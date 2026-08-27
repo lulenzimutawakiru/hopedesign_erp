@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Update File: apps/api/src/services/qr.ts
+@@
+   SECURITY_JOB: 'HDG-SJ',
++  REAM: 'HDG-RE',
+   CARTON: 'HDG-CT',
+*** End Patch

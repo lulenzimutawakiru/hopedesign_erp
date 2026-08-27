@@ -1,0 +1,122 @@
+
+      <section className="card">
+        <div className="card-head">
+          <h3>Printers & label spool</h3>
+          {spool && (
+            <span className="chip">
+              <span className="chip-k">Job</span>
+              <b className="cell-mono">{spool.jobNo}</b>
+            </span>
+          )}
+        </div>
+        <div className="card-pad">
+          <div className="printer-strip" style={{ marginTop: 0 }}>
+            <span className={'chip ' + (niimbotAvailable ? 'is-online' : '')}>
+              <span className="chip-k">Bluetooth</span>
+              {niimbotAvailable ? <b>Available</b> : <b>Unavailable</b>}
+            </span>
+            <span className={'chip ' + (niimbotSerialAvailable ? 'is-online' : '')}>
+              <span className="chip-k">USB</span>
+              {niimbotSerialAvailable ? <b>Available</b> : <b>Unavailable</b>}
+            </span>
+            {discovered && (
+              <span className="chip is-online">
+                <span className="chip-k">Connected</span>
+                <b>{discovered.name}</b>
+                <span className="chip-k">via {discovered.transport}</span>
+              </span>
+            )}
+          </div>
+          <div className="packing-row" style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={btBusy || usbBusy}
+              onClick={() => void discoverPrinter('Bluetooth')}
+            >
+              {btBusy ? 'Searching...' : 'Discover Bluetooth printer'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={btBusy || usbBusy}
+              onClick={() => void discoverPrinter('USB')}
+            >
+              {usbBusy ? 'Searching...' : 'Discover USB printer'}
+            </button>
+            <span className="muted">Opens the browser's device chooser - Chrome/Edge on HTTPS or localhost.</span>
+          </div>
+          {discoverStatus && <p className="muted" style={{ marginTop: 8 }}>{discoverStatus}</p>}
+          {discoverError && <div className="alert alert-error" style={{ marginTop: 8 }}>{discoverError}</div>}
+
+          <div className="packing-divider" />
+
+          {spool ? (
+            <>
+              <div className="packing-row">
+                <span className="badge badge-blue">{spool.labels.length} label(s) queued</span>
+                <span className="cell-mono">
+                  {spoolTemplate && spoolTemplate.mmWidth && spoolTemplate.mmHeight
+                    ? spoolTemplate.name + ' (' + spoolTemplate.mmWidth + 'x' + spoolTemplate.mmHeight + 'mm)'
+                    : LABEL_DIMS[spoolKind].label}
+                </span>
+                {selectedBatch && (
+                  <span className="cell-mono">BATCH {str(selectedBatch.batchNo ?? selectedBatch.batch_no)}</span>
+                )}
+              </div>
+              {spool.labels.some((l) => l.imageDataUrl) && (
+                <div className="packing-previews">
+                  {spool.labels.map((l) => (
+                    <figure key={l.id} className="packing-preview">
+                      {l.imageDataUrl ? (
+                        <img src={l.imageDataUrl} alt={'Label preview ' + l.code} />
+                      ) : (
+                        <div className="packing-preview-empty">No preview</div>
+                      )}
+                      <figcaption className="cell-mono">{str(l.labelNo)}</figcaption>
+                    </figure>
+                  ))}
+                </div>
+              )}
+              <div className="packing-row" style={{ marginTop: 12 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={!niimbotAvailable || btBusy}
+                  onClick={() => void printSpoolViaBluetooth()}
+                >
+                  {btBusy ? 'Printing...' : 'Print via Bluetooth (Niimbot)'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={!niimbotSerialAvailable || usbBusy}
+                  onClick={() => void printSpoolViaUsb()}
+                >
+                  {usbBusy ? 'Printing...' : 'Print via USB (Niimbot)'}
+                </button>
+                {(!niimbotAvailable || !niimbotSerialAvailable) && (
+                  <span className="muted">
+                    Bluetooth/USB need Chrome or Edge on HTTPS or localhost - or run the bridge daemon (
+                    <code>npm run niimbot:bridge -w apps/api</code>).
+                  </span>
+                )}
+              </div>
+              {btStatus && <p className="muted" style={{ marginTop: 8 }}>{btStatus}</p>}
+              {btError && <div className="alert alert-error" style={{ marginTop: 8 }}>{btError}</div>}
+              {usbStatus && <p className="muted" style={{ marginTop: 8 }}>{usbStatus}</p>}
+              {usbError && <div className="alert alert-error" style={{ marginTop: 8 }}>{usbError}</div>}
+            </>
+          ) : (
+            <div className="packing-empty">
+              <p className="muted" style={{ margin: 0 }}>
+                No labels spooled yet. Generate reams and spool them, or seal a carton - label previews and the
+                Bluetooth/USB print buttons will appear here.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}

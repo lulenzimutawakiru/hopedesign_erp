@@ -1,0 +1,17 @@
+{
+  "name": "@hopedesign/db",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "migrate": "node src/migrate.js",
+    "seed": "node src/seed.js",
+    "reset": "node src/reset.js",
+    "build": "node -e \"console.log('@hopedesign/db: no build step')\""
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.1"
+  }
+}

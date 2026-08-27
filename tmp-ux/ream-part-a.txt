@@ -1,0 +1,191 @@
+
+  const reamSpooled = !!spool && spoolKind === 'REAM';
+
+  const steps = [
+    { label: 'Product & batch', done: !!batchId, active: !batchId },
+    {
+      label: 'Generate reams',
+      done: generated.length > 0,
+      active: !!batchId && generated.length === 0,
+    },
+    {
+      label: 'Print ream labels',
+      done: reamSpooled,
+      active: generated.length > 0 && !reamSpooled,
+    },
+    {
+      label: 'Scan reams',
+      done: scanned.length === REAMS_PER_CARTON,
+      active: generated.length > 0 && scanned.length > 0 && scanned.length < REAMS_PER_CARTON,
+    },
+    {
+      label: 'Seal & carton label',
+      done: !!carton,
+      active: scanned.length === REAMS_PER_CARTON && !carton,
+    },
+  ];
+
+  const readyToSeal = scanned.length === REAMS_PER_CARTON;
+
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <h1>Ream Packing</h1>
+          <p className="muted">Generate unique ream QRs, pack 5 reams into one carton and seal it.</p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={resetFlow}
+          title="Clear generated QRs, scanned reams and the open carton"
+        >
+          Start over
+        </button>
+      </header>
+
+      <nav className="steps" aria-label="Packing flow">
+        {steps.map((s, i) => {
+          const status = s.done ? 'Done' : s.active ? 'In progress' : 'Pending';
+          return (
+            <div
+              key={s.label}
+              className={'step' + (s.active ? ' is-active' : '') + (s.done ? ' is-done' : '')}
+            >
+              <span className="step-num">{s.done ? '\u2713' : i + 1}</span>
+              <span className="step-label">
+                <span className="step-label-text">{s.label}</span>
+                <span className="step-status">{status}</span>
+              </span>
+            </div>
+          );
+        })}
+      </nav>
+
+      <section className="card">
+        <div className="card-head"><h3>1 · Product & batch</h3></div>
+        <div className="card-pad">
+          <label className="field">
+            <span>Ream product</span>
+            <select value={productId} onChange={(e) => setProductId(num(e.target.value))}>
+              {reamProducts.length === 0 && <option value={0}>No ream products - create one below</option>}
+              {reamProducts.map((p) => (
+                <option key={num(p.id)} value={num(p.id)}>
+                  {str(p.code)} · {str(p.name)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field" style={{ marginTop: 10 }}>
+            <span>Production batch</span>
+            <select value={batchId} onChange={(e) => setBatchId(num(e.target.value))} disabled={batches.length === 0}>
+              {batches.length === 0 && <option value={0}>No batches yet - create one below</option>}
+              {batches.map((b) => (
+                <option key={num(b.id)} value={num(b.id)}>
+                  {str(b.batchNo ?? b.batch_no)}
+                  {Number(b.quantity) > 0 ? ' · qty ' + str(b.quantity) : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          {(selectedProduct || selectedBatch) && (
+            <div className="chips" style={{ marginTop: 10 }}>
+              {selectedProduct && (
+                <span className="chip">
+                  <span className="chip-k">Product</span>
+                  <b>{str(selectedProduct.name)}</b>
+                  <span className="cell-mono">{str(pick(selectedProduct, 'code'))}</span>
+                  {str(pick(selectedProduct, 'gsm')) ? <span className="chip-k">{str(pick(selectedProduct, 'gsm'))} gsm</span> : null}
+                </span>
+              )}
+              {selectedBatch && (
+                <span className="chip">
+                  <span className="chip-k">Batch</span>
+                  <b className="cell-mono">{str(selectedBatch.batchNo ?? selectedBatch.batch_no)}</b>
+                  {str(selectedBatch.lotNo ?? selectedBatch.lot_no) ? (
+                    <span className="chip-k">Lot {str(selectedBatch.lotNo ?? selectedBatch.lot_no)}</span>
+                  ) : null}
+                  {Number(selectedBatch.quantity) > 0 ? (
+                    <span className="chip-k">qty {str(selectedBatch.quantity)}</span>
+                  ) : null}
+                  {str(selectedBatch.expiryDate ?? selectedBatch.expiry_date) ? (
+                    <span className="chip-k">Exp {str(selectedBatch.expiryDate ?? selectedBatch.expiry_date)}</span>
+                  ) : null}
+                  <span className={'badge ' + (str(selectedBatch.status) === 'ACTIVE' ? 'badge-green' : 'badge-neutral')}>
+                    {str(selectedBatch.status ?? 'ACTIVE')}
+                  </span>
+                </span>
+              )}
+            </div>
+          )}
+          {batchError && <div className="alert alert-error" style={{ marginTop: 8 }}>{batchError}</div>}
+          {batchMsg && <div className="alert alert-success" style={{ marginTop: 8 }}>{batchMsg}</div>}
+
+          <div className="flow-actions" style={{ marginTop: 10 }}>
+            <button type="button" className="btn btn-ghost" onClick={() => setShowNewBatch((v) => !v)}>
+              {showNewBatch ? 'Hide batch form' : 'Create production batch'}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => setShowNewProduct((v) => !v)}>
+              {showNewProduct ? 'Hide product form' : 'Create ream product'}
+            </button>
+          </div>
+
+          {showNewBatch && (
+            <form onSubmit={createBatch} className="stack" style={{ marginTop: 10 }}>
+              <div className="grid-2">
+                <label className="field">
+                  <span>Quantity</span>
+                  <input type="number" min={0} step={1} value={newBatch.quantity} onChange={(e) => setNewBatch({ ...newBatch, quantity: e.target.value })} placeholder="e.g. 1000 reams" />
+                </label>
+                <label className="field">
+                  <span>Lot no</span>
+                  <input value={newBatch.lotNo} onChange={(e) => setNewBatch({ ...newBatch, lotNo: e.target.value })} placeholder="Optional lot reference" />
+                </label>
+                <label className="field">
+                  <span>Expiry date</span>
+                  <input type="date" value={newBatch.expiryDate} onChange={(e) => setNewBatch({ ...newBatch, expiryDate: e.target.value })} />
+                </label>
+                <label className="field">
+                  <span>Notes</span>
+                  <input value={newBatch.notes} onChange={(e) => setNewBatch({ ...newBatch, notes: e.target.value })} placeholder="Optional batch notes" />
+                </label>
+              </div>
+              <div className="flow-actions">
+                <button className="btn btn-primary" disabled={batchBusy || !productId}>
+                  {batchBusy ? 'Creating...' : 'Create batch'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {showNewProduct && (
+            <form onSubmit={createProduct} className="stack" style={{ marginTop: 10 }}>
+              <div className="grid-2">
+                <label className="field">
+                  <span>Product name *</span>
+                  <input value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} placeholder="e.g. A4 80gsm Copy Ream" />
+                </label>
+                <label className="field">
+                  <span>GSM</span>
+                  <input type="number" min={0} step="0.01" value={newProduct.gsm} onChange={(e) => setNewProduct({ ...newProduct, gsm: e.target.value })} placeholder="80" />
+                </label>
+                <label className="field">
+                  <span>Sheets per ream</span>
+                  <input type="number" min={1} step={1} value={newProduct.sheetsPerReam} onChange={(e) => setNewProduct({ ...newProduct, sheetsPerReam: e.target.value })} placeholder="500" />
+                </label>
+                <label className="field">
+                  <span>Width (mm)</span>
+                  <input type="number" min={0} step="0.1" value={newProduct.widthMm} onChange={(e) => setNewProduct({ ...newProduct, widthMm: e.target.value })} placeholder="210" />
+                </label>
+              </div>
+              {productError && <div className="alert alert-error">{productError}</div>}
+              <div className="flow-actions">
+                <button className="btn btn-primary" disabled={productBusy || !newProduct.name.trim()}>
+                  {productBusy ? 'Creating...' : 'Create product'}
+                </button>
+              </div>
+            </form>
+          )}
+          {productMsg && <div className="alert alert-success" style={{ marginTop: 8 }}>{productMsg}</div>}
+        </div>
+      </section>

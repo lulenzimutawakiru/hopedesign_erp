@@ -1,0 +1,75 @@
+
+      <section className="card">
+        <div className="card-head">
+          <h3>2 · Generate ream QRs</h3>
+          {selectedBatch && <span className="cell-mono">BATCH {str(selectedBatch.batchNo ?? selectedBatch.batch_no)}</span>}
+        </div>
+        <div className="card-pad">
+          <div className="packing-row">
+            <label className="field">
+              <span>Number of reams (1–100)</span>
+              <input type="number" min={1} max={100} step={1} value={count} onChange={(e) => setCount(num(e.target.value))} />
+            </label>
+            <div className="field packing-generate-btn">
+              <span>&nbsp;</span>
+              <button type="button" className="btn btn-primary" disabled={!productId || !batchId || genBusy} onClick={() => void generate()}>
+                {genBusy ? 'Generating...' : 'Generate reams'}
+              </button>
+            </div>
+          </div>
+          {!batchId && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              Create a production batch in step 1 first - every ream QR label carries the batch number.
+            </p>
+          )}
+          {genError && <div className="alert alert-error">{genError}</div>}
+          {generated.length > 0 && (
+            <>
+              <div className="packing-tray">
+                <span>
+                  <span className="badge badge-green">{generated.length} reams</span>{' '}
+                  generated for <span className="cell-mono">BATCH {str(selectedBatch ? (selectedBatch.batchNo ?? selectedBatch.batch_no) : '')}</span>
+                  <span className="muted"> - print the labels, then scan them on the packing line.</span>
+                </span>
+                <CopyButton value={str(generated[0].code)} label="Copy first QR" />
+              </div>
+              <div className="table-wrap" style={{ marginTop: 10 }}>
+                <table className="table data">
+                  <thead>
+                    <tr><th>Ream</th><th>QR code</th><th>Payload</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    {generated.slice(0, 10).map((g) => (
+                      <tr key={num(g.id)}>
+                        <td className="cell-mono">{str(g.reamNo)}</td>
+                        <td className="cell-mono">{str(g.code)}</td>
+                        <td className="cell-mono" title="Secret payload - printed on the label only">{str(g.payload).split('|')[0]}|•••</td>
+                        <td className="cell-num"><CopyButton value={str(g.code)} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {templatesError && <div className="alert alert-error" style={{ marginTop: 10 }}>{templatesError}</div>}
+              <div className="packing-row" style={{ marginTop: 12 }}>
+                {reamTemplates.length > 0 && (
+                  <label className="field">
+                    <span>Ream label variety</span>
+                    <select value={reamTemplateId} onChange={(e) => setReamTemplateId(num(e.target.value))}>
+                      {reamTemplates.map((t) => (
+                        <option key={num(t.id)} value={num(t.id)}>
+                          {str(t.name)} ({str(t.mmWidth)}&times;{str(t.mmHeight)} mm)
+                          {t.isDefault ? ' · Default' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <button type="button" className="btn btn-primary" disabled={spoolBusy} onClick={() => void printReamLabels()}>
+                  {spoolBusy ? 'Spooling...' : 'Spool & print ream labels (Niimbot)'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </section>

@@ -1,0 +1,23 @@
+{
+  "name": "hopedesign-erp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hope Design Group Ltd - Enterprise ERP (paper manufacturing + security printing + QR traceability)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "build": "npm run build -w packages/db && npm run build -w apps/api && npm run build -w apps/web",
+    "db:migrate": "npm run migrate -w packages/db",
+    "db:seed": "npm run seed -w packages/db",
+    "db:reset": "npm run reset -w packages/db",
+    "test": "npm run test -w apps/api",
+    "test:web": "npm run test -w apps/web"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

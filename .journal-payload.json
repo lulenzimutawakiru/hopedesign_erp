@@ -1,0 +1,17 @@
+{
+    "post":  false,
+    "lines":  [
+                  {
+                      "credit":  0,
+                      "accountId":  5,
+                      "debit":  5000
+                  },
+                  {
+                      "credit":  5000,
+                      "accountId":  2,
+                      "debit":  0
+                  }
+              ],
+    "description":  "Draft transfer probe",
+    "entryDate":  "2026-08-20"
+}

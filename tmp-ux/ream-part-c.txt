@@ -1,0 +1,138 @@
+
+      <section className="card">
+        <div className="card-head">
+          <h3>3 · Packing line</h3>
+          <span className={'badge ' + (readyToSeal ? 'badge-green' : 'badge-neutral')}>{scanned.length}/{REAMS_PER_CARTON} packed</span>
+        </div>
+        <div className="card-pad">
+          <div className="packing-slots" aria-label={scanned.length + ' of ' + REAMS_PER_CARTON + ' reams packed'}>
+            {Array.from({ length: REAMS_PER_CARTON }).map((_, i) => (
+              <span
+                key={i}
+                className={'packing-slot' + (i < scanned.length ? ' is-filled' : '') + (i === scanned.length && scanned.length < REAMS_PER_CARTON ? ' is-next' : '')}
+              />
+            ))}
+            <span className="packing-slots-label">
+              {readyToSeal ? 'Ready to seal' : scanned.length + '/' + REAMS_PER_CARTON + ' packed'}
+            </span>
+          </div>
+          <form
+            className="packing-scan-row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void scanReam(scanInput);
+            }}
+          >
+            <label className="field">
+              <span>Scan ream QR</span>
+              <input
+                ref={scanRef}
+                value={scanInput}
+                onChange={(e) => setScanInput(e.target.value)}
+                placeholder="Scan or type the ream QR code"
+                autoFocus
+              />
+            </label>
+            <button type="submit" className="btn btn-primary" disabled={!scanInput.trim() || scanBusy}>
+              {scanBusy ? 'Scanning...' : 'Scan ream'}
+            </button>
+          </form>
+          {scanFlash && <div className="flash-ok" style={{ marginTop: 10 }}>{scanFlash}</div>}
+          {scanError && <div className="alert alert-error" style={{ marginTop: 10 }}>{scanError}</div>}
+
+          {scanned.length > 0 && (
+            <div className="table-wrap" style={{ marginTop: 12 }}>
+              <table className="table data">
+                <thead>
+                  <tr><th>#</th><th>Ream</th><th>QR code</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                  {scanned.map((s, i) => (
+                    <tr key={s.code} className={i === scanned.length - 1 ? 'packing-row-fresh' : ''}>
+                      <td>{i + 1}</td>
+                      <td className="cell-mono">{s.reamNo}</td>
+                      <td className="cell-mono">{s.code}</td>
+                      <td>{s.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="packing-row" style={{ marginTop: 12 }}>
+            <button type="button" className="btn btn-success" disabled={!readyToSeal || !batchId || sealBusy} onClick={() => void seal()}>
+              {sealBusy ? 'Sealing...' : 'Seal carton (5 reams)'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={scanned.length === 0}
+              onClick={() => {
+                setScanned([]);
+                setScanError('');
+              }}
+            >
+              Clear scans
+            </button>
+          </div>
+          {sealError && <div className="alert alert-error" style={{ marginTop: 8 }}>{sealError}</div>}
+
+          {carton && (
+            <div className="scan-verified">
+              <div className="verify-mark">CARTON SEALED</div>
+              <dl className="detail-list">
+                <div className="detail-row"><dt>Carton no</dt><dd className="cell-mono">{str(carton.cartonNo ?? carton.carton_no)}</dd></div>
+                <div className="detail-row"><dt>Carton QR</dt>
+                  <dd><div className="copy-row"><span className="cell-mono">{str(carton.code)}</span><CopyButton value={str(carton.code)} /></div></dd>
+                </div>
+                <div className="detail-row"><dt>Payload</dt>
+                  <dd><div className="copy-row"><span className="cell-mono">{str(carton.payload)}</span><CopyButton value={str(carton.payload)} /></div></dd>
+                </div>
+                <div className="detail-row"><dt>Reams</dt><dd>{Array.isArray(carton.reams) ? carton.reams.length : REAMS_PER_CARTON}</dd></div>
+                {selectedBatch && (
+                  <div className="detail-row"><dt>Batch</dt><dd className="cell-mono">{str(selectedBatch.batchNo ?? selectedBatch.batch_no)}</dd></div>
+                )}
+              </dl>
+              {Array.isArray(carton.reams) && carton.reams.length > 0 && (
+                <div className="table-wrap" style={{ marginTop: 10 }}>
+                  <table className="table data">
+                    <thead>
+                      <tr><th>#</th><th>Ream</th><th>QR code</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                      {carton.reams.map((r, i) => (
+                        <tr key={num(r.reamId)}>
+                          <td>{i + 1}</td>
+                          <td className="cell-mono">{str(r.reamNo)}</td>
+                          <td className="cell-mono">{str(r.code)}</td>
+                          <td className="cell-num"><CopyButton value={str(r.code)} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {templatesError && <div className="alert alert-error" style={{ marginTop: 10 }}>{templatesError}</div>}
+              <div className="packing-row" style={{ marginTop: 12 }}>
+                {cartonTemplates.length > 0 && (
+                  <label className="field">
+                    <span>Carton label variety</span>
+                    <select value={cartonTemplateId} onChange={(e) => setCartonTemplateId(num(e.target.value))}>
+                      {cartonTemplates.map((t) => (
+                        <option key={num(t.id)} value={num(t.id)}>
+                          {str(t.name)} ({str(t.mmWidth)}&times;{str(t.mmHeight)} mm)
+                          {t.isDefault ? ' · Default' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <button type="button" className="btn btn-primary" disabled={spoolBusy} onClick={() => void printCartonLabel()}>
+                  {spoolBusy ? 'Spooling...' : 'Print carton label (Niimbot)'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
