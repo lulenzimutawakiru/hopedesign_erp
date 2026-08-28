@@ -424,7 +424,7 @@ function ContractBoard() {
         <div>
           <p className="mod-kicker" data-mod="hr">HR &amp; payroll</p>
           <h1>Employment contracts</h1>
-          <p className="muted">Create, approve and sign Uganda employment contracts. Written particulars are validated against the Employment Act, 2006 (Chapter 226) before approval.</p>
+          <p className="muted">Create, approve and sign Uganda employment contracts. Written particulars are validated against the Employment Act (Cap. 226), as amended, before approval.</p>
         </div>
         <div className="head-actions">
           {can(user, 'hr.contracts.create') && (
@@ -730,7 +730,7 @@ function ContractComposer() {
           <button className="btn btn-sm" onClick={() => navigate('/people/contracts')}>Back</button>
           <p className="mod-kicker" data-mod="hr">Contract builder</p>
           <h1>New employment contract</h1>
-          <p className="muted">Statutory written particulars (Employment Act, 2006, s.59) are validated before approval. The platform does not remove or reduce any statutory employment right.</p>
+          <p className="muted">Statutory written particulars (Employment Act (Cap. 226), s.59, as amended) are validated before approval. The platform does not remove or reduce any statutory employment right.</p>
         </div>
       </header>
       {notice && (
@@ -1951,7 +1951,7 @@ useEffect(() => {
               <span className="callout-icon" aria-hidden>⚖️</span>
               <div className="callout-body">
                 <p className="callout-title">Compliance gating</p>
-                <p>RED blocks approval. AMBER requires HR review before approval. The compliance engine applies the current legal framework version (Employment Act, 2006, Chapter 226, including the 2026 amendment).</p>
+                <p>RED blocks approval. AMBER requires HR review before approval. The compliance engine applies the current legal framework version (Employment Act (Cap. 226), as amended, including the Employment (Amendment) Act, 2025).</p>
               </div>
             </div>
           </div>
@@ -2720,7 +2720,7 @@ function LegalRules() {
         <div>
           <p className="mod-kicker" data-mod="hr">HR &amp; payroll</p>
           <h1>Legal framework</h1>
-          <p className="muted">Versioned legal rules from the Employment Act, 2006 (Chapter 226, Laws of Uganda), including the Employment (Amendment) Act, 2026. Rules are configuration, not hard-coded assumptions.</p>
+          <p className="muted">Versioned legal rules from the Employment Act (Cap. 226, Laws of Uganda), as amended, including the Employment (Amendment) Act, 2025. Rules are configuration, not hard-coded assumptions.</p>
         </div>
       </header>
       <ModuleTabs active="rules" />
@@ -2758,7 +2758,7 @@ function LegalRules() {
                   <td><Badge value={r.status} /></td>
                 </tr>
               ))}
-              {loading && rows.length === 0 ? <LoadingRow label="Loading legal rules…" colSpan={9} /> : rows.length === 0 ? <tr><td colSpan={9}><EmptyState icon="⚖" title="No legal rules configured" hint="Legal rules are versioned configuration from the Employment Act, 2006 (Chapter 226)." /></td></tr> : null}
+              {loading && rows.length === 0 ? <LoadingRow label="Loading legal rules…" colSpan={9} /> : rows.length === 0 ? <tr><td colSpan={9}><EmptyState icon="⚖" title="No legal rules configured" hint="Legal rules are versioned configuration from the Employment Act (Cap. 226), as amended." /></td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -2870,7 +2870,7 @@ function MissingParticulars() {
         <div>
           <p className="mod-kicker" data-mod="hr">HR &amp; payroll</p>
           <h1>Missing written particulars</h1>
-          <p className="muted">Contracts missing statutory particulars required by the Employment Act, 2006 (Chapter 226) s.59. These cannot be approved until corrected.</p>
+          <p className="muted">Contracts missing statutory particulars required by the Employment Act (Cap. 226), s.59, as amended. These cannot be approved until corrected.</p>
         </div>
       </header>
       <ModuleTabs active="missing" />
@@ -3310,7 +3310,7 @@ function Certificates() {
         <div>
           <p className="mod-kicker" data-mod="hr">HR &amp; payroll</p>
           <h1>Certificate of service</h1>
-          <p className="muted">The statutory certificate under the Employment Act, 2006 (Chapter 226) records employer, employee, the nature of the business, the period of continuous employment, the final position and wages payable at termination.</p>
+          <p className="muted">The statutory certificate under the Employment Act (Cap. 226), as amended, records employer, employee, the nature of the business, the period of continuous employment, the final position and wages payable at termination.</p>
         </div>
       </header>
       <ModuleTabs active="certificates" />
@@ -3379,7 +3379,7 @@ function Certificates() {
             <span className="def-sec-icon" aria-hidden>📄</span>
             <div>
               <h3>Statutory particulars</h3>
-              <p>Details recorded on the certificate under the Employment Act, 2006.</p>
+              <p>Details recorded on the certificate under the Employment Act (Cap. 226), as amended.</p>
             </div>
           </div>
           <div className="form-grid">

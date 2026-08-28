@@ -29,7 +29,7 @@ function serviceMonths(startDate: string | null | undefined, asOf?: string): num
 }
 
 /**
- * Statutory notice under the Employment Act, 2006 s.58(3), derived from the
+ * Statutory notice under the Employment Act (Cap. 226), s.58(3), as amended, derived from the
  * ACTIVE NOTICE_PERIOD rule bands in the database - never hard-coded.
  * Returns 0 when no active rule is loaded or service is below the first band
  * (contractual notice then applies).
@@ -589,7 +589,7 @@ function activeRuleSnapshot(rule: Row | null): { code: string; version: number }
 /** Legal framework descriptor for new contracts; org override via app_settings. */
 async function legalFrameworkVersion(client: pg.PoolClient, ctx: Ctx): Promise<string> {
   const fallback =
-    'Employment Act, 2006 (Chapter 226, Laws of Uganda) - ULII consolidation current version 5 June 2026, including the Employment (Amendment) Act, 2026';
+    'Employment Act (Cap. 226, Laws of Uganda), as amended - ULII consolidation current version 5 June 2026, including the Employment (Amendment) Act, 2025';
   const res = await client.query(
     `SELECT value FROM app_settings
      WHERE tenant_id = $1 AND category = 'hr.contracts' AND key = 'legal_framework_version'
@@ -1085,7 +1085,7 @@ export async function createContract(
       );
     }
     warnings.push(
-      'Non-employment agreement: this engagement is not an employment contract under the Employment Act, 2006. A consultancy or contractor agreement may be required instead.'
+      'Non-employment agreement: this engagement is not an employment contract under the Employment Act (Cap. 226), as amended. A consultancy or contractor agreement may be required instead.'
     );
   }
 
@@ -1399,7 +1399,7 @@ export async function validateContract(
   ) => {
     issues.push({ code, check, status, reason, legalRef: opts.legalRef, ruleCode: opts.ruleCode });
   };
-  const lawRef = 'Employment Act, 2006 (Chapter 226, Laws of Uganda)';
+  const lawRef = 'Employment Act (Cap. 226, Laws of Uganda), as amended';
   const particularsRule = await activeRule(client, ctx, 'WRITTEN_PARTICULARS');
   const requiredParticulars = ((ruleValue(particularsRule, 'required_particulars') as string[]) ?? []).map((x) => String(x));
   const required = (key: string) => requiredParticulars.includes(key);
@@ -1495,7 +1495,7 @@ export async function validateContract(
     );
   }
 
-  // Hours of work (Employment Act, 2006 s.52): normal hours may not exceed 48 per week.
+  // Hours of work (Employment Act (Cap. 226), s.52, as amended): normal hours may not exceed 48 per week.
   const workTimeRule = await activeRule(client, ctx, 'WORKING_TIME');
   const maxWeeklyHoursRaw = ruleValue(workTimeRule, 'max_hours_per_week');
   const maxWeeklyHours = maxWeeklyHoursRaw == null ? null : Number(maxWeeklyHoursRaw);
@@ -1507,12 +1507,12 @@ export async function validateContract(
       recordedHours <= maxWeeklyHours ? 'PASS' : 'FAIL',
       recordedHours <= maxWeeklyHours
         ? `Normal working hours: ${recordedHours} per week (statutory maximum ${maxWeeklyHours}).`
-        : `Normal working hours of ${recordedHours} per week exceed the statutory maximum of ${maxWeeklyHours} hours (Employment Act, 2006 s.52).`,
+        : `Normal working hours of ${recordedHours} per week exceed the statutory maximum of ${maxWeeklyHours} hours (Employment Act (Cap. 226), s.52, as amended).`,
       { legalRef: `${lawRef}, s.52`, ruleCode: 'WORKING_TIME' }
     );
   }
 
-  // Weekly rest (Employment Act, 2006 s.50): at least 24 consecutive hours of rest each week.
+  // Weekly rest (Employment Act (Cap. 226), s.50, as amended): at least 24 consecutive hours of rest each week.
   const weeklyRestRule = await activeRule(client, ctx, 'WEEKLY_REST');
   const maxConsecutiveDaysRaw = ruleValue(weeklyRestRule, 'max_consecutive_working_days');
   const maxConsecutiveDays = maxConsecutiveDaysRaw == null ? null : Number(maxConsecutiveDaysRaw);
@@ -1524,7 +1524,7 @@ export async function validateContract(
       scheduledDays.length <= maxConsecutiveDays ? 'PASS' : 'FAIL',
       scheduledDays.length <= maxConsecutiveDays
         ? `Working days per week: ${scheduledDays.length} (statutory maximum ${maxConsecutiveDays} consecutive days).`
-        : `The employee is scheduled to work ${scheduledDays.length} days per week, exceeding the maximum of ${maxConsecutiveDays} consecutive working days without a weekly rest of at least 24 hours (Employment Act, 2006 s.50).`,
+        : `The employee is scheduled to work ${scheduledDays.length} days per week, exceeding the maximum of ${maxConsecutiveDays} consecutive working days without a weekly rest of at least 24 hours (Employment Act (Cap. 226), s.50, as amended).`,
       { legalRef: `${lawRef}, s.50`, ruleCode: 'WEEKLY_REST' }
     );
   }

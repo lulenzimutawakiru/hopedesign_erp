@@ -1531,7 +1531,7 @@ async function loadEmploymentContract(client: pg.PoolClient, ctx: Ctx, id: numbe
     ],
     totals: [],
     notes: [
-      'This document records the written particulars of employment. It does not remove, reduce or contract out any statutory right conferred by the Employment Act, 2006 (Chapter 226, Laws of Uganda), as amended.',
+      'This document records the written particulars of employment. It does not remove, reduce or contract out any statutory right conferred by the Employment Act (Cap. 226, Laws of Uganda), as amended.',
       'Where the legal position is uncertain, this document should be reviewed by a qualified employment-law professional before approval.',
     ],
     raw: out,
@@ -1612,7 +1612,7 @@ async function loadCertificateOfService(client: pg.PoolClient, ctx: Ctx, id: num
     items: [],
     totals: [],
     notes: [
-      'This certificate is issued under the Employment Act, 2006 (Chapter 226, Laws of Uganda), as amended, and records the particulars of employment set out above.',
+      'This certificate is issued under the Employment Act (Cap. 226, Laws of Uganda), as amended, and records the particulars of employment set out above.',
       'It is a statutory certificate of service and is not a reference as to the character or performance of the employee.',
     ],
     raw: res.rows[0],
@@ -2632,7 +2632,7 @@ function drawContractLetterhead(doc: PdfDoc, data: DocData, opts: DocumentRender
 function drawContractIntro(doc: PdfDoc, opts: DocumentRenderOpts): void {
   doc.cursorY -= 2;
   doc.text(
-    'This document records the written particulars of employment between the Employer and the Employee identified below and constitutes their contract of employment. It is issued in accordance with the Employment Act, 2006 (Chapter 226, Laws of Uganda), as amended, and nothing in it removes, reduces or contracts out any statutory right conferred on the Employee.',
+    'This document records the written particulars of employment between the Employer and the Employee identified below and constitutes their contract of employment. It is issued in accordance with the Employment Act (Cap. 226, Laws of Uganda), as amended, and nothing in it removes, reduces or contracts out any statutory right conferred on the Employee.',
     MARGIN,
     8.6,
     { color: INK, maxWidth: TABLE_W }
@@ -3054,7 +3054,7 @@ function drawCertificateStatement(doc: PdfDoc, data: DocData, brand: DocBrand): 
   }
   drawBodyParagraph(
     doc,
-    'This certificate is issued at the request of the Employee in accordance with the Employment Act, 2006 (Chapter 226, Laws of Uganda), as amended. It is a statutory certificate of service and is not a reference as to the character or performance of the Employee.',
+    'This certificate is issued at the request of the Employee in accordance with the Employment Act (Cap. 226, Laws of Uganda), as amended. It is a statutory certificate of service and is not a reference as to the character or performance of the Employee.',
     bodySize,
     bodyX,
     bodyW,
@@ -3707,7 +3707,7 @@ function htmlClauseBody(data: DocData): string {
   const parts: string[] = [];
   parts.push(
     `<p class="contract-intro">${htmlEsc(
-      'This document records the written particulars of employment between the Employer and the Employee identified below and constitutes their contract of employment. It is issued in accordance with the Employment Act, 2006 (Chapter 226, Laws of Uganda), as amended, and nothing in it removes, reduces or contracts out any statutory right conferred on the Employee.'
+      'This document records the written particulars of employment between the Employer and the Employee identified below and constitutes their contract of employment. It is issued in accordance with the Employment Act (Cap. 226, Laws of Uganda), as amended, and nothing in it removes, reduces or contracts out any statutory right conferred on the Employee.'
     )}</p>`
   );
   if (sections.length) {
@@ -3757,7 +3757,7 @@ function htmlCertificateBody(data: DocData): string {
   if (wages) paras.push('At the date on which the employment ceased, the wages payable to the Employee were ' + wages + '.');
   if (reason) paras.push('The reason for the termination of the employment was: ' + reason + '.');
   paras.push(
-    'This certificate is issued at the request of the Employee in accordance with the Employment Act, 2006 (Chapter 226, Laws of Uganda), as amended. It is a statutory certificate of service and is not a reference as to the character or performance of the Employee.'
+    'This certificate is issued at the request of the Employee in accordance with the Employment Act (Cap. 226, Laws of Uganda), as amended. It is a statutory certificate of service and is not a reference as to the character or performance of the Employee.'
   );
   return [
     '<div class="band">Certificate Statement</div>',
