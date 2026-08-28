@@ -122,6 +122,22 @@ hrOpsRouter.post('/employees', ...run('hr.employees.create', (c, ctx, b) => hr.c
   status: b.status != null ? String(b.status) : undefined,
   userId: b.userId != null && b.userId !== '' ? Number(b.userId) : null,
 })));
+hrOpsRouter.patch('/employees/:id', ...run('hr.employees.update', (c, ctx, b, p) => hr.updateEmployee(c, ctx, Number(p.id), {
+  firstName: b.firstName !== undefined && b.firstName !== null ? String(b.firstName) : undefined,
+  lastName: b.lastName !== undefined && b.lastName !== null ? String(b.lastName) : undefined,
+  departmentId: b.departmentId !== undefined ? (b.departmentId === null || b.departmentId === '' ? null : Number(b.departmentId)) : undefined,
+  position: b.position !== undefined ? (b.position === null || b.position === '' ? null : String(b.position)) : undefined,
+  hireDate: b.hireDate !== undefined && b.hireDate !== null ? String(b.hireDate) : undefined,
+  salaryType: b.salaryType !== undefined && b.salaryType !== null ? String(b.salaryType) : undefined,
+  baseSalary: b.baseSalary !== undefined && b.baseSalary !== null ? Number(b.baseSalary) : undefined,
+  phone: b.phone !== undefined ? (b.phone === null || b.phone === '' ? null : String(b.phone)) : undefined,
+  email: b.email !== undefined ? (b.email === null || b.email === '' ? null : String(b.email)) : undefined,
+  tin: b.tin !== undefined ? (b.tin === null || b.tin === '' ? null : String(b.tin)) : undefined,
+  nssfNo: b.nssfNo !== undefined ? (b.nssfNo === null || b.nssfNo === '' ? null : String(b.nssfNo)) : undefined,
+  bankName: b.bankName !== undefined ? (b.bankName === null || b.bankName === '' ? null : String(b.bankName)) : undefined,
+  bankAccountNo: b.bankAccountNo !== undefined ? (b.bankAccountNo === null || b.bankAccountNo === '' ? null : String(b.bankAccountNo)) : undefined,
+  status: b.status !== undefined && b.status !== null ? String(b.status) : undefined,
+})));
 hrOpsRouter.post('/employees/:id/terminate', ...run('hr.employees.terminate', (c, ctx, b, p) => hr.terminateEmployee(c, ctx, Number(p.id), b.terminationDate != null ? String(b.terminationDate) : null)));
 hrOpsRouter.post('/employees/:id/clock-in', ...run('hr.attendance.create', (c, ctx, _b, p) => hr.clockIn(c, ctx, Number(p.id))));
 hrOpsRouter.post('/employees/:id/clock-out', ...run('hr.attendance.create', (c, ctx, _b, p) => hr.clockOut(c, ctx, Number(p.id))));

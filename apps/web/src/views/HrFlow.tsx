@@ -58,15 +58,16 @@ function shortDate(v: unknown): string {
   return String(v).slice(0, 10);
 }
 
-function parsePeople(path: string): { view: string; id: string | null } {
+function parsePeople(path: string): { view: string; id: string | null; sub: string | null } {
   const parts = path.split('/').filter(Boolean);
-  if (parts[0] !== 'people') return { view: 'board', id: null };
-  return { view: parts[1] ?? 'board', id: parts[2] ?? null };
+  if (parts[0] !== 'people') return { view: 'board', id: null, sub: null };
+  return { view: parts[1] ?? 'board', id: parts[2] ?? null, sub: parts[3] ?? null };
 }
 
 export default function HrFlow({ path }: { path: string }) {
-  const { view, id } = parsePeople(path);
+  const { view, id, sub } = parsePeople(path);
   if (view === 'employees' && id === 'new') return <EmployeeComposer />;
+  if (view === 'employees' && id && sub === 'edit') return <EmployeeEditor id={Number(id)} />;
   if (view === 'employees' && id) return <EmployeeDesk id={Number(id)} />;
   if (view === 'employees') return <EmployeeList />;
   if (view === 'employee-ids') return <EmployeeIdentity path={path} />;
@@ -1164,6 +1165,9 @@ function EmployeeDesk({ id }: { id: number }) {
           {can(user, 'hr.contracts.create') && !terminated && (
             <button className="btn btn-primary" onClick={() => navigate('/people/contracts/new', { query: { employee: id } })}>New contract</button>
           )}
+          {can(user, 'hr.employees.update') && (
+            <button className="btn" onClick={() => navigate(`/people/employees/${id}/edit`)}>Edit details</button>
+          )}
           {can(user, 'hr.employees.terminate') && !terminated && (
             <button className="btn btn-warning" disabled={busy} onClick={() => {
               if (window.confirm('Terminate ' + fullName + '?')) act(`/api/ops/hr/employees/${id}/terminate`, {}, 'Terminated');
@@ -1399,6 +1403,138 @@ function EmployeeDesk({ id }: { id: number }) {
           </section>
         </div>
       )}
+    </div>
+  );
+}
+
+function EmployeeEditor({ id }: { id: number }) {
+  const { user } = useAuth();
+  const [doc, setDoc] = useState<Rec | null>(null);
+  const [depts, setDepts] = useState<Rec[]>([]);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [position, setPosition] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const [baseSalary, setBaseSalary] = useState('');
+  const [salaryType, setSalaryType] = useState('MONTHLY');
+  const [hireDate, setHireDate] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [tin, setTin] = useState('');
+  const [nssfNo, setNssfNo] = useState('');
+  const [bankName, setBankName] = useState('');
+  const [bankAccountNo, setBankAccountNo] = useState('');
+  const [status, setStatus] = useState('ACTIVE');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    Promise.all([
+      api<{ data: Rec[] }>('/api/ops/hr/departments'),
+      api<{ data: Rec }>(`/api/ops/hr/employees/${id}`),
+    ])
+      .then(([deptRes, empRes]) => {
+        setDepts(deptRes.data ?? []);
+        const e = empRes.data.employee as Rec;
+        setDoc(empRes.data);
+        setFirstName(String(e.firstName ?? ''));
+        setLastName(String(e.lastName ?? ''));
+        setPosition(String(e.position ?? ''));
+        setDepartmentId(e.departmentId != null ? String(e.departmentId) : '');
+        setBaseSalary(e.baseSalary != null ? String(e.baseSalary) : '');
+        setSalaryType(String(e.salaryType ?? 'MONTHLY'));
+        setHireDate(String(e.hireDate ?? '').slice(0, 10));
+        setEmail(String(e.email ?? ''));
+        setPhone(String(e.phone ?? ''));
+        setTin(String(e.tin ?? ''));
+        setNssfNo(String(e.nssfNo ?? ''));
+        setBankName(String(e.bankName ?? ''));
+        setBankAccountNo(String(e.bankAccountNo ?? ''));
+        setStatus(String(e.status ?? 'ACTIVE'));
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Employee failed'));
+  }, [id]);
+  const canEdit = can(user, 'hr.employees.update');
+  const save = async () => {
+    if (!firstName.trim() || !lastName.trim()) { setError('First and last name are required'); return; }
+    setBusy(true); setError('');
+    try {
+      await api(`/api/ops/hr/employees/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          firstName, lastName,
+          position: position.trim() || null,
+          departmentId: departmentId ? Number(departmentId) : null,
+          baseSalary: baseSalary ? Number(baseSalary) : 0,
+          salaryType,
+          hireDate: hireDate || null,
+          email: email.trim() || null,
+          phone: phone.trim() || null,
+          tin: tin.trim() || null,
+          nssfNo: nssfNo.trim() || null,
+          bankName: bankName.trim() || null,
+          bankAccountNo: bankAccountNo.trim() || null,
+          status,
+        }),
+      });
+      navigate(`/people/employees/${id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+  if (error && !doc) return <ErrorBanner error={error} />;
+  if (!doc) return <PageLoader label="Opening employee..." />;
+  const e = doc.employee as Rec;
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <button className="btn btn-sm" onClick={() => navigate(`/people/employees/${id}`)}>Back</button>
+          <p className="mod-kicker" data-mod="hr">Employee file</p>
+          <h1>Edit {String(e.firstName)} {String(e.lastName)}</h1>
+        </div>
+      </header>
+      {!canEdit && <ErrorBanner error={new Error('You need the HR employee update permission to edit this record.')} />}
+      {error && <ErrorBanner error={error} />}
+      <section className="card card-pad">
+        <div className="form-grid">
+          <div className="field field-required"><label>First name</label><input value={firstName} onChange={(ev) => setFirstName(ev.target.value)} /></div>
+          <div className="field field-required"><label>Last name</label><input value={lastName} onChange={(ev) => setLastName(ev.target.value)} /></div>
+          <div className="field"><label>Position</label><input value={position} onChange={(ev) => setPosition(ev.target.value)} /></div>
+          <div className="field">
+            <label>Department</label>
+            <select value={departmentId} onChange={(ev) => setDepartmentId(ev.target.value)}>
+              <option value="">-</option>
+              {depts.map((d) => <option key={String(d.id)} value={String(d.id)}>{String(d.code)} - {String(d.name)}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>Hire date</label><input type="date" value={hireDate} onChange={(ev) => setHireDate(ev.target.value)} /></div>
+          <div className="field">
+            <label>Salary type</label>
+            <select value={salaryType} onChange={(ev) => setSalaryType(ev.target.value)}>
+              <option value="MONTHLY">Monthly</option>
+              <option value="HOURLY">Hourly</option>
+              <option value="COMMISSION">Commission</option>
+            </select>
+          </div>
+          <div className="field"><label>Basic pay</label><input inputMode="decimal" value={baseSalary} onChange={(ev) => setBaseSalary(ev.target.value)} /></div>
+          <div className="field">
+            <label>Status</label>
+            <select value={status} onChange={(ev) => setStatus(ev.target.value)}>
+              <option value="ACTIVE">Active</option>
+              <option value="PROBATION">Probation</option>
+              <option value="ON_LEAVE">On leave</option>
+              <option value="SUSPENDED">Suspended</option>
+            </select>
+          </div>
+          <div className="field"><label>Work email</label><input type="email" value={email} onChange={(ev) => setEmail(ev.target.value)} /></div>
+          <div className="field"><label>Phone</label><input value={phone} onChange={(ev) => setPhone(ev.target.value)} /></div>
+          <div className="field"><label>TIN</label><input value={tin} onChange={(ev) => setTin(ev.target.value)} /></div>
+          <div className="field"><label>NSSF no</label><input value={nssfNo} onChange={(ev) => setNssfNo(ev.target.value)} /></div>
+          <div className="field"><label>Bank</label><input value={bankName} onChange={(ev) => setBankName(ev.target.value)} /></div>
+          <div className="field"><label>Account no</label><input value={bankAccountNo} onChange={(ev) => setBankAccountNo(ev.target.value)} /></div>
+        </div>
+        <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={busy || !canEdit} onClick={save}>Save changes</button>
+      </section>
     </div>
   );
 }

@@ -120,6 +120,94 @@ export async function terminateEmployee(client: pg.PoolClient, ctx: Ctx, employe
   return { employeeId, employeeNo: res.rows[0].employee_no, status: 'TERMINATED' };
 }
 
+const EDITABLE_EMPLOYEE_STATUSES = ['ACTIVE', 'PROBATION', 'ON_LEAVE', 'SUSPENDED'];
+const EMPLOYEE_SALARY_TYPES = ['MONTHLY', 'HOURLY', 'COMMISSION'];
+
+export async function updateEmployee(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  employeeId: number,
+  input: {
+    firstName?: string;
+    lastName?: string;
+    departmentId?: number | null;
+    position?: string | null;
+    hireDate?: string | null;
+    salaryType?: string;
+    baseSalary?: number;
+    phone?: string | null;
+    email?: string | null;
+    tin?: string | null;
+    nssfNo?: string | null;
+    bankName?: string | null;
+    bankAccountNo?: string | null;
+    status?: string;
+  }
+) {
+  const exists = await client.query(
+    `SELECT id, employee_no FROM employees WHERE id = $1 AND tenant_id = $2 AND company_id = $3`,
+    [employeeId, ctx.tenantId, ctx.companyId]
+  );
+  if (exists.rows.length === 0) throw notFound('Employee not found');
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  const push = (column: string, value: unknown) => {
+    params.push(value);
+    sets.push(`${column} = $${params.length}`);
+  };
+
+  if (input.firstName !== undefined) {
+    const name = String(input.firstName).trim();
+    if (!name) throw badRequest('First name cannot be empty');
+    push('first_name', name);
+  }
+  if (input.lastName !== undefined) {
+    const name = String(input.lastName).trim();
+    if (!name) throw badRequest('Last name cannot be empty');
+    push('last_name', name);
+  }
+  if (input.position !== undefined) push('position', input.position ? String(input.position) : null);
+  if (input.departmentId !== undefined) push('department_id', input.departmentId ? Number(input.departmentId) : null);
+  if (input.hireDate !== undefined) push('hire_date', input.hireDate ? String(input.hireDate).slice(0, 10) : null);
+  if (input.salaryType !== undefined) {
+    const salaryType = String(input.salaryType).toUpperCase();
+    if (!EMPLOYEE_SALARY_TYPES.includes(salaryType)) throw badRequest('Salary type must be MONTHLY, HOURLY or COMMISSION');
+    push('salary_type', salaryType);
+  }
+  if (input.baseSalary !== undefined) push('base_salary', Number(input.baseSalary ?? 0));
+  if (input.phone !== undefined) push('phone', input.phone ? String(input.phone) : null);
+  if (input.email !== undefined) push('email', input.email ? String(input.email) : null);
+  if (input.tin !== undefined) push('tin', input.tin ? String(input.tin) : null);
+  if (input.nssfNo !== undefined) push('nssf_no', input.nssfNo ? String(input.nssfNo) : null);
+  if (input.bankName !== undefined) push('bank_name', input.bankName ? String(input.bankName) : null);
+  if (input.bankAccountNo !== undefined) push('bank_account_no', input.bankAccountNo ? String(input.bankAccountNo) : null);
+  if (input.status !== undefined) {
+    const status = String(input.status).toUpperCase();
+    if (!EDITABLE_EMPLOYEE_STATUSES.includes(status)) {
+      throw badRequest('Status must be ACTIVE, PROBATION, ON_LEAVE or SUSPENDED');
+    }
+    push('status', status);
+  }
+
+  if (sets.length === 0) throw badRequest('Nothing to update');
+  params.push(employeeId, ctx.tenantId);
+  const res = await client.query(
+    `UPDATE employees SET ${sets.join(', ')}, updated_at = now()
+     WHERE id = $${params.length - 1} AND tenant_id = $${params.length}
+     RETURNING employee_no`,
+    params
+  );
+  await logAudit(client, ctx, {
+    action: 'update',
+    resource: 'employees',
+    recordId: employeeId,
+    recordCode: String(res.rows[0].employee_no),
+    metadata: { fields: Object.keys(input) },
+  });
+  return { employeeId, employeeNo: String(res.rows[0].employee_no) };
+}
+
 export async function listEmployees(
   client: pg.PoolClient,
   ctx: Ctx,

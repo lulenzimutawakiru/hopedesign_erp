@@ -751,4 +751,61 @@ describe('HR and payroll', () => {
     await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
     await deleteEmployees([empANoSalary, empBNoBank]);
   }, 30_000);
+
+  it('updates an employee record via PATCH with permission and status guards', async () => {
+    const { token } = await loginAs('hr.hannah');
+    const created = await api.post('/api/ops/hr/employees').set(auth(token)).send({
+      firstName: 'Edit',
+      lastName: 'Candidate',
+      position: 'Clerk',
+      baseSalary: 200000,
+      email: 'edit-candidate@example.com',
+    });
+    expect(created.status).toBe(200);
+    const employeeId = Number(created.body.data.employeeId);
+    const employeeNo = String(created.body.data.employeeNo);
+
+    const patched = await api.patch(`/api/ops/hr/employees/${employeeId}`).set(auth(token)).send({
+      firstName: 'Edited',
+      lastName: 'Record',
+      position: 'Supervisor',
+      baseSalary: 850000,
+      phone: '0700111222',
+      bankName: 'Stanbic',
+      bankAccountNo: '9030012345678',
+      status: 'PROBATION',
+    });
+    expect(patched.status).toBe(200);
+    expect(String(patched.body.data.employeeNo)).toBe(employeeNo);
+
+    const detail = await api.get(`/api/ops/hr/employees/${employeeId}`).set(auth(token));
+    expect(detail.status).toBe(200);
+    const emp = detail.body.data.employee as Record<string, unknown>;
+    expect(emp.firstName).toBe('Edited');
+    expect(emp.lastName).toBe('Record');
+    expect(emp.position).toBe('Supervisor');
+    expect(Number(emp.baseSalary)).toBe(850000);
+    expect(emp.phone).toBe('0700111222');
+    expect(emp.bankName).toBe('Stanbic');
+    expect(emp.bankAccountNo).toBe('9030012345678');
+    expect(emp.status).toBe('PROBATION');
+    // Untouched fields survive.
+    expect(emp.email).toBe('edit-candidate@example.com');
+    expect(emp.employeeNo).toBe(employeeNo);
+
+    // Termination stays a dedicated flow; plain status edits cannot set it.
+    const terminated = await api.patch(`/api/ops/hr/employees/${employeeId}`).set(auth(token)).send({ status: 'TERMINATED' });
+    expect(terminated.status).toBe(400);
+
+    // A user without hr.employees.update cannot edit.
+    const { token: outsider } = await loginAs('sarah.sales');
+    const denied = await api.patch(`/api/ops/hr/employees/${employeeId}`).set(auth(outsider)).send({ position: 'Hacked' });
+    expect(denied.status).toBe(403);
+
+    // Unknown ids 404.
+    const missing = await api.patch('/api/ops/hr/employees/999999999').set(auth(token)).send({ position: 'Ghost' });
+    expect(missing.status).toBe(404);
+
+    await deleteEmployees([employeeId]);
+  }, 30_000);
 });
