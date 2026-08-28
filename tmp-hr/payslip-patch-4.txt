@@ -1,0 +1,71 @@
+*** Begin Patch
+*** Update File: apps/api/src/services/documents.ts
+@@
+   data.totals.forEach(([label, value], i) => {
+     const last = i === data.totals.length - 1;
+     const row = ws.addRow([label, value]);
+     row.font = { bold: true, color: { argb: last ? 'FFFFFFFF' : navy } };
+     if (last) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+   });
++  const xBreakdown = data.payBreakdown ?? [];
++  const xBrackets = data.payeBrackets;
++  if (xBreakdown.length || xBrackets?.bands.length) {
++    ws.addRow([]);
++    if (xBreakdown.length) {
++      ws.addRow(['NET PAY CALCULATION']).font = { bold: true, color: { argb: navy } };
++      xBreakdown.forEach(([label, value], i) => {
++        const last = i === xBreakdown.length - 1;
++        const row = ws.addRow([label, value]);
++        row.font = { bold: true, color: { argb: last ? 'FFFFFFFF' : navy } };
++        if (last) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
++      });
++    }
++    if (xBrackets?.bands.length) {
++      ws.addRow([]);
++      ws.addRow(['PAYE BRACKETS APPLIED (MONTHLY UGX)']).font = { bold: true, color: { argb: navy } };
++      const bhr = ws.addRow(['Monthly taxable income (UGX)', 'PAYE rate']);
++      bhr.font = { bold: true, color: { argb: 'FFFFFFFF' }, name: 'Calibri', size: 9 };
++      bhr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
++      xBrackets.bands.forEach(([band, rate]) => ws.addRow([band, rate]));
++      if (xBrackets.note) ws.addRow([xBrackets.note]);
++    }
++  }
+   if (data.notes.length) {
+     ws.addRow([]);
+     ws.addRow(['Terms and notes']).font = { bold: true, color: { argb: navy } };
+     for (const note of data.notes) ws.addRow([note]);
+   }
+@@
+   rows.push([]);
+   for (const [label, value] of data.totals) rows.push([label, value]);
++  const csvBreakdown = data.payBreakdown ?? [];
++  const csvBrackets = data.payeBrackets;
++  if (csvBreakdown.length || csvBrackets?.bands.length) {
++    rows.push([]);
++    if (csvBreakdown.length) {
++      rows.push(['NET PAY CALCULATION']);
++      for (const [label, value] of csvBreakdown) rows.push([label, value]);
++    }
++    if (csvBrackets?.bands.length) {
++      rows.push([]);
++      rows.push(['PAYE BRACKETS APPLIED (MONTHLY UGX)']);
++      rows.push(['Monthly taxable income (UGX)', 'PAYE rate']);
++      for (const [band, rate] of csvBrackets.bands) rows.push([band, rate]);
++      if (csvBrackets.note) rows.push([csvBrackets.note]);
++    }
++  }
+   if (data.notes.length) {
+     rows.push([]);
+     rows.push(['Terms and notes']);
+     for (const note of data.notes) rows.push([note]);
+   }
+@@
+         docNo: data.code || null,
+         status: statusOf(data, opts) || null,
+         classification: classifOf(data, opts),
++        payBreakdown: data.payBreakdown ?? [],
++        payeBrackets: data.payeBrackets ?? null,
+         authenticity: authEnabled(opts)
+           ? { fingerprint: opts.fingerprint, token: opts.token, verifyUrl: opts.verifyUrl }
+           : null,
+*** End Patch

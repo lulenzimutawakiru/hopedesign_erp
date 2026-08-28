@@ -1,0 +1,13 @@
+*** Begin Patch
+*** Update File: apps/api/tests/loans.test.ts
+@@
+-    expect(Number(mine!.paye)).toBe(802000);
++    expect(Number(mine!.paye)).toBe(743250);
+     expect(Number(mine!.nssf)).toBe(150000);
+     expect(Number(mine!.loans)).toBe(500000);
+     expect(Number(mine!.advances)).toBe(300000);
+-    // 3,000,000 - 802,000 - 150,000 - 500,000 - 300,000 = 1,248,000
+-    expect(Number(mine!.netPay)).toBe(1248000);
++    // 3,000,000 - 743,250 - 150,000 - 500,000 - 300,000 = 1,306,750
++    expect(Number(mine!.netPay)).toBe(1306750);
+*** End Patch

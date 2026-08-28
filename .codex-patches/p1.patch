@@ -1,0 +1,66 @@
+﻿*** Begin Patch
+*** Update File: apps/web/src/views/ContractFlow.tsx
+@@
+ function ContractList() {
+   const { user } = useAuth();
+   const [items, setItems] = useState<Rec[]>([]);
+   const [total, setTotal] = useState(0);
+   const [page, setPage] = useState(1);
+   const [q, setQ] = useState('');
+   const [status, setStatus] = useState('');
+   const [contractType, setContractType] = useState('');
++  const [statuses, setStatuses] = useState(() => currentQuery().get('statuses') ?? '');
+   const [error, setError] = useState('');
+   const [loading, setLoading] = useState(false);
+   const [selected, setSelected] = useState<Set<number>>(new Set());
+   const load = useCallback(() => {
+     setError('');
+     setLoading(true);
+     const p: string[] = [];
+     if (q.trim()) p.push('q=' + encodeURIComponent(q.trim()));
+     if (status) p.push('status=' + encodeURIComponent(status));
+     if (contractType) p.push('contractType=' + encodeURIComponent(contractType));
++    if (statuses && statuses !== 'expiring') p.push('statuses=' + encodeURIComponent(statuses));
+     p.push('page=' + page, 'pageSize=40');
+     api<{ data: { items: Rec[]; total: number } }>('/api/ops/hr/contracts?' + p.join('&'))
+       .then((r) => { setItems(r.data.items ?? []); setTotal(r.data.total ?? 0); })
+       .catch((e) => setError(e instanceof Error ? e.message : 'Contract list failed'))
+       .finally(() => setLoading(false));
+-  }, [q, status, contractType, page]);
++  }, [q, status, contractType, statuses, page]);
+@@
+       } else if (e.key === 'Escape') {
+         if (selected.size > 0) setSelected(new Set());
+         else if (q.trim()) resetPage(setQ, '');
+         else if (status) resetPage(setStatus, '');
+         else if (contractType) resetPage(setContractType, '');
++        else if (statuses) resetPage(setStatuses, '');
+       }
+@@
+-  }, [user, q, status, contractType, selected.size]);
++  }, [user, q, status, contractType, statuses, selected.size]);
+@@
+           <span className="kbd-hints" aria-hidden><kbd>/</kbd> search &#183; <kbd>n</kbd> new &#183; <kbd>esc</kbd> clear</span>
+         </div>
++        <div className="saved-views" role="group" aria-label="Saved views">
++          <span className="saved-views-label muted">Views</span>
++          {SAVED_VIEWS.map(([v, label]) => {
++            const active = v === 'expiring' ? statuses === 'expiring' : statuses === v;
++            return (
++              <button
++                key={label}
++                type="button"
++                className={'view-chip' + (active ? ' active' : '')}
++                aria-pressed={active}
++                onClick={() => {
++                  if (v === 'expiring') navigate('/people/contracts/expiring');
++                  else resetPage(setStatuses, v);
++                }}
++              >
++                {label}
++              </button>
++            );
++          })}
++        </div>
+         <div className="list-meta">
+*** End Patch

@@ -1,0 +1,6 @@
+﻿*** Begin Patch
+*** Update File: apps/web/src/views/ContractFlow.tsx
+@@
+         {tab === 'variations' && (
+           <div className="stack">
+*** End Patch

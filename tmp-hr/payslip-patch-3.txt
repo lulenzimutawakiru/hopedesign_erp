@@ -1,0 +1,83 @@
+*** Begin Patch
+*** Update File: apps/api/src/services/documents.ts
+@@
+     y -= rowH;
+   });
+   doc.cursorY = top - h - 8;
+ }
+ 
++function drawPaySlipExtras(doc: PdfDoc, data: DocData, brand: DocBrand): void {
++  const breakdown = data.payBreakdown ?? [];
++  const brackets = data.payeBrackets;
++  if (!breakdown.length && !brackets?.bands.length) return;
++  if (breakdown.length) {
++    drawContractBand(doc, 'Net Pay calculation', brand);
++    const rowH = 15;
++    const h = breakdown.length * rowH + 12;
++    if (doc.cursorY - h < BOTTOM) doc.newPage();
++    const top = doc.cursorY;
++    doc.rect(MARGIN, top - h, TABLE_W, h, BRAND.headerFill);
++    doc.rect(MARGIN, top - h, 2.6, h, brand.teal);
++    let y = top - 6;
++    breakdown.forEach(([label, value], i) => {
++      const last = i === breakdown.length - 1;
++      if (last) {
++        doc.rect(MARGIN, y - rowH - 2, TABLE_W, rowH + 6, brand.navy);
++        doc.rect(MARGIN, y - rowH - 2, 2.6, rowH + 6, brand.teal);
++        doc.rawText(label.toUpperCase(), MARGIN + 10, y - 11, 8.2, { bold: true, color: BRAND.white, maxWidth: TABLE_W * 0.62 });
++        doc.rawText(value, MARGIN + 8, y - 11, 9.4, { bold: true, color: BRAND.white, align: 'right', maxWidth: TABLE_W - 16 });
++      } else {
++        doc.rawText(label, MARGIN + 10, y - 10, 7.8, { color: GRAY, maxWidth: TABLE_W * 0.62 });
++        doc.rawText(value, MARGIN + 8, y - 10, 8.4, { bold: true, color: INK, align: 'right', maxWidth: TABLE_W - 16 });
++        doc.line(MARGIN + 10, y - rowH, MARGIN + TABLE_W - 8, y - rowH, LINE, 0.35);
++      }
++      y -= rowH;
++    });
++    doc.cursorY = top - h - 8;
++  }
++  if (brackets?.bands.length) {
++    drawContractBand(doc, 'PAYE brackets applied', brand);
++    const columns: PdfTableColumn[] = [
++      { key: 'band', label: 'Monthly taxable income (UGX)', weight: 2.4 },
++      { key: 'rate', label: 'PAYE rate', align: 'right', weight: 1 },
++    ];
++    const rows = brackets.bands.map(([band, rate]) => ({ band, rate }));
++    doc.table({
++      x: MARGIN,
++      width: TABLE_W,
++      columns,
++      rows,
++      headerFill: brand.navy,
++      headerColor: BRAND.white,
++      zebra: true,
++      zebraFill: BRAND.zebra,
++      grid: 'horizontal',
++      lineColor: LINE,
++      cellPadding: 6,
++      headerSize: 7.4,
++      size: 8.3,
++    });
++    doc.cursorY -= 6;
++    if (brackets.note) {
++      const wrapped = wrapHard(brackets.note, 7.6, false, TABLE_W - 20);
++      const h = wrapped.length * 7.6 * 1.42 + 14;
++      if (doc.cursorY - h < BOTTOM) doc.newPage();
++      const top = doc.cursorY;
++      doc.rect(MARGIN, top - h, TABLE_W, h, BRAND.headerFill);
++      doc.rect(MARGIN, top - h, 2.6, h, brand.teal);
++      let y = top - 11;
++      for (const ln of wrapped) {
++        doc.rawText(ln, MARGIN + 10, y, 7.6, { color: GRAY, maxWidth: TABLE_W - 20 });
++        y -= 7.6 * 1.42;
++      }
++      doc.cursorY = top - h - 5;
++    }
++  }
++}
++
+ async function drawAuthenticityBlock(doc: PdfDoc, opts: DocumentRenderOpts, brand: DocBrand): Promise<void> {
+@@
+   drawTotals(doc, data.totals, brand);
++  drawPaySlipExtras(doc, data, brand);
+   drawContractNotices(doc, data.notes, brand, 'Terms and notes');
+*** End Patch

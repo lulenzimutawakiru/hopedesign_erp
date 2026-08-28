@@ -1,0 +1,30 @@
+﻿*** Begin Patch
+*** Update File: apps/web/src/views/ContractFlow.tsx
+@@
+         </div>
+       </header>
++      <section className="hero-card card" aria-label="Contract summary">
++        <div className="hero-main">
++          <div className="hero-id">
++            <span className="hero-kicker">Employment contract</span>
++            <h2 className="cell-mono">{String(c.contractNo ?? '-')}</h2>
++          </div>
++          <Avatar
++            name={String(c.firstName ?? '') + ' ' + String(c.lastName ?? '')}
++            sub={(c.jobTitle && c.departmentName ? String(c.jobTitle) + ' \u00B7 ' + String(c.departmentName) : c.jobTitle ? String(c.jobTitle) : c.departmentName ? String(c.departmentName) : '')}
++            size="lg"
++          />
++          <span className="hero-status"><Badge value={c.status} /></span>
++        </div>
++        <div className="hero-meta">
++          <span>Started <b>{fmtDate(c.startDate)}</b></span>
++          <span>Ends <b>{fmtDate(c.endDate)}</b></span>
++          <span>Version <b>v{String(c.version ?? 1)}</b></span>
++        </div>
++        <div className="hero-actions">
++          {canView && <button className="btn btn-primary" disabled={busy !== ''} onClick={downloadPdf}>View contract</button>}
++        </div>
++      </section>
+       {terminal ? (
+         <div className={'lc-note ' + terminal.kind}>
+*** End Patch

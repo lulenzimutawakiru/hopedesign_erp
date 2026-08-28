@@ -234,6 +234,11 @@ const MODULES = {
     warnings: ["view","create","update","issue","expire"],
     // HR asset assignments
     asset_assignments: ["view","create","update","return","delete"],
+    // Employee identity / ID cards
+    employee_assignments: ["view","create"],
+    employee_identity: ["view","generate","replace","suspend"],
+    employee_card: ["view","generate","issue","print","replace","suspend"],
+    employee_qr: ["view","generate","scan","verify"],
     // Offboarding / alumni (exit lifecycle)
     offboardings: ["view","create","update","start","complete","cancel","waive","export"],
     alumni: ["view","export"],
@@ -284,6 +289,7 @@ const MODULES = {
     register: ["view","create","update","delete","submit","approve","reject","dispose","transfer","audit","print","export","import","capitalize","depreciate","impair","assign","verify","scan","maintain","inspect","checkin","checkout","restore","archive","comment"],
     tags: ["view","create","generate","print","reprint","replace","void","archive"],
     transfers: ["view","create","update","submit","approve","reject","complete","cancel"],
+    movements: ["view","create"],
     assignments: ["view","create","complete","return","cancel"],
     audits: ["view","create","update","submit","approve","close","cancel"],
     audit_items: ["view","create","update"],
@@ -354,6 +360,11 @@ const MODULES = {
     backups: ["view","restore"],
     health: ["view"],
     audit_logs: ["view"],
+    company_config: ["administer","update","view"],
+    integrations: ["manage","view"],
+    notifications: ["update","view"],
+    numbering: ["update","view"],
+    organization: ["update","view"],
   },
   database: {
     health: ["view"],
@@ -404,7 +415,7 @@ const ROLES = [
   { code: "system_administrator", name: "System Administrator", grants: ["admin.*", "database.*", "settings", "workflows.*", "reports.*", "expenditure.*"] },
   { code: "security_administrator", name: "Security Administrator", grants: ["admin.users.*", "admin.roles.*", "admin.permissions.*", "admin.policies.*", "admin.sod.*", "admin.audit.*", "qr.*", "security_printing.audit.*"] },
   { code: "it_support_administrator", name: "IT Support Administrator", grants: ["admin.users.view", "admin.settings.*", "documents.*"] },
-  { code: "integration_administrator", name: "Integration Administrator", grants: ["admin.imports.*", "admin.exports.*", "admin.events.*", "admin.settings.view"] },
+  { code: "integration_administrator", name: "Integration Administrator", grants: ["admin.imports.*", "admin.exports.*", "admin.events.*", "admin.integrations.*", "admin.settings.view"] },
   { code: "backup_administrator", name: "Backup Administrator", grants: ["admin.settings.view", "admin.audit.view"] },
   { code: "audit_administrator", name: "Audit Administrator", grants: ["admin.audit.*", "admin.events.*", "reports.*"] },
   // Executive
@@ -499,7 +510,7 @@ const ROLES = [
   // HR
   { code: "hr_manager", name: "HR Manager", grants: ["hr.*", "workflows.instances.*"] },
   { code: "hr_officer", name: "HR Officer", grants: ["hr.employees.*", "hr.contracts.*", "hr.certificates.*", "hr.legal_rules.view", "hr.attendance.*", "hr.leave.*", "hr.loans.*", "hr.divisions.*", "hr.locations.*", "hr.org_units.*", "hr.teams.*", "hr.job_families.*", "hr.job_grades.*", "hr.positions.*", "hr.position_assignments.*", "hr.workforce_plans.*", "hr.shifts.*", "hr.shift_assignments.*", "hr.timesheets.*", "hr.overtime.*", "hr.leave_types.*", "hr.leave_policies.*", "hr.leave_accruals.*", "hr.leave_balances.*", "hr.holidays.*", "hr.benefit_plans.*", "hr.benefit_enrollments.*", "hr.benefit_claims.*", "hr.grievances.*", "hr.investigations.*", "hr.disciplinary.*", "hr.warnings.*", "hr.asset_assignments.*", "hr.employee_requests.*", "hr.projects.*", "hr.onboarding.*", "hr.offboardings.*", "hr.alumni.view", "hr.payroll_components.view", "hr.employee_salaries.view", "hr.employee_earnings.view", "hr.employee_deductions.view", "hr.employee_benefits.view", "hr.overtime_records.view", "hr.bonus_records.view", "hr.commission_records.view", "hr.final_settlements.view", "hr.final_settlements.create", "hr.final_settlements.update", "hr.final_settlements.submit"] },
-  { code: "hr_assistant", name: "HR Assistant", grants: ["hr.employees.view", "hr.employees.create", "hr.attendance.*", "hr.leave.view", "hr.positions.view", "hr.onboarding.*", "hr.offboardings.view", "hr.alumni.view", "hr.employee_requests.*", "hr.leave_types.view", "hr.holidays.view", "hr.asset_assignments.view"] },
+  { code: "hr_assistant", name: "HR Assistant", grants: ["hr.employees.view", "hr.employees.create", "hr.attendance.*", "hr.leave.view", "hr.positions.view", "hr.onboarding.*", "hr.offboardings.view", "hr.alumni.view", "hr.employee_requests.*", "hr.leave_types.view", "hr.holidays.view", "hr.asset_assignments.view", "hr.employee_identity.view", "hr.employee_card.view", "hr.employee_qr.view", "hr.employee_assignments.view"] },
   { code: "recruitment_officer", name: "Recruitment Officer", grants: ["hr.requisitions.*", "hr.vacancies.*", "hr.vacancy_channels.*", "hr.candidates.*", "hr.applications.*", "hr.interviews.*", "hr.assessments.*", "hr.offers.*", "hr.onboarding.view", "hr.positions.view", "hr.workforce_plans.view", "hr.employees.view"] },
   { code: "training_officer", name: "Training Officer", grants: ["hr.training_catalog.*", "hr.training_sessions.*", "hr.training_requests.*", "hr.training_enrollments.*", "hr.training_certificates.*", "hr.competencies.*", "hr.employees.view"] },
   { code: "performance_officer", name: "Performance Officer", grants: ["hr.performance_goals.*", "hr.performance_kpis.*", "hr.performance_reviews.*", "hr.pips.*", "hr.employees.view"] },
@@ -521,9 +532,9 @@ const ROLES = [
   { code: "driver", name: "Driver", grants: ["logistics.trips.view", "logistics.trips.update", "logistics.deliveries.view", "logistics.deliveries.deliver", "qr.scan.*", "sales.delivery_notes.view"] },
   // Assets
   { code: "asset_manager", name: "Asset Manager", grants: ["assets.*", "finance.journals.view", "finance.journals.create", "finance.journals.post", "admin.audit.view"] },
-  { code: "asset_officer", name: "Asset Officer", grants: ["assets.register.*", "assets.tags.*", "assets.transfers.*", "assets.assignments.*", "assets.locations.*", "assets.categories.*", "assets.types.*", "assets.classes.*", "assets.maintenance.*", "assets.warranties.*", "assets.insurance.*", "assets.documents.*", "assets.photos.*", "assets.depreciation.*", "assets.scans.*", "assets.timeline.*", "assets.dashboards.*", "assets.reports.*", "assets.imports.*", "assets.exports.*"] },
+  { code: "asset_officer", name: "Asset Officer", grants: ["assets.register.*", "assets.tags.*", "assets.transfers.*", "assets.movements.*", "assets.assignments.*", "assets.locations.*", "assets.categories.*", "assets.types.*", "assets.classes.*", "assets.maintenance.*", "assets.warranties.*", "assets.insurance.*", "assets.documents.*", "assets.photos.*", "assets.depreciation.*", "assets.scans.*", "assets.timeline.*", "assets.dashboards.*", "assets.reports.*", "assets.imports.*", "assets.exports.*"] },
   { code: "asset_custodian", name: "Asset Custodian", grants: ["assets.register.view", "assets.register.print", "assets.register.scan", "assets.register.verify", "assets.register.comment", "assets.tags.view", "assets.scans.*", "assets.timeline.*", "assets.dashboards.view", "assets.documents.view", "assets.photos.view", "qr.scan.*"] },
-  { code: "asset_auditor", name: "Asset Auditor", grants: ["assets.register.view", "assets.register.audit", "assets.register.verify", "assets.register.scan", "assets.audits.*", "assets.audit_items.*", "assets.anomalies.*", "assets.scans.*", "assets.timeline.*", "assets.dashboards.view", "assets.reports.view", "admin.audit.view"] },
+  { code: "asset_auditor", name: "Asset Auditor", grants: ["assets.register.view", "assets.register.audit", "assets.register.verify", "assets.register.scan", "assets.audits.*", "assets.audit_items.*", "assets.anomalies.*", "assets.movements.view", "assets.scans.*", "assets.timeline.*", "assets.dashboards.view", "assets.reports.view", "admin.audit.view"] },
   { code: "asset_storekeeper", name: "Asset Storekeeper", grants: ["assets.register.view", "assets.register.scan", "assets.register.verify", "assets.register.checkin", "assets.register.checkout", "assets.register.comment", "assets.tags.view", "assets.tags.print", "assets.locations.view", "assets.scans.*", "assets.timeline.*", "assets.dashboards.view", "qr.scan.*"] },
   { code: "asset_finance", name: "Asset Finance Officer", grants: ["assets.register.view", "assets.register.capitalize", "assets.register.depreciate", "assets.register.impair", "assets.depreciation.*", "assets.impairments.*", "assets.disposals.*", "assets.reports.*", "assets.exports.*", "finance.journals.view", "finance.journals.post"] },
   // Analytics

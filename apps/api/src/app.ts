@@ -95,7 +95,7 @@ app.use('/api/ops/inventory-intel', inventoryIntelRouter);
 app.use('/api/ops/finance', financeOpsRouter);
 app.use('/api/ops/hr', hrOpsRouter);
 app.use('/api/ops/hr/identity', employeeIdentityOpsRouter);
-  app.use('/api/ops/hr', contractsOpsRouter);
+app.use('/api/ops/hr', contractsOpsRouter);
 app.use('/api/ops/hcm', hcmOpsRouter);
 app.use('/api/ops/security', securityOpsRouter);
 app.use('/api/ops/mrp', mrpOpsRouter);

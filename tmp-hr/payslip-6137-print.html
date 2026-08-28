@@ -1,0 +1,199 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Payslip PS-2026-00006124 — Hope Design Group Ltd</title>
+<style>
+  :root {
+    --navy: #1261A0;
+    --teal: #00A6A6;
+    --blue: #1261A0;
+    --line: #D9E1E8;
+    --ink: #172B3A;
+    --muted: #5F6B76;
+    --paper: #F5F7FA;
+    --fill: #F4F6F8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: Calibri, 'Segoe UI', Arial, Helvetica, sans-serif;
+    color: var(--ink);
+    background: #fff;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .sheet { max-width: 860px; margin: 0 auto; padding: 0 0 28px; }
+  .topbar { height: 8px; background: var(--navy); }
+  .topbar::after { content: ''; display: block; height: 3px; background: var(--teal); }
+  .letterhead { padding: 18px 32px 0; }
+  .lh-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+  .lh-brand { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+  .brand-mark { width: 42px; height: 42px; flex: 0 0 auto; display: block; }
+  .brand-logo { height: 42px; width: auto; max-width: 120px; flex: 0 0 auto; object-fit: contain; }
+  .co-name { font-size: 18px; font-weight: 700; color: var(--navy); letter-spacing: 0.01em; margin: 0; }
+  .co-tag { color: var(--teal); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin: 2px 0 6px; font-weight: 600; }
+  .c-line { color: var(--muted); font-size: 9.5px; line-height: 1.45; }
+  .lh-doc { text-align: right; flex: 0 0 auto; max-width: 46%; }
+  .doc-kicker { font-size: 8.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--teal); font-weight: 700; margin-bottom: 4px; }
+  .doc-title { font-size: 20px; font-weight: 700; color: var(--navy); letter-spacing: 0.04em; margin: 0; line-height: 1.15; }
+  .doc-no { font-weight: 700; color: var(--teal); font-size: 12.5px; margin-top: 4px; letter-spacing: 0.02em; }
+  .doc-sub { color: var(--muted); font-size: 10.5px; margin-top: 4px; }
+  .lh-rule { height: 2.2px; background: var(--navy); margin: 14px 0 0; }
+  .lh-rule::after { content: ''; display: block; height: 1.4px; background: var(--teal); margin-top: 1.6px; }
+  .meta-stamp { color: var(--muted); font-size: 9.5px; margin: 12px 32px 0; }
+  .facts { display: grid; grid-template-columns: repeat(4, 1fr); margin: 14px 32px 0; border: 1px solid var(--line); background: var(--fill); }
+  .fact { padding: 8px 12px; border-right: 1px solid var(--line); }
+  .fact:last-child { border-right: 0; }
+  .fact .k { font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .fact .v { font-size: 11px; font-weight: 700; color: var(--navy); margin-top: 3px; word-break: break-word; }
+  .parties { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 32px 0; align-items: stretch; }
+  .party { background: var(--fill); border-left: 3px solid var(--teal); padding: 10px 12px; }
+  .passport-slot { max-width: 128px; text-align: center; }
+  .passport-photo { width: 86px; height: 110px; object-fit: cover; object-position: center top; border: 1px solid var(--navy); background: #fff; display: block; margin: 8px auto 0; }
+  .party .h { font-size: 8.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
+  .party .n { font-size: 12.5px; font-weight: 700; color: var(--navy); margin: 3px 0 4px; }
+  .party .l { font-size: 10px; color: #3d4c58; line-height: 1.45; }
+  .body { padding: 8px 32px 0; }
+  table.data, table { border-collapse: collapse; width: 100%; font-size: 10.5px; margin-top: 12px; }
+  table.data th, table th { background: var(--navy); color: #fff; font-weight: 600; letter-spacing: 0.04em; font-size: 9.5px; text-transform: uppercase; border: 0; padding: 7px 8px; text-align: left; }
+  table.data td, table td { border: 0; border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; color: var(--ink); }
+  table.data tbody tr:nth-child(even) td, table tbody tr:nth-child(even) td { background: #F6F8F9; }
+  .totals { margin: 16px 0 0 auto; width: 280px; font-size: 11px; }
+  .totals .row { display: flex; justify-content: space-between; padding: 4px 8px; color: var(--ink); }
+  .totals .row.total { background: var(--navy); color: #fff; font-weight: 700; padding: 8px 10px; margin-top: 4px; }
+  .notes { margin-top: 18px; font-size: 10.5px; color: var(--ink); }
+  .notes h4 { margin: 0 0 6px; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--navy); }
+  .notes p { margin: 0 0 8px; }
+  .signs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 28px; margin-top: 36px; }
+  .contract-intro { font-size: 11px; color: var(--ink); margin: 4px 0 10px; text-align: justify; }
+  .band { background: var(--navy); color: #fff; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; padding: 7px 10px; margin: 16px 0 10px; border-left: 3px solid var(--teal); }
+  .band.light { background: var(--fill); color: var(--navy); }
+  .clause { margin: 0 0 16px; page-break-inside: avoid; }
+  .clause h4 { margin: 0 0 4px; font-size: 12px; color: var(--navy); }
+  .clause p { margin: 0 0 6px; font-size: 11px; text-align: justify; white-space: pre-wrap; }
+  .clause .legal-ref { font-size: 9px; color: var(--muted); }
+  .sign .line { border-bottom: 1px solid #9aa8b3; height: 32px; }
+  .sign .lbl { font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-top: 6px; font-weight: 700; }
+  .sign .nm { font-size: 10px; color: var(--ink); margin-top: 2px; }
+  .sign .dt { font-size: 8px; color: var(--muted); margin-top: 2px; }
+  .sign .sig-img { height: 34px; max-width: 160px; object-fit: contain; display: block; margin-bottom: 4px; }
+  .auth { margin: 22px 32px 0; background: var(--fill); border: 1px solid var(--line); border-left: 3px solid var(--teal); box-shadow: 0 1px 2px rgba(11, 31, 51, 0.08); }
+  .auth-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 14px; background: var(--navy); }
+  .auth-title { display: flex; align-items: center; gap: 8px; color: #fff; font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+  .auth-title svg { width: 16px; height: 16px; display: block; flex: 0 0 auto; }
+  .auth-chip { background: var(--teal); color: #fff; font-size: 7.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; padding: 2px 9px; border-radius: 999px; }
+  .auth-body { display: flex; gap: 16px; align-items: flex-start; padding: 12px 14px; }
+  .auth-qr { flex: 0 0 auto; }
+  .auth-qr-box { background: #fff; border: 1px solid var(--line); padding: 6px; box-shadow: 0 1px 2px rgba(11, 31, 51, 0.08); }
+  .auth-qr svg { width: 96px; height: 96px; display: block; }
+  .auth-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+  .auth-row { display: flex; gap: 10px; align-items: baseline; }
+  .auth-label { flex: 0 0 118px; font-size: 7.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .auth-value { font-size: 9px; color: var(--ink); word-break: break-all; min-width: 0; }
+  .auth-value.mono { font-family: 'IBM Plex Mono', Consolas, Menlo, monospace; font-size: 8px; color: #445; }
+  .auth-value.vu { color: var(--blue); text-decoration: none; }
+  .auth-note { margin: 4px 0 0; font-size: 8.5px; color: var(--muted); line-height: 1.5; }
+  .foot { margin: 18px 32px 0; padding-top: 8px; border-top: 2px solid var(--navy); color: var(--muted); font-size: 8.5px; display: flex; justify-content: space-between; gap: 16px; }
+  .foot .foot-l { display: flex; align-items: center; min-width: 0; }
+  .foot-logo { height: 26px; width: auto; max-width: 120px; object-fit: contain; flex: 0 0 auto; margin-right: 8px; }
+  .foot .r { text-align: right; }
+  @page { size: A4; margin: 12mm 12mm 14mm; }
+  @media print {
+    .sheet { max-width: none; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .no-print { display: none; }
+    .letterhead, .facts, .parties, .auth, table.data th, table th, .clause, .band, .sign { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="topbar"></div>
+  <header class="letterhead">
+    <div class="lh-row">
+      <div class="lh-brand">
+        <svg class="brand-mark" viewBox="0 0 40 40" width="42" height="42" aria-hidden="true">
+      <rect width="40" height="40" rx="8" fill="#1261A0"/>
+      <rect x="8" y="8" width="6.2" height="24" rx="1.2" fill="#fff"/>
+      <rect x="25.8" y="8" width="6.2" height="24" rx="1.2" fill="#fff"/>
+      <rect x="8" y="17" width="24" height="6" rx="1" fill="#00A6A6"/>
+      <rect x="18.6" y="14.4" width="2.8" height="11.2" rx="0.4" fill="#1261A0"/>
+      <rect x="14.4" y="18.6" width="11.2" height="2.8" rx="0.4" fill="#1261A0"/>
+    </svg>
+        <div>
+          <p class="co-name">Hope Design Group Ltd</p>
+          
+          <div class="c-line">Plot 12, Namanve Industrial Park, Kampala, Uganda</div><div class="c-line">+256 414 000 000  ·  info@hopedesign.co.ug  ·  https://hopedesign.co.ug</div><div class="c-line">TIN 1012345678  ·  VRN VAT-UG-1020304  ·  Currency UGX</div>
+        </div>
+      </div>
+      <div class="lh-doc">
+        <div class="doc-kicker">Payroll document</div>
+        <h1 class="doc-title">Payslip</h1>
+        <div class="doc-no">PS-2026-00006124</div>
+        <div class="doc-sub">Anthony Njenga Chege  ·  1 September 2026 to 30 October 2026</div>
+      </div>
+    </div>
+    <div class="lh-rule"></div>
+  </header>
+
+  <div class="meta-stamp">Issued by System Administrator on 28 August 2026, 08:55 · Ref 2f3817c3-117c-45b6-aa68-a3f8490a86c3</div>
+  <div class="facts"><div class="fact"><div class="k">Document No</div><div class="v">PS-2026-00006124</div></div><div class="fact"><div class="k">Issue Date</div><div class="v">28 August 2026, 08:55</div></div><div class="fact"><div class="k">Payslip No</div><div class="v">PS-2026-00006124</div></div><div class="fact"><div class="k">Payroll No</div><div class="v">PAY-2026-00000590</div></div><div class="fact"><div class="k">Period</div><div class="v">1 September 2026 to 30 October 2026</div></div><div class="fact"><div class="k">Run Type</div><div class="v">Normal</div></div><div class="fact"><div class="k">Currency</div><div class="v">UGX</div></div><div class="fact"><div class="k">Taxable Pay</div><div class="v">UGX 2,041,769.45</div></div><div class="fact"><div class="k">Status</div><div class="v">Submitted</div></div><div class="fact"><div class="k">Classification</div><div class="v">Confidential</div></div></div>
+  <div class="parties"><aside class="party">
+        <div class="h">Employer</div>
+        <div class="n">Hope Design Group Ltd</div>
+        <div class="l">Plot 12, Namanve Industrial Park, Kampala, Uganda</div><div class="l">Phone: +256 414 000 000</div><div class="l">Email: info@hopedesign.co.ug</div><div class="l">TIN 1012345678</div>
+      </aside><aside class="party">
+        <div class="h">Employee</div>
+        <div class="n">Anthony Njenga Chege</div>
+        <div class="l">Employee No EMP-2026-00001120</div><div class="l">Oper.&amp; flo.Supv.</div><div class="l">Production</div><div class="l">Email: anthony.chege@hopedesign.co.ug</div>
+      </aside></div>
+
+  <div class="body"><div class="band">Earnings and deductions</div>
+<table class="data"><thead><tr><th>#</th><th>Type</th><th>Component</th><th>Detail</th><th>Amount</th></tr></thead><tbody><tr><td>1</td><td>Earning</td><td>Basic pay</td><td>Contracted monthly salary</td><td>1,849,231.00</td></tr><tr><td>2</td><td>Earning</td><td>Allowances</td><td>Taxable allowances for the period</td><td>300,000.00</td></tr><tr><td>3</td><td>Deduction</td><td>PAYE</td><td>Pay-As-You-Earn (Income Tax Act)</td><td>500,780.84</td></tr><tr><td>4</td><td>Deduction</td><td>NSSF (employee)</td><td>National Social Security Fund employee contribution</td><td>107,461.55</td></tr><tr><td>5</td><td>Deduction</td><td>Local Service Tax</td><td>Local Service Tax for the period</td><td>25,000.00</td></tr></tbody></table>
+<div class="totals"><div class="row"><span>Gross Pay</span><span>UGX 2,149,231.00</span></div><div class="row"><span>Total Deductions</span><span>UGX 633,242.39</span></div><div class="row"><span>Net Pay</span><span>UGX 1,515,988.61</span></div><div class="row total"><span>Employer NSSF</span><span>UGX 214,923.10</span></div></div>
+<div class="band">Net Pay calculation</div>
+<div class="totals"><div class="row"><span>Gross Pay</span><span>UGX 2,149,231.00</span></div><div class="row"><span>Less: Employee NSSF (5%)</span><span>(UGX 107,461.55)</span></div><div class="row"><span>Less: PAYE (Income Tax)</span><span>(UGX 500,780.84)</span></div><div class="row"><span>Less: Local Service Tax</span><span>(UGX 25,000.00)</span></div><div class="row total"><span>Net Pay</span><span>UGX 1,515,988.61</span></div></div>
+<div class="band">PAYE brackets applied</div>
+<table class="data"><thead><tr><th>Monthly taxable income (UGX)</th><th>PAYE rate</th></tr></thead><tbody><tr><td>Up to 335,000</td><td>0%</td></tr><tr><td>335,001 – 410,000</td><td>20%</td></tr><tr><td>410,001 – 485,000</td><td>25%</td></tr><tr><td>485,001 – 10,000,000</td><td>30%</td></tr><tr><td>Above 10,000,000</td><td>40%</td></tr></tbody></table>
+<div class="notes"><p>PAYE is applied to taxable pay after deducting the employee NSSF contribution. Up to UGX 10,000,000: 33,750 + 30% of the excess over 485,000. Above UGX 10,000,000: PAYE on 10,000,000 + 40% of the excess.</p></div>
+<div class="band">Terms and notes</div>
+<div class="notes"><h4>Terms and notes</h4><p>This payslip is issued for the employee's personal records. It is confidential and must not be disclosed to third parties without the employee's consent.</p><p>PAYE, NSSF and Local Service Tax are calculated from the statutory configuration in force for this payroll period under Ugandan law.</p><p>This is a calculated slip. It has not been published as a final payslip.</p></div>
+<div class="signs"><div class="sign"><div class="line"></div><div class="lbl">Employee acknowledgement</div><div class="nm">Anthony Njenga Chege</div></div><div class="sign"><div class="line"></div><div class="lbl">Payroll officer</div><div class="dt">Managing Director</div><div class="nm">System Administrator</div><div class="dt">Signed electronically 28 August 2026</div></div></div></div>
+
+  <div class="auth">
+          <div class="auth-head">
+            <div class="auth-title"><svg class="brand-mark" viewBox="0 0 40 40" width="16" height="16" aria-hidden="true">
+      <rect width="40" height="40" rx="8" fill="#1261A0"/>
+      <rect x="8" y="8" width="6.2" height="24" rx="1.2" fill="#fff"/>
+      <rect x="25.8" y="8" width="6.2" height="24" rx="1.2" fill="#fff"/>
+      <rect x="8" y="17" width="24" height="6" rx="1" fill="#00A6A6"/>
+      <rect x="18.6" y="14.4" width="2.8" height="11.2" rx="0.4" fill="#1261A0"/>
+      <rect x="14.4" y="18.6" width="11.2" height="2.8" rx="0.4" fill="#1261A0"/>
+    </svg><span>Document authenticity</span></div>
+            <span class="auth-chip">Verified</span>
+          </div>
+          <div class="auth-body">
+            <div class="auth-qr"><div class="auth-qr-box"><svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 91 91" shape-rendering="crispEdges"><path fill="#ffffff" d="M0 0h91v91H0z"/><path stroke="#000000" d="M1 1.5h7m4 0h1m1 0h2m1 0h2m1 0h1m1 0h4m2 0h1m1 0h1m1 0h3m1 0h2m2 0h5m5 0h1m2 0h1m1 0h5m3 0h2m3 0h4m1 0h1m1 0h2m2 0h3m1 0h7M1 2.5h1m5 0h1m3 0h3m1 0h1m1 0h1m3 0h2m1 0h1m1 0h1m2 0h5m3 0h4m2 0h2m1 0h2m2 0h1m3 0h2m4 0h1m2 0h1m1 0h1m3 0h4m2 0h2m1 0h1m1 0h1m2 0h1m5 0h1M1 3.5h1m1 0h3m1 0h1m1 0h2m5 0h2m3 0h1m1 0h1m1 0h1m3 0h1m7 0h1m2 0h2m3 0h3m2 0h1m2 0h1m1 0h1m1 0h3m2 0h1m2 0h5m2 0h2m2 0h2m5 0h1m1 0h3m1 0h1M1 4.5h1m1 0h3m1 0h1m1 0h1m1 0h2m2 0h2m3 0h2m1 0h2m3 0h6m1 0h4m3 0h3m3 0h4m2 0h1m2 0h2m3 0h5m2 0h2m5 0h2m1 0h1m1 0h1m1 0h1m1 0h3m1 0h1M1 5.5h1m1 0h3m1 0h1m1 0h2m2 0h6m1 0h1m2 0h1m1 0h11m1 0h1m4 0h3m3 0h1m1 0h1m1 0h1m2 0h5m1 0h1m2 0h1m2 0h2m1 0h1m2 0h1m1 0h1m4 0h1m2 0h1m1 0h3m1 0h1M1 6.5h1m5 0h1m1 0h2m3 0h5m1 0h1m1 0h2m1 0h1m1 0h1m1 0h1m3 0h3m1 0h2m6 0h4m1 0h1m3 0h2m3 0h2m1 0h2m1 0h2m3 0h7m1 0h1m1 0h1m2 0h1m5 0h1M1 7.5h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7M9 8.5h5m2 0h2m2 0h1m1 0h1m3 0h2m1 0h1m3 0h1m5 0h1m3 0h2m1 0h2m1 0h1m1 0h1m3 0h1m3 0h1m3 0h3m1 0h1m1 0h1m4 0h4m1 0h2M1 9.5h1m1 0h5m2 0h1m1 0h1m2 0h1m2 0h9m2 0h5m1 0h4m3 0h1m1 0h1m3 0h1m2 0h1m2 0h6m2 0h4m1 0h2m5 0h1m1 0h1m2 0h1m1 0h1m1 0h5M1 10.5h3m1 0h1m2 0h1m1 0h3m1 0h4m1 0h3m1 0h2m2 0h4m1 0h4m1 0h2m3 0h2m1 0h1m6 0h2m1 0h2m1 0h2m3 0h1m1 0h1m1 0h5m1 0h1m3 0h1m1 0h1m1 0h3m3 0h2M3 11.5h3m1 0h1m4 0h3m1 0h1m1 0h1m1 0h2m1 0h4m1 0h6m1 0h1m1 0h1m4 0h2m1 0h2m1 0h1m1 0h5m2 0h2m2 0h1m1 0h2m1 0h1m1 0h2m1 0h3m1 0h2m1 0h1m5 0h1m1 0h1M3 12.5h1m2 0h1m1 0h3m3 0h2m1 0h2m2 0h1m2 0h1m4 0h1m1 0h1m1 0h1m1 0h1m2 0h3m3 0h3m2 0h1m4 0h2m3 0h1m3 0h1m1 0h1m1 0h2m1 0h3m4 0h4m1 0h1m2 0h2m1 0h2M1 13.5h1m2 0h1m1 0h4m1 0h1m3 0h1m2 0h3m4 0h6m3 0h4m6 0h1m3 0h3m4 0h1m1 0h1m1 0h1m1 0h2m1 0h1m4 0h2m2 0h2m1 0h1m1 0h1m1 0h2m1 0h1m3 0h3M2 14.5h1m1 0h2m6 0h1m4 0h2m2 0h4m4 0h1m1 0h2m1 0h1m1 0h3m4 0h2m1 0h1m1 0h2m2 0h2m1 0h1m1 0h5m2 0h2m1 0h6m2 0h1m5 0h5M3 15.5h2m1 0h5m5 0h2m1 0h7m1 0h4m2 0h2m1 0h2m2 0h3m1 0h1m2 0h1m1 0h2m2 0h2m4 0h1m1 0h1m1 0h2m1 0h1m2 0h2m1 0h2m1 0h2m1 0h1m3 0h1m2 0h2M1 16.5h1m1 0h2m1 0h1m1 0h1m7 0h3m1 0h1m1 0h1m5 0h2m3 0h1m3 0h4m2 0h1m1 0h2m2 0h1m1 0h1m2 0h1m3 0h2m2 0h4m1 0h1m1 0h1m1 0h1m3 0h1m1 0h1m1 0h3m1 0h4M1 17.5h3m1 0h1m1 0h2m3 0h1m1 0h3m1 0h1m2 0h6m1 0h3m2 0h2m1 0h1m7 0h1m2 0h4m6 0h1m3 0h1m2 0h2m3 0h3m3 0h2m1 0h5m2 0h3m1 0h1M2 18.5h3m1 0h1m1 0h3m1 0h1m3 0h1m1 0h2m1 0h2m2 0h1m2 0h1m2 0h2m5 0h1m2 0h3m4 0h2m5 0h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h1m2 0h1m5 0h2m1 0h1m2 0h1m1 0h1m4 0h1M1 19.5h2m1 0h2m1 0h2m2 0h1m6 0h7m2 0h2m1 0h4m2 0h1m3 0h1m1 0h2m2 0h1m4 0h1m1 0h2m2 0h4m1 0h4m2 0h1m2 0h2m2 0h1m2 0h1m1 0h1m4 0h4M3 20.5h4m1 0h2m2 0h7m2 0h1m3 0h3m2 0h4m2 0h1m1 0h1m1 0h5m2 0h5m1 0h1m4 0h1m1 0h1m5 0h1m1 0h2m2 0h2m1 0h2m1 0h1m1 0h3m1 0h3M2 21.5h2m3 0h1m1 0h1m1 0h3m2 0h2m10 0h4m2 0h5m3 0h3m2 0h3m2 0h1m6 0h1m3 0h4m2 0h1m1 0h1m2 0h4m2 0h2m3 0h1M1 22.5h1m2 0h1m1 0h1m5 0h2m3 0h4m1 0h1m1 0h4m2 0h1m4 0h1m2 0h1m1 0h1m1 0h3m5 0h1m6 0h3m1 0h1m1 0h1m6 0h4m2 0h1m5 0h3m1 0h1M1 23.5h1m1 0h1m1 0h3m2 0h2m1 0h2m1 0h2m1 0h1m3 0h1m1 0h2m2 0h1m1 0h2m1 0h2m1 0h3m4 0h3m4 0h2m1 0h1m3 0h2m3 0h3m2 0h1m2 0h1m1 0h3m5 0h1m2 0h1m1 0h2M1 24.5h6m3 0h2m4 0h2m2 0h2m1 0h3m2 0h4m1 0h2m1 0h1m2 0h4m1 0h2m6 0h1m1 0h3m1 0h1m3 0h1m4 0h3m4 0h1m5 0h2m1 0h4M1 25.5h3m3 0h1m1 0h3m3 0h2m1 0h1m5 0h5m2 0h1m5 0h1m1 0h1m6 0h6m2 0h1m1 0h2m3 0h7m1 0h1m4 0h4m3 0h1m3 0h1m1 0h3M1 26.5h1m3 0h2m1 0h4m1 0h2m3 0h5m3 0h1m2 0h4m2 0h1m2 0h1m1 0h3m5 0h3m1 0h1m1 0h5m1 0h3m1 0h2m2 0h1m1 0h1m1 0h2m2 0h1m4 0h1m1 0h5m1 0h1M1 27.5h1m2 0h2m1 0h1m1 0h1m1 0h1m1 0h2m1 0h4m1 0h2m1 0h2m1 0h1m1 0h3m2 0h3m2 0h3m1 0h2m1 0h1m1 0h2m2 0h1m4 0h1m1 0h1m3 0h3m2 0h4m1 0h2m1 0h1m4 0h2m1 0h3m1 0h1M2 28.5h4m3 0h1m3 0h1m4 0h1m1 0h2m4 0h3m1 0h1m2 0h2m1 0h1m3 0h2m1 0h2m3 0h1m2 0h2m2 0h1m2 0h2m4 0h1m1 0h4m2 0h1m1 0h5m2 0h1m1 0h4m1 0h2M2 29.5h1m2 0h8m2 0h1m4 0h3m2 0h1m2 0h6m2 0h4m2 0h2m2 0h1m2 0h2m4 0h5m1 0h1m2 0h2m1 0h1m1 0h2m3 0h5m2 0h5m2 0h1M1 30.5h2m1 0h2m3 0h1m4 0h1m1 0h1m1 0h2m2 0h1m3 0h2m1 0h1m3 0h3m1 0h1m5 0h2m3 0h3m1 0h4m3 0h3m1 0h2m2 0h1m2 0h2m8 0h2m3 0h1m1 0h3M5 31.5h1m1 0h1m1 0h1m1 0h2m1 0h2m1 0h1m1 0h1m1 0h4m1 0h4m1 0h1m1 0h3m2 0h4m5 0h1m3 0h1m1 0h1m1 0h1m1 0h1m1 0h4m1 0h1m1 0h1m1 0h1m2 0h8m2 0h1m1 0h1m1 0h2M2 32.5h4m3 0h1m2 0h2m2 0h2m3 0h2m4 0h1m1 0h1m3 0h2m1 0h2m4 0h3m1 0h2m1 0h1m2 0h2m1 0h1m3 0h1m3 0h4m2 0h2m1 0h1m1 0h4m1 0h3m3 0h2m1 0h2M3 33.5h1m1 0h7m1 0h1m1 0h3m2 0h1m3 0h1m4 0h5m2 0h3m4 0h2m1 0h1m1 0h2m1 0h1m2 0h6m1 0h2m1 0h2m3 0h3m1 0h6m2 0h5m2 0h2M4 34.5h2m2 0h2m1 0h1m2 0h2m4 0h4m1 0h1m5 0h2m2 0h1m1 0h2m2 0h5m2 0h1m1 0h1m5 0h5m4 0h1m2 0h7m6 0h8M1 35.5h1m1 0h5m1 0h4m3 0h1m5 0h1m1 0h1m1 0h1m1 0h3m6 0h1m5 0h4m1 0h2m3 0h1m1 0h4m1 0h1m1 0h3m4 0h5m1 0h5m1 0h1m2 0h2m1 0h2M1 36.5h3m1 0h1m2 0h1m2 0h1m2 0h2m1 0h2m1 0h1m1 0h1m1 0h2m1 0h2m4 0h2m1 0h1m2 0h5m1 0h1m3 0h2m2 0h2m2 0h4m1 0h4m1 0h1m1 0h2m1 0h1m1 0h1m2 0h1m2 0h1m5 0h1m1 0h2M1 37.5h1m1 0h1m1 0h1m1 0h1m2 0h1m2 0h1m1 0h3m2 0h2m2 0h6m2 0h3m2 0h1m1 0h1m3 0h2m3 0h2m1 0h1m2 0h2m1 0h1m1 0h1m3 0h2m1 0h1m2 0h1m1 0h1m2 0h3m4 0h5m1 0h2M2 38.5h3m1 0h1m1 0h2m3 0h1m1 0h5m7 0h2m1 0h1m1 0h1m1 0h2m2 0h1m1 0h1m1 0h4m4 0h1m1 0h2m1 0h1m1 0h1m3 0h1m1 0h3m4 0h1m2 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h5M1 39.5h1m1 0h1m1 0h1m1 0h1m1 0h2m1 0h2m2 0h1m1 0h1m1 0h4m1 0h1m4 0h1m2 0h3m1 0h1m1 0h3m1 0h1m1 0h2m4 0h1m2 0h2m2 0h1m2 0h1m1 0h1m2 0h3m2 0h1m1 0h6m1 0h3m2 0h3M1 40.5h1m3 0h2m1 0h3m9 0h1m3 0h1m1 0h3m5 0h1m1 0h1m1 0h1m1 0h1m3 0h1m3 0h3m1 0h1m1 0h2m1 0h1m1 0h2m1 0h1m2 0h1m2 0h2m4 0h1m1 0h4m5 0h2m1 0h2M2 41.5h1m2 0h1m1 0h1m1 0h1m6 0h4m1 0h1m2 0h1m3 0h1m1 0h2m1 0h1m2 0h3m3 0h3m1 0h4m3 0h3m2 0h1m2 0h1m1 0h3m4 0h1m1 0h2m1 0h2m1 0h3m1 0h1m1 0h4M2 42.5h1m1 0h1m4 0h1m6 0h2m1 0h3m1 0h1m2 0h1m2 0h1m3 0h1m2 0h3m2 0h3m5 0h2m1 0h3m2 0h1m1 0h1m1 0h1m5 0h2m1 0h3m3 0h1m2 0h1m1 0h2m1 0h2m2 0h2M1 43.5h3m2 0h4m1 0h1m5 0h1m3 0h1m2 0h3m1 0h2m1 0h1m1 0h1m1 0h1m2 0h3m2 0h1m4 0h2m1 0h1m1 0h7m1 0h3m2 0h1m1 0h2m2 0h2m1 0h2m1 0h1m3 0h2m3 0h1M10 44.5h7m4 0h6m3 0h1m1 0h3m4 0h1m1 0h1m1 0h4m4 0h2m1 0h1m3 0h4m2 0h2m2 0h2m1 0h1m2 0h1m2 0h1m1 0h2m1 0h1m2 0h2m2 0h1M4 45.5h1m1 0h2m1 0h1m1 0h1m1 0h1m1 0h2m2 0h2m2 0h6m1 0h2m1 0h6m3 0h2m4 0h2m1 0h1m3 0h4m3 0h4m1 0h1m3 0h1m3 0h3m1 0h1m1 0h1m1 0h4m1 0h1M1 46.5h5m2 0h1m1 0h2m8 0h1m4 0h2m2 0h1m1 0h2m1 0h2m7 0h1m1 0h2m1 0h1m1 0h1m2 0h2m5 0h2m6 0h1m1 0h2m1 0h1m1 0h3m1 0h1m1 0h1m2 0h1m1 0h1M5 47.5h1m1 0h3m1 0h1m3 0h4m2 0h1m1 0h3m1 0h1m2 0h3m1 0h6m2 0h1m5 0h1m7 0h3m2 0h4m2 0h2m2 0h2m1 0h2m2 0h1m1 0h3m2 0h2M2 48.5h1m1 0h2m3 0h1m1 0h3m2 0h2m3 0h3m3 0h1m1 0h2m1 0h2m3 0h1m2 0h1m1 0h1m3 0h1m2 0h2m1 0h1m1 0h2m1 0h1m1 0h1m2 0h1m1 0h2m3 0h2m4 0h5m2 0h1m1 0h3m1 0h1M1 49.5h3m1 0h1m1 0h2m1 0h1m1 0h3m3 0h1m2 0h1m9 0h1m2 0h5m2 0h4m2 0h4m3 0h3m1 0h1m1 0h3m1 0h2m3 0h1m1 0h1m1 0h2m1 0h1m2 0h3m1 0h3M1 50.5h2m1 0h1m7 0h1m1 0h5m1 0h1m1 0h1m3 0h1m2 0h1m2 0h1m3 0h3m1 0h4m1 0h2m1 0h1m1 0h1m1 0h1m6 0h2m3 0h2m1 0h1m2 0h1m1 0h2m1 0h3m6 0h2m2 0h1M3 51.5h1m2 0h2m1 0h3m1 0h5m2 0h1m1 0h1m1 0h3m2 0h1m4 0h1m2 0h2m2 0h1m3 0h1m1 0h1m1 0h1m5 0h7m1 0h1m1 0h4m1 0h4m1 0h4m2 0h2m3 0h2M2 52.5h2m4 0h1m2 0h2m1 0h1m3 0h1m2 0h1m1 0h2m3 0h3m1 0h1m1 0h1m1 0h2m4 0h1m1 0h2m1 0h1m2 0h1m1 0h1m4 0h6m2 0h1m3 0h1m2 0h1m1 0h1m3 0h3m3 0h3m1 0h2M1 53.5h1m1 0h1m3 0h3m2 0h2m1 0h3m1 0h2m2 0h1m2 0h1m2 0h1m2 0h1m1 0h4m4 0h2m3 0h3m1 0h1m2 0h6m1 0h4m1 0h1m2 0h2m4 0h3m3 0h1m1 0h3m2 0h2M3 54.5h2m1 0h1m1 0h5m3 0h2m1 0h1m4 0h1m1 0h1m2 0h2m2 0h3m2 0h1m1 0h1m1 0h2m2 0h1m1 0h3m2 0h1m1 0h1m1 0h2m2 0h1m1 0h2m2 0h2m1 0h4m1 0h2m2 0h1m1 0h2m1 0h1m2 0h1m1 0h1M1 55.5h1m2 0h6m1 0h1m1 0h2m1 0h1m2 0h4m3 0h2m1 0h5m1 0h2m7 0h1m2 0h1m3 0h2m1 0h6m1 0h1m1 0h5m1 0h1m3 0h1m1 0h2m1 0h1m1 0h7m1 0h1M1 56.5h1m2 0h2m3 0h1m4 0h3m2 0h1m1 0h2m1 0h1m2 0h3m3 0h1m4 0h2m1 0h1m5 0h1m2 0h1m1 0h4m3 0h2m3 0h3m1 0h2m1 0h1m2 0h2m1 0h5m3 0h1m2 0h2M1 57.5h3m1 0h1m1 0h1m1 0h1m1 0h1m2 0h2m1 0h4m1 0h2m2 0h1m2 0h1m1 0h1m1 0h2m1 0h2m1 0h1m2 0h3m1 0h4m1 0h1m2 0h2m1 0h1m1 0h1m2 0h3m2 0h1m1 0h1m4 0h1m1 0h1m1 0h1m2 0h1m1 0h1m1 0h4M1 58.5h1m1 0h3m3 0h1m1 0h1m2 0h1m1 0h2m1 0h2m1 0h1m1 0h1m1 0h4m3 0h3m2 0h3m1 0h4m3 0h2m2 0h3m3 0h2m3 0h1m3 0h3m1 0h2m2 0h1m4 0h1m3 0h2m1 0h2M1 59.5h10m1 0h1m1 0h4m6 0h2m3 0h6m6 0h1m1 0h1m4 0h4m3 0h6m1 0h2m2 0h6m1 0h1m1 0h2m1 0h2m1 0h6M1 60.5h3m1 0h1m2 0h1m3 0h1m2 0h1m3 0h2m1 0h4m4 0h1m1 0h1m2 0h1m3 0h1m1 0h3m1 0h1m1 0h3m1 0h2m1 0h7m3 0h2m4 0h1m1 0h1m2 0h3m1 0h2m2 0h4m2 0h1M4 61.5h1m1 0h4m5 0h1m2 0h2m1 0h7m2 0h1m1 0h3m1 0h2m1 0h1m4 0h1m1 0h2m1 0h2m3 0h1m3 0h2m1 0h1m1 0h2m1 0h2m1 0h3m4 0h2m2 0h2m2 0h1M4 62.5h2m5 0h2m3 0h2m2 0h1m1 0h2m1 0h4m2 0h4m5 0h1m1 0h2m1 0h2m1 0h3m1 0h1m1 0h1m1 0h3m4 0h1m1 0h1m1 0h1m2 0h1m2 0h1m1 0h3m2 0h1m1 0h1m2 0h2M1 63.5h1m4 0h2m4 0h2m3 0h2m1 0h2m3 0h4m4 0h1m4 0h2m2 0h1m2 0h1m1 0h1m1 0h1m3 0h1m1 0h1m2 0h3m1 0h2m2 0h1m2 0h3m1 0h4m5 0h2M5 64.5h1m5 0h1m1 0h1m3 0h1m1 0h2m1 0h1m2 0h5m1 0h1m2 0h1m2 0h1m2 0h1m2 0h2m3 0h1m1 0h3m1 0h1m1 0h4m5 0h5m5 0h4m5 0h3m1 0h1M1 65.5h1m5 0h3m1 0h3m3 0h4m1 0h5m4 0h9m4 0h1m1 0h1m2 0h1m1 0h1m3 0h1m6 0h4m5 0h1m2 0h3m2 0h1m1 0h1m3 0h1m3 0h1M2 66.5h4m2 0h1m2 0h1m1 0h3m1 0h2m3 0h3m1 0h3m2 0h1m2 0h1m3 0h1m2 0h1m1 0h1m1 0h1m2 0h4m3 0h1m2 0h3m2 0h3m2 0h1m4 0h1m1 0h2m3 0h1m1 0h5m1 0h2M1 67.5h2m3 0h5m4 0h1m1 0h1m5 0h1m1 0h2m2 0h3m2 0h1m2 0h1m4 0h1m9 0h1m3 0h2m4 0h2m1 0h1m3 0h5m1 0h1m5 0h1m2 0h1m1 0h2M2 68.5h5m2 0h1m2 0h1m4 0h1m1 0h5m2 0h1m1 0h1m1 0h1m4 0h3m1 0h2m1 0h6m1 0h1m2 0h2m3 0h3m2 0h1m2 0h1m1 0h1m1 0h1m2 0h1m1 0h2m1 0h2m1 0h2m3 0h2m1 0h2M1 69.5h3m1 0h7m2 0h3m1 0h3m1 0h3m1 0h1m2 0h1m1 0h1m1 0h3m1 0h2m3 0h1m1 0h1m3 0h4m6 0h2m1 0h2m1 0h1m4 0h2m2 0h2m1 0h2m1 0h1m6 0h1m2 0h1M2 70.5h2m2 0h1m2 0h6m4 0h1m2 0h1m1 0h1m2 0h2m2 0h1m1 0h2m1 0h3m1 0h1m1 0h2m1 0h1m3 0h2m3 0h1m1 0h2m2 0h2m2 0h1m3 0h3m1 0h2m3 0h1m1 0h1m1 0h5m1 0h1M3 71.5h1m2 0h4m1 0h2m1 0h2m2 0h1m1 0h1m3 0h1m4 0h7m1 0h1m1 0h1m1 0h1m5 0h3m1 0h1m1 0h1m1 0h2m2 0h1m2 0h3m1 0h1m1 0h1m2 0h3m1 0h1m2 0h1m2 0h6M1 72.5h1m2 0h1m4 0h2m1 0h1m1 0h1m1 0h3m1 0h5m1 0h1m2 0h5m2 0h1m2 0h5m2 0h1m1 0h2m1 0h2m1 0h1m2 0h1m4 0h1m2 0h1m3 0h1m2 0h1m1 0h4m2 0h1m3 0h1m1 0h1m2 0h1M7 73.5h1m1 0h1m1 0h3m2 0h2m2 0h1m2 0h2m3 0h6m1 0h3m1 0h1m3 0h2m2 0h5m2 0h2m2 0h2m1 0h2m1 0h4m2 0h1m2 0h1m1 0h4m6 0h3M10 74.5h3m1 0h2m5 0h1m3 0h1m4 0h1m2 0h2m1 0h1m1 0h1m1 0h4m1 0h2m1 0h1m1 0h1m1 0h5m1 0h1m1 0h1m3 0h2m2 0h4m9 0h1m1 0h3m2 0h2M2 75.5h1m3 0h5m1 0h5m3 0h1m2 0h3m1 0h3m1 0h2m2 0h1m1 0h1m2 0h2m1 0h1m3 0h1m4 0h2m1 0h3m1 0h1m2 0h1m1 0h4m3 0h1m2 0h4m3 0h2m1 0h1m1 0h2M2 76.5h2m5 0h1m1 0h4m4 0h4m1 0h1m1 0h3m2 0h1m2 0h2m1 0h1m3 0h1m1 0h1m1 0h3m1 0h1m1 0h1m1 0h2m1 0h1m1 0h1m1 0h2m1 0h1m2 0h1m1 0h3m1 0h1m3 0h3m1 0h1m1 0h5m2 0h1M1 77.5h2m3 0h2m1 0h2m2 0h1m2 0h1m3 0h5m1 0h1m4 0h1m1 0h7m2 0h3m3 0h3m1 0h1m2 0h1m1 0h1m1 0h1m4 0h1m2 0h1m1 0h2m5 0h1m2 0h1m7 0h1m1 0h1M1 78.5h1m1 0h1m2 0h1m1 0h1m1 0h1m1 0h1m4 0h1m3 0h3m1 0h1m1 0h1m7 0h1m1 0h1m2 0h1m2 0h2m3 0h3m7 0h1m4 0h1m6 0h2m1 0h1m1 0h1m1 0h1m2 0h3m1 0h3m1 0h2M1 79.5h1m2 0h1m2 0h2m2 0h1m2 0h2m1 0h1m1 0h1m1 0h4m1 0h2m2 0h1m2 0h2m3 0h2m1 0h7m2 0h2m8 0h1m5 0h1m1 0h1m2 0h3m1 0h3m3 0h3m3 0h1M1 80.5h2m2 0h2m1 0h2m1 0h1m2 0h3m4 0h1m3 0h1m3 0h1m2 0h2m1 0h2m5 0h1m3 0h2m1 0h1m1 0h2m1 0h1m1 0h4m3 0h3m1 0h1m1 0h1m1 0h1m3 0h1m2 0h1m2 0h1m3 0h1m2 0h2M1 81.5h1m2 0h1m2 0h1m2 0h1m1 0h1m1 0h2m4 0h1m1 0h2m2 0h2m1 0h7m1 0h3m4 0h2m2 0h2m1 0h1m3 0h5m1 0h3m2 0h1m3 0h2m1 0h2m1 0h2m1 0h11M9 82.5h1m4 0h1m3 0h1m2 0h1m1 0h2m2 0h1m1 0h1m3 0h3m2 0h1m1 0h4m1 0h1m2 0h1m1 0h1m4 0h1m3 0h1m1 0h1m1 0h1m1 0h1m1 0h2m1 0h2m3 0h1m4 0h2m3 0h2m1 0h2M1 83.5h7m2 0h1m2 0h3m1 0h2m1 0h1m2 0h4m2 0h1m1 0h1m1 0h3m1 0h2m1 0h1m3 0h4m1 0h1m1 0h3m1 0h1m1 0h1m1 0h4m3 0h1m1 0h4m1 0h5m2 0h2m1 0h1m1 0h2M1 84.5h1m5 0h1m1 0h3m3 0h2m2 0h1m4 0h1m4 0h1m3 0h1m1 0h2m2 0h2m1 0h1m2 0h1m1 0h2m1 0h4m1 0h1m3 0h2m1 0h2m1 0h1m1 0h3m1 0h2m6 0h1m1 0h1m3 0h2M1 85.5h1m1 0h3m1 0h1m1 0h1m6 0h1m5 0h5m2 0h5m3 0h2m3 0h3m1 0h4m1 0h1m2 0h6m4 0h3m3 0h2m4 0h2m3 0h5m1 0h3M1 86.5h1m1 0h3m1 0h1m1 0h5m1 0h1m2 0h1m1 0h1m1 0h1m1 0h1m2 0h1m1 0h1m1 0h1m5 0h2m4 0h1m4 0h1m1 0h1m4 0h1m1 0h5m2 0h1m2 0h1m2 0h2m1 0h1m1 0h1m4 0h1m4 0h1m1 0h2M1 87.5h1m1 0h3m1 0h1m1 0h1m2 0h1m3 0h7m1 0h1m1 0h1m2 0h1m2 0h2m1 0h1m3 0h1m1 0h2m2 0h1m1 0h2m3 0h4m5 0h3m2 0h1m2 0h1m1 0h3m2 0h1m1 0h3m1 0h4m2 0h1M1 88.5h1m5 0h1m2 0h2m2 0h2m1 0h3m1 0h1m1 0h1m1 0h1m1 0h1m2 0h1m1 0h1m1 0h2m3 0h1m1 0h3m1 0h1m2 0h6m2 0h1m2 0h1m3 0h1m1 0h1m1 0h1m1 0h1m1 0h2m2 0h4m1 0h1m4 0h2m1 0h1M1 89.5h7m1 0h2m3 0h4m3 0h2m1 0h3m2 0h1m2 0h6m1 0h1m2 0h1m1 0h1m1 0h5m3 0h5m2 0h1m1 0h3m1 0h1m1 0h3m2 0h1m1 0h2m2 0h1m5 0h2"/></svg>
+</div></div>
+            <div class="auth-info">
+              <div class="auth-row"><span class="auth-label">Issued by</span><span class="auth-value">System Administrator · 28 August 2026, 08:55</span></div>
+              <div class="auth-row"><span class="auth-label">SHA-256 fingerprint</span><span class="auth-value mono">7e20e35e72231d517937f4eae44b06448f46b756f77b9a03fafa51c36f062efd</span></div>
+              <div class="auth-row"><span class="auth-label">Document token</span><span class="auth-value mono">d1.eyJ2IjoxLCJ…EeT79LcI</span></div>
+              <div class="auth-row"><span class="auth-label">Verify at</span><a class="auth-value vu" href="http://localhost:5173/verify#doc=d1.eyJ2IjoxLCJ0eXBlIjoicGF5c2xpcCIsImlkIjo2MTM3LCJjb2RlIjoiUFMtMjAyNi0wMDAwNjEyNCIsInRpdGxlIjoiUGF5c2xpcCIsImZpbmdlcnByaW50IjoiN2UyMGUzNWU3MjIzMWQ1MTc5MzdmNGVhZTQ0YjA2NDQ4ZjQ2Yjc1NmY3N2I5YTAzZmFmYTUxYzM2ZjA2MmVmZCIsImlzc3VlZEF0IjoiMjAyNi0wOC0yOFQwNTo1NTowOC45MjdaIiwidGVuYW50SWQiOjIsImNvbXBhbnlJZCI6IjIiLCJjb21wYW55TmFtZSI6IkhvcGUgRGVzaWduIEdyb3VwIEx0ZCIsImlzc3VlciI6ImFkbWluQGhvcGVkZXNpZ24uY28udWciLCJpc3N1ZXJOYW1lIjoiU3lzdGVtIEFkbWluaXN0cmF0b3IifQ.siKtBw4ygEJ0-3FuegJ9I1FXoUdDR0CrpFiEeT79LcI">http://localhost:5173/verify#doc=d1.eyJ2IjoxLCJ0eXBlIjoicGF5c2xpcCIsImlkIjo2MTM3LCJjb2RlIjoiUFMtMjAyNi0wMDAwNjEyNCIsInRpdGxlIjoiUGF5c2xpcCIsImZpbmdlcnByaW50IjoiN2UyMGUzNWU3MjIzMWQ1MTc5MzdmNGVhZTQ0YjA2NDQ4ZjQ2Yjc1NmY3N2I5YTAzZmFmYTUxYzM2ZjA2MmVmZCIsImlzc3VlZEF0IjoiMjAyNi0wOC0yOFQwNTo1NTowOC45MjdaIiwidGVuYW50SWQiOjIsImNvbXBhbnlJZCI6IjIiLCJjb21wYW55TmFtZSI6IkhvcGUgRGVzaWduIEdyb3VwIEx0ZCIsImlzc3VlciI6ImFkbWluQGhvcGVkZXNpZ24uY28udWciLCJpc3N1ZXJOYW1lIjoiU3lzdGVtIEFkbWluaXN0cmF0b3IifQ.siKtBw4ygEJ0-3FuegJ9I1FXoUdDR0CrpFiEeT79LcI</a></div>
+              <p class="auth-note">Scan the QR code or open the verify link to confirm this document against the official registry. Any alteration of the contents invalidates the fingerprint.</p>
+            </div>
+          </div>
+        </div>
+
+  <footer class="foot">
+    <div class="foot-l">
+      
+      <div>Hope Design Group Ltd  ·  TIN 1012345678  ·  VRN VAT-UG-1020304</div>
+    </div>
+    <div class="r">Issued by System Administrator on 28 August 2026, 08:55  ·  Ref 2f3817c3-117c-45b6-aa68-a3f8490a86c3  ·  SHA-256 7e20e35e72231d51…</div>
+  </footer>
+</div>
+<script>window.print();</script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+*** Begin Patch
+*** Update File: apps/api/src/services/documents.ts
+@@
+-async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise<DocData> {
++/**
++ * Ugandan monthly PAYE brackets in force for FY2026/27 (effective 1 July 2026).
++ * PAYE is charged on taxable pay after deducting the employee NSSF contribution.
++ */
++const UG_PAYE_BRACKETS_2026: { bands: Array<[string, string]>; note: string } = {
++  bands: [
++    ['Up to 335,000', '0%'],
++    ['335,001 \u2013 410,000', '20%'],
++    ['410,001 \u2013 485,000', '25%'],
++    ['485,001 \u2013 10,000,000', '30%'],
++    ['Above 10,000,000', '40%'],
++  ],
++  note:
++    'PAYE is applied to taxable pay after deducting the employee NSSF contribution. ' +
++    'Up to UGX 10,000,000: 33,750 + 30% of the excess over 485,000. ' +
++    'Above UGX 10,000,000: PAYE on 10,000,000 + 40% of the excess.',
++};
++
++async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise<DocData> {
+@@
+   addLine('Deduction', 'Staff loan', 'Monthly loan recovery', pick(r, 'loans'));
+   addLine('Deduction', 'Salary advance', 'Advance recovery', pick(r, 'advances'));
+   addLine('Deduction', 'Other deductions', 'Other authorised deductions', pick(r, 'other_deductions'));
++  const payBreakdown: Array<[string, string]> = [['Gross Pay', moneyCcy(pick(r, 'gross_pay'), currency)]];
++  const deductionLines: Array<[string, string]> = [];
++  const addDeduction = (label: string, amount: unknown) => {
++    if (num(amount) > 0) deductionLines.push([label, `(${moneyCcy(amount, currency)})`]);
++  };
++  addDeduction('Less: Employee NSSF (5%)', pick(r, 'nssf'));
++  addDeduction('Less: PAYE (Income Tax)', pick(r, 'paye'));
++  addDeduction('Less: Local Service Tax', pick(r, 'lst'));
++  addDeduction('Less: Staff loan recovery', pick(r, 'loans'));
++  addDeduction('Less: Salary advance recovery', pick(r, 'advances'));
++  addDeduction('Less: Other deductions', pick(r, 'other_deductions'));
++  payBreakdown.push(...deductionLines);
++  payBreakdown.push(['Net Pay', moneyCcy(pick(r, 'net_pay'), currency)]);
+   const paymentDate = dateOnly(pick(r, 'slip_payment_date', 'payment_date'));
+@@
+     notes,
+     raw: r,
+     photo,
++    payBreakdown,
++    payeBrackets: UG_PAYE_BRACKETS_2026,
+   };
+ }
+*** End Patch

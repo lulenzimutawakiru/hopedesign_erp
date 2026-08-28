@@ -1,0 +1,79 @@
+*** Begin Patch
+*** Update File: apps/api/src/services/brandedExport.ts
+@@
+-const GRAY = BRAND.gray;
+-const LINE = BRAND.line;
+-const INK = BRAND.ink;
+-const TABLE_W = PAGE_W - MARGIN * 2;
++export const GRAY = BRAND.gray;
++export const LINE = BRAND.line;
++export const INK = BRAND.ink;
++export const TABLE_W = PAGE_W - MARGIN * 2;
+@@
+-export interface BrandedTableOpts {
++/** Document-level metadata shared by single-table exports and multi-section payroll documents. */
++export interface BrandedDocMeta {
+   title: string;
+   subtitle?: string;
+   kicker?: string;
+   docNo?: string;
+   status?: string;
+   classification?: string;
+   company: CompanyProfile;
+   issuedBy: string;
+   issuedAt: string;
+   correlationId?: string | null;
+   facts?: Array<[string, string]>;
++  fingerprint?: string;
++  token?: string;
++  verifyUrl?: string;
++}
++
++export interface BrandedTableOpts extends BrandedDocMeta {
+   columns: BrandedTableColumn[];
+   rows: Array<Record<string, unknown>>;
+-  fingerprint?: string;
+-  token?: string;
+-  verifyUrl?: string;
+ }
+ 
+-interface DocBrand {
++export interface DocBrand {
+   navy: [number, number, number];
+   teal: [number, number, number];
+ }
+ 
+-const brandOf = (c: CompanyProfile): DocBrand => ({
++export const brandOf = (c: CompanyProfile): DocBrand => ({
+   navy: hexToRgb(c.brandColor, BRAND.navy),
+   teal: hexToRgb(c.brandColorSecondary, BRAND.teal),
+ });
+ 
+-const authEnabled = (o: BrandedTableOpts): boolean =>
++const authEnabled = (o: BrandedDocMeta): boolean =>
+   Boolean(o.token && o.verifyUrl && o.fingerprint);
+ 
+-function esc(v: unknown): string {
++export function esc(v: unknown): string {
+@@
+-function normalizeCellValue(v: unknown): string {
++export function normalizeCellValue(v: unknown): string {
+@@
+-function wrapHard(text: string, size: number, bold: boolean, maxWidth: number): string[] {
++export function wrapHard(text: string, size: number, bold: boolean, maxWidth: number): string[] {
+@@
+-function preloadLogo(doc: PdfDoc, logoUrl: string): string | undefined {
++export function preloadLogo(doc: PdfDoc, logoUrl: string): string | undefined {
+@@
+-function preloadFooterLogo(doc: PdfDoc, footerLogoUrl: string): string | undefined {
++export function preloadFooterLogo(doc: PdfDoc, footerLogoUrl: string): string | undefined {
+@@
+-function drawRunningHeader(doc: PdfDoc, opts: BrandedTableOpts, brand: DocBrand, logoName?: string): void {
++export function drawRunningHeader(doc: PdfDoc, opts: BrandedDocMeta, brand: DocBrand, logoName?: string): void {
+@@
+-function drawLetterhead(doc: PdfDoc, opts: BrandedTableOpts, brand: DocBrand, logoName?: string): void {
++export function drawLetterhead(doc: PdfDoc, opts: BrandedDocMeta, brand: DocBrand, logoName?: string): void {
+@@
+-function drawFacts(doc: PdfDoc, items: Array<[string, string]>, brand: DocBrand): void {
++export function drawFacts(doc: PdfDoc, items: Array<[string, string]>, brand: DocBrand): void {
+*** End Patch

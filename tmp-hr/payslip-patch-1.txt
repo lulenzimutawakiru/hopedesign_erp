@@ -1,0 +1,68 @@
+*** Begin Patch
+*** Update File: apps/api/src/services/documents.ts
+@@
+   columns: PdfTableColumn[];
+   items: Array<Record<string, unknown>>;
+   totals: Array<[string, string]>;
+   notes: string[];
++  /** Payslip-only: lines showing how Net Pay is derived (Gross Pay minus deductions). */
++  payBreakdown?: Array<[string, string]>;
++  /** Payslip-only: PAYE bracket table and explanatory note used for the period. */
++  payeBrackets?: { bands: Array<[string, string]>; note?: string };
+   raw: unknown;
+   isContract?: boolean;
+   isCertificate?: boolean;
+@@
+ function htmlItemsTable(data: DocData): string {
+   if (!data.items.length || !data.columns.length) return '';
+   const head = data.columns.map((c) => `<th>${htmlEsc(c.label)}</th>`).join('');
+   const body = data.items
+     .map(
+       (it, i) =>
+         `<tr><td>${i + 1}</td>${data.columns.map((c) => `<td>${htmlEsc(it[c.key] ?? '')}</td>`).join('')}</tr>`
+     )
+     .join('');
+   return `<table class="data"><thead><tr><th>#</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+ }
+ 
++function htmlPayBreakdown(data: DocData): string {
++  const breakdown = data.payBreakdown ?? [];
++  const brackets = data.payeBrackets;
++  const parts: string[] = [];
++  if (breakdown.length) {
++    parts.push('<div class="band">Net Pay calculation</div>');
++    parts.push(
++      `<div class="totals">${breakdown
++        .map(([label, value], i) => {
++          const isNet = i === breakdown.length - 1 && /net pay/i.test(label);
++          return `<div class="row${isNet ? ' total' : ''}"><span>${htmlEsc(label)}</span><span>${htmlEsc(value)}</span></div>`;
++        })
++        .join('')}</div>`
++    );
++  }
++  if (brackets?.bands.length) {
++    parts.push('<div class="band">PAYE brackets applied</div>');
++    parts.push(
++      `<table class="data"><thead><tr><th>Monthly taxable income (UGX)</th><th>PAYE rate</th></tr></thead><tbody>${brackets.bands
++        .map(([band, rate]) => `<tr><td>${htmlEsc(band)}</td><td>${htmlEsc(rate)}</td></tr>`)
++        .join('')}</tbody></table>`
++    );
++    if (brackets.note) parts.push(`<div class="notes"><p>${htmlEsc(brackets.note)}</p></div>`);
++  }
++  return parts.filter(Boolean).join('\n');
++}
++
+ function htmlClauseBody(data: DocData): string {
+@@
+   if (data.totals.length) {
+     parts.push(
+       `<div class="totals">${data.totals
+         .map(([label, value], i) => `<div class="row${i === data.totals.length - 1 ? ' total' : ''}"><span>${htmlEsc(label)}</span><span>${htmlEsc(value)}</span></div>`)
+         .join('')}</div>`
+     );
+   }
++  parts.push(htmlPayBreakdown(data));
+   if (data.notes.length) {
+     parts.push('<div class="band">Terms and notes</div>');
+     parts.push(htmlNotes(data.notes, 'Terms and notes'));
+*** End Patch
