@@ -49,7 +49,7 @@ describe('Payroll payments', () => {
     expect(run.status).toBe(200);
     const payrollId = Number(run.body.data.payrollId);
 
-    // 3. Verify the calculation engine: 3,000,000 - PAYE 802,000 - NSSF 150,000 = 2,048,000.
+    // 3. Verify the calculation engine: 3,000,000 - PAYE 743,250 - NSSF 150,000 = 2,106,750.
     const detail = await api.get(`/api/ops/hr/payrolls/${payrollId}`).set(auth(token));
     expect(detail.status).toBe(200);
     const items = detail.body.data.items as {
@@ -63,11 +63,11 @@ describe('Payroll payments', () => {
     const mine = items.find((i) => Number(i.employeeId) === employeeId);
     expect(mine).toBeTruthy();
     expect(Number(mine!.grossPay)).toBe(3000000);
-    expect(Number(mine!.paye)).toBe(802000);
+    expect(Number(mine!.paye)).toBe(743250);
     expect(Number(mine!.nssf)).toBe(150000);
-    expect(Number(mine!.netPay)).toBe(2048000);
+    expect(Number(mine!.netPay)).toBe(2106750);
     const payrollNet = Number(detail.body.data.payroll.netTotal);
-    expect(payrollNet).toBe(2048000);
+    expect(payrollNet).toBe(2106750);
 
     // 4. Only the raw row flips to APPROVED; the officer who prepared the run
     // cannot self-approve through the UI/API.

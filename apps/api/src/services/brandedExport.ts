@@ -33,10 +33,10 @@ import {
   type Rgb,
 } from './pdf.js';
 
-const GRAY = BRAND.gray;
-const LINE = BRAND.line;
-const INK = BRAND.ink;
-const TABLE_W = PAGE_W - MARGIN * 2;
+export const GRAY = BRAND.gray;
+export const LINE = BRAND.line;
+export const INK = BRAND.ink;
+export const TABLE_W = PAGE_W - MARGIN * 2;
 
 export interface BrandedTableColumn {
   key: string;
@@ -45,7 +45,8 @@ export interface BrandedTableColumn {
   weight?: number;
 }
 
-export interface BrandedTableOpts {
+/** Document-level metadata shared by single-table exports and multi-section payroll documents. */
+export interface BrandedDocMeta {
   title: string;
   subtitle?: string;
   kicker?: string;
@@ -57,27 +58,30 @@ export interface BrandedTableOpts {
   issuedAt: string;
   correlationId?: string | null;
   facts?: Array<[string, string]>;
-  columns: BrandedTableColumn[];
-  rows: Array<Record<string, unknown>>;
   fingerprint?: string;
   token?: string;
   verifyUrl?: string;
 }
 
-interface DocBrand {
+export interface BrandedTableOpts extends BrandedDocMeta {
+  columns: BrandedTableColumn[];
+  rows: Array<Record<string, unknown>>;
+}
+
+export interface DocBrand {
   navy: [number, number, number];
   teal: [number, number, number];
 }
 
-const brandOf = (c: CompanyProfile): DocBrand => ({
+export const brandOf = (c: CompanyProfile): DocBrand => ({
   navy: hexToRgb(c.brandColor, BRAND.navy),
   teal: hexToRgb(c.brandColorSecondary, BRAND.teal),
 });
 
-const authEnabled = (o: BrandedTableOpts): boolean =>
+const authEnabled = (o: BrandedDocMeta): boolean =>
   Boolean(o.token && o.verifyUrl && o.fingerprint);
 
-function esc(v: unknown): string {
+export function esc(v: unknown): string {
   if (v === null || v === undefined) return '';
   return String(v)
     .replace(/&/g, '&amp;')
@@ -87,7 +91,7 @@ function esc(v: unknown): string {
 }
 
 /** Compact a raw DB value into a clean printable cell string for PDF/print. */
-function normalizeCellValue(v: unknown): string {
+export function normalizeCellValue(v: unknown): string {
   if (v === null || v === undefined) return '';
   if (v instanceof Date) return compactDateTime(v);
   if (typeof v === 'object') {
@@ -125,7 +129,7 @@ function capCell(s: string, max = 160): string {
 }
 
 /** Word-wrap like wrapText, but also breaks words that exceed maxWidth. */
-function wrapHard(text: string, size: number, bold: boolean, maxWidth: number): string[] {
+export function wrapHard(text: string, size: number, bold: boolean, maxWidth: number): string[] {
   const out: string[] = [];
   const words = String(text).split(/\s+/).filter(Boolean);
   let line = '';
@@ -225,14 +229,14 @@ function readStoredFooterLogo(footerLogoUrl: string): { bytes: Buffer; ext: stri
 }
 
 /** Preload the stored company logo into the PDF and return its XObject name. */
-function preloadLogo(doc: PdfDoc, logoUrl: string): string | undefined {
+export function preloadLogo(doc: PdfDoc, logoUrl: string): string | undefined {
   if (!logoUrl) return undefined;
   const file = readStoredLogo(logoUrl);
   return file ? doc.addImage(file.bytes) ?? undefined : undefined;
 }
 
 /** Preload the stored footer logo into the PDF and return its XObject name. */
-function preloadFooterLogo(doc: PdfDoc, footerLogoUrl: string): string | undefined {
+export function preloadFooterLogo(doc: PdfDoc, footerLogoUrl: string): string | undefined {
   if (!footerLogoUrl) return undefined;
   const file = readStoredFooterLogo(footerLogoUrl);
   return file ? doc.addImage(file.bytes) ?? undefined : undefined;
@@ -243,7 +247,7 @@ function drawTopBar(doc: PdfDoc, brand: DocBrand): void {
   doc.rect(0, doc.pageHeight - 11, doc.pageWidth, 3, brand.teal);
 }
 
-function drawRunningHeader(doc: PdfDoc, opts: BrandedTableOpts, brand: DocBrand, logoName?: string): void {
+export function drawRunningHeader(doc: PdfDoc, opts: BrandedDocMeta, brand: DocBrand, logoName?: string): void {
   drawTopBar(doc, brand);
   const top = doc.pageHeight - 18;
   const mark = 16;
@@ -273,7 +277,7 @@ function drawRunningHeader(doc: PdfDoc, opts: BrandedTableOpts, brand: DocBrand,
   doc.cursorY = top - 34;
 }
 
-function drawLetterhead(doc: PdfDoc, opts: BrandedTableOpts, brand: DocBrand, logoName?: string): void {
+export function drawLetterhead(doc: PdfDoc, opts: BrandedDocMeta, brand: DocBrand, logoName?: string): void {
   const c = opts.company;
   drawTopBar(doc, brand);
   const logoSize = 30;
@@ -343,7 +347,7 @@ function drawLetterhead(doc: PdfDoc, opts: BrandedTableOpts, brand: DocBrand, lo
   doc.cursorY = ruleY - 10;
 }
 
-function drawFacts(doc: PdfDoc, items: Array<[string, string]>, brand: DocBrand): void {
+export function drawFacts(doc: PdfDoc, items: Array<[string, string]>, brand: DocBrand): void {
   const shown = items.filter(([, v]) => v && v !== '-' && v !== 'N/A');
   if (!shown.length) return;
   const cols = Math.min(4, Math.max(2, shown.length));

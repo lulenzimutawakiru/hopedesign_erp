@@ -377,7 +377,7 @@ export function MobileDock({
         <span className="dock-ico" aria-hidden>☑</span>Tasks
         {taskCount > 0 && <span className="count-badge">{taskCount}</span>}
       </button>
-      <button onClick={onMore}>
+      <button className={path.startsWith('/people') ? 'active' : ''} onClick={onMore}>
         <span className="dock-ico" aria-hidden>☰</span>More
       </button>
     </nav>

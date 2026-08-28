@@ -403,7 +403,14 @@ function ContractBoard() {
   if (!data) return <PageLoader label="Opening contracts" />;
   const kpis = (data.kpis ?? {}) as Rec;
   const charts = (data.charts ?? {}) as Rec;
-  const alerts = (data.alerts as string[]) ?? [];
+  const alerts = (data.alerts as Array<Rec | string>) ?? [];
+  const alertMeta: Record<string, { href: string; icon: string; accent: string; tint: string }> = {
+    approval: { href: '/people/contracts/list?statuses=SUBMITTED,HR_REVIEW,MANAGER_REVIEW,FINANCE_REVIEW,LEGAL_REVIEW', icon: '⚠', accent: '#D97706', tint: 'rgba(217,119,6,0.12)' },
+    signature: { href: '/people/contracts/list?statuses=SENT_FOR_SIGNATURE,PARTIALLY_SIGNED', icon: '✍', accent: '#0284C7', tint: 'rgba(2,132,199,0.12)' },
+    expiry: { href: '/people/contracts/expiring', icon: '⏳', accent: '#DC2626', tint: 'rgba(220,38,38,0.12)' },
+    probation: { href: '/people/contracts/probation-ending', icon: '●', accent: '#16A34A', tint: 'rgba(22,163,74,0.12)' },
+    missing: { href: '/people/contracts/missing-particulars', icon: '!', accent: '#7C3AED', tint: 'rgba(124,58,237,0.12)' },
+  };
   const byType = (charts.byType as Array<{ label: string; value: number }>) ?? [];
   const byStatus = (charts.byStatus as Array<{ label: string; value: number }>) ?? [];
   const byDepartment = (charts.byDepartment as Array<{ label: string; value: number }>) ?? [];
@@ -412,8 +419,8 @@ function ContractBoard() {
   const probationStatus = (charts.probationStatus as Array<{ label: string; value: number }>) ?? [];
   const kpiCards: Array<{ key: string; label: string; value: unknown; sub: string; href: string; icon: string; accent: string; tint: string }> = [
     { key: 'active', label: 'Active contracts', value: kpis.active, sub: 'Executed or active today', href: '/people/contracts?status=ACTIVE', icon: '✓', accent: '#168A5B', tint: 'rgba(22,138,91,0.12)' },
-    { key: 'sig', label: 'Pending signature', value: kpis.pendingSignature, sub: 'Sent or partially signed', href: '', icon: '✎', accent: '#D99A00', tint: 'rgba(217,154,0,0.12)' },
-    { key: 'approval', label: 'Awaiting approval', value: kpis.awaitingApproval, sub: 'In the approval workflow', href: '', icon: '◷', accent: '#2878D0', tint: 'rgba(40,120,208,0.12)' },
+    { key: 'sig', label: 'Pending signature', value: kpis.pendingSignature, sub: 'Sent or partially signed', href: '/people/contracts/list?statuses=SENT_FOR_SIGNATURE,PARTIALLY_SIGNED', icon: '✎', accent: '#D99A00', tint: 'rgba(217,154,0,0.12)' },
+    { key: 'approval', label: 'Awaiting approval', value: kpis.awaitingApproval, sub: 'In the approval workflow', href: '/people/contracts/list?statuses=SUBMITTED,HR_REVIEW,MANAGER_REVIEW,FINANCE_REVIEW,LEGAL_REVIEW', icon: '◷', accent: '#2878D0', tint: 'rgba(40,120,208,0.12)' },
     { key: 'expiry', label: 'Expiring in 30 days', value: kpis.expiring30, sub: 'Fixed-term contracts', href: '/people/contracts/expiring', icon: '⏳', accent: '#D97706', tint: 'rgba(217,119,6,0.12)' },
     { key: 'prob', label: 'Probation ending', value: kpis.probationEnding30, sub: 'Within 30 days', href: '/people/contracts/probation-ending', icon: '●', accent: '#0891B2', tint: 'rgba(8,145,178,0.12)' },
     { key: 'missing', label: 'Missing particulars', value: kpis.missingParticulars, sub: 'Need completion', href: '/people/contracts/missing-particulars', icon: '!', accent: '#C93636', tint: 'rgba(201,54,54,0.12)' },
@@ -459,19 +466,38 @@ function ContractBoard() {
         <ChartCard title="Contract expiry trend" rows={expiryTrend} />
         <ChartCard title="Probation status" rows={probationStatus} />
       </div>
-      {alerts.length > 0 && (
-        <section className="card card-pad" style={{ marginTop: 16 }}>
-          <div className="card-head"><h3>Alerts</h3></div>
-          <div className="stack" style={{ gap: 8 }}>
-            {alerts.map((a, i) => (
-              <div key={i} className="callout callout-warn" style={{ margin: 0, padding: '10px 14px' }}>
-                <span className="callout-icon" aria-hidden>⚠</span>
-                <div className="callout-body"><p style={{ margin: 0 }}>{a}</p></div>
-              </div>
-            ))}
+      <section className="card card-pad" style={{ marginTop: 16 }}>
+        <div className="card-head">
+          <div>
+            <h3 style={{ margin: 0 }}>Action centre</h3>
+            <p className="muted" style={{ margin: '2px 0 0' }}>Work that needs your attention</p>
           </div>
-        </section>
-      )}
+        </div>
+        {alerts.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>Nothing needs attention. New contract activity will appear here.</p>
+        ) : (
+          <div className="action-grid">
+            {alerts.map((a, i) => {
+              const rec = typeof a === 'string' ? { title: a, body: '', kind: '', count: 0 } : a;
+              const meta = alertMeta[String(rec.kind ?? '')] ?? alertMeta.expiry;
+              const title = String(rec.title ?? '');
+              const body = String(rec.body ?? '');
+              const count = Number(rec.count ?? 0);
+              return (
+                <button key={i} type="button" className="action-card" style={tileStyle(meta.accent, meta.tint)} onClick={() => navigate(meta.href)}>
+                  <span className="action-card-icon" aria-hidden>{String(rec.kind === 'signature' ? '✍' : meta.icon)}</span>
+                  <span className="action-card-body">
+                    <span className="action-card-title">{title || body}</span>
+                    {body && <span className="action-card-desc">{body}</span>}
+                  </span>
+                  {count > 0 && <span className="action-card-count" aria-label={count + ' items'}>{fmtNum(count)}</span>}
+                  <span className="action-card-go" aria-hidden>&#8594;</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
       <section className="card" style={{ marginTop: 16 }}>
         <div className="card-head">
           <h3>Recent contracts</h3>
@@ -532,6 +558,7 @@ const WEEK_DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATU
 
 function ContractComposer() {
   const [step, setStep] = useState(1);
+  const { user } = useAuth();
   const [employees, setEmployees] = useState<Rec[]>([]);
   const [depts, setDepts] = useState<Rec[]>([]);
   const [templates, setTemplates] = useState<Rec[]>([]);
@@ -540,6 +567,7 @@ function ContractComposer() {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [employeeId, setEmployeeId] = useState('');
+  const [employeeSearch, setEmployeeSearch] = useState('');
   const [contractType, setContractType] = useState('PERMANENT');
   const [templateId, setTemplateId] = useState('');
   const [reason, setReason] = useState('');
@@ -574,6 +602,37 @@ function ContractComposer() {
   const [hasConfidentialAccess, setHasConfidentialAccess] = useState(false);
   const [overtimeEligible, setOvertimeEligible] = useState(false);
   const preselectEmployee = useMemo(() => currentQuery().get('employee') ?? '', []);
+  const employeeResults = useMemo(() => {
+    const q = employeeSearch.trim().toLowerCase();
+    const usable = employees.filter((e) => {
+      const st = String(e.status ?? '').toUpperCase();
+      return !['TERMINATED', 'RESIGNED', 'ARCHIVED', 'INACTIVE', 'DECEASED', 'EXITED'].includes(st);
+    });
+    const matches = q ? usable.filter((e) => employeeName(e).toLowerCase().includes(q) || String(e.employeeNo ?? '').toLowerCase().includes(q)) : usable;
+    return matches.slice(0, 12);
+  }, [employees, employeeSearch]);
+  const allowanceTotal = useMemo(() => allowances.reduce((sum, a) => {
+    const freq = String(a.frequency ?? 'MONTHLY');
+    if (freq !== 'MONTHLY') return sum;
+    const amt = Number(a.amount ?? '');
+    if (a.amount !== '' && a.amount != null && !isNaN(amt)) return sum + amt;
+    const base = Number(basic ?? 0);
+    const pct = Number(a.percentage ?? '');
+    if (pct && !isNaN(pct)) return sum + (base * pct) / 100;
+    return sum;
+  }, 0), [allowances, basic]);
+  const expiryGuidance = useMemo(() => {
+    if (!endDate.trim()) return '';
+    const days = daysUntil(endDate);
+    if (days === null || days < 0) return '';
+    const years = Math.floor(days / 365);
+    const months = Math.round((days % 365) / 30.44);
+    let period = '';
+    if (years > 0) period = years + ' year' + (years > 1 ? 's' : '') + (months > 0 ? ' and ' + months + ' month' + (months > 1 ? 's' : '') : '');
+    else if (months > 0) period = months + ' month' + (months > 1 ? 's' : '');
+    else period = days + ' day' + (days > 1 ? 's' : '');
+    return 'This contract will expire in ' + period + '. Renewal alerts automatically begin 90 days before expiry.';
+  }, [endDate]);
 
   const load = useCallback(() => {
     api<{ data: unknown }>('/api/ops/hr/employees?pageSize=200').then((r) => { const d = r.data as Rec | Rec[] | null; setEmployees(Array.isArray(d) ? d : (d && Array.isArray(d.rows) ? (d.rows as Rec[]) : [])); }).catch(() => undefined);
@@ -628,6 +687,8 @@ function ContractComposer() {
     ['Compensation', 3, 'Salary, allowances and benefits'],
     ['Clauses', 4, 'Terms selected from the clause library'],
     ['Review', 5, 'Confirm before creating the draft'],
+    ['Approval', 6, 'Review the approval workflow before submission'],
+    ['Signature', 7, 'Signature plan and execution steps'],
   ];
 
   const canNext = (): boolean => {
@@ -786,14 +847,57 @@ function ContractComposer() {
               <div className="form-grid">
                 <div className="field" style={{ gridColumn: '1 / -1' }}>
                   <label>Employee *</label>
-                  <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
-                    <option value="">Select employee</option>
-                    {employees.map((e) => (
-                      <option key={String(e.id)} value={String(e.id)}>
-                        {String(e.employeeNo ?? '')} - {employeeName(e)}
-                      </option>
-                    ))}
-                  </select>
+                  {!employeeId ? (
+                    <div className="employee-picker">
+                      <input
+                        type="search"
+                        className="search-input"
+                        placeholder="Search by name or employee ID"
+                        value={employeeSearch}
+                        onChange={(e) => setEmployeeSearch(e.target.value)}
+                        aria-label="Search employees"
+                      />
+                      <div className="employee-picker-list" role="listbox" aria-label="Employee results">
+                        {employeeResults.length === 0 ? (
+                          <p className="muted employee-picker-empty">No employees match your search.</p>
+                        ) : employeeResults.map((e) => (
+                          <button
+                            key={String(e.id)}
+                            type="button"
+                            role="option"
+                            aria-selected={String(e.id) === employeeId}
+                            className="employee-picker-row"
+                            onClick={() => setEmployeeId(String(e.id))}
+                          >
+                            <Avatar name={employeeName(e)} sub={String(e.employeeNo ?? '')} size="sm" />
+                            <span className="employee-picker-meta">
+                              <span className="employee-picker-name">{employeeName(e)}</span>
+                              <span className="employee-picker-sub">
+                                {String(e.position ?? '')}
+                                {e.departmentName ? ' ' + String.fromCharCode(183) + ' ' + String(e.departmentName) : ''}
+                              </span>
+                              <span className="employee-picker-id">{String(e.employeeNo ?? '')}</span>
+                            </span>
+                            <span className="employee-picker-go" aria-hidden>&#8594;</span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="hint">Search by name or employee ID. Only employable employees are listed.</p>
+                    </div>
+                  ) : (
+                    selectedEmployee ? (
+                    <div className="selected-employee">
+                      <span className="selected-employee-meta">
+                        <span className="selected-employee-name">{employeeName(selectedEmployee)}</span>
+                        <span className="selected-employee-sub">
+                          {String(selectedEmployee.position ?? '')}
+                          {selectedEmployee.departmentName ? ' ' + String.fromCharCode(183) + ' ' + String(selectedEmployee.departmentName) : ''}
+                        </span>
+                        <span className="selected-employee-id">{String(selectedEmployee.employeeNo ?? '')}</span>
+                      </span>
+                      <button type="button" className="btn btn-sm" onClick={() => { setEmployeeId(''); setEmployeeSearch(''); }}>Change employee</button>
+                    </div>
+                  ) : null)}
                 </div>
                 <div className="field" style={{ gridColumn: '1 / -1' }}>
                   <label>Contract type *</label>
@@ -873,6 +977,15 @@ function ContractComposer() {
                   <div className="field"><label>End date *</label><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></div>
                 ) : (
                   <div className="field"><label>End date</label><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></div>
+                )}
+                {expiryGuidance && (
+                  <div className="callout callout-info" style={{ gridColumn: '1 / -1' }}>
+                    <span className="callout-icon" aria-hidden>{String.fromCharCode(8505)}</span>
+                    <div className="callout-body">
+                      <p className="callout-title">Expiry guidance</p>
+                      <p>{expiryGuidance}</p>
+                    </div>
+                  </div>
                 )}
                 <div className="field"><label>Job title</label><input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} placeholder="e.g. Finance Officer" /></div>
                 <div className="field"><label>Job code</label><input value={jobCode} onChange={(e) => setJobCode(e.target.value)} /></div>
@@ -959,7 +1072,8 @@ function ContractComposer() {
           </div>
         )}
         {step === 3 && (
-          <div className="stack">
+          <div className="comp-grid">
+            <div className="stack">
             <div className="def-sec">
               <div className="def-sec-head">
                 <span className="def-sec-icon" aria-hidden>💰</span>
@@ -1050,6 +1164,23 @@ function ContractComposer() {
                 </div>
               </div>
             </div>
+            {can(user, 'hr.contracts.view') && (
+              <aside className="card card-pad comp-summary-panel" aria-label="Monthly compensation summary">
+                <p className="comp-summary-kicker">Compensation</p>
+                <h3 className="comp-summary-title">Monthly summary</h3>
+                <dl className="comp-summary-rows">
+                  <div><dt>Basic salary</dt><dd>{fmtUGX(basic, currency)}</dd></div>
+                  <div><dt>Allowances</dt><dd>{fmtUGX(allowanceTotal, currency)}</dd></div>
+                </dl>
+                <div className="comp-summary-divider" aria-hidden />
+                <dl className="comp-summary-rows comp-summary-total">
+                  <div><dt>Total package</dt><dd>{fmtUGX(Number(basic || 0) + allowanceTotal, currency)}</dd></div>
+                </dl>
+                <p className="hint">Paid {String(frequency).toLowerCase()}. Statutory deductions (PAYE, NSSF) are calculated by the payroll engine.</p>
+                <p className="muted comp-summary-lock">{String.fromCharCode(128274)} Salary is visible to authorised HR users only.</p>
+              </aside>
+            )}
+          </div>
           </div>
         )}
         {step === 4 && (
@@ -1158,6 +1289,106 @@ function ContractComposer() {
             </div>
           </div>
         )}
+        {step === 6 && (
+          <div className="stack">
+            <div className="def-sec">
+              <div className="def-sec-head">
+                <span className="def-sec-icon" aria-hidden>{'\u2705'}</span>
+                <div>
+                  <h3>Approval workflow</h3>
+                  <p>What happens after this contract is submitted.</p>
+                </div>
+              </div>
+              <ol className="wf-steps" aria-label="Approval workflow preview">
+                <li className="wf-step">
+                  <span className="wf-dot wf-dot-done" aria-hidden>{'\u2713'}</span>
+                  <div className="wf-body">
+                    <span className="wf-title">Compliance validation</span>
+                    <span className="wf-sub">Runs automatically on submission. Statutory particulars, clause conflicts and legal rules are checked before the workflow starts.</span>
+                  </div>
+                </li>
+                <li className="wf-step">
+                  <span className="wf-dot" aria-hidden>1</span>
+                  <div className="wf-body">
+                    <span className="wf-title">HR review</span>
+                    <span className="wf-sub">An HR officer confirms the details are complete, consistent and match the employee record.</span>
+                  </div>
+                </li>
+                <li className="wf-step">
+                  <span className="wf-dot" aria-hidden>2</span>
+                  <div className="wf-body">
+                    <span className="wf-title">Finance review</span>
+                    <span className="wf-sub">Confirms the compensation package when salary, allowances or benefits are configured.</span>
+                  </div>
+                </li>
+                <li className="wf-step">
+                  <span className="wf-dot" aria-hidden>3</span>
+                  <div className="wf-body">
+                    <span className="wf-title">Managing director approval</span>
+                    <span className="wf-sub">Final decision before the contract is sent for signature.</span>
+                  </div>
+                </li>
+              </ol>
+            </div>
+            <div className="callout callout-info">
+              <span className="callout-icon" aria-hidden>{'\u2139'}</span>
+              <div className="callout-body">
+                <p className="callout-title">The exact chain follows the organisation workflow configuration</p>
+                <p>Steps, approvers and escalation rules are resolved when the contract is submitted. Progress and decisions appear in the contract workspace as they happen.</p>
+              </div>
+            </div>
+          </div>
+        )}
+        {step === 7 && (
+          <div className="stack">
+            <div className="def-sec">
+              <div className="def-sec-head">
+                <span className="def-sec-icon" aria-hidden>{'\u270D\uFE0F'}</span>
+                <div>
+                  <h3>Signature plan</h3>
+                  <p>Who signs this contract and in what order.</p>
+                </div>
+              </div>
+              <ol className="wf-steps" aria-label="Signature plan">
+                <li className="wf-step">
+                  <span className="wf-dot" aria-hidden>1</span>
+                  <div className="wf-body">
+                    <span className="wf-title">Employee</span>
+                    <span className="wf-sub">{selectedEmployee ? employeeName(selectedEmployee) : 'The employee'} signs first. The employer never signs on the employee&#39;s behalf.</span>
+                  </div>
+                </li>
+                <li className="wf-step">
+                  <span className="wf-dot" aria-hidden>2</span>
+                  <div className="wf-body">
+                    <span className="wf-title">Employer representative</span>
+                    <span className="wf-sub">An authorised representative of the company signs after the employee.</span>
+                  </div>
+                </li>
+                <li className="wf-step">
+                  <span className="wf-dot" aria-hidden>3</span>
+                  <div className="wf-body">
+                    <span className="wf-title">Witness</span>
+                    <span className="wf-sub">A witness countersigns to confirm both parties signed freely.</span>
+                  </div>
+                </li>
+              </ol>
+            </div>
+            <div className="callout callout-warn">
+              <span className="callout-icon" aria-hidden>{'\uD83D\uDD12'}</span>
+              <div className="callout-body">
+                <p className="callout-title">Executed documents are locked</p>
+                <p>Once every required party has signed, the contract becomes immutable. Later changes are recorded as formal variations and never rewrite the signed original.</p>
+              </div>
+            </div>
+            <div className="callout callout-success">
+              <span className="callout-icon" aria-hidden>{'\u2713'}</span>
+              <div className="callout-body">
+                <p className="callout-title">Ready to create the draft</p>
+                <p>Creating the draft saves it for review. Submit for approval from the contract workspace when you are ready to start the workflow.</p>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="composer-foot">
           {step < steps.length && !canNext() && nextHint() && (
             <p className="composer-hint" role="status">{nextHint()}</p>
@@ -1184,6 +1415,14 @@ const CONTRACT_STATUSES = ['DRAFT','VALIDATING','SUBMITTED','HR_REVIEW','MANAGER
 // CONTRACT REGISTER (list)
 // ============================================================
 
+const SAVED_VIEWS: Array<[string, string]> = [
+  ['', 'All contracts'],
+  ['SUBMITTED,HR_REVIEW,MANAGER_REVIEW,FINANCE_REVIEW,LEGAL_REVIEW', 'Awaiting approval'],
+  ['SENT_FOR_SIGNATURE,PARTIALLY_SIGNED', 'Pending signature'],
+  ['DRAFT', 'Unsigned'],
+  ['expiring', 'Expiring soon'],
+];
+
 function ContractList() {
   const { user } = useAuth();
   const [items, setItems] = useState<Rec[]>([]);
@@ -1192,6 +1431,7 @@ function ContractList() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [contractType, setContractType] = useState('');
+  const [statuses, setStatuses] = useState(() => currentQuery().get('statuses') ?? '');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -1202,12 +1442,13 @@ function ContractList() {
     if (q.trim()) p.push('q=' + encodeURIComponent(q.trim()));
     if (status) p.push('status=' + encodeURIComponent(status));
     if (contractType) p.push('contractType=' + encodeURIComponent(contractType));
+    if (statuses && statuses !== 'expiring') p.push('statuses=' + encodeURIComponent(statuses));
     p.push('page=' + page, 'pageSize=40');
     api<{ data: { items: Rec[]; total: number } }>('/api/ops/hr/contracts?' + p.join('&'))
       .then((r) => { setItems(r.data.items ?? []); setTotal(r.data.total ?? 0); })
       .catch((e) => setError(e instanceof Error ? e.message : 'Contract list failed'))
       .finally(() => setLoading(false));
-  }, [q, status, contractType, page]);
+  }, [q, status, contractType, statuses, page]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setSelected(new Set()); }, [items]);
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -1225,11 +1466,12 @@ function ContractList() {
         else if (q.trim()) resetPage(setQ, '');
         else if (status) resetPage(setStatus, '');
         else if (contractType) resetPage(setContractType, '');
+        else if (statuses) resetPage(setStatuses, '');
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [user, q, status, contractType, selected.size]);
+  }, [user, q, status, contractType, statuses, selected.size]);
   const resetPage = (setter: (v: string) => void, v: string) => { setter(v); setPage(1); };
   const toggleRow = (id: number) => {
     setSelected((prev) => {
@@ -1290,6 +1532,26 @@ function ContractList() {
             {CONTRACT_TYPES.map((t) => <option key={t} value={t}>{contractTypeLabel(t)}</option>)}
           </select>
           <span className="kbd-hints" aria-hidden><kbd>/</kbd> search &#183; <kbd>n</kbd> new &#183; <kbd>esc</kbd> clear</span>
+        </div>
+        <div className="saved-views" role="group" aria-label="Saved views">
+          <span className="saved-views-label muted">Views</span>
+          {SAVED_VIEWS.map(([v, label]) => {
+            const active = v === 'expiring' ? statuses === 'expiring' : statuses === v;
+            return (
+              <button
+                key={label}
+                type="button"
+                className={'view-chip' + (active ? ' active' : '')}
+                aria-pressed={active}
+                onClick={() => {
+                  if (v === 'expiring') navigate('/people/contracts/expiring');
+                  else resetPage(setStatuses, v);
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
         <div className="list-meta">
           <span className="muted">{fmtNum(total)} contract(s)</span>
@@ -1421,6 +1683,7 @@ function ContractDesk({ id }: { id: number }) {
   const [renEnd, setRenEnd] = useState('');
   const [renReason, setRenReason] = useState('');
   const [photoRev, setPhotoRev] = useState(0);
+  const [qrBusy, setQrBusy] = useState(false);
   const load = useCallback(() => {
     setError('');
     api<{ data: Rec }>('/api/ops/hr/contracts/' + String(id))
@@ -1493,6 +1756,21 @@ useEffect(() => {
     if (!executed) return;
     try { navigator.clipboard.writeText(executed.secret + ' | ' + executed.verificationCode); setNotice('Verification details copied.'); }
     catch { setNotice('Copy manually: secret + verification code shown below.'); }
+  };
+  const openVerificationQr = async () => {
+    if (qrBusy) return;
+    setQrBusy(true);
+    setError('');
+    try {
+      const r = await api<{ data: Rec }>('/api/ops/hr/contracts/' + String(id) + '/verification-qr');
+      const url = String(r.data?.verifyUrl ?? '');
+      if (url) window.open(url, '_blank', 'noopener');
+      else setNotice('Document verification is disabled for this company.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'QR generation failed');
+    } finally {
+      setQrBusy(false);
+    }
   };
   const doValidate = () => {
     setValidateResult(null);
@@ -1636,7 +1914,7 @@ useEffect(() => {
           </div>
           </div>
         </div>
-        <div className="head-actions">
+        <div className="head-actions contract-actions">
           {canValidate && <button className="btn" disabled={busy !== ''} onClick={doValidate}>Validate</button>}
           {canSubmit && <button className="btn btn-primary" disabled={busy !== ''} onClick={doSubmit}>Submit for approval</button>}
           {canSign && <button className="btn" disabled={busy !== ''} onClick={() => { setModal('request-sign'); setSignerType('ALL'); }}>Request signature</button>}
@@ -1660,6 +1938,33 @@ useEffect(() => {
           </span>
         </div>
       </header>
+      <section className="hero-card card" aria-label="Contract summary">
+        <div className="hero-main">
+          <div className="hero-id">
+            <span className="hero-kicker">Employment contract</span>
+            <h2 className="cell-mono">{String(c.contractNo ?? '-')}</h2>
+          </div>
+          <Avatar
+            name={String(c.firstName ?? '') + ' ' + String(c.lastName ?? '')}
+            sub={(c.jobTitle && c.departmentName ? String(c.jobTitle) + ' \u00B7 ' + String(c.departmentName) : c.jobTitle ? String(c.jobTitle) : c.departmentName ? String(c.departmentName) : '')}
+            size="lg"
+          />
+          <span className="hero-status"><Badge value={c.status} /></span>
+        </div>
+        <div className="hero-meta">
+          <span>Started <b>{fmtDate(c.startDate)}</b></span>
+          <span>Ends <b>{fmtDate(c.endDate)}</b></span>
+          <span>Version <b>v{String(c.version ?? 1)}</b></span>
+        </div>
+        <div className="hero-actions">
+          {canView && <button className="btn btn-primary" disabled={busy !== ''} onClick={downloadPdf}>View contract</button>}
+          {canView && (
+            <button className="btn" disabled={qrBusy} onClick={openVerificationQr} title="Open the public verification page for this contract">
+              {qrBusy ? 'Opening...' : 'Verification QR'}
+            </button>
+          )}
+        </div>
+      </section>
       {terminal ? (
         <div className={'lc-note ' + terminal.kind}>
           <span className="lc-note-dot" aria-hidden />
@@ -1722,7 +2027,7 @@ useEffect(() => {
         </div>
       )}
       <div className="tabs" style={{ marginTop: 12 }}>
-        {[['overview', 'Overview'], ['terms', 'Terms & clauses'], ['compensation', 'Compensation'], ['signatures', 'Signatures'], ['approvals', 'Approvals'], ['compliance', 'Compliance'], ['variations', 'Variations'], ['audit', 'Audit']].map(([k, label]) => (
+        {[['overview', 'Overview'], ['terms', 'Terms & clauses'], ['compensation', 'Compensation'], ['documents', 'Documents'], ['approvals', 'Approvals'], ['signatures', 'Signatures'], ['compliance', 'Compliance'], ['variations', 'Variations'], ['history', 'History'], ['audit', 'Audit']].map(([k, label]) => (
           <button key={k} className={tab === k ? 'tab active' : 'tab'} onClick={() => setTab(k)}>{label}</button>
         ))}
       </div>
@@ -1956,6 +2261,30 @@ useEffect(() => {
             </div>
           </div>
         )}
+        {tab === 'documents' && (
+          <div>
+            {documents.length === 0 ? (
+              <EmptyState icon={'\uD83D\uDCC4'} title="No documents attached" hint="Signed contract files, exhibits and supporting documents appear here." />
+            ) : (
+              <div className="stack">
+                <section className="card def-sec">
+                  <div className="def-sec-head">
+                    <span className="def-sec-icon" aria-hidden>{'\uD83D\uDCCE'}</span>
+                    <div>
+                      <h3>Documents</h3>
+                      <p>{documents.length} attached</p>
+                    </div>
+                  </div>
+                  <dl className="def-list">
+                    {documents.map((d) => (
+                      <DefRow key={String(d.id)} k={String(d.documentType ?? 'document')} v={<span><span className="td-cell-mono">{String(d.documentNo ?? '')}</span>{d.mimeType ? ' \u00B7 ' + String(d.mimeType) : ''} <Badge value={d.status} /></span>} />
+                    ))}
+                  </dl>
+                </section>
+              </div>
+            )}
+          </div>
+        )}
         {tab === 'variations' && (
           <div className="stack">
             {variations.map((v) => {
@@ -1973,9 +2302,25 @@ useEffect(() => {
                   {v.reason ? <p className="muted" style={{ margin: '0 0 10px' }}>{String(v.reason)}</p> : null}
                   {changes.length > 0 && (
                     <dl className="def-list">
-                      {changes.map((ch, idx) => (
-                        <DefRow key={idx} k={String(ch.label ?? ch.field ?? 'change')} v={<span><span className="muted">{String(ch.oldValue ?? '—')}</span> <span className="muted" aria-hidden>→</span> <span className="td-strong">{String(ch.newValue ?? '—')}</span></span>} />
-                      ))}
+                      {changes.map((ch, idx) => {
+                        const oldV = String(ch.oldValue ?? '');
+                        const newV = String(ch.newValue ?? '');
+                        const added = oldV === '' && newV !== '';
+                        const removed = newV === '' && oldV !== '';
+                        return (
+                          <DefRow
+                            key={idx}
+                            k={String(ch.label ?? ch.field ?? 'change')}
+                            v={added ? (
+                              <span><span className="diff-badge diff-add">Added</span> <span className="td-strong">{newV}</span></span>
+                            ) : removed ? (
+                              <span><span className="diff-badge diff-del">Removed</span> <span className="muted">{oldV}</span></span>
+                            ) : (
+                              <span><span className="muted">{oldV || '\u2014'}</span> <span className="muted" aria-hidden>{'\u2192'}</span> <span className="diff-badge diff-mod">Modified</span> <span className="td-strong">{newV || '\u2014'}</span></span>
+                            )}
+                          />
+                        );
+                      })}
                     </dl>
                   )}
                 </section>
@@ -1997,21 +2342,38 @@ useEffect(() => {
             {variations.length === 0 && renewals.length === 0 && (
               <EmptyState icon="🔄" title="No variations or renewals" hint="Changes to an executed contract are recorded as formal variation documents and never rewrite the original." />
             )}
-            {documents.length > 0 && (
-              <section className="card def-sec">
-                <div className="def-sec-head">
-                  <span className="def-sec-icon" aria-hidden>📎</span>
-                  <div>
-                    <h3>Documents</h3>
-                    <p>{documents.length} attached</p>
-                  </div>
-                </div>
-                <dl className="def-list">
-                  {documents.map((d) => (
-                    <DefRow key={String(d.id)} k={String(d.documentType ?? 'document')} v={<span><span className="td-cell-mono">{String(d.documentNo ?? '')}</span>{d.mimeType ? ' · ' + String(d.mimeType) : ''} <Badge value={d.status} /></span>} />
-                  ))}
-                </dl>
-              </section>
+          </div>
+        )}
+        {tab === 'history' && (
+          <div>
+            <div className="list-meta" style={{ marginBottom: 12 }}>
+              <span className="muted">{fmtNum(audit.length)} event(s)</span>
+            </div>
+            {audit.length === 0 ? (
+              <EmptyState icon={'\uD83D\uDDD1'} title="No history yet" hint="Actions on this contract will appear here as a human-friendly timeline." />
+            ) : (
+              <div className="feed">
+                {audit.map((a) => {
+                  const meta = auditEventMeta(String(a.action ?? ''));
+                  return (
+                    <div key={String(a.id)} className="feed-item">
+                      <span className="feed-icon" style={{ background: hexToRgba(meta.color, 0.13), color: meta.color }} aria-hidden>{meta.icon}</span>
+                      <div className="feed-body">
+                        <div className="feed-title">
+                          <span className="td-strong">{meta.label}</span>
+                          {a.userId ? <span className="muted">{' user ' + String(a.userId)}</span> : null}
+                        </div>
+                        <div className="feed-meta">
+                          <span>{fmtDate(a.createdAt)}</span>
+                          {a.ip ? <span>{' \u00B7 ' + String(a.ip)}</span> : null}
+                          {a.device ? <span>{' \u00B7 ' + String(a.device)}</span> : null}
+                        </div>
+                      </div>
+                      <span className="muted feed-id">#{String(a.id)}</span>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}
@@ -2912,6 +3274,7 @@ function MissingParticulars() {
 // ============================================================
 
 function MyContracts() {
+  const { user } = useAuth();
   const [data, setData] = useState<Rec | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -2920,6 +3283,8 @@ function MyContracts() {
   const [signature, setSignature] = useState('');
   const [signatureFile, setSignatureFile] = useState<File | null>(null);
   const [executed, setExecuted] = useState<{ secret: string; verificationCode: string } | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
+  const [sigDetail, setSigDetail] = useState<Rec | null>(null);
   const load = useCallback(() => {
     setError('');
     api<{ data: Rec }>('/api/ops/hr/contracts/my?pageSize=50')
@@ -2927,6 +3292,20 @@ function MyContracts() {
       .catch((e) => setError(e instanceof Error ? e.message : 'My contracts failed'));
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const items0 = ((data?.items ?? []) as Rec[]);
+    const cur = items0.find((c) => ['EXECUTED', 'ACTIVE', 'VARIED', 'RENEWED'].includes(String(c.status ?? ''))) ?? items0[0] ?? null;
+    const cid = cur ? Number(cur.id) : null;
+    if (cid === null) {
+      setSigDetail(null);
+      return;
+    }
+    let cancelled = false;
+    api<{ data: Rec }>('/api/ops/hr/contracts/' + String(cid))
+      .then((r) => { if (!cancelled) setSigDetail(r.data); })
+      .catch(() => { if (!cancelled) setSigDetail(null); });
+    return () => { cancelled = true; };
+  }, [data?.items]);
   if (error && !data) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader label="Opening your contracts" />;
   const items = (data.items ?? []) as Rec[];
@@ -2985,15 +3364,33 @@ function MyContracts() {
   const activeCount = items.filter((c) => ['EXECUTED', 'ACTIVE', 'VARIED', 'RENEWED'].includes(String(c.status ?? ''))).length;
   const lcIdx = current ? lifecycleIndex(String(current.status ?? '')) : -1;
   const currentPending = current ? ['SENT_FOR_SIGNATURE', 'PARTIALLY_SIGNED'].includes(String(current.status ?? '')) : false;
+  const signatures = ((sigDetail?.signatures ?? []) as Rec[]);
+  const signerLabel = (t: string) =>
+    t === 'EMPLOYEE' ? 'Employee' : t === 'EMPLOYER_REPRESENTATIVE' ? 'Employer representative' : t === 'WITNESS' ? 'Witness' : t === 'HR_REPRESENTATIVE' ? 'HR representative' : t;
+  const openQr = async (c: Rec) => {
+    if (qrBusy) return;
+    setQrBusy(true);
+    setError('');
+    try {
+      const r = await api<{ data: Rec }>('/api/ops/hr/contracts/' + String(c.id) + '/verification-qr');
+      const url = String(r.data?.verifyUrl ?? '');
+      if (url) window.open(url, '_blank', 'noopener');
+      else setNotice('Document verification is disabled for this company.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'QR generation failed');
+    } finally {
+      setQrBusy(false);
+    }
+  };
   return (
     <div className="page">
       <header className="page-head">
         <div>
           <p className="mod-kicker" data-mod="hr">Employee self-service</p>
-          <h1>My employment contracts</h1>
+          <h1>Hello, {String(user?.first_name ?? 'there')}</h1>
           <p className="muted">View, print, download and sign your own contracts. Printed copies include every attached clause. You can only sign contracts that are addressed to you.</p>
         </div>
-        <div className="head-actions">
+        <div className="head-actions contract-actions">
           {pending.length > 0 && (
             <button className="chip chip-active" onClick={() => { const el = document.getElementById('sig-required'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}>
               ✎ {fmtNum(pending.length)} awaiting signature
@@ -3028,6 +3425,16 @@ function MyContracts() {
           <div className="callout-body">
             <p className="callout-title">Signature required</p>
             <p><strong>{pending.length} contract(s)</strong> are awaiting your signature. Sign to complete execution.</p>
+            <ul className="self-sig-list">
+              {pending.map((c) => (
+                <li key={String(c.id)} className="self-sig-item">
+                  <span className="cell-mono">{String(c.contractNo ?? '-')}</span>
+                  <span className="muted">{String(c.jobTitle ?? '')}</span>
+                  <Badge value={c.status} />
+                  <button className="btn btn-sm btn-success" disabled={busy !== ''} onClick={() => setSignId(Number(c.id))}>Sign now</button>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       )}
@@ -3091,12 +3498,30 @@ function MyContracts() {
             </ol>
           </div>
           <div className="self-hero-side">
+            {signatures.length > 0 && (
+              <div className="self-sig-progress" aria-label="Signature status">
+                <span className="self-hero-k">Signature status</span>
+                {signatures.map((s) => {
+                  const signed = String(s.status ?? '') === 'SIGNED';
+                  return (
+                    <div key={String(s.id ?? String(s.signerType ?? ''))} className={'self-sig-row' + (signed ? ' done' : '')}>
+                      <span className="self-sig-ico" aria-hidden>{signed ? '\u2713' : '\u25CB'}</span>
+                      <span className="self-sig-name">{signerLabel(String(s.signerType ?? ''))}</span>
+                      <span className="self-sig-meta">{signed && s.signedAt ? fmtDate(s.signedAt) : <span className="muted">Pending</span>}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <div className="self-hero-actions">
               {currentPending && <button className="btn btn-success" disabled={busy !== ''} onClick={() => setSignId(Number(current.id))}>Sign now</button>}
               {['EXECUTED', 'ACTIVE', 'VARIED', 'RENEWED'].includes(String(current.status ?? '')) && (
                 <>
                   <button className="btn" disabled={busy !== ''} onClick={() => printContract(current)}>Print</button>
                   <button className="btn" disabled={busy !== ''} onClick={() => downloadPdf(current)}>Download PDF</button>
+                  <button className="btn" disabled={qrBusy} onClick={() => openQr(current)} title="Open the public verification page for this contract">
+                    {qrBusy ? 'Opening...' : 'Verification QR'}
+                  </button>
                 </>
               )}
             </div>

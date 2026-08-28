@@ -21,6 +21,10 @@ import {
   applyExcelBrandHeader,
   companyContactLines,
   companyRegLines,
+  documentFingerprint,
+  documentVerifyUrl,
+  issueDocumentToken,
+  loadCompanyProfile,
   formatDocDate,
   formatDocDateTime,
   formatDocStatus,
@@ -67,6 +71,10 @@ export interface DocData {
   items: Array<Record<string, unknown>>;
   totals: Array<[string, string]>;
   notes: string[];
+  /** Payslip-only: lines showing how Net Pay is derived (Gross Pay minus deductions). */
+  payBreakdown?: Array<[string, string]>;
+  /** Payslip-only: PAYE bracket table and explanatory note used for the period. */
+  payeBrackets?: { bands: Array<[string, string]>; note?: string };
   raw: unknown;
   isContract?: boolean;
   isCertificate?: boolean;
@@ -1619,6 +1627,24 @@ async function loadCertificateOfService(client: pg.PoolClient, ctx: Ctx, id: num
   };
 }
 
+/**
+ * Ugandan monthly PAYE brackets in force for FY2026/27 (effective 1 July 2026).
+ * PAYE is charged on taxable pay after deducting the employee NSSF contribution.
+ */
+const UG_PAYE_BRACKETS_2026: { bands: Array<[string, string]>; note: string } = {
+  bands: [
+    ['Up to 335,000', '0%'],
+    ['335,001 \u2013 410,000', '20%'],
+    ['410,001 \u2013 485,000', '25%'],
+    ['485,001 \u2013 10,000,000', '30%'],
+    ['Above 10,000,000', '40%'],
+  ],
+  note:
+    'PAYE is applied to taxable pay after deducting the employee NSSF contribution. ' +
+    'Up to UGX 10,000,000: 33,750 + 30% of the excess over 485,000. ' +
+    'Above UGX 10,000,000: PAYE on 10,000,000 + 40% of the excess.',
+};
+
 async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise<DocData> {
   const res = await client.query(
     `SELECT i.*,
@@ -1675,6 +1701,19 @@ async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise
   addLine('Deduction', 'Staff loan', 'Monthly loan recovery', pick(r, 'loans'));
   addLine('Deduction', 'Salary advance', 'Advance recovery', pick(r, 'advances'));
   addLine('Deduction', 'Other deductions', 'Other authorised deductions', pick(r, 'other_deductions'));
+  const payBreakdown: Array<[string, string]> = [['Gross Pay', moneyCcy(pick(r, 'gross_pay'), currency)]];
+  const deductionLines: Array<[string, string]> = [];
+  const addDeduction = (label: string, amount: unknown) => {
+    if (num(amount) > 0) deductionLines.push([label, `(${moneyCcy(amount, currency)})`]);
+  };
+  addDeduction('Less: Employee NSSF (5%)', pick(r, 'nssf'));
+  addDeduction('Less: PAYE (Income Tax)', pick(r, 'paye'));
+  addDeduction('Less: Local Service Tax', pick(r, 'lst'));
+  addDeduction('Less: Staff loan recovery', pick(r, 'loans'));
+  addDeduction('Less: Salary advance recovery', pick(r, 'advances'));
+  addDeduction('Less: Other deductions', pick(r, 'other_deductions'));
+  payBreakdown.push(...deductionLines);
+  payBreakdown.push(['Net Pay', moneyCcy(pick(r, 'net_pay'), currency)]);
   const paymentDate = dateOnly(pick(r, 'slip_payment_date', 'payment_date'));
   const notes = [
     'This payslip is issued for the employee\'s personal records. It is confidential and must not be disclosed to third parties without the employee\'s consent.',
@@ -1760,6 +1799,188 @@ async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise
     notes,
     raw: r,
     photo,
+    payBreakdown,
+    payeBrackets: UG_PAYE_BRACKETS_2026,
+  };
+}
+
+async function loadPayrollRegister(client: pg.PoolClient, ctx: Ctx, id: number): Promise<DocData> {
+  const head = await client.query(
+    `SELECT p.payroll_no, p.period_start, p.period_end, p.payment_date, p.status,
+            p.currency, p.run_type, p.off_cycle_type, p.reason, p.validation_score, p.gl_posted,
+            p.gross_total, p.deduction_total, p.net_total,
+            c.name AS company_name, c.legal_name AS company_legal_name, c.address AS company_address,
+            c.phone AS company_phone, c.email AS company_email, c.tin AS company_tin
+     FROM payrolls p
+     JOIN companies c ON c.id = p.company_id
+     WHERE p.id = $1 AND p.tenant_id = $2 AND p.company_id = $3`,
+    [id, ctx.tenantId, ctx.companyId]
+  );
+  if (head.rows.length === 0) throw notFound('Payroll not found');
+  const h = head.rows[0] as Record<string, unknown>;
+
+  const itemsRes = await client.query(
+    `SELECT i.*,
+            e.employee_no, e.first_name, e.last_name, e.position, e.status AS employee_status,
+            e.nssf_no, e.tin AS employee_tin, e.bank_name, e.bank_account_no,
+            d.name AS department_name, br.name AS branch_name
+     FROM payroll_items i
+     JOIN payrolls p ON p.id = i.payroll_id
+     JOIN employees e ON e.id = i.employee_id
+     LEFT JOIN departments d ON d.id = e.department_id
+     LEFT JOIN branches br ON br.id = e.branch_id
+     WHERE i.payroll_id = $1 AND p.tenant_id = $2 AND p.company_id = $3
+     ORDER BY e.first_name, e.last_name`,
+    [id, ctx.tenantId, ctx.companyId]
+  );
+
+  const sumsRes = await client.query(
+    `SELECT count(i.employee_id)::int AS employee_count,
+            COALESCE(sum(i.basic_pay), 0) AS basic_total,
+            COALESCE(sum(i.allowances), 0) AS allowances_total,
+            COALESCE(sum(i.gross_pay), 0) AS gross_total,
+            COALESCE(sum(i.taxable_income), 0) AS taxable_total,
+            COALESCE(sum(i.paye), 0) AS paye_total,
+            COALESCE(sum(i.nssf), 0) AS nssf_total,
+            COALESCE(sum(i.lst), 0) AS lst_total,
+            COALESCE(sum(i.employer_nssf), 0) AS employer_nssf_total,
+            COALESCE(sum(i.loans), 0) AS loans_total,
+            COALESCE(sum(i.advances), 0) AS advances_total,
+            COALESCE(sum(i.other_deductions), 0) AS other_deductions_total,
+            COALESCE(sum(i.total_deductions), 0) AS deduction_total,
+            COALESCE(sum(i.net_pay), 0) AS net_total
+     FROM payroll_items i
+     JOIN payrolls p ON p.id = i.payroll_id
+     WHERE i.payroll_id = $1 AND p.tenant_id = $2 AND p.company_id = $3`,
+    [id, ctx.tenantId, ctx.companyId]
+  );
+  const s = sumsRes.rows[0] as Record<string, unknown>;
+  const currency = str(pick(h, 'currency')) || 'UGX';
+  const employeeCount = num(pick(s, 'employee_count'));
+  const period = lines(dateOnly(pick(h, 'period_start')), dateOnly(pick(h, 'period_end'))).join(' to ');
+  const payrollStatus = statusLabel(pick(h, 'status'));
+  const runType = statusLabel(pick(h, 'run_type')) || 'Normal';
+  const offCycle = statusLabel(pick(h, 'off_cycle_type'));
+  const glPosted = Boolean(pick(h, 'gl_posted'));
+  const validation = pick(h, 'validation_score');
+  const employerName = str(pick(h, 'company_legal_name')) || str(pick(h, 'company_name'));
+  const paymentDate = dateOnly(pick(h, 'payment_date'));
+
+  const items: Array<Record<string, unknown>> = (itemsRes.rows as Array<Record<string, unknown>>).map((r) => {
+    const name = lines(pick(r, 'first_name'), pick(r, 'last_name')).join(' ');
+    return {
+      employee: name,
+      employeeNo: str(pick(r, 'employee_no')),
+      department: str(pick(r, 'department_name')),
+      branch: str(pick(r, 'branch_name')),
+      basicPay: money(pick(r, 'basic_pay')),
+      allowances: money(pick(r, 'allowances')),
+      grossPay: money(pick(r, 'gross_pay')),
+      taxableIncome: money(pick(r, 'taxable_income')),
+      paye: money(pick(r, 'paye')),
+      nssf: money(pick(r, 'nssf')),
+      lst: money(pick(r, 'lst')),
+      employerNssf: money(pick(r, 'employer_nssf')),
+      loans: money(pick(r, 'loans')),
+      advances: money(pick(r, 'advances')),
+      otherDeductions: money(pick(r, 'other_deductions')),
+      totalDeductions: money(pick(r, 'total_deductions')),
+      netPay: money(pick(r, 'net_pay')),
+      payslipNo: str(pick(r, 'payslip_no')),
+    };
+  });
+
+  const notes = [
+    'This register lists every employee line on the payroll run for the period shown. Amounts are in the payroll currency.',
+    'PAYE, NSSF and Local Service Tax are calculated from the statutory configuration in force for this payroll period under Ugandan law.',
+  ];
+  if (!['RELEASED', 'PAID'].includes(str(pick(h, 'status')))) {
+    notes.push('This is a draft register. It has not been released as a final payroll.');
+  }
+  if (str(pick(h, 'reason'))) notes.push(`Payroll note: ${str(pick(h, 'reason'))}`);
+
+  return {
+    code: str(pick(h, 'payroll_no')),
+    title: 'Payroll Register',
+    kicker: 'Payroll document',
+    currency,
+    status: payrollStatus,
+    classification: 'Confidential',
+    subtitle: lines(employerName, period).join('  \u00b7  ') || undefined,
+    parties: [
+      {
+        heading: 'Employer',
+        name: employerName,
+        lines: lines(
+          pick(h, 'company_address'),
+          str(pick(h, 'company_phone')) ? `Phone: ${pick(h, 'company_phone')}` : '',
+          str(pick(h, 'company_email')) ? `Email: ${pick(h, 'company_email')}` : '',
+          str(pick(h, 'company_tin')) ? `TIN ${pick(h, 'company_tin')}` : ''
+        ),
+      },
+    ],
+    facts: [
+      ['Payroll No', str(pick(h, 'payroll_no'))],
+      ['Period', period],
+      ['Pay Date', paymentDate],
+      ['Run Type', offCycle ? `${runType} \u00b7 ${offCycle}` : runType],
+      ['Currency', currency],
+      ['Employees', String(employeeCount)],
+      ['Validation', validation == null ? '-' : `${str(validation)}%`],
+      ['GL Posting', glPosted ? 'Posted' : 'Open'],
+    ].filter(([, v]) => Boolean(v)) as Array<[string, string]>,
+    signatures: [
+      { label: 'Prepared by' },
+      { label: 'Authorised signatory' },
+    ],
+    meta: [
+      ['Payroll No', str(pick(h, 'payroll_no'))],
+      ['Period Start', dateOnly(pick(h, 'period_start'))],
+      ['Period End', dateOnly(pick(h, 'period_end'))],
+      ['Pay Date', paymentDate],
+      ['Currency', currency],
+      ['Employees', String(employeeCount)],
+      ['Gross Pay', moneyCcy(pick(s, 'gross_total'), currency)],
+      ['Net Pay', moneyCcy(pick(s, 'net_total'), currency)],
+      ['Status', payrollStatus],
+    ].filter(([, v]) => Boolean(v)) as Array<[string, string]>,
+    columns: [
+      { key: 'employee', label: 'Employee', weight: 2.2 },
+      { key: 'employeeNo', label: 'Emp No', weight: 0.9 },
+      { key: 'department', label: 'Department', weight: 1.4 },
+      { key: 'basicPay', label: 'Basic', align: 'right', weight: 1.0 },
+      { key: 'allowances', label: 'Allow.', align: 'right', weight: 0.9 },
+      { key: 'grossPay', label: 'Gross', align: 'right', weight: 1.0 },
+      { key: 'taxableIncome', label: 'Taxable', align: 'right', weight: 1.0 },
+      { key: 'paye', label: 'PAYE', align: 'right', weight: 0.9 },
+      { key: 'nssf', label: 'NSSF', align: 'right', weight: 0.9 },
+      { key: 'lst', label: 'LST', align: 'right', weight: 0.8 },
+      { key: 'employerNssf', label: 'Er NSSF', align: 'right', weight: 0.9 },
+      { key: 'loans', label: 'Loans', align: 'right', weight: 0.9 },
+      { key: 'advances', label: 'Advances', align: 'right', weight: 0.9 },
+      { key: 'otherDeductions', label: 'Other', align: 'right', weight: 0.9 },
+      { key: 'totalDeductions', label: 'Total Ded.', align: 'right', weight: 1.0 },
+      { key: 'netPay', label: 'Net', align: 'right', weight: 1.1 },
+    ],
+    items,
+    totals: [
+      ['Employees', String(employeeCount)],
+      ['Total Basic Pay', moneyCcy(pick(s, 'basic_total'), currency)],
+      ['Total Allowances', moneyCcy(pick(s, 'allowances_total'), currency)],
+      ['Total Gross Pay', moneyCcy(pick(s, 'gross_total'), currency)],
+      ['Taxable Income', moneyCcy(pick(s, 'taxable_total'), currency)],
+      ['PAYE', moneyCcy(pick(s, 'paye_total'), currency)],
+      ['NSSF (employee)', moneyCcy(pick(s, 'nssf_total'), currency)],
+      ['Local Service Tax', moneyCcy(pick(s, 'lst_total'), currency)],
+      ['Employer NSSF', moneyCcy(pick(s, 'employer_nssf_total'), currency)],
+      ['Staff loans', moneyCcy(pick(s, 'loans_total'), currency)],
+      ['Salary advances', moneyCcy(pick(s, 'advances_total'), currency)],
+      ['Other deductions', moneyCcy(pick(s, 'other_deductions_total'), currency)],
+      ['Total Deductions', moneyCcy(pick(s, 'deduction_total'), currency)],
+      ['Net Pay', moneyCcy(pick(s, 'net_total'), currency)],
+    ],
+    notes,
+    raw: { payroll: h, items: itemsRes.rows, totals: s },
   };
 }
 
@@ -2004,9 +2225,63 @@ export const DOCUMENT_TYPES: Record<string, DocumentTypeDef> = {
   'employment-contract': { type: 'employment-contract', label: 'Employment Contract', permission: 'hr.contracts.view', load: loadEmploymentContract },
   'certificate-of-service': { type: 'certificate-of-service', label: 'Certificate of Service', permission: 'hr.certificates.view', load: loadCertificateOfService },
   payslip: { type: 'payslip', label: 'Payslip', permission: 'hr.payslips.view', load: loadPayslip },
+  'payroll-register': { type: 'payroll-register', label: 'Payroll Register', permission: 'hr.payrolls.view', load: loadPayrollRegister },
   'employee-id': { type: 'employee-id', label: 'Employee Identity Card', permission: 'hr.employee_identity.view', load: loadEmployeeId },
   'employee-id-card': { type: 'employee-id-card', label: 'Employee ID Card', permission: 'hr.employee_card.view', load: loadEmployeeIdCard },
 };
+
+export interface EmploymentContractToken {
+  token: string;
+  verifyUrl: string;
+  issuedAt: string;
+  reason: string | null;
+}
+
+/**
+ * Issue a signed verification token for an employment contract using exactly
+ * the same load + fingerprint path as /api/documents/:type/:id, so a QR
+ * encoding the returned URL auto-verifies through /api/public/verify-document.
+ */
+export async function issueEmploymentContractToken(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  contractId: number,
+  issuer?: { email?: string; name?: string }
+): Promise<EmploymentContractToken> {
+  const def = DOCUMENT_TYPES['employment-contract'];
+  const loaded = await def.load(client, ctx, contractId);
+  const company = await loadCompanyProfile(client, ctx);
+  const issuedAt = new Date().toISOString();
+  if (!company.verifyEnabled) {
+    return { token: '', verifyUrl: '', issuedAt, reason: 'VERIFY_DISABLED' };
+  }
+  const fingerprint = documentFingerprint({
+    code: loaded.code,
+    title: loaded.title,
+    subtitle: loaded.subtitle,
+    meta: loaded.meta,
+    columns: loaded.columns,
+    items: loaded.items,
+    totals: loaded.totals,
+    notes: loaded.notes,
+  });
+  const email = issuer?.email ?? 'system';
+  const name = issuer?.name ?? 'HR portal';
+  const token = issueDocumentToken({
+    type: def.type,
+    id: contractId,
+    code: loaded.code,
+    title: loaded.title,
+    fingerprint,
+    issuedAt,
+    tenantId: ctx.tenantId ?? 0,
+    companyId: ctx.companyId ?? null,
+    companyName: company.name,
+    issuer: email,
+    issuerName: name,
+  });
+  return { token, verifyUrl: documentVerifyUrl(company, token), issuedAt, reason: null };
+}
 
 // ---------------------------------------------------------------------------
 // Renderers
@@ -2310,6 +2585,75 @@ function drawTotals(doc: PdfDoc, totals: Array<[string, string]>, brand: DocBran
     y -= rowH;
   });
   doc.cursorY = top - h - 8;
+}
+
+function drawPaySlipExtras(doc: PdfDoc, data: DocData, brand: DocBrand): void {
+  const breakdown = data.payBreakdown ?? [];
+  const brackets = data.payeBrackets;
+  if (!breakdown.length && !brackets?.bands.length) return;
+  if (breakdown.length) {
+    drawContractBand(doc, 'Net Pay calculation', brand);
+    const rowH = 15;
+    const h = breakdown.length * rowH + 12;
+    if (doc.cursorY - h < BOTTOM) doc.newPage();
+    const top = doc.cursorY;
+    doc.rect(MARGIN, top - h, TABLE_W, h, BRAND.headerFill);
+    doc.rect(MARGIN, top - h, 2.6, h, brand.teal);
+    let y = top - 6;
+    breakdown.forEach(([label, value], i) => {
+      const last = i === breakdown.length - 1;
+      if (last) {
+        doc.rect(MARGIN, y - rowH - 2, TABLE_W, rowH + 6, brand.navy);
+        doc.rect(MARGIN, y - rowH - 2, 2.6, rowH + 6, brand.teal);
+        doc.rawText(label.toUpperCase(), MARGIN + 10, y - 11, 8.2, { bold: true, color: BRAND.white, maxWidth: TABLE_W * 0.62 });
+        doc.rawText(value, MARGIN + 8, y - 11, 9.4, { bold: true, color: BRAND.white, align: 'right', maxWidth: TABLE_W - 16 });
+      } else {
+        doc.rawText(label, MARGIN + 10, y - 10, 7.8, { color: GRAY, maxWidth: TABLE_W * 0.62 });
+        doc.rawText(value, MARGIN + 8, y - 10, 8.4, { bold: true, color: INK, align: 'right', maxWidth: TABLE_W - 16 });
+        doc.line(MARGIN + 10, y - rowH, MARGIN + TABLE_W - 8, y - rowH, LINE, 0.35);
+      }
+      y -= rowH;
+    });
+    doc.cursorY = top - h - 8;
+  }
+  if (brackets?.bands.length) {
+    drawContractBand(doc, 'PAYE brackets applied', brand);
+    const columns: PdfTableColumn[] = [
+      { key: 'band', label: 'Monthly taxable income (UGX)', weight: 2.4 },
+      { key: 'rate', label: 'PAYE rate', align: 'right', weight: 1 },
+    ];
+    const rows = brackets.bands.map(([band, rate]) => ({ band, rate }));
+    doc.table({
+      x: MARGIN,
+      width: TABLE_W,
+      columns,
+      rows,
+      headerFill: brand.navy,
+      headerColor: BRAND.white,
+      zebra: true,
+      zebraFill: BRAND.zebra,
+      grid: 'horizontal',
+      lineColor: LINE,
+      cellPadding: 6,
+      headerSize: 7.4,
+      size: 8.3,
+    });
+    doc.cursorY -= 6;
+    if (brackets.note) {
+      const wrapped = wrapHard(brackets.note, 7.6, false, TABLE_W - 20);
+      const h = wrapped.length * 7.6 * 1.42 + 14;
+      if (doc.cursorY - h < BOTTOM) doc.newPage();
+      const top = doc.cursorY;
+      doc.rect(MARGIN, top - h, TABLE_W, h, BRAND.headerFill);
+      doc.rect(MARGIN, top - h, 2.6, h, brand.teal);
+      let y = top - 11;
+      for (const ln of wrapped) {
+        doc.rawText(ln, MARGIN + 10, y, 7.6, { color: GRAY, maxWidth: TABLE_W - 20 });
+        y -= 7.6 * 1.42;
+      }
+      doc.cursorY = top - h - 5;
+    }
+  }
 }
 
 async function drawAuthenticityBlock(doc: PdfDoc, opts: DocumentRenderOpts, brand: DocBrand): Promise<void> {
@@ -3439,6 +3783,7 @@ async function renderPdf(data: DocData, opts: DocumentRenderOpts): Promise<Buffe
   }
 
   drawTotals(doc, data.totals, brand);
+  drawPaySlipExtras(doc, data, brand);
   drawContractNotices(doc, data.notes, brand, 'Terms and notes');
   await drawContractSignatures(doc, data.signatures ?? [], brand);
   if (auth) {
@@ -3538,6 +3883,29 @@ async function renderXlsx(data: DocData, opts: DocumentRenderOpts): Promise<Buff
     row.font = { bold: true, color: { argb: last ? 'FFFFFFFF' : navy } };
     if (last) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
   });
+  const xBreakdown = data.payBreakdown ?? [];
+  const xBrackets = data.payeBrackets;
+  if (xBreakdown.length || xBrackets?.bands.length) {
+    ws.addRow([]);
+    if (xBreakdown.length) {
+      ws.addRow(['NET PAY CALCULATION']).font = { bold: true, color: { argb: navy } };
+      xBreakdown.forEach(([label, value], i) => {
+        const last = i === xBreakdown.length - 1;
+        const row = ws.addRow([label, value]);
+        row.font = { bold: true, color: { argb: last ? 'FFFFFFFF' : navy } };
+        if (last) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+      });
+    }
+    if (xBrackets?.bands.length) {
+      ws.addRow([]);
+      ws.addRow(['PAYE BRACKETS APPLIED (MONTHLY UGX)']).font = { bold: true, color: { argb: navy } };
+      const bhr = ws.addRow(['Monthly taxable income (UGX)', 'PAYE rate']);
+      bhr.font = { bold: true, color: { argb: 'FFFFFFFF' }, name: 'Calibri', size: 9 };
+      bhr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+      xBrackets.bands.forEach(([band, rate]) => ws.addRow([band, rate]));
+      if (xBrackets.note) ws.addRow([xBrackets.note]);
+    }
+  }
   if (data.notes.length) {
     ws.addRow([]);
     ws.addRow(['Terms and notes']).font = { bold: true, color: { argb: navy } };
@@ -3592,6 +3960,22 @@ function renderCsv(data: DocData, opts: DocumentRenderOpts): string {
   });
   rows.push([]);
   for (const [label, value] of data.totals) rows.push([label, value]);
+  const csvBreakdown = data.payBreakdown ?? [];
+  const csvBrackets = data.payeBrackets;
+  if (csvBreakdown.length || csvBrackets?.bands.length) {
+    rows.push([]);
+    if (csvBreakdown.length) {
+      rows.push(['NET PAY CALCULATION']);
+      for (const [label, value] of csvBreakdown) rows.push([label, value]);
+    }
+    if (csvBrackets?.bands.length) {
+      rows.push([]);
+      rows.push(['PAYE BRACKETS APPLIED (MONTHLY UGX)']);
+      rows.push(['Monthly taxable income (UGX)', 'PAYE rate']);
+      for (const [band, rate] of csvBrackets.bands) rows.push([band, rate]);
+      if (csvBrackets.note) rows.push([csvBrackets.note]);
+    }
+  }
   if (data.notes.length) {
     rows.push([]);
     rows.push(['Terms and notes']);
@@ -3647,6 +4031,8 @@ function renderJson(data: DocData, opts: DocumentRenderOpts): string {
         docNo: data.code || null,
         status: statusOf(data, opts) || null,
         classification: classifOf(data, opts),
+        payBreakdown: data.payBreakdown ?? [],
+        payeBrackets: data.payeBrackets ?? null,
         authenticity: authEnabled(opts)
           ? { fingerprint: opts.fingerprint, token: opts.token, verifyUrl: opts.verifyUrl }
           : null,
@@ -3700,6 +4086,33 @@ function htmlItemsTable(data: DocData): string {
     )
     .join('');
   return `<table class="data"><thead><tr><th>#</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function htmlPayBreakdown(data: DocData): string {
+  const breakdown = data.payBreakdown ?? [];
+  const brackets = data.payeBrackets;
+  const parts: string[] = [];
+  if (breakdown.length) {
+    parts.push('<div class="band">Net Pay calculation</div>');
+    parts.push(
+      `<div class="totals">${breakdown
+        .map(([label, value], i) => {
+          const isNet = i === breakdown.length - 1 && /net pay/i.test(label);
+          return `<div class="row${isNet ? ' total' : ''}"><span>${htmlEsc(label)}</span><span>${htmlEsc(value)}</span></div>`;
+        })
+        .join('')}</div>`
+    );
+  }
+  if (brackets?.bands.length) {
+    parts.push('<div class="band">PAYE brackets applied</div>');
+    parts.push(
+      `<table class="data"><thead><tr><th>Monthly taxable income (UGX)</th><th>PAYE rate</th></tr></thead><tbody>${brackets.bands
+        .map(([band, rate]) => `<tr><td>${htmlEsc(band)}</td><td>${htmlEsc(rate)}</td></tr>`)
+        .join('')}</tbody></table>`
+    );
+    if (brackets.note) parts.push(`<div class="notes"><p>${htmlEsc(brackets.note)}</p></div>`);
+  }
+  return parts.filter(Boolean).join('\n');
 }
 
 function htmlClauseBody(data: DocData): string {
@@ -3780,6 +4193,7 @@ function htmlGenericBody(data: DocData): string {
         .join('')}</div>`
     );
   }
+  parts.push(htmlPayBreakdown(data));
   if (data.notes.length) {
     parts.push('<div class="band">Terms and notes</div>');
     parts.push(htmlNotes(data.notes, 'Terms and notes'));

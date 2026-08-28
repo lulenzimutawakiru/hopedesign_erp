@@ -53,12 +53,14 @@ const optStr = (v: unknown): string | undefined => (v != null && v !== '' ? Stri
 const optNum = (v: unknown): number | undefined => (v != null && v !== '' ? Number(v) : undefined);
 const optBool = (v: unknown): boolean | undefined => (v != null ? Boolean(v) : undefined);
 const optStrArr = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.map(String) : undefined);
+const optCsvArr = (v: unknown): string[] | undefined => (v != null && String(v).trim() !== '' ? String(v).split(',').map((s) => s.trim()).filter(Boolean) : undefined);
 
 // Dashboard, lists and smart queries
 contractsOpsRouter.get('/contracts/board', ...runGet('hr.contracts.view', (c, ctx) => contracts.contractDashboard(c, ctx)));
 contractsOpsRouter.get('/contracts', ...runGet('hr.contracts.view', (c, ctx, q) => contracts.listContracts(c, ctx, {
   q: optStr(q.q),
   status: optStr(q.status),
+  statuses: optCsvArr(q.statuses),
   contractType: optStr(q.contractType),
   employeeId: optNum(q.employeeId),
   departmentId: optNum(q.departmentId),
@@ -191,6 +193,7 @@ contractsOpsRouter.post('/contracts', ...run('hr.contracts.create', (c, ctx, b) 
 
 // Detail, versions, audit and draft edits
 contractsOpsRouter.get('/contracts/:id', ...runGet('hr.contracts.view', (c, ctx, _q, p) => contracts.getContract(c, ctx, Number(p.id))));
+contractsOpsRouter.get('/contracts/:id/verification-qr', ...runGet('hr.contracts.view', (c, ctx, _q, p) => contracts.verificationQr(c, ctx, Number(p.id))));
 contractsOpsRouter.get(
   '/contracts/:id/employee-photo',
   requirePermission('hr.contracts.view'),

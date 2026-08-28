@@ -165,16 +165,56 @@ export function computeNssf(gross: number, cfg: StatutoryConfig): NssfResult {
 
 /**
  * Local service tax / flat statutory deduction.
- * limits: { monthly_amount: 5000, min_gross: 100000, apply_to_payroll: true }
- * rates:  { rate: 0 } optional percentage alternative.
+ * Flat or percentage forms:
+ *   limits: { monthly_amount: 5000, min_gross: 100000, apply_to_payroll: true }
+ *   rates:  { rate: 0 } optional percentage alternative.
+ * Graduated schedule (KCCA-style), keyed on monthly gross pay:
+ *   limits: { apply_to_payroll: true, months: [7,8,9,10],
+ *             bands: [{ max: 200000, monthly_amount: 1250 }, ..., { max: null, monthly_amount: 25000 }] }
+ * The first band whose max (null = unbounded) covers gross wins. When the
+ * config declares collection months and the caller supplies the payroll
+ * period, LST only applies if the period overlaps those months.
  */
-export function computeLst(gross: number, cfg: StatutoryConfig | null): number {
+export function computeLst(
+  gross: number,
+  cfg: StatutoryConfig | null,
+  opts: { months?: number[]; periodStart?: string; periodEnd?: string } = {}
+): number {
   if (!cfg) return 0;
   const rates = configRates(cfg);
   const limits = (cfg.limits ?? {}) as Record<string, unknown>;
   if (limits.apply_to_payroll === false) return 0;
   const minGross = Number(limits.min_gross ?? 0);
   if (minGross > 0 && (Number(gross) || 0) < minGross) return 0;
+  // Season gate: when the config declares collection months and the caller
+  // supplies the payroll period, skip LST when the period does not overlap.
+  const months = Array.isArray(limits.months) ? (limits.months as unknown[]).map(Number) : [];
+  if (months.length && opts.periodStart && opts.periodEnd) {
+    const start = new Date(String(opts.periodStart) + 'T00:00:00');
+    const end = new Date(String(opts.periodEnd) + 'T00:00:00');
+    const first = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+    const last = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
+    let overlap = false;
+    for (let d = new Date(first); d <= last && !overlap; d.setUTCMonth(d.getUTCMonth() + 1)) {
+      if (months.includes(d.getUTCMonth() + 1)) overlap = true;
+    }
+    if (!overlap) return 0;
+  }
+  // Graduated band schedule (KCCA-style).
+  const bands = Array.isArray(limits.bands) ? (limits.bands as Array<Record<string, unknown>>) : [];
+  if (bands.length) {
+    const g = Math.max(0, Number(gross) || 0);
+    const sorted = [...bands].sort((a, b) => {
+      const am = a.max != null ? Number(a.max) : Number.POSITIVE_INFINITY;
+      const bm = b.max != null ? Number(b.max) : Number.POSITIVE_INFINITY;
+      return am - bm;
+    });
+    for (const b of sorted) {
+      const upper = b.max != null ? Number(b.max) : Number.POSITIVE_INFINITY;
+      if (g <= upper) return round2(Number(b.monthly_amount ?? b.amount ?? 0));
+    }
+    return 0;
+  }
   const flat = Number(limits.monthly_amount ?? rates.monthly_amount ?? 0);
   if (flat > 0) return round2(flat);
   const pct = Number(rates.rate ?? 0);

@@ -369,9 +369,9 @@ describe('HCM lifecycle', () => {
       const item = items.find((i) => Number(i.employeeId) === employeeId);
       expect(item).toBeTruthy();
       expect(Number(item!.grossPay)).toBe(638709.68);
-      expect(Number(item!.paye)).toBe(93612.9);
+      expect(Number(item!.paye)).toBe(70282.26);
       expect(Number(item!.nssf)).toBe(31935.48);
-      expect(Number(item!.netPay)).toBe(513161.3);
+      expect(Number(item!.netPay)).toBe(521491.94);
 
       // 9b. HCM home dashboard: workforce + recruitment + payroll KPIs, tenant/company scoped.
       const dash = await api.get('/api/ops/hcm/dashboard').set(auth(hrToken));

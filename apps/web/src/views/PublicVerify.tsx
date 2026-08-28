@@ -52,6 +52,15 @@ interface DocVerifyResult {
   company?: CompanyInfo | null;
 }
 
+interface ContractVerifyResult {
+  valid: boolean;
+  status?: string;
+  document_no?: string | null;
+  document_type?: string | null;
+  first_verified_at?: string | null;
+  verify_count?: number;
+}
+
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 const fmtDate = (v: unknown) => {
   if (!v) return '';
@@ -77,6 +86,11 @@ export default function PublicVerify() {
   const [docResult, setDocResult] = useState<DocVerifyResult | null>(null);
   const [docError, setDocError] = useState('');
   const [docBusy, setDocBusy] = useState(false);
+  const [contrCode, setContrCode] = useState('');
+  const [contrSecret, setContrSecret] = useState('');
+  const [contrResult, setContrResult] = useState<ContractVerifyResult | null>(null);
+  const [contrError, setContrError] = useState('');
+  const [contrBusy, setContrBusy] = useState(false);
 
   useEffect(() => {
     const hash = window.location.hash;
@@ -140,6 +154,39 @@ export default function PublicVerify() {
     }
   };
 
+  const verifyContract = async (e: { preventDefault(): void }) => {
+    e.preventDefault();
+    const code = contrCode.trim();
+    const secret = contrSecret.trim();
+    if (!code || !secret || contrBusy) return;
+    setContrBusy(true);
+    setContrError('');
+    setContrResult(null);
+    try {
+      const res = await fetch('/api/public/verify-contract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, secret }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.error?.message ?? 'Verification failed (' + res.status + ')');
+      }
+      setContrResult(body?.data ?? null);
+    } catch (err) {
+      setContrError(err instanceof Error ? err.message : 'Verification failed');
+    } finally {
+      setContrBusy(false);
+    }
+  };
+
+  const resetContract = () => {
+    setContrResult(null);
+    setContrError('');
+    setContrCode('');
+    setContrSecret('');
+  };
+
   const result = str(data?.result ?? '');
   const ok = result === 'AUTHENTIC' || result === 'VERIFIED';
   const ream = data?.ream;
@@ -161,6 +208,10 @@ export default function PublicVerify() {
     setDocResult(null);
     setDocError('');
     setDocToken('');
+    setContrResult(null);
+    setContrError('');
+    setContrCode('');
+    setContrSecret('');
     if (window.location.hash) {
       history.replaceState(null, '', window.location.pathname + window.location.search);
     }
@@ -171,7 +222,7 @@ export default function PublicVerify() {
       <header className="page-head">
         <div>
           <h1>Verify Authenticity</h1>
-          <p className="muted">Public authenticity portal for Hope Design reams and cartons.</p>
+          <p className="muted">Public authenticity portal for Hope Design reams, cartons and employment contracts.</p>
         </div>
       </header>
 
@@ -352,6 +403,84 @@ export default function PublicVerify() {
           )}
         </section>
       )}
+
+      <section className="card" style={{ marginTop: 16 }}>
+        <div className="card-head">
+          <h3>Verify an employment contract</h3>
+          <p className="muted" style={{ margin: '2px 0 0' }}>
+            Confirm a signed contract against the HR registry using the code and secret printed on the document or QR.
+          </p>
+        </div>
+        <form onSubmit={verifyContract} className="stack" style={{ marginTop: 10 }}>
+          <div className="grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+            <label className="field">
+              <span>Contract code</span>
+              <input
+                value={contrCode}
+                onChange={(e) => setContrCode(e.target.value)}
+                placeholder="HDG-CON-2026-000001  (code from the QR or document)"
+                autoComplete="off"
+              />
+            </label>
+            <label className="field">
+              <span>Secret code</span>
+              <input
+                value={contrSecret}
+                onChange={(e) => setContrSecret(e.target.value)}
+                placeholder="One-time secret shown with the code"
+                autoComplete="off"
+              />
+            </label>
+          </div>
+          {contrError && <div className="alert alert-error">{contrError}</div>}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" disabled={contrBusy || !contrCode.trim() || !contrSecret.trim()}>
+              {contrBusy ? 'Verifying...' : 'Verify contract'}
+            </button>
+            {contrResult?.valid && (
+              <button type="button" className="btn btn-ghost" onClick={resetContract}>
+                Verify another
+              </button>
+            )}
+          </div>
+        </form>
+        {contrResult && (
+          <div className={contrResult.valid ? 'result-hero ok' : 'result-hero warn'} style={{ marginTop: 14 }}>
+            <div className="hero-icon" aria-hidden>{contrResult.valid ? 'OK' : '!'}</div>
+            <div>
+              <h2>{contrResult.valid ? 'Contract is authentic' : 'Contract could not be verified'}</h2>
+              <p>
+                {contrResult.valid
+                  ? 'This employment contract is registered in the HR system and is genuine.'
+                  : 'We could not confirm this contract. The code or secret may be incorrect, or the record is no longer verifiable.'}
+              </p>
+            </div>
+          </div>
+        )}
+        {contrResult && (
+          <dl className="detail-list" style={{ marginTop: 12 }}>
+            <div className="detail-row">
+              <dt>Status</dt>
+              <dd><strong>{contrResult.valid ? 'VERIFIED' : 'NOT VERIFIED'}</strong></dd>
+            </div>
+            {str(contrResult.status) && (
+              <div className="detail-row"><dt>Contract status</dt><dd>{contrResult.status}</dd></div>
+            )}
+            {str(contrResult.document_no) && (
+              <div className="detail-row"><dt>Document no</dt><dd className="cell-mono">{contrResult.document_no}</dd></div>
+            )}
+            {str(contrResult.document_type) && (
+              <div className="detail-row"><dt>Document type</dt><dd>{contrResult.document_type}</dd></div>
+            )}
+            {str(contrResult.first_verified_at) && (
+              <div className="detail-row"><dt>First verified</dt><dd>{fmtDate(contrResult.first_verified_at)}</dd></div>
+            )}
+            {typeof contrResult.verify_count === 'number' && (
+              <div className="detail-row"><dt>Verification count</dt><dd>{contrResult.verify_count}</dd></div>
+            )}
+          </dl>
+        )}
+      </section>
 
       <p className="hint" style={{ marginTop: 12 }}>
         Tip: the same QR can also be scanned at <code>/verify</code>. Each unique ream carries its own

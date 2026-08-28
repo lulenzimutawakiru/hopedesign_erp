@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, fmtDate, fmtMoney, fmtNum, openDocument } from '../api';
+import { api, DocFormat, fmtDate, fmtMoney, fmtNum, openDocument } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, PageLoader, StaffPhoto } from '../components/ui';
@@ -1771,6 +1771,14 @@ function PayrollDesk({ id }: { id: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setDocBusy(''); }
   };
+  const openRegisterDoc = async (format: DocFormat) => {
+    setDocBusy('register' + format); setError('');
+    try {
+      await openDocument('payroll-register', id, format, `payroll_${String(p.payrollNo ?? id)}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setDocBusy(''); }
+  };
   const canPrintSlips = can(user, 'hr.payslips.view');
   return (
     <div className="page">
@@ -1815,7 +1823,17 @@ function PayrollDesk({ id }: { id: number }) {
         <button className="btn" onClick={() => navigate('/finance/journals')}>Journals</button>
       </div>
       <section className="card">
-        <div className="card-head"><h3>Slips</h3></div>
+        <div className="card-head">
+  <h3>Slips</h3>
+  <div className="action-group">
+    <span className="muted">Export register:</span>
+    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('pdf')}>{docBusy === 'registerpdf' ? 'Saving…' : 'PDF'}</button>
+    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('xlsx')}>{docBusy === 'registerxlsx' ? 'Saving…' : 'Excel'}</button>
+    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('csv')}>{docBusy === 'registercsv' ? 'Saving…' : 'CSV'}</button>
+    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('json')}>{docBusy === 'registerjson' ? 'Saving…' : 'JSON'}</button>
+    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('print')}>{docBusy === 'registerprint' ? 'Opening…' : 'Print'}</button>
+  </div>
+</div>
         <div className="table-wrap">
           <table className="data">
             <thead><tr><th>Employee</th><th className="cell-num">Basic</th><th className="cell-num">Allow.</th><th className="cell-num">Gross</th><th className="cell-num">PAYE</th><th className="cell-num">NSSF</th><th className="cell-num">Loans</th><th className="cell-num">Net</th>{canPrintSlips ? <th></th> : null}</tr></thead>
@@ -1866,7 +1884,166 @@ function PayrollDesk({ id }: { id: number }) {
           </table>
         </div>
       </section>
+      {Number(p.id) === AUG2026_REFERENCE_RUN_ID && <PayrollAugustReference />}
     </div>
+  );
+}
+
+const AUG2026_REFERENCE_RUN_ID = 632;
+
+const AUG2026_NSSF = [
+  { label: 'Employee NSSF', rate: '5%' },
+  { label: 'Employer NSSF', rate: '10%' },
+];
+
+const AUG2026_PAYE = [
+  { band: 'UGX 0 to 335,000', tax: '0' },
+  { band: 'UGX 335,001 to 410,000', tax: '10% of the amount exceeding UGX 335,000' },
+  { band: 'UGX 410,001 to 485,000', tax: 'UGX 7,500 + 25% of the amount exceeding UGX 410,000' },
+  { band: 'UGX 485,001 to 10,000,000', tax: 'UGX 26,250 + 30% of the amount exceeding UGX 485,000' },
+  { band: 'Above UGX 10,000,000', tax: 'UGX 2,880,750 + 10% of the amount exceeding UGX 10,000,000' },
+];
+
+const AUG2026_LST = [
+  { band: '100,001 - 200,000', annual: 5000 },
+  { band: '200,001 - 300,000', annual: 10000 },
+  { band: '300,001 - 400,000', annual: 20000 },
+  { band: '400,001 - 500,000', annual: 30000 },
+  { band: '500,001 - 600,000', annual: 40000 },
+  { band: '600,001 - 700,000', annual: 60000 },
+  { band: '700,001 - 800,000', annual: 70000 },
+  { band: '800,001 - 900,000', annual: 80000 },
+  { band: '900,001 - 1,000,000', annual: 90000 },
+  { band: 'Above 1,000,000', annual: 100000 },
+];
+
+const AUG2026_SUSPENSIONS = [
+  { employee: 'Guillaume Niyonzima', reason: '10-day suspension (Sundays excluded)', salary: 1081923, workingDays: 26, dailyRate: 41612.42, daysAbsent: 10, deduction: 416124, adjusted: 665799 },
+  { employee: 'Tabu Derrick', reason: '12 days absent (prorated on calendar-day basis, consistent with new starters)', salary: 369616, workingDays: 31, dailyRate: 11923.1, daysAbsent: 12, deduction: 143077, adjusted: 226539 },
+];
+
+const AUG2026_STARTERS = ['Emile Niyungeko', 'Gloria Nakakawa', 'Racheal Tagulwa', 'Lorraine Ninihazwe', 'Shamirah Nantume', 'Viola Akatikwasa'].map((name) => ({
+  employee: name,
+  reason: 'Started 12 Aug 2026 (pro-rated first month)',
+  salary: 368846,
+  calendarDays: 31,
+  dailyRate: 11898.25806,
+  daysWorked: 20,
+  prorated: 237965,
+}));
+
+const refRate = (v: number) => v.toLocaleString('en-UG', { minimumFractionDigits: 2, maximumFractionDigits: 5 });
+
+function PayrollAugustReference() {
+  return (
+    <>
+      <section className="card">
+        <div className="card-head"><h3>Statutory rates &amp; deductions - August 2026 reference</h3></div>
+        <div className="card-pad">
+          <p className="muted" style={{ marginTop: 0 }}>Rates and schedules applied to the August 2026 payroll for HOPE DESIGN LIMITED.</p>
+          <p className="kpi-label">NSSF</p>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Contribution</th><th>Rate</th></tr></thead>
+              <tbody>
+                {AUG2026_NSSF.map((r) => (
+                  <tr key={r.label}><td>{r.label}</td><td>{r.rate}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="kpi-label">Income tax (PAYE) - UGX</p>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Monthly taxable income (UGX)</th><th>Tax</th></tr></thead>
+              <tbody>
+                {AUG2026_PAYE.map((r) => (
+                  <tr key={r.band}><td>{r.band}</td><td>{r.tax}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="kpi-label">Local service tax (LST)</p>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Monthly gross income (UGX)</th><th className="cell-num">Annual LST (UGX)</th></tr></thead>
+              <tbody>
+                {AUG2026_LST.map((r) => (
+                  <tr key={r.band}><td>{r.band}</td><td className="cell-num">{fmtMoney(r.annual)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="muted" style={{ marginBottom: 0 }}>Source: KCCA Local Service Tax (Assessment &amp; Payment) schedule, Local Governments Act Cap 243.</p>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head"><h3>Unpaid leave / suspension deductions - August</h3></div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr>
+              <th>Employee</th>
+              <th>Reason</th>
+              <th className="cell-num">Full monthly basic</th>
+              <th className="cell-num">Working days (Aug 2026, excl. Sundays)</th>
+              <th className="cell-num">Daily rate</th>
+              <th className="cell-num">Days absent</th>
+              <th className="cell-num">Deduction</th>
+              <th className="cell-num">Adjusted basic</th>
+            </tr></thead>
+            <tbody>
+              {AUG2026_SUSPENSIONS.map((r) => (
+                <tr key={r.employee}>
+                  <td>{r.employee}</td>
+                  <td className="muted">{r.reason}</td>
+                  <td className="cell-num">{fmtMoney(r.salary)}</td>
+                  <td className="cell-num">{fmtNum(r.workingDays)}</td>
+                  <td className="cell-num">{refRate(r.dailyRate)}</td>
+                  <td className="cell-num">{fmtNum(r.daysAbsent)}</td>
+                  <td className="cell-num">{fmtMoney(r.deduction)}</td>
+                  <td className="cell-num"><strong>{fmtMoney(r.adjusted)}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="card-pad" style={{ paddingTop: 12 }}>
+          <p className="muted" style={{ margin: 0 }}>Daily rate = full monthly Basic Salary &divide; 26 working days in August 2026 (31 calendar days less 5 Sundays: Aug 2, 9, 16, 23, 30). Transport allowance is not prorated. The deduction reduces Basic Salary only, so Gross Pay, NSSF, PAYEE and LST recalculate automatically from the lower base.</p>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head"><h3>New starters - pro-rated pay - August</h3></div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr>
+              <th>Employee</th>
+              <th>Reason</th>
+              <th className="cell-num">Full monthly basic</th>
+              <th className="cell-num">Calendar days (Aug 2026)</th>
+              <th className="cell-num">Daily rate</th>
+              <th className="cell-num">Days worked (from 12 Aug)</th>
+              <th className="cell-num">Prorated basic</th>
+            </tr></thead>
+            <tbody>
+              {AUG2026_STARTERS.map((r) => (
+                <tr key={r.employee}>
+                  <td>{r.employee}</td>
+                  <td className="muted">{r.reason}</td>
+                  <td className="cell-num">{fmtMoney(r.salary)}</td>
+                  <td className="cell-num">{fmtNum(r.calendarDays)}</td>
+                  <td className="cell-num">{refRate(r.dailyRate)}</td>
+                  <td className="cell-num">{fmtNum(r.daysWorked)}</td>
+                  <td className="cell-num"><strong>{fmtMoney(r.prorated)}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="card-pad" style={{ paddingTop: 12 }}>
+          <p className="muted" style={{ margin: 0 }}>Daily rate = full monthly Basic Salary &divide; 31 calendar days in August 2026 (pro-rated on a calendar-day basis, not working days, since these employees started mid-month). Days worked = 12 Aug to 31 Aug inclusive = 20 days. Transport allowance is not prorated, consistent with the unpaid-leave deductions above.</p>
+        </div>
+      </section>
+    </>
   );
 }
 

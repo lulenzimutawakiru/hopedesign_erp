@@ -44,10 +44,10 @@ describe('HR and payroll', () => {
     const peter = items.find((i) => Number(i.employeeId) === seniorId);
     const asha = items.find((i) => Number(i.employeeId) === juniorId);
     expect(peter && asha).toBeTruthy();
-    expect(Number(peter!.paye)).toBe(802000);
+    expect(Number(peter!.paye)).toBe(743250);
     expect(Number(peter!.nssf)).toBe(150000);
     expect(Number(peter!.loans)).toBe(100000);
-    expect(Number(peter!.netPay)).toBe(1948000);
+    expect(Number(peter!.netPay)).toBe(2006750);
     expect(Number(asha!.paye)).toBe(0);
     expect(Number(asha!.nssf)).toBe(10000);
     expect(Number(asha!.netPay)).toBe(190000);
@@ -141,14 +141,15 @@ describe('HR and payroll', () => {
     expect(bonus).toBeTruthy();
     // Basic 3,000,000 + extra earnings 500,000
     expect(Number(bonus!.grossPay)).toBe(3500000);
-    // PAYE on 3,500,000: 10% on 235k-335k + 20% on 335k-410k + 30% on 410k-3.5m = 952,000
-    expect(Number(bonus!.paye)).toBe(952000);
+    // PAYE on 3,325,000 (3.5m minus 175k NSSF): 20% on 335k-410k + 25% on
+    // 410k-485k + 30% on 485k-3,325,000 = 885,750.
+    expect(Number(bonus!.paye)).toBe(885750);
     expect(Number(bonus!.nssf)).toBe(175000);
     expect(Number(bonus!.employerNssf)).toBe(350000);
     expect(Number(bonus!.loans)).toBe(100000);
     expect(Number(bonus!.otherDeductions)).toBe(50000);
-    // 3,500,000 - 952,000 - 175,000 - 100,000 - 50,000 = 2,223,000
-    expect(Number(bonus!.netPay)).toBe(2223000);
+    // 3,500,000 - 885,750 - 175,000 - 100,000 - 50,000 = 2,289,250
+    expect(Number(bonus!.netPay)).toBe(2289250);
 
     await db(`UPDATE payrolls SET status = 'APPROVED' WHERE id = $1`, [payrollId]);
 
@@ -197,7 +198,7 @@ describe('HR and payroll', () => {
     });
     expect(created.status).toBe(200);
     expect(Number(created.body.data.difference)).toBe(500000);
-    // PAYE delta: 952,000 on 3.5m minus 802,000 on 3.0m.
+    // PAYE delta: 938,250 on 3.5m minus 788,250 on 3.0m (both in the 30% band).
     expect(Number(created.body.data.taxImpact)).toBe(150000);
     expect(Number(created.body.data.netArrears)).toBe(350000);
     expect(created.body.data.status).toBe('PENDING');
@@ -266,12 +267,13 @@ describe('HR and payroll', () => {
     expect(ar).toBeTruthy();
     // Basic 3,000,000 + net arrears 350,000.
     expect(Number(ar!.grossPay)).toBe(3350000);
-    // PAYE on 3,350,000: 10% 235k-335k + 20% 335k-410k + 30% 410k-3.35m = 907,000.
-    expect(Number(ar!.paye)).toBe(907000);
+    // PAYE on 3,182,500 (3.35m minus 167,500 NSSF): 20% on 335k-410k + 25% on
+    // 410k-485k + 30% on 485k-3,182,500 = 843,000.
+    expect(Number(ar!.paye)).toBe(843000);
     expect(Number(ar!.nssf)).toBe(167500);
     expect(Number(ar!.loans)).toBe(0);
-    // 3,350,000 - 907,000 - 167,500 = 2,275,500.
-    expect(Number(ar!.netPay)).toBe(2275500);
+    // 3,350,000 - 843,000 - 167,500 = 2,339,500.
+    expect(Number(ar!.netPay)).toBe(2339500);
 
     // 4. Posting the run closes the linked arrears and keeps rejected ones unpaid.
     await db(`UPDATE payrolls SET status = 'APPROVED' WHERE id = $1`, [payrollId]);

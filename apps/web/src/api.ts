@@ -47,11 +47,21 @@ export async function api<T = ApiResponse>(path: string, init: RequestInit = {})
   return body as T;
 }
 
+export type DocFormat = 'pdf' | 'print' | 'xlsx' | 'csv' | 'json';
+
+const DOC_EXT: Record<DocFormat, string> = {
+  pdf: 'pdf',
+  print: 'html',
+  xlsx: 'xlsx',
+  csv: 'csv',
+  json: 'json',
+};
+
 /** Fetch a branded document as a download or a print-friendly HTML window. */
 export async function openDocument(
   type: string,
   id: unknown,
-  format: 'pdf' | 'print',
+  format: DocFormat,
   filename: string
 ): Promise<void> {
   const token = getToken();
@@ -79,7 +89,8 @@ export async function openDocument(
   }
   const a = document.createElement('a');
   a.href = url;
-  a.download = filename.endsWith('.pdf') ? filename : filename + '.pdf';
+  const base = filename.replace(/\.[a-z0-9]+$/i, '');
+  a.download = base + '.' + DOC_EXT[format];
   document.body.appendChild(a);
   a.click();
   a.remove();

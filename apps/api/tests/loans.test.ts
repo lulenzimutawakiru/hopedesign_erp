@@ -114,12 +114,12 @@ describe('Payroll loans and salary advances', () => {
     const mine = items.find((i) => Number(i.employeeId) === employeeId);
     expect(mine).toBeTruthy();
     expect(Number(mine!.grossPay)).toBe(3000000);
-    expect(Number(mine!.paye)).toBe(802000);
+    expect(Number(mine!.paye)).toBe(743250);
     expect(Number(mine!.nssf)).toBe(150000);
     expect(Number(mine!.loans)).toBe(500000);
     expect(Number(mine!.advances)).toBe(300000);
-    // 3,000,000 - 802,000 - 150,000 - 500,000 - 300,000 = 1,248,000
-    expect(Number(mine!.netPay)).toBe(1248000);
+    // 3,000,000 - 743,250 - 150,000 - 500,000 - 300,000 = 1,306,750
+    expect(Number(mine!.netPay)).toBe(1306750);
 
     // 10. Posting settles the balances and writes repayment records.
     await db(`UPDATE payrolls SET status = 'APPROVED' WHERE id = $1`, [payrollId]);

@@ -764,12 +764,16 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
       ? (arrearsByEmployee.get(employeeId) ?? 0)
       : extraEarnings;
     const gross = round2(basic + allowances + extraForEmployee + variableEarnings + employeeEarnings);
-    // PAYE runs on taxable income (basic + taxable allowances/earnings), so
-    // non-taxable components never inflate the tax charge.
-    const taxableIncome = round2(basic + contractAllowances + extraForEmployee + taxableComponentEarnings + variableEarnings + taxableEmployeeEarnings + benefitsTaxable);
+    // PAYE runs on chargeable income (basic + taxable allowances/earnings),
+    // so non-taxable components never inflate the tax charge. Under Uganda's
+    // Income Tax Act the employee NSSF contribution is deductible from
+    // chargeable income before PAYE; LST is withheld separately and never
+    // reduces taxable pay.
+    const chargeableIncome = round2(basic + contractAllowances + extraForEmployee + taxableComponentEarnings + variableEarnings + taxableEmployeeEarnings + benefitsTaxable);
     const nssf = statutory.computeNssf(gross, nssfCfg);
+    const lst = statutory.computeLst(gross, lstCfg, { periodStart, periodEnd });
+    const taxableIncome = round2(Math.max(0, chargeableIncome - nssf.employee));
     const paye = statutory.computePaye(taxableIncome, payeCfg);
-    const lst = statutory.computeLst(gross, lstCfg);
     const loanRows = await client.query(
       `SELECT id, balance, monthly_deduction FROM employee_loans
        WHERE employee_id = $1 AND status = 'ACTIVE' AND balance > 0`,

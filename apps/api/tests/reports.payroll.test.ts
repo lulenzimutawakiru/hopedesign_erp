@@ -43,7 +43,7 @@ describe('Payroll reports', () => {
     const groupId = await createGroupFor(employeeId);
 
     // 2. Group-scoped single-day payroll run (known fixture: gross 3,000,000,
-    // PAYE 802,000, NSSF 150,000, net 2,048,000).
+    // PAYE 743,250 on 2,850,000 taxable, NSSF 150,000, net 2,106,750).
     const run = await api.post('/api/ops/hr/payrolls').set(auth(token)).send({
       periodStart: '2027-06-08',
       periodEnd: '2027-06-08',
@@ -54,7 +54,7 @@ describe('Payroll reports', () => {
     // 3. Seed one published payslip so the payslip-register view has a row.
     await db(
       `INSERT INTO payslips (company_id, tenant_id, employee_id, payslip_no, currency, gross_total, taxable_total, deduction_total, net_total, employer_contributions, payment_date, status, payroll_id)
-       VALUES ((SELECT company_id FROM employees WHERE id=$1),(SELECT tenant_id FROM employees WHERE id=$1),$1,$2,'UGX',3000000,3000000,952000,2048000,300000,'2027-06-08','PUBLISHED', $3)`,
+       VALUES ((SELECT company_id FROM employees WHERE id=$1),(SELECT tenant_id FROM employees WHERE id=$1),$1,$2,'UGX',3000000,2850000,893250,2106750,300000,'2027-06-08','PUBLISHED', $3)`,
       [employeeId, `PST-${Date.now()}`, payrollId]
     );
 
@@ -67,11 +67,11 @@ describe('Payroll reports', () => {
     const regRow = (reg.body.data as Row[]).find((r) => Number(r.employeeId) === employeeId);
     expect(regRow).toBeTruthy();
     expect(Number(regRow!.grossPay)).toBe(3000000);
-    expect(Number(regRow!.taxableIncome)).toBe(3000000);
-    expect(Number(regRow!.paye)).toBe(802000);
+    expect(Number(regRow!.taxableIncome)).toBe(2850000);
+    expect(Number(regRow!.paye)).toBe(743250);
     expect(Number(regRow!.nssf)).toBe(150000);
-    expect(Number(regRow!.totalDeductions)).toBe(952000);
-    expect(Number(regRow!.netPay)).toBe(2048000);
+    expect(Number(regRow!.totalDeductions)).toBe(893250);
+    expect(Number(regRow!.netPay)).toBe(2106750);
 
     // 5. Payroll summary: per-run totals from the payroll header.
     const sum = await api.get('/api/reports/payroll-summary').query(filter).set(auth(admin));
@@ -79,9 +79,9 @@ describe('Payroll reports', () => {
     expect(sum.body.data.length).toBe(1);
     expect(Number(sum.body.data[0].employeeCount)).toBe(1);
     expect(Number(sum.body.data[0].grossTotal)).toBe(3000000);
-    expect(Number(sum.body.data[0].payeTotal)).toBe(802000);
+    expect(Number(sum.body.data[0].payeTotal)).toBe(743250);
     expect(Number(sum.body.data[0].nssfTotal)).toBe(150000);
-    expect(Number(sum.body.data[0].netTotal)).toBe(2048000);
+    expect(Number(sum.body.data[0].netTotal)).toBe(2106750);
 
     // 6. Statutory report: one row per employee per statutory rule.
     const stat = await api.get('/api/reports/payroll-statutory').query(filter).set(auth(admin));
@@ -89,8 +89,8 @@ describe('Payroll reports', () => {
     const rows = stat.body.data as Row[];
     const paye = rows.find((r) => r.ruleCode === 'PAYE' && r.contributionType === 'EMPLOYEE');
     expect(paye).toBeTruthy();
-    expect(Number(paye!.taxableBase)).toBe(3000000);
-    expect(Number(paye!.amount)).toBe(802000);
+    expect(Number(paye!.taxableBase)).toBe(2850000);
+    expect(Number(paye!.amount)).toBe(743250);
     expect(rows.some((r) => r.ruleCode === 'NSSF' && r.contributionType === 'EMPLOYEE' && Number(r.amount) === 150000)).toBe(true);
     expect(rows.some((r) => r.ruleCode === 'NSSF' && r.contributionType === 'EMPLOYER' && Number(r.amount) === 300000)).toBe(true);
 
@@ -99,13 +99,13 @@ describe('Payroll reports', () => {
     expect(earn.status).toBe(200);
     const earnRow = (earn.body.data as Row[]).find((r) => Number(r.employeeId) === employeeId);
     expect(Number(earnRow!.basicPay)).toBe(3000000);
-    expect(Number(earnRow!.netPay)).toBe(2048000);
+    expect(Number(earnRow!.netPay)).toBe(2106750);
 
     const ded = await api.get('/api/reports/payroll-deductions').query(filter).set(auth(admin));
     expect(ded.status).toBe(200);
     const dedRow = (ded.body.data as Row[]).find((r) => Number(r.employeeId) === employeeId);
-    expect(Number(dedRow!.totalDeductions)).toBe(952000);
-    expect(Number(dedRow!.netPay)).toBe(2048000);
+    expect(Number(dedRow!.totalDeductions)).toBe(893250);
+    expect(Number(dedRow!.netPay)).toBe(2106750);
 
     // 8. Payslip register from published payslips.
     const slips = await api.get('/api/reports/payslip-register').query(filter).set(auth(admin));
@@ -113,7 +113,7 @@ describe('Payroll reports', () => {
     const slip = (slips.body.data as Row[]).find((r) => Number(r.employeeId) === employeeId);
     expect(slip).toBeTruthy();
     expect(slip!.payslipStatus).toBe('PUBLISHED');
-    expect(Number(slip!.netTotal)).toBe(2048000);
+    expect(Number(slip!.netTotal)).toBe(2106750);
     expect(Number(slip!.employerContributions)).toBe(300000);
 
     // 9. Export formats: CSV, XLSX and branded print HTML.

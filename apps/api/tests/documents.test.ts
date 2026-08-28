@@ -272,6 +272,12 @@ describe('payslip document exports', () => {
       expect(json.body.meta.company.name).toMatch(/Hope Design/);
       expect(Array.isArray(json.body.meta.parties)).toBe(true);
       expect(json.body.meta.parties.some((p: { heading: string }) => p.heading === 'Employee')).toBe(true);
+      expect(Array.isArray(json.body.meta.payBreakdown)).toBe(true);
+      expect(json.body.meta.payBreakdown.length).toBeGreaterThanOrEqual(3);
+      expect(json.body.meta.payBreakdown[0][0]).toBe('Gross Pay');
+      expect(json.body.meta.payBreakdown[json.body.meta.payBreakdown.length - 1][0]).toBe('Net Pay');
+      expect(Array.isArray(json.body.meta.payeBrackets?.bands)).toBe(true);
+      expect(json.body.meta.payeBrackets.bands.length).toBe(5);
 
       const pdf = await api.get(`/api/documents/payslip/${slipId}?format=pdf`).set(auth(token));
       expect(pdf.status).toBe(200);
@@ -285,6 +291,8 @@ describe('payslip document exports', () => {
       expect(text).toContain('NSSF');
       expect(text).toContain('CONFIDENTIAL');
       expect(text).toContain(mine!.payslipNo);
+      expect(text).toContain('NET PAY CALCULATION');
+      expect(text).toContain('PAYE BRACKETS APPLIED');
       // Watermark must paint behind the body text: its op sits at the start of
       // the page content stream, before the document heading. It is drawn as a
       // professional security pattern: the label repeats across the page, so
@@ -298,6 +306,16 @@ describe('payslip document exports', () => {
       expect(text.indexOf('CONFIDENTIAL')).toBeGreaterThanOrEqual(0);
       expect(text.indexOf('CONFIDENTIAL')).toBeLessThan(text.indexOf('PAYSLIP'));
 
+      const xlsx = await api.get(`/api/documents/payslip/${slipId}?format=xlsx`).set(auth(token));
+      expect(xlsx.status).toBe(200);
+      expect(xlsx.headers['content-type']).toContain('spreadsheetml');
+
+      const csv = await api.get(`/api/documents/payslip/${slipId}?format=csv`).set(auth(token));
+      expect(csv.status).toBe(200);
+      expect(csv.headers['content-type']).toContain('text/csv');
+      expect(csv.text).toContain('NET PAY CALCULATION');
+      expect(csv.text).toContain('PAYE BRACKETS APPLIED (MONTHLY UGX)');
+
       const printed = await api.get(`/api/documents/payslip/${slipId}?format=print`).set(auth(token));
       expect(printed.status).toBe(200);
       expect(printed.headers['content-type']).toContain('text/html');
@@ -309,6 +327,10 @@ describe('payslip document exports', () => {
       expect(printed.text).toContain('Confidential');
       expect(printed.text).not.toContain('0987654321');
       expect(printed.text).toContain('****4321');
+      expect(printed.text).toContain('Net Pay calculation');
+      expect(printed.text).toContain('PAYE brackets applied');
+      expect(printed.text).toContain('Monthly taxable income (UGX)');
+      expect(printed.text).toContain('Up to 335,000');
 
       const unknown = await api.get('/api/documents/payslip/99999999?format=json').set(auth(token));
       expect(unknown.status).toBe(404);

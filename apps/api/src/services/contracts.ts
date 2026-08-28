@@ -100,6 +100,7 @@ async function employeeIdForUser(client: pg.PoolClient, ctx: Ctx): Promise<numbe
 export interface ContractListFilters {
   q?: string;
   status?: string;
+  statuses?: string[];
   contractType?: string;
   employeeId?: number;
   departmentId?: number;
@@ -125,6 +126,10 @@ export async function listContracts(client: pg.PoolClient, ctx: Ctx, filters: Co
   if (filters.status) {
     params.push(filters.status);
     where.push(`ec.status = $${params.length}`);
+  }
+  if (filters.statuses?.length) {
+    params.push(filters.statuses);
+    where.push(`ec.status = ANY($${params.length}::text[])`);
   }
   if (filters.contractType) {
     params.push(filters.contractType);
@@ -2099,6 +2104,53 @@ export async function verifyContractDocument(client: pg.PoolClient, ctx: Ctx, in
   return res.rows[0].result;
 }
 
+export interface ContractVerificationQr {
+  contractId: number;
+  contractNo: string;
+  status: string;
+  verificationCode: string;
+  verifyCount: number;
+  firstVerifiedAt: string | null;
+  token: string;
+  verifyUrl: string;
+  reason: string | null;
+}
+
+/**
+ * Verification payload for an executed/active contract. Reuses the one-time
+ * verification row created at execution and issues a fresh HMAC-signed QR URL
+ * that opens the public portal and auto-verifies via verify-document.
+ */
+export async function verificationQr(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  contractId: number
+): Promise<ContractVerificationQr> {
+  const row = await loadContractRow(client, ctx, contractId, ['EXECUTED', 'ACTIVE', 'VARIED', 'RENEWED']);
+  const verRes = await client.query(
+    `SELECT verification_code, verify_count, first_verified_at
+     FROM document_verification
+     WHERE company_id = $1 AND tenant_id = $2 AND document_no = $3 AND document_type = 'EMPLOYMENT_CONTRACT'
+       AND status = 'ACTIVE'
+     ORDER BY id DESC LIMIT 1`,
+    [ctx.companyId, ctx.tenantId, String(row.contract_no ?? '')]
+  );
+  const ver = verRes.rows[0] ?? null;
+  const { issueEmploymentContractToken } = await import('./documents.js');
+  const issued = await issueEmploymentContractToken(client, ctx, contractId);
+  return {
+    contractId,
+    contractNo: String(row.contract_no ?? ''),
+    status: String(row.status ?? ''),
+    verificationCode: ver ? String(ver.verification_code ?? '') : '',
+    verifyCount: ver ? Number(ver.verify_count ?? 0) : 0,
+    firstVerifiedAt: ver?.first_verified_at ? new Date(ver.first_verified_at).toISOString() : null,
+    token: issued.token,
+    verifyUrl: issued.verifyUrl,
+    reason: issued.reason,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Draft updates, variations, renewals, certificates & dashboard
 // ---------------------------------------------------------------------------
@@ -2883,6 +2935,13 @@ export async function missingParticulars(client: pg.PoolClient, ctx: Ctx) {
   });
 }
 
+export interface ContractAlert {
+  kind: 'approval' | 'signature' | 'expiry' | 'probation' | 'missing';
+  count: number;
+  title: string;
+  body: string;
+}
+
 export interface ContractDashboardResult {
   kpis: Record<string, number>;
   charts: {
@@ -2893,7 +2952,7 @@ export interface ContractDashboardResult {
     expiryTrend: Array<{ label: string; value: number }>;
     probationStatus: Array<{ label: string; value: number }>;
   };
-  alerts: string[];
+  alerts: ContractAlert[];
 }
 
 /** HR Contract Dashboard: KPIs, charts and actionable alerts. */
@@ -2984,21 +3043,26 @@ export async function contractDashboard(client: pg.PoolClient, ctx: Ctx): Promis
     renewals30: Number(renewalRes.rows[0]?.value ?? 0),
   };
 
-  const alerts: string[] = [];
+  const alerts: ContractAlert[] = [];
   if (kpis.expiring30 > 0) {
-    alerts.push(`${kpis.expiring30} contract${kpis.expiring30 === 1 ? '' : 's'} expire within 30 days`);
+    const n = kpis.expiring30;
+    alerts.push({ kind: 'expiry', count: n, title: `${n} contract${n === 1 ? '' : 's'} expire soon`, body: `End dates fall within the next 30 days. Review renewals and notices now.` });
   }
   if (kpis.probationEnding30 > 0) {
-    alerts.push(`${kpis.probationEnding30} employee${kpis.probationEnding30 === 1 ? '' : 's'} have probation ending within 30 days`);
+    const n = kpis.probationEnding30;
+    alerts.push({ kind: 'probation', count: n, title: `${n} probation review${n === 1 ? '' : 's'} due`, body: `Probation ends within 30 days. A decision is required before the period lapses.` });
   }
   if (kpis.pendingSignature > 0) {
-    alerts.push(`${kpis.pendingSignature} contract${kpis.pendingSignature === 1 ? '' : 's'} awaiting employee signature`);
+    const n = kpis.pendingSignature;
+    alerts.push({ kind: 'signature', count: n, title: `${n} employee${n === 1 ? '' : 's'} have not signed`, body: `Contracts are sent but still await a signature. Send a reminder or follow up.` });
   }
   if (kpis.missingParticulars > 0) {
-    alerts.push(`${kpis.missingParticulars} contract${kpis.missingParticulars === 1 ? '' : 's'} missing required particulars`);
+    const n = kpis.missingParticulars;
+    alerts.push({ kind: 'missing', count: n, title: `${n} contract${n === 1 ? '' : 's'} missing required particulars`, body: `Written particulars are incomplete and cannot be approved until corrected.` });
   }
   if (kpis.awaitingApproval > 0) {
-    alerts.push(`${kpis.awaitingApproval} contract${kpis.awaitingApproval === 1 ? '' : 's'} require approval`);
+    const n = kpis.awaitingApproval;
+    alerts.push({ kind: 'approval', count: n, title: `${n} contract${n === 1 ? '' : 's'} require approval`, body: `Submitted and waiting in the approval workflow. Review decisions are pending.` });
   }
 
   return {
