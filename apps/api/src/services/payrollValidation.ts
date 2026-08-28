@@ -281,7 +281,7 @@ export async function listExceptions(client: pg.PoolClient, ctx: Ctx, payrollId:
      FROM payroll_exceptions x
      LEFT JOIN employees e ON e.id = x.employee_id
      WHERE x.payroll_id = $1
-     ORDER BY x.severity DESC, x.created_at DESC, x.id DESC`,
+     ORDER BY CASE x.severity WHEN 'ERROR' THEN 0 WHEN 'HIGH_RISK' THEN 1 ELSE 2 END, x.created_at DESC, x.id DESC`,
     [payrollId]
   );
   return toCamelRows(res.rows);
@@ -337,7 +337,7 @@ export async function exceptionCentre(client: pg.PoolClient, ctx: Ctx, query: Ex
        AND ($4::text IS NULL OR x.severity = $4)
        AND ($5::text IS NULL OR x.message ILIKE $5 OR p.payroll_no ILIKE $5
             OR e.first_name ILIKE $5 OR e.last_name ILIKE $5 OR e.employee_no ILIKE $5)
-     ORDER BY x.severity DESC, x.created_at DESC, x.id DESC
+     ORDER BY CASE x.severity WHEN 'ERROR' THEN 0 WHEN 'HIGH_RISK' THEN 1 ELSE 2 END, x.created_at DESC, x.id DESC
      LIMIT $6 OFFSET $7`,
     [ctx.tenantId, ctx.companyId, status, severity, q, pageSize, offset]
   );

@@ -350,7 +350,7 @@ describe('HCM lifecycle', () => {
       expect(Number(annual.accrued)).toBe(12);
       expect(Number(annual.available)).toBe(12);
 
-      // 9. Payroll (August 2026; UG PAYE/NSSF applied from versioned config)
+      // 9. Payroll (August 2026; UG PAYE/NSSF from versioned config; hire 2026-08-21 prorated to 11/31 days)
       const payroll = await api.post('/api/ops/hr/payrolls').set(auth(hrToken)).send({
         periodStart: '2026-08-01',
         periodEnd: '2026-08-31',
@@ -368,10 +368,10 @@ describe('HCM lifecycle', () => {
       }[];
       const item = items.find((i) => Number(i.employeeId) === employeeId);
       expect(item).toBeTruthy();
-      expect(Number(item!.grossPay)).toBe(1800000);
-      expect(Number(item!.paye)).toBe(442000);
-      expect(Number(item!.nssf)).toBe(90000);
-      expect(Number(item!.netPay)).toBe(1268000);
+      expect(Number(item!.grossPay)).toBe(638709.68);
+      expect(Number(item!.paye)).toBe(93612.9);
+      expect(Number(item!.nssf)).toBe(31935.48);
+      expect(Number(item!.netPay)).toBe(513161.3);
 
       // 9b. HCM home dashboard: workforce + recruitment + payroll KPIs, tenant/company scoped.
       const dash = await api.get('/api/ops/hcm/dashboard').set(auth(hrToken));

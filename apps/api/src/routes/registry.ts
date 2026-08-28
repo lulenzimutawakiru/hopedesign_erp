@@ -203,6 +203,13 @@ export const ENTITIES: (CrudConfig & Handlers)[] = [
   { table: 'payroll_component_definitions', module: 'hr', resource: 'payroll_components', label: 'Payroll Component', codeColumn: 'code', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.code ASC' },
   { table: 'employee_payroll_components', module: 'hr', resource: 'payroll_components', label: 'Employee Payroll Component', statusColumn: 'status', searchable: [], defaultOrder: 't.id DESC' },
   { table: 'payroll_component_entries', module: 'hr', resource: 'payroll_components', label: 'Payroll Component Entry', searchable: [], defaultOrder: 't.id DESC' },
+  { table: 'employee_salaries', module: 'hr', resource: 'employee_salaries', label: 'Employee Salary', searchable: [], defaultOrder: 't.effective_from DESC' },
+  { table: 'employee_earnings', module: 'hr', resource: 'employee_earnings', label: 'Employee Earning', statusColumn: 'status', searchable: [], defaultOrder: 't.effective_from DESC' },
+  { table: 'employee_deductions', module: 'hr', resource: 'employee_deductions', label: 'Employee Deduction', statusColumn: 'status', searchable: [], defaultOrder: 't.effective_from DESC' },
+  { table: 'employee_benefits', module: 'hr', resource: 'employee_benefits', label: 'Employee Benefit', statusColumn: 'status', searchable: [], defaultOrder: 't.id DESC' },
+  { table: 'overtime_records', module: 'hr', resource: 'overtime_records', label: 'Overtime Record', statusColumn: 'status', searchable: [], defaultOrder: 't.overtime_date DESC' },
+  { table: 'bonus_records', module: 'hr', resource: 'bonus_records', label: 'Bonus Record', statusColumn: 'status', searchable: [], defaultOrder: 't.id DESC' },
+  { table: 'commission_records', module: 'hr', resource: 'commission_records', label: 'Commission Record', statusColumn: 'status', searchable: [], defaultOrder: 't.id DESC' },
   { table: 'statutory_configs', module: 'hr', resource: 'statutory_configs', label: 'Statutory Config', codeColumn: 'code', statusColumn: 'status', searchable: ['code', 'name', 'country', 'category'], defaultOrder: 't.effective_from DESC' },
 
   // Self-service + projects

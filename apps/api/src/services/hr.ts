@@ -10,6 +10,7 @@ import { logAudit } from './audit.js';
 import * as finance from './finance.js';
 import * as statutory from './statutory.js';
 import * as payrollValidation from './payrollValidation.js';
+import { loadModernPayrollInputs, prorateEmployment, prorateBasic, resolveComponentAmount, emptyVariablePay } from './payrollEngine.js';
 import * as identityLink from './identityLink.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -557,6 +558,7 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
   const lstCfg = await statutory.getStatutoryConfig(client, ctx, 'LST', { effectiveDate: periodEnd });
 
   await client.query(`DELETE FROM payroll_items WHERE payroll_id = $1`, [payrollId]);
+  await client.query(`DELETE FROM payroll_component_entries WHERE payroll_id = $1`, [payrollId]);
   const staff = isOffCycle
     ? await client.query(
         `SELECT e.*, (
@@ -588,11 +590,17 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
           : [ctx.tenantId, ctx.companyId, periodStart]
       );
   if (staff.rows.length === 0) throw badRequest(isOffCycle ? 'No selected employees to pay' : 'No active employees to pay');
+  // Modern payroll inputs (components, variable pay, benefits, effective
+  // salaries) are loaded once for the whole staff; every loader is a no-op
+  // when the enterprise tables are empty, keeping legacy runs identical.
+  const modern = await loadModernPayrollInputs(client, ctx, staff.rows.map((r) => Number(r.id)), periodStart, periodEnd);
+  const componentEntries: { employeeId: number; componentId: number; amount: number }[] = [];
   let grossTotal = 0;
   let deductionTotal = 0;
   let netTotal = 0;
   for (const emp of staff.rows) {
-    const allowances = sumAllowances(emp.contract_allowances);
+    const employeeId = Number(emp.id);
+    const contractAllowances = sumAllowances(emp.contract_allowances);
     const unpaid = await client.query(
       `SELECT COALESCE(sum(
          GREATEST(0,
@@ -605,13 +613,74 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
       [emp.id, periodStart, periodEnd]
     );
     const unpaidDays = Number(unpaid.rows[0].days) || 0;
-    const basic = round2(Math.max(0, Number(emp.base_salary) - (Number(emp.base_salary) / 30) * unpaidDays));
-    const extraForEmployee = isArrearsRun && arrearsByEmployee.has(Number(emp.id))
-      ? (arrearsByEmployee.get(Number(emp.id)) ?? 0)
+    const proration = prorateEmployment(emp.hire_date, emp.termination_date, periodStart, periodEnd, unpaidDays);
+    const effectiveSalary = modern.salaries.get(employeeId);
+    const baseSalary = effectiveSalary ? effectiveSalary.basicSalary : (Number(emp.base_salary) || 0);
+    const basic = prorateBasic(baseSalary, proration);
+
+    // Modern payroll components (employee_payroll_components + definitions).
+    const empComponents = modern.components.get(employeeId) ?? [];
+    const earnings: { kind: string; componentId?: number; code: string; name: string; amount: number; taxable: boolean }[] = [];
+    const deductions: { kind: string; componentId?: number; code: string; name: string; amount: number }[] = [];
+    let componentEarnings = 0;
+    let taxableComponentEarnings = 0;
+    let componentDeductions = 0;
+    for (const comp of empComponents) {
+      const amount = resolveComponentAmount(comp, basic, proration.factor);
+      if (amount <= 0) continue;
+      if (comp.type === 'EARNING') {
+        componentEarnings = round2(componentEarnings + amount);
+        if (comp.isTaxable) taxableComponentEarnings = round2(taxableComponentEarnings + amount);
+        earnings.push({ kind: 'COMPONENT', componentId: comp.componentId, code: comp.code, name: comp.name, amount, taxable: comp.isTaxable });
+      } else {
+        componentDeductions = round2(componentDeductions + amount);
+        deductions.push({ kind: 'COMPONENT', componentId: comp.componentId, code: comp.code, name: comp.name, amount });
+      }
+      componentEntries.push({ employeeId, componentId: comp.componentId, amount });
+    }
+
+    // Approved variable pay: overtime, bonuses, commissions and effective
+    // employee earnings/deductions.
+    const variable = modern.variablePay.get(employeeId) ?? emptyVariablePay();
+    const variableEarnings = round2(variable.overtime + variable.bonuses + variable.commissions);
+    if (variable.overtime > 0) earnings.push({ kind: 'OVERTIME', code: 'OVERTIME', name: 'Overtime', amount: variable.overtime, taxable: true });
+    if (variable.bonuses > 0) earnings.push({ kind: 'BONUS', code: 'BONUS', name: 'Bonus', amount: variable.bonuses, taxable: true });
+    if (variable.commissions > 0) earnings.push({ kind: 'COMMISSION', code: 'COMMISSION', name: 'Commission', amount: variable.commissions, taxable: true });
+    const employeeLines = modern.earningsAndDeductions.get(employeeId);
+    let employeeEarnings = 0;
+    let taxableEmployeeEarnings = 0;
+    let employeeDeductions = 0;
+    if (employeeLines) {
+      for (const line of employeeLines.earnings) {
+        const amount = line.percentage ? round2(basic * (line.percentage / 100)) : round2(line.amount);
+        if (amount <= 0) continue;
+        employeeEarnings = round2(employeeEarnings + amount);
+        if (line.taxable) taxableEmployeeEarnings = round2(taxableEmployeeEarnings + amount);
+        earnings.push({ kind: 'EARNING', code: line.code, name: line.name, amount, taxable: line.taxable });
+      }
+      for (const line of employeeLines.deductions) {
+        const amount = line.percentage ? round2(basic * (line.percentage / 100)) : round2(line.amount);
+        if (amount <= 0) continue;
+        employeeDeductions = round2(employeeDeductions + amount);
+        deductions.push({ kind: 'DEDUCTION', code: line.code, name: line.name, amount });
+      }
+    }
+    const benefit = modern.benefits.get(employeeId);
+    const benefitsEmployee = benefit?.employee ?? 0;
+    const benefitsEmployer = benefit?.employer ?? 0;
+    const benefitsTaxable = benefit?.taxable ?? 0;
+    if (benefitsEmployee > 0) deductions.push({ kind: 'BENEFIT', code: 'BENEFIT', name: 'Benefits (employee share)', amount: benefitsEmployee });
+
+    const allowances = round2(contractAllowances + componentEarnings);
+    const extraForEmployee = isArrearsRun && arrearsByEmployee.has(employeeId)
+      ? (arrearsByEmployee.get(employeeId) ?? 0)
       : extraEarnings;
-    const gross = round2(basic + allowances + extraForEmployee);
+    const gross = round2(basic + allowances + extraForEmployee + variableEarnings + employeeEarnings);
+    // PAYE runs on taxable income (basic + taxable allowances/earnings), so
+    // non-taxable components never inflate the tax charge.
+    const taxableIncome = round2(basic + contractAllowances + extraForEmployee + taxableComponentEarnings + variableEarnings + taxableEmployeeEarnings + benefitsTaxable);
     const nssf = statutory.computeNssf(gross, nssfCfg);
-    const paye = statutory.computePaye(gross, payeCfg);
+    const paye = statutory.computePaye(taxableIncome, payeCfg);
     const lst = statutory.computeLst(gross, lstCfg);
     const loanRows = await client.query(
       `SELECT id, balance, monthly_deduction FROM employee_loans
@@ -643,24 +712,45 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
         advances = round2(advances + take);
       }
     }
-    const deductions = round2(paye + nssf.employee + lst + loans + advances + extraDeductions);
-    const net = round2(gross - deductions);
+    const otherDeductions = round2(extraDeductions + componentDeductions + employeeDeductions + benefitsEmployee);
+    const totalDeductions = round2(paye + nssf.employee + lst + loans + advances + otherDeductions);
+    const net = round2(gross - totalDeductions);
     const slip = await nextDoc(client, ctx, 'PS');
     const breakdown = {
-      paye: { configId: payeCfg.id, code: payeCfg.code, version: payeCfg.version, taxableIncome: gross, tax: paye },
+      paye: { configId: payeCfg.id, code: payeCfg.code, version: payeCfg.version, taxableIncome, tax: paye },
       nssf: { configId: nssfCfg.id, code: nssfCfg.code, version: nssfCfg.version, employee: nssf.employee, employer: nssf.employer, base: nssf.base, ceiling: nssf.ceiling },
       lst: lstCfg ? { configId: lstCfg.id, code: lstCfg.code, version: lstCfg.version, amount: lst } : null,
+      taxableIncome,
+      earnings,
+      deductions,
+      benefits: { employee: benefitsEmployee, employer: benefitsEmployer },
+      proration,
     };
     await client.query(
       `INSERT INTO payroll_items
          (payroll_id, employee_id, basic_pay, allowances, gross_pay, paye, nssf, loans, advances, other_deductions, net_pay, payslip_no,
           taxable_income, employer_nssf, lst, total_deductions, currency, breakdown)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-      [payrollId, emp.id, basic, allowances, gross, paye, nssf.employee, loans, advances, extraDeductions, net, slip, gross, nssf.employer, lst, deductions, currency, JSON.stringify(breakdown)]
+      [payrollId, employeeId, basic, allowances, gross, paye, nssf.employee, loans, advances, otherDeductions, net, slip, taxableIncome, nssf.employer, lst, totalDeductions, currency, JSON.stringify(breakdown)]
     );
     grossTotal += gross;
-    deductionTotal += deductions;
+    deductionTotal += totalDeductions;
     netTotal += net;
+  }
+
+  // Persist component line items so modern reports can reconstruct earnings
+  // and deductions per employee (cascades with the payroll row on cleanup).
+  if (componentEntries.length > 0) {
+    const values = componentEntries
+      .map((_, i) => `($1,$2,$3,$${i * 3 + 4},$${i * 3 + 5},$${i * 3 + 6})`)
+      .join(', ');
+    const params: unknown[] = [ctx.companyId, ctx.tenantId, payrollId];
+    for (const e of componentEntries) params.push(e.employeeId, e.componentId, round2(e.amount));
+    await client.query(
+      `INSERT INTO payroll_component_entries (company_id, tenant_id, payroll_id, employee_id, component_id, amount)
+       VALUES ${values}`,
+      params
+    );
   }
   const statutorySnapshot = {
     paye: statutory.statutorySnapshot(payeCfg),
