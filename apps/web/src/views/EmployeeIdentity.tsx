@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api } from '../api';
+import { api, openDocument } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
@@ -107,6 +107,7 @@ function EmployeeDesk({ id }: { id: number }) {
   const [txDepartment, setTxDepartment] = useState('');
   const [txBranch, setTxBranch] = useState('');
   const [txPosition, setTxPosition] = useState('');
+  const [pdfBusy, setPdfBusy] = useState(false);
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/hr/identity/employees/${id}`)
       .then((r) => setDoc(r.data))
@@ -159,6 +160,17 @@ function EmployeeDesk({ id }: { id: number }) {
   const qr = identities.find((i) => String(i.identityType) === 'QR_IDENTITY');
   const official = identities.find((i) => String(i.identityType) === 'OFFICIAL_EMPLOYEE_ID');
   const name = `${String(emp.firstName ?? '')} ${String(emp.lastName ?? '')}`;
+  const downloadPdf = async () => {
+    setPdfBusy(true); setError(''); setNotice('');
+    try {
+      await openDocument('employee-id', id, 'pdf', `${String(emp.employeeNumber ?? 'employee')}-id-card.pdf`);
+      setNotice('Employee ID card PDF downloaded');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Download failed');
+    } finally {
+      setPdfBusy(false);
+    }
+  };
   return (
     <div className="page">
       <header className="page-head">
@@ -184,6 +196,9 @@ function EmployeeDesk({ id }: { id: number }) {
           )}
           {can(user, 'hr.employee_card.generate') && (
             <button className="btn" disabled={!!busy} onClick={() => act('New card', `/api/ops/hr/identity/employees/${id}/cards`)}>{busy === 'New card' ? 'Working...' : 'New card'}</button>
+          )}
+          {can(user, 'hr.employee_identity.view') && (
+            <button className="btn" disabled={!!busy || pdfBusy} onClick={() => downloadPdf()}>{pdfBusy ? 'Working...' : 'Download PDF'}</button>
           )}
           {can(user, 'hr.employee_assignments.create') && (
             <button className="btn btn-primary" onClick={() => setModal('transfer')}>Transfer</button>
