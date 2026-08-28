@@ -11,7 +11,7 @@ import * as procurement from './procurement.js';
 import * as finance from './finance.js';
 import * as contracts from './contracts.js';
 import { readEmployeePhotoFile } from './hr.js';
-import { PdfDoc, PdfTableColumn, textWidth, PAGE_W, PAGE_H, MARGIN, BOTTOM, Rgb } from './pdf.js';
+import { PdfDoc, PdfTableColumn, PdfTextStyle, textWidth, wrapText, PAGE_W, PAGE_H, MARGIN, BOTTOM, Rgb } from './pdf.js';
 import QRCode from 'qrcode';
 import {
   BRAND,
@@ -3511,6 +3511,35 @@ function cropMarks(doc: PdfDoc, x: number, y: number, w: number, h: number, colo
   doc.line(x + w, y - m, x + w, y - m + s, color, 0.6);
 }
 
+/** Draw an embedded image fitted (contain) inside a box with uniform padding. */
+function idCardFitImage(doc: PdfDoc, name: string, x: number, y: number, w: number, h: number, pad: number): void {
+  const dims = doc.imageDims(name);
+  if (!dims || dims.width <= 0 || dims.height <= 0) return;
+  const ar = dims.width / dims.height;
+  const boxAr = w / h;
+  let dw = w - pad * 2;
+  let dh = h - pad * 2;
+  if (ar > boxAr) dh = dw / ar;
+  else dw = dh * ar;
+  doc.image(name, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+}
+
+/** Draw a single line, shrinking the size until it fits within maxWidth. */
+function idCardFitText(
+  doc: PdfDoc,
+  text: string,
+  x: number,
+  y: number,
+  size: number,
+  style: PdfTextStyle,
+  maxWidth: number
+): void {
+  let s = size;
+  const bold = style.bold ?? false;
+  while (s > 5 && textWidth(text, s, bold) > maxWidth) s -= 0.5;
+  doc.rawText(text, x, y, s, { ...style, maxWidth });
+}
+
 function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
   const doc = new PdfDoc();
   const brand = brandOf(opts.company);
@@ -3528,6 +3557,7 @@ function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
   const status = statusOf(data, opts);
   const photoName = data.photo?.bytes ? doc.addImage(data.photo.bytes) : null;
   const qrName = data.qrPng ? doc.addImage(data.qrPng) : null;
+  const logoName = preloadLogo(doc, opts.company.logoUrl);
 
   const CARD_W = 243;
   const CARD_H = 153;
@@ -3541,46 +3571,108 @@ function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
   doc.rawText('Front  ·  CR80 card  ·  cut on crop marks', frontX, frontY + CARD_H + 10, 7, { color: GRAY, maxWidth: CARD_W });
 
   const drawFront = (x: number, y: number) => {
+    const top = y + CARD_H;
     cropMarks(doc, x, y, CARD_W, CARD_H, brand.navy);
     doc.rect(x, y, CARD_W, CARD_H, BRAND.white);
-    doc.rect(x, y + CARD_H - 28, CARD_W, 28, brand.navy);
-    doc.rect(x, y + CARD_H - 32, CARD_W, 4, brand.teal);
-    doc.rawText(opts.company.name.toUpperCase(), x + 8, y + CARD_H - 14, 8, {
+    doc.strokeRect(x, y, CARD_W, CARD_H, brand.navy, 1.4);
+    doc.strokeRect(x + 4, y + 4, CARD_W - 8, CARD_H - 8, BRAND.line, 0.5);
+
+    // Branded header band with company logo
+    doc.rect(x, top - 30, CARD_W, 30, brand.navy);
+    doc.rect(x, top - 32.5, CARD_W, 2.5, brand.teal);
+    let headTx = x + 12;
+    if (logoName) {
+      idCardFitImage(doc, logoName, x + 10, top - 26, 22, 22, 1.5);
+      headTx = x + 38;
+    }
+    doc.rawText(opts.company.name.toUpperCase(), headTx, top - 13, 8, {
       bold: true,
       color: BRAND.white,
-      maxWidth: CARD_W - 16,
+      maxWidth: CARD_W - (headTx - x) - 12,
     });
-    doc.rawText('STAFF IDENTITY', x + 8, y + CARD_H - 24, 6, { color: brand.teal, maxWidth: CARD_W - 16 });
-    doc.strokeRect(x, y, CARD_W, CARD_H, brand.navy, 1.2);
-    const photoW = 62;
-    const photoH = 78;
-    const photoX = x + 8;
-    const photoY = y + 28;
-    doc.rect(photoX, photoY, photoW, photoH, BRAND.headerFill);
-    if (photoName) doc.image(photoName, photoX + 2, photoY + 2, photoW - 4, photoH - 4);
-    else {
-      const initials = fullName.split(/\s+/).filter(Boolean).map((p) => p[0]).slice(0, 2).join('').toUpperCase() || '?';
-      doc.rawText(initials, photoX, photoY + photoH / 2 - 6, 16, { bold: true, color: brand.navy, align: 'center', maxWidth: photoW });
+    doc.rawText('STAFF IDENTITY CARD', headTx, top - 21, 5.5, {
+      bold: true,
+      color: brand.teal,
+      maxWidth: CARD_W - (headTx - x) - 12,
+    });
+
+    // Photograph with light frame (initials fallback when no photo on file)
+    const photoX = x + 12;
+    const photoTop = top - 112;
+    doc.rect(photoX, photoTop, 58, 76, BRAND.white);
+    doc.strokeRect(photoX, photoTop, 58, 76, brand.navy, 1);
+    if (photoName) {
+      idCardFitImage(doc, photoName, photoX + 2, photoTop + 2, 54, 72, 0);
+    } else {
+      const initials =
+        fullName.split(/\s+/).filter(Boolean).map((p) => p[0]).slice(0, 2).join('').toUpperCase() || '?';
+      doc.rect(photoX + 2, photoTop + 2, 54, 72, BRAND.headerFill);
+      doc.rawText(initials, photoX + 2, photoTop + 42, 18, { bold: true, color: brand.navy, align: 'center', maxWidth: 54 });
+      doc.rawText('PHOTO ON FILE', photoX + 2, photoTop + 16, 4.6, { color: GRAY, align: 'center', maxWidth: 54 });
     }
-    const tx = photoX + photoW + 8;
-    const tw = CARD_W - photoW - 24;
-    doc.rawText(fullName || 'EMPLOYEE', tx, y + CARD_H - 46, 10, { bold: true, color: INK, maxWidth: tw });
-    doc.rawText(position || 'Staff', tx, y + CARD_H - 60, 8, { color: GRAY, maxWidth: tw });
-    doc.rawText(department || '', tx, y + CARD_H - 72, 7.2, { color: GRAY, maxWidth: tw });
-    doc.rawText(official || 'ID PENDING', tx, y + CARD_H - 90, 9, { bold: true, color: brand.navy, maxWidth: tw });
-    if (shortId) doc.rawText('Badge  ' + shortId, tx, y + CARD_H - 104, 7, { color: INK, maxWidth: tw });
-    if (status) doc.rawText(status, tx, y + 34, 6.5, { bold: true, color: brand.teal, maxWidth: tw });
-    if (qrName) doc.image(qrName, x + CARD_W - 52, y + 8, 42, 42);
-    else doc.rawText('NO QR', x + CARD_W - 50, y + 22, 6, { color: GRAY, maxWidth: 44 });
-    doc.rawText(cardNo ? 'Card ' + cardNo : 'Identity badge', x + 8, y + 10, 6, { color: GRAY, maxWidth: CARD_W - 60 });
+
+    // Identity details (name wraps to a second line when needed)
+    const tx = x + 78;
+    const tw = CARD_W - 78 - 12;
+    const nameLines = wrapText(fullName || 'EMPLOYEE', 12, true, tw).slice(0, 2);
+    nameLines.forEach((line, i) =>
+      doc.rawText(line, tx, top - 38 - i * 15, 12, { bold: true, color: brand.navy, maxWidth: tw })
+    );
+    const nameH = (nameLines.length - 1) * 15;
+    doc.rawText(position || 'Staff', tx, top - 52 - nameH, 8.5, { color: GRAY, maxWidth: tw });
+    doc.rawText(department || '', tx, top - 63 - nameH, 7.5, { color: GRAY, maxWidth: tw });
+    doc.line(tx, top - 70 - nameH, x + CARD_W - 12, top - 70 - nameH, BRAND.line, 0.5);
+    doc.rawText('EMPLOYEE ID', tx, top - 77 - nameH, 5.5, { bold: true, color: brand.teal, maxWidth: tw });
+    idCardFitText(doc, official || 'ID PENDING', tx, top - 90 - nameH, 13, { bold: true, color: brand.navy }, tw);
+    if (shortId) doc.rawText('Badge  ' + shortId, tx, top - 103 - nameH, 6.5, { color: INK, maxWidth: tw });
+
+    // Status chip, top-right
+    if (status) {
+      const chipW = 44;
+      const chipX = x + CARD_W - 12 - chipW;
+      doc.rect(chipX, top - 50, chipW, 12, brand.teal);
+      idCardFitText(doc, status.toUpperCase(), chipX, top - 42.5, 5.5, { bold: true, color: BRAND.white, align: 'center' }, chipW - 4);
+    }
+
+    // Validity row above the footer band
+    const validity = ['Issued ' + issued, expires ? 'Expires ' + expires : ''].filter(Boolean).join('   \u00b7   ');
+    if (validity) doc.rawText(validity, x + 10, y + 28, 5.8, { color: GRAY, align: 'center', maxWidth: CARD_W - 20 });
+
+    // Footer band
+    doc.rect(x, y, CARD_W, 20, brand.navy);
+    idCardFitText(doc, 'Property of ' + company + '  \u00b7  Return to Human Resources', x + 10, y + 11, 5.3, {
+      bold: true,
+      color: BRAND.white,
+      align: 'center',
+    }, CARD_W - 20);
   };
 
   const drawBack = (x: number, y: number) => {
+    const top = y + CARD_H;
     cropMarks(doc, x, y, CARD_W, CARD_H, brand.navy);
     doc.rect(x, y, CARD_W, CARD_H, BRAND.white);
-    doc.rect(x, y + CARD_H - 22, CARD_W, 22, brand.navy);
-    doc.strokeRect(x, y, CARD_W, CARD_H, brand.navy, 1.2);
-    doc.rawText('RETURN TO HUMAN RESOURCES', x + 8, y + CARD_H - 14, 7, { bold: true, color: BRAND.white, maxWidth: CARD_W - 16 });
+    doc.strokeRect(x, y, CARD_W, CARD_H, brand.navy, 1.4);
+    doc.strokeRect(x + 4, y + 4, CARD_W - 8, CARD_H - 8, BRAND.line, 0.5);
+
+    doc.rect(x, top - 30, CARD_W, 30, brand.navy);
+    doc.rect(x, top - 32.5, CARD_W, 2.5, brand.teal);
+    doc.rawText('EMPLOYEE IDENTIFICATION', x, top - 13, 8, { bold: true, color: BRAND.white, align: 'center', maxWidth: CARD_W });
+    doc.rawText('Return this card to Human Resources if found', x, top - 21, 5.5, { bold: true, color: brand.teal, align: 'center', maxWidth: CARD_W });
+
+    // Verification QR with framed quiet zone
+    const qrX = x + 14;
+    const qrTop = top - 104;
+    doc.rect(qrX, qrTop, 56, 56, BRAND.white);
+    doc.strokeRect(qrX, qrTop, 56, 56, brand.navy, 0.8);
+    if (qrName) {
+      idCardFitImage(doc, qrName, qrX + 3, qrTop + 3, 50, 50, 0);
+      doc.rawText('SCAN TO VERIFY', qrX, top - 56, 5.5, { bold: true, color: brand.teal, align: 'center', maxWidth: 56 });
+    } else {
+      doc.rawText('NO QR CODE', qrX, top - 76, 6, { color: GRAY, align: 'center', maxWidth: 56 });
+      doc.rawText('VERIFICATION PENDING', qrX, top - 88, 4.8, { color: GRAY, align: 'center', maxWidth: 56 });
+    }
+
+    // Field register with hairline separators
     const rows: Array<[string, string]> = [
       ['Official ID', official],
       ['Badge', shortId],
@@ -3589,21 +3681,27 @@ function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
       ['Issued', issued],
       ['Expires', expires],
     ].filter(([, v]) => Boolean(v)) as Array<[string, string]>;
-    let ly = y + CARD_H - 38;
-    for (const [k, v] of rows) {
-      doc.rawText(k.toUpperCase(), x + 10, ly, 6, { color: GRAY, maxWidth: 70 });
-      doc.rawText(v, x + 82, ly, 7.2, { bold: true, color: INK, maxWidth: CARD_W - 96 });
-      ly -= 12;
-    }
-    const addr = opts.company.address || company;
-    doc.rawText('If found, return to ' + company + (addr ? ' · ' + addr : ''), x + 10, y + 28, 6, {
+    const fx = x + 82;
+    const fw = CARD_W - 82 - 12;
+    rows.forEach(([k, v], i) => {
+      const baseline = top - 36 - i * 15;
+      doc.rawText(k.toUpperCase(), fx, baseline, 5.5, { bold: true, color: GRAY, maxWidth: 62 });
+      idCardFitText(doc, v, fx + 66, baseline, 7.5, { bold: true, color: INK }, fw - 66);
+      doc.line(fx, baseline - 5.5, x + CARD_W - 12, baseline - 5.5, BRAND.line, 0.4);
+    });
+
+    // Terms + footer band
+    doc.rawText('This card is not transferable and must be surrendered on separation from service.', x + 10, y + 26, 5.3, {
       color: GRAY,
+      align: 'center',
       maxWidth: CARD_W - 20,
     });
-    doc.rawText('This card is property of the employer and must be surrendered on exit.', x + 10, y + 14, 5.8, {
-      color: GRAY,
-      maxWidth: CARD_W - 20,
-    });
+    doc.rect(x, y, CARD_W, 20, brand.navy);
+    idCardFitText(doc, 'IF FOUND  \u00b7  RETURN TO ' + company.toUpperCase(), x + 10, y + 11, 5.3, {
+      bold: true,
+      color: BRAND.white,
+      align: 'center',
+    }, CARD_W - 20);
   };
 
   drawFront(frontX, frontY);
@@ -3628,7 +3726,6 @@ function htmlEsc(s: unknown): string {
 }
 
 function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
-  const brand = brandOf(opts.company);
   const navy = brandHex(opts.company.brandColor, '#0b1f33');
   const teal = brandHex(opts.company.brandColorSecondary, '#00a6a6');
   const official = factVal(data, 'Official ID');
@@ -3640,13 +3737,15 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
   const serial = factVal(data, 'Serial');
   const issued = factVal(data, 'Issued');
   const expires = factVal(data, 'Expires');
+  const status = statusOf(data, opts);
   const photo = data.photo?.dataUrl
     ? `<img src="${htmlEsc(data.photo.dataUrl)}" alt="Photograph"/>`
-    : `<div class="ph">${htmlEsc((fullName || '?').split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase())}</div>`;
+    : `<div class="ph"><span>${htmlEsc((fullName || '?').split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase())}</span><em>PHOTO ON FILE</em></div>`;
   const qr = data.qrPng
     ? `<img class="qr" src="data:image/png;base64,${data.qrPng.toString('base64')}" alt="QR"/>`
-    : '<div class="qr empty">NO QR</div>';
+    : '<div class="qr empty">NO QR CODE<br/>VERIFICATION PENDING</div>';
   const company = htmlEsc(opts.company.name);
+  const validity = ['Issued ' + issued, expires ? 'Expires ' + expires : ''].filter(Boolean).join('  ·  ');
   return `<!doctype html>
 <html><head><meta charset="utf-8"/><title>${htmlEsc(data.title)} ${htmlEsc(official)}</title>
 <style>
@@ -3655,30 +3754,43 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
   h1 { font-size:16px; margin:0 0 4px; }
   .muted { color:#6b7280; font-size:12px; margin-bottom:16px; }
   .sheet { display:flex; flex-direction:column; gap:22px; align-items:center; }
-  .label { font-size:11px; color:#6b7280; align-self:flex-start; margin-left: calc(50% - 128mm); }
-  .card { width:85.6mm; height:54mm; border:1.2px solid var(--navy); border-radius:4px; overflow:hidden; position:relative; background:#fff; }
-  .head { background:var(--navy); color:#fff; padding:6px 8px 5px; }
-  .head .co { font-size:11px; font-weight:700; letter-spacing:.04em; }
-  .head .k { font-size:8px; color:var(--teal); }
+  .card { width:85.6mm; height:54mm; border:1.1px solid var(--navy); border-radius:1.5mm; overflow:hidden; position:relative; background:#fff; box-shadow:0 1px 3px rgba(11,31,51,.18); }
+  .head { position:relative; background:var(--navy); color:#fff; padding:1.6mm 2.8mm 1.4mm; }
+  .head .co { font-size:3.1mm; font-weight:700; letter-spacing:.05em; line-height:1.15; }
+  .head .k { font-size:2.2mm; color:var(--teal); font-weight:700; letter-spacing:.03em; }
+  .head.center .co, .head.center .k { text-align:center; }
+  .chip { position:absolute; right:2.8mm; top:1.6mm; background:var(--teal); color:#fff; font-size:2mm; font-weight:700; letter-spacing:.06em; padding:.7mm 1.6mm; border-radius:999px; }
   .accent { height:3px; background:var(--teal); }
-  .front { display:flex; gap:8px; padding:8px; }
-  .front img, .ph { width:22mm; height:28mm; object-fit:cover; background:#e8eef4; display:flex; align-items:center; justify-content:center; font-weight:700; color:var(--navy); }
+  .front { display:flex; gap:2.8mm; padding:2.4mm; }
+  .front img, .ph { width:20.5mm; height:26.5mm; object-fit:cover; border:1px solid var(--navy); background:#f4f6f8; }
+  .ph { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1mm; color:var(--navy); }
+  .ph span { font-size:6mm; font-weight:700; }
+  .ph em { font-style:normal; font-size:1.7mm; color:#5f6b76; }
   .meta { flex:1; min-width:0; }
-  .name { font-size:13px; font-weight:700; }
-  .role, .dept { font-size:10px; color:#4b5563; }
-  .id { font-size:12px; font-weight:700; color:var(--navy); margin-top:6px; }
-  .badge { font-size:10px; }
-  .qr { width:16mm; height:16mm; position:absolute; right:6px; bottom:6px; }
-  .qr.empty { font-size:8px; display:flex; align-items:center; justify-content:center; background:#f3f4f6; }
-  .back { padding:8px 10px; font-size:10px; }
-  .back .bar { background:var(--navy); color:#fff; font-size:9px; font-weight:700; padding:5px 8px; margin:-8px -10px 8px; }
-  .row { display:flex; gap:8px; margin:3px 0; }
-  .k { width:22mm; color:#6b7280; text-transform:uppercase; font-size:8px; }
-  .v { font-weight:700; }
-  .note { font-size:8px; color:#6b7280; margin-top:8px; }
+  .meta .name { font-size:4.4mm; font-weight:700; color:var(--navy); line-height:1.15; }
+  .meta .role { font-size:3mm; color:#4b5563; margin-top:.4mm; }
+  .meta .dept { font-size:2.7mm; color:#4b5563; }
+  .meta .idlabel { font-size:2mm; font-weight:700; letter-spacing:.05em; color:var(--teal); margin-top:1.6mm; }
+  .meta .id { font-size:4.6mm; font-weight:700; color:var(--navy); word-break:break-all; }
+  .meta .badge { font-size:2.5mm; color:#172b3c; }
+  .validity { text-align:center; font-size:2.1mm; color:#5f6b76; padding:.6mm 1mm; }
+  .footbar { position:absolute; left:0; right:0; bottom:0; background:var(--navy); color:#fff; font-size:2mm; font-weight:700; text-align:center; padding:.9mm 1mm; }
+  .back { padding:0; }
+  .backrow { display:flex; gap:3mm; padding:2.4mm 2.8mm; }
+  .qrblock { flex:0 0 auto; width:20mm; text-align:center; }
+  .qrblock .qr { width:20mm; height:20mm; border:1px solid var(--navy); background:#fff; }
+  .qrblock .qr img { width:100%; height:100%; object-fit:contain; }
+  .qrblock .qr.empty { font-size:1.8mm; color:#5f6b76; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .qrlbl { font-size:2mm; font-weight:700; letter-spacing:.04em; color:var(--teal); margin-top:.6mm; }
+  .fields { flex:1; min-width:0; }
+  .row { display:flex; gap:2mm; padding:.7mm 0; border-bottom:1px solid #e4e9ee; }
+  .row .k { flex:0 0 21mm; color:#5f6b76; text-transform:uppercase; font-size:2mm; font-weight:700; letter-spacing:.03em; line-height:1.4; }
+  .row .v { flex:1; min-width:0; font-weight:700; font-size:2.7mm; line-height:1.4; word-break:break-all; }
+  .terms { text-align:center; font-size:2mm; color:#5f6b76; padding:.6mm 2.8mm 1.6mm; }
   @media print {
     body { margin:8mm; }
     .no-print { display:none; }
+    .card { box-shadow:none; }
     .card { break-inside: avoid; }
   }
 </style></head>
@@ -3687,7 +3799,11 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
   <p class="muted">${company} · print or save as PDF from this window</p>
   <div class="sheet">
     <div class="card">
-      <div class="head"><div class="co">${company}</div><div class="k">STAFF IDENTITY</div></div>
+      <div class="head">
+        <div class="co">${company}</div>
+        <div class="k">STAFF IDENTITY CARD</div>
+        ${status ? `<span class="chip">${htmlEsc(status.toUpperCase())}</span>` : ''}
+      </div>
       <div class="accent"></div>
       <div class="front">
         ${photo}
@@ -3695,22 +3811,37 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
           <div class="name">${htmlEsc(fullName)}</div>
           <div class="role">${htmlEsc(position)}</div>
           <div class="dept">${htmlEsc(department)}</div>
-          <div class="id">${htmlEsc(official || 'ID pending')}</div>
+          <div class="idlabel">EMPLOYEE ID</div>
+          <div class="id">${htmlEsc(official || 'ID PENDING')}</div>
           ${shortId ? `<div class="badge">Badge ${htmlEsc(shortId)}</div>` : ''}
         </div>
-        ${qr}
       </div>
+      ${validity ? `<div class="validity">${htmlEsc(validity)}</div>` : ''}
+      <div class="footbar">Property of ${company} · Return to Human Resources</div>
     </div>
     <div class="card">
       <div class="back">
-        <div class="bar">RETURN TO HUMAN RESOURCES</div>
-        ${official ? `<div class="row"><div class="k">Official ID</div><div class="v">${htmlEsc(official)}</div></div>` : ''}
-        ${shortId ? `<div class="row"><div class="k">Badge</div><div class="v">${htmlEsc(shortId)}</div></div>` : ''}
-        ${cardNo ? `<div class="row"><div class="k">Card No</div><div class="v">${htmlEsc(cardNo)}</div></div>` : ''}
-        ${serial ? `<div class="row"><div class="k">Serial</div><div class="v">${htmlEsc(serial)}</div></div>` : ''}
-        ${issued ? `<div class="row"><div class="k">Issued</div><div class="v">${htmlEsc(issued)}</div></div>` : ''}
-        ${expires ? `<div class="row"><div class="k">Expires</div><div class="v">${htmlEsc(expires)}</div></div>` : ''}
-        <div class="note">If found, return to ${company}. This card is property of the employer.</div>
+        <div class="head center">
+          <div class="co">EMPLOYEE IDENTIFICATION</div>
+          <div class="k">Return this card to Human Resources if found</div>
+        </div>
+        <div class="accent"></div>
+        <div class="backrow">
+          <div class="qrblock">
+            <div class="qr">${qr}</div>
+            <div class="qrlbl">SCAN TO VERIFY</div>
+          </div>
+          <div class="fields">
+            ${official ? `<div class="row"><div class="k">Official ID</div><div class="v">${htmlEsc(official)}</div></div>` : ''}
+            ${shortId ? `<div class="row"><div class="k">Badge</div><div class="v">${htmlEsc(shortId)}</div></div>` : ''}
+            ${cardNo ? `<div class="row"><div class="k">Card No</div><div class="v">${htmlEsc(cardNo)}</div></div>` : ''}
+            ${serial ? `<div class="row"><div class="k">Serial</div><div class="v">${htmlEsc(serial)}</div></div>` : ''}
+            ${issued ? `<div class="row"><div class="k">Issued</div><div class="v">${htmlEsc(issued)}</div></div>` : ''}
+            ${expires ? `<div class="row"><div class="k">Expires</div><div class="v">${htmlEsc(expires)}</div></div>` : ''}
+          </div>
+        </div>
+        <div class="terms">This card is not transferable and must be surrendered on separation from service.</div>
+        <div class="footbar">IF FOUND · RETURN TO ${company.toUpperCase()}</div>
       </div>
     </div>
   </div>
