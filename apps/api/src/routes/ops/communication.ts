@@ -15,6 +15,7 @@ import {
   notifyUsers,
   renderTemplate,
 } from '../../services/communication.js';
+import { sendEmail, sendSms, sendWhatsApp } from '../../services/bird.js';
 
 export const communicationOpsRouter = Router();
 
@@ -1009,6 +1010,35 @@ communicationOpsRouter.get(
   })
 );
 
+// ---------------------------------------------------------------------------
+// Provider test (Bird)
+// ---------------------------------------------------------------------------
+communicationOpsRouter.post(
+  '/test-send',
+  ...run('communication.settings.manage', async (c, ctx, b) => {
+    const channel = String(b.channel ?? '').toUpperCase();
+    const to = String(b.to ?? '').trim();
+    if (!['EMAIL', 'SMS', 'WHATSAPP'].includes(channel)) throw badRequest('channel must be EMAIL, SMS or WHATSAPP');
+    if (!to) throw badRequest('to is required (email address or E.164 phone number)');
+    const subject = String(b.subject ?? 'HOPE DESIGN ERP test email');
+    const body = String(b.body ?? 'This is a test message from the HOPE DESIGN communication center.');
+    const result =
+      channel === 'EMAIL'
+        ? await sendEmail({
+            to: [to],
+            subject,
+            html: '<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;padding:24px;color:#0F172A;line-height:1.5"><h2 style="margin:0 0 8px">HOPE DESIGN ERP</h2><p>' + body.replace(/</g, '&lt;') + '</p></div>',
+            text: body,
+          })
+        : channel === 'SMS'
+          ? await sendSms({ to, text: body, category: 'service' })
+          : await sendWhatsApp({ to, text: { body } });
+    await auditComms(c, ctx, 'PROVIDER_TEST_SENT', 'communication_provider', null, {
+      channel, to, ok: result.ok, providerMessageId: result.providerMessageId ?? null, error: result.error ?? null,
+    });
+    return { channel, to, ...result };
+  })
+);
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------

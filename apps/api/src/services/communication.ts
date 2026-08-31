@@ -45,6 +45,151 @@ export async function resolveRecipients(
   return [...ids];
 }
 
+// ---------------------------------------------------------------------------
+// Channel resolution: personal preferences + tenant notification rules
+// ---------------------------------------------------------------------------
+
+interface UserChannelPrefs {
+  inApp: boolean;
+  email: boolean;
+  push: boolean;
+  sms: boolean;
+  whatsapp: boolean;
+  digest: string;
+  criticalBypass: boolean;
+}
+
+const DEFAULT_CHANNEL_PREFS: UserChannelPrefs = {
+  inApp: true,
+  email: true,
+  push: true,
+  sms: false,
+  whatsapp: false,
+  digest: 'INSTANT',
+  criticalBypass: true,
+};
+
+const DIGEST_RANK: Record<string, number> = { INSTANT: 0, '15_MIN': 1, HOURLY: 2, DAILY: 3, WEEKLY: 4 };
+
+/**
+ * Map a notification `type` to the notification-rule event types it belongs
+ * to. Rules use uppercase event types (e.g. STOCK_LOW) while internal services
+ * pass dotted types (e.g. inventory.low_stock), so known aliases are resolved.
+ */
+function ruleEventTypes(type: string): string[] {
+  const upper = (type ?? '').trim().toUpperCase();
+  if (!upper) return [];
+  const norm = upper.replace(/[^A-Z0-9]/g, '');
+  if (!norm) return [];
+  const alias: Record<string, string[]> = {
+    INVENTORYLOWSTOCK: ['STOCK_LOW', 'STOCK_REORDER'],
+    HRCONTRACTEXPIRY: ['CONTRACT_EXPIRY'],
+    ASSETMAINTENANCEDUE: ['MAINTENANCE_DUE'],
+    PRODUCTIONWORKORDEROVERDUE: ['WORK_ORDER_OVERDUE'],
+    PRODUCTIONWORKORDERSTALE: ['WORK_ORDER_OVERDUE'],
+    APPROVALESCALATED: ['APPROVAL_REQUIRED', 'APPROVAL_ESCALATED'],
+    APPROVALREQUEST: ['APPROVAL_REQUIRED'],
+    APPROVALREQUESTED: ['APPROVAL_REQUIRED'],
+  };
+  return alias[norm] ?? [upper];
+}
+
+function mergePrefs(rows: Record<string, unknown>[]): UserChannelPrefs {
+  if (rows.length === 0) return { ...DEFAULT_CHANNEL_PREFS };
+  const prefs: UserChannelPrefs = { ...DEFAULT_CHANNEL_PREFS };
+  let digest = 'WEEKLY';
+  let bestRank = DIGEST_RANK[digest] ?? 4;
+  for (const r of rows) {
+    prefs.inApp = r.in_app !== false;
+    prefs.email = r.email !== false;
+    prefs.push = r.push !== false;
+    prefs.sms = r.sms === true;
+    prefs.whatsapp = r.whatsapp === true;
+    prefs.criticalBypass = r.critical_bypass !== false;
+    const d = String(r.digest ?? 'INSTANT');
+    const rank = DIGEST_RANK[d] ?? 0;
+    if (rank < bestRank) {
+      bestRank = rank;
+      digest = d;
+    }
+  }
+  prefs.digest = digest;
+  return prefs;
+}
+
+async function getUserPrefs(
+  client: pg.PoolClient,
+  tenantId: number,
+  userId: number,
+  eventTypes: string[]
+): Promise<UserChannelPrefs> {
+  if (eventTypes.length === 0) return { ...DEFAULT_CHANNEL_PREFS };
+  const { rows } = await client.query(
+    `SELECT event_type, in_app, email, push, sms, whatsapp, digest, critical_bypass
+       FROM notification_preferences
+      WHERE tenant_id = $1 AND user_id = $2
+        AND (event_type = ANY($3::text[])
+             OR regexp_replace(event_type, '[^A-Z0-9]', '', 'g') = $4)
+      ORDER BY event_type ASC`,
+    [tenantId, userId, eventTypes, (eventTypes[0] ?? '').replace(/[^A-Z0-9]/g, '')]
+  );
+  return mergePrefs(rows as Record<string, unknown>[]);
+}
+
+interface RuleMatch {
+  channels: string[];
+  userIds: number[];
+  roleCodes: string[];
+}
+
+/** Union of active notification rules matching the event type. */
+async function getRulesForEvent(client: pg.PoolClient, ctx: Ctx, eventTypes: string[]): Promise<RuleMatch> {
+  const tenantId = ctx.tenantId ?? 0;
+  const companyId = ctx.companyId ?? null;
+  const empty: RuleMatch = { channels: [], userIds: [], roleCodes: [] };
+  if (eventTypes.length === 0) return empty;
+  const { rows } = await client.query(
+    `SELECT channels, user_ids, role_codes
+       FROM notification_rules
+      WHERE tenant_id = $1 AND is_active = true
+        AND (company_id IS NULL OR company_id = $3)
+        AND (event_type = ANY($2::text[])
+             OR regexp_replace(event_type, '[^A-Z0-9]', '', 'g') = $4)`,
+    [tenantId, eventTypes, companyId, (eventTypes[0] ?? '').replace(/[^A-Z0-9]/g, '')]
+  );
+  const channels = new Set<string>();
+  const userIds = new Set<number>();
+  const roleCodes = new Set<string>();
+  for (const r of rows as Record<string, unknown>[]) {
+    if (Array.isArray(r.channels)) {
+      for (const ch of r.channels) if (typeof ch === 'string' && ch.trim()) channels.add(ch.trim().toUpperCase());
+    }
+    if (Array.isArray(r.user_ids)) {
+      for (const u of r.user_ids) {
+        const n = Number(u);
+        if (Number.isFinite(n) && n > 0) userIds.add(n);
+      }
+    }
+    if (Array.isArray(r.role_codes)) {
+      for (const rc of r.role_codes) if (typeof rc === 'string' && rc.trim()) roleCodes.add(rc.trim());
+    }
+  }
+  return { channels: [...channels], userIds: [...userIds], roleCodes: [...roleCodes] };
+}
+
+function filterChannelsByPrefs(channels: string[], prefs: UserChannelPrefs): string[] {
+  return channels.filter((ch) => {
+    switch (ch) {
+      case 'IN_APP': return prefs.inApp;
+      case 'EMAIL': return prefs.email;
+      case 'PUSH': return prefs.push;
+      case 'SMS': return prefs.sms;
+      case 'WHATSAPP': return prefs.whatsapp;
+      default: return false;
+    }
+  });
+}
+
 /** Create notifications (and per-channel deliveries) for a set of users. */
 export async function notifyUsers(
   client: pg.PoolClient,
@@ -54,9 +199,35 @@ export async function notifyUsers(
 ): Promise<number[]> {
   const tenantId = ctx.tenantId ?? 0;
   const companyId = ctx.companyId ?? null;
-  const channels = input.channels?.length ? input.channels : ['IN_APP'];
+  const eventTypes = ruleEventTypes(input.type);
+  const rule = await getRulesForEvent(client, ctx, eventTypes);
+  const ruleRecipients = await resolveRecipients(client, ctx, {
+    userIds: rule.userIds,
+    roleCodes: rule.roleCodes,
+  });
+  const recipients = new Set<number>(userIds.map(Number).filter((n) => Number.isFinite(n) && n > 0));
+  for (const id of ruleRecipients) recipients.add(id);
+
+  const explicitChannels = (input.channels ?? [])
+    .map((ch) => String(ch).trim().toUpperCase())
+    .filter((ch) => ch.length > 0);
   const created: number[] = [];
-  for (const uid of userIds) {
+
+  for (const uid of recipients) {
+    const prefs = await getUserPrefs(client, tenantId, uid, eventTypes);
+    let channels = explicitChannels.length > 0 ? [...explicitChannels] : [...rule.channels];
+    if (channels.length === 0) channels = ['IN_APP'];
+    channels = [...new Set(filterChannelsByPrefs(channels, prefs))];
+    // The in-app copy is always created when the user has not disabled it.
+    if (!channels.includes('IN_APP') && prefs.inApp) channels.unshift('IN_APP');
+    // Digest: non-instant digests surface in-app immediately and defer external
+    // channels to the digest run (a future digest job emits the bundled copy).
+    const critical = input.priority === 'CRITICAL';
+    if (prefs.digest !== 'INSTANT' && !(critical && prefs.criticalBypass)) {
+      channels = channels.filter((ch) => ch === 'IN_APP');
+    }
+    if (channels.length === 0) continue;
+
     const { rows } = await client.query(
       `INSERT INTO notifications
          (company_id, tenant_id, user_id, type, title, body, link, entity_type, entity_id,
@@ -76,7 +247,7 @@ export async function notifyUsers(
         input.severity ?? 'INFO',
         input.actionLabel != null,
         input.priority ?? 'NORMAL',
-        channels[0] ?? 'IN_APP',
+        channels[0],
         input.actionLabel ?? null,
         input.actionTarget ?? null,
         JSON.stringify(input.data ?? {}),
@@ -91,7 +262,7 @@ export async function notifyUsers(
          VALUES ($1,$2,$3,$4,
                  CASE WHEN $4 IN ('SMS','WHATSAPP') THEN (SELECT phone FROM users WHERE id = $3)
                       ELSE (SELECT email FROM users WHERE id = $3) END,
-                 CASE WHEN $4 = 'IN_APP' THEN 'DELIVERED' ELSE 'QUEUED' END,
+                 CASE WHEN $4 IN ('IN_APP','PUSH') THEN 'DELIVERED' ELSE 'QUEUED' END,
                  $5, now())
          ON CONFLICT DO NOTHING`,
         [tenantId, notificationId, uid, ch, ch.toLowerCase()]
