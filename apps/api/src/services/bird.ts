@@ -6,6 +6,7 @@ import {
   sendWhatsAppViaAfricastalking,
 } from './africastalking.js';
 import { isResendConfigured, sendEmailViaResend } from './resend.js';
+import { brandEmailContent } from './emailBranding.js';
 
 export interface BirdSendResult {
   ok: boolean;
@@ -116,19 +117,25 @@ export async function sendEmail(
   input: BirdEmailInput,
   providerOverride?: ProviderOverride
 ): Promise<BirdSendResult> {
+  const branded = brandEmailContent({
+    subject: input.subject,
+    html: input.html,
+    text: input.text,
+  });
+  const payload = { ...input, html: branded.html, text: branded.text };
   const wantResend =
     providerOverride === 'resend' || (providerOverride !== 'bird' && isResendConfigured());
-  if (wantResend) return sendEmailViaResend(input);
+  if (wantResend) return sendEmailViaResend(payload);
   const c = getClient();
   if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
-  if (!input.to?.length) return { ok: false, error: 'Email recipients missing' };
+  if (!payload.to?.length) return { ok: false, error: 'Email recipients missing' };
   try {
     const msg = await c.email.send({
       from: { email: config.bird.fromEmail, name: config.bird.fromName },
-      to: input.to,
-      subject: input.subject,
-      ...(input.html ? { html: input.html } : {}),
-      ...(input.text ? { text: input.text } : {}),
+      to: payload.to,
+      subject: payload.subject,
+      ...(payload.html ? { html: payload.html } : {}),
+      ...(payload.text ? { text: payload.text } : {}),
     });
     return okResult(msg);
   } catch (err) {
@@ -152,7 +159,6 @@ export async function dispatchBird(
     return sendEmail({
       to: [to],
       subject: payload.title ?? 'HOPE DESIGN ERP',
-      html: '<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#0F172A;line-height:1.5">' + escapeHtml(body) + '</div>',
       text: body,
     });
   }
@@ -174,11 +180,3 @@ export async function dispatchBird(
   return { ok: false, error: 'Unsupported channel ' + channel };
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}

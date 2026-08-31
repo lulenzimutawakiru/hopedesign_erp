@@ -1140,7 +1140,6 @@ communicationOpsRouter.post(
         ? await sendEmail({
             to: [to],
             subject,
-            html: '<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;padding:24px;color:#0F172A;line-height:1.5"><h2 style="margin:0 0 8px">HOPE DESIGN ERP</h2><p>' + body.replace(/</g, '&lt;') + '</p></div>',
             text: body,
           }, provider as ProviderOverride)
         : channel === 'SMS'
