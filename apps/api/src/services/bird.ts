@@ -1,0 +1,131 @@
+import { BirdClient, type SmsSendParams, type WhatsappSendParams } from '@messagebird/sdk';
+import { config } from '../config.js';
+
+export interface BirdSendResult {
+  ok: boolean;
+  providerMessageId?: string;
+  status?: string;
+  error?: string;
+}
+
+export interface BirdEmailInput {
+  to: string[];
+  subject: string;
+  html?: string;
+  text?: string;
+}
+
+let client: BirdClient | null = null;
+
+/**
+ * Lazy Bird client. Constructing BirdClient without an API key throws, so the
+ * client is only built once BIRD_API_KEY is configured (in the gitignored .env).
+ */
+function getClient(): BirdClient | null {
+  const apiKey = (config.bird.apiKey ?? '').trim();
+  if (!apiKey) return null;
+  if (!client) client = new BirdClient({ apiKey });
+  return client;
+}
+
+function okResult(msg: { id?: unknown; status?: unknown }): BirdSendResult {
+  return {
+    ok: true,
+    providerMessageId: msg?.id != null ? String(msg.id) : undefined,
+    status: msg?.status != null ? String(msg.status) : undefined,
+  };
+}
+
+function errResult(err: unknown): BirdSendResult {
+  return { ok: false, error: err instanceof Error ? err.message : String(err) };
+}
+
+/** Send an SMS via Bird (free-text or template). */
+export async function sendSms(params: SmsSendParams): Promise<BirdSendResult> {
+  const c = getClient();
+  if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
+  try {
+    const msg = await c.sms.send(params);
+    return okResult(msg);
+  } catch (err) {
+    return errResult(err);
+  }
+}
+
+/** Send a WhatsApp message via Bird (template preferred; free-text only inside a service window). */
+export async function sendWhatsApp(params: WhatsappSendParams): Promise<BirdSendResult> {
+  const c = getClient();
+  if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
+  try {
+    const msg = await c.whatsapp.send(params);
+    return okResult(msg);
+  } catch (err) {
+    return errResult(err);
+  }
+}
+
+/** Send an email via Bird using the configured HOPE DESIGN sender address. */
+export async function sendEmail(input: BirdEmailInput): Promise<BirdSendResult> {
+  const c = getClient();
+  if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
+  if (!input.to?.length) return { ok: false, error: 'Email recipients missing' };
+  try {
+    const msg = await c.email.send({
+      from: { email: config.bird.fromEmail, name: config.bird.fromName },
+      to: input.to,
+      subject: input.subject,
+      ...(input.html ? { html: input.html } : {}),
+      ...(input.text ? { text: input.text } : {}),
+    });
+    return okResult(msg);
+  } catch (err) {
+    return errResult(err);
+  }
+}
+
+/**
+ * Route a delivery by channel (EMAIL / SMS / WHATSAPP) to the Bird provider.
+ * The recipient must be an email address or an E.164 phone number.
+ */
+export async function dispatchBird(
+  channel: string,
+  to: string,
+  payload: { title?: string; body?: string }
+): Promise<BirdSendResult> {
+  if (!to) return { ok: false, error: 'No recipient for ' + channel + ' delivery' };
+  const ch = channel.toUpperCase();
+  const body = payload.body ?? payload.title ?? '';
+  if (ch === 'EMAIL') {
+    return sendEmail({
+      to: [to],
+      subject: payload.title ?? 'HOPE DESIGN ERP',
+      html: '<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#0F172A;line-height:1.5">' + escapeHtml(body) + '</div>',
+      text: body,
+    });
+  }
+  if (ch === 'SMS') {
+    return sendSms({
+      to,
+      ...(config.bird.smsFrom ? { from: config.bird.smsFrom } : {}),
+      text: body,
+      category: 'service',
+    });
+  }
+  if (ch === 'WHATSAPP') {
+    return sendWhatsApp({
+      to,
+      ...(config.bird.whatsappFrom ? { from: config.bird.whatsappFrom } : {}),
+      text: { body },
+    });
+  }
+  return { ok: false, error: 'Unsupported channel ' + channel };
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}

@@ -2,6 +2,7 @@ import pg from 'pg';
 import { Ctx, query, tx } from '../db.js';
 import { logAudit } from './audit.js';
 import { notifyUsers, resolveRecipients } from './communication.js';
+import { sendEmail } from './bird.js';
 import { computeNextRun } from './reportScheduler.js';
 
 export interface CronJobRow {
@@ -458,6 +459,385 @@ async function approvalEscalation(client: pg.PoolClient, ctx: Ctx, job: CronJobR
   return { graceHours, escalated, instancesAffected: instanceIds.length, notified };
 }
 
+
+async function qualityQcPendingCheck(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
+  const graceHours = numParam(job, 'grace_hours', 4);
+  const { rows } = await client.query(
+    `SELECT i.id, i.inspection_no, i.kind, i.created_at, i.product_id, i.batch_id,
+            b.batch_no, p.name AS product_name
+       FROM inspections i
+       LEFT JOIN product_batches b ON b.id = i.batch_id
+       LEFT JOIN products p ON p.id = i.product_id
+      WHERE i.tenant_id = $1
+        AND i.result = 'PENDING'
+        AND i.status = 'SUBMITTED'
+        AND i.created_at < now() - ($2::int || ' hours')::interval
+      ORDER BY i.created_at ASC
+      LIMIT 50`,
+    [ctx.tenantId, graceHours]
+  );
+  const roleCodes = rolesOf(job);
+  let notified = 0;
+  for (const r of rows as Record<string, unknown>[]) {
+    const id = Number(r.id);
+    const inspectionNo = String(r.inspection_no ?? id);
+    const batchNo = String(r.batch_no ?? inspectionNo);
+    const productName = String(r.product_name ?? 'product');
+    const userIds = await resolveRecipients(client, ctx, { roleCodes });
+    await notifyUsers(
+      client,
+      ctx,
+      {
+        roleCodes,
+        type: 'quality.inspection_pending',
+        title: `QC inspection pending: ${batchNo}`,
+        body: `Inspection ${inspectionNo} (${String(r.kind)}) for ${productName} has been submitted and is awaiting QC review.`,
+        link: `/quality/inspections/${id}`,
+        entityType: 'inspection',
+        entityId: id,
+        priority: 'HIGH',
+        severity: 'WARN',
+        actionLabel: 'Review Inspection',
+        actionTarget: `/quality/inspections/${id}`,
+        channels: ['IN_APP', 'EMAIL'],
+        data: { job: job.code, inspectionNo, batchNo, graceHours },
+      },
+      userIds
+    );
+    notified += userIds.length;
+  }
+  return { checked: rows.length, pending: rows.length, notified };
+}
+
+async function productionOrderStaleCheck(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
+  const staleHours = numParam(job, 'stale_hours', 12);
+  const { rows } = await client.query(
+    `SELECT w.id, w.wo_no, w.status, w.updated_at, w.due_date, w.product_id, p.name AS product_name
+       FROM work_orders w
+       LEFT JOIN products p ON p.id = w.product_id
+      WHERE w.tenant_id = $1
+        AND w.status IN ('APPROVED','RELEASED','IN_PROGRESS')
+        AND w.updated_at < now() - ($2::int || ' hours')::interval
+      ORDER BY w.updated_at ASC
+      LIMIT 50`,
+    [ctx.tenantId, staleHours]
+  );
+  const roleCodes = rolesOf(job);
+  let notified = 0;
+  for (const r of rows as Record<string, unknown>[]) {
+    const id = Number(r.id);
+    const woNo = String(r.wo_no ?? id);
+    const productName = String(r.product_name ?? 'product');
+    const userIds = await resolveRecipients(client, ctx, { roleCodes });
+    await notifyUsers(
+      client,
+      ctx,
+      {
+        roleCodes,
+        type: 'production.work_order_stale',
+        title: `${woNo} has no recent activity`,
+        body: `Work order ${woNo} (${productName}) has not been updated for ${staleHours} hours. Please review.`,
+        link: `/production/orders/${id}`,
+        entityType: 'work_order',
+        entityId: id,
+        priority: 'HIGH',
+        severity: 'WARN',
+        actionLabel: 'Review Work Order',
+        actionTarget: `/production/orders/${id}`,
+        channels: ['IN_APP', 'EMAIL'],
+        data: { job: job.code, woNo, productName, staleHours, status: r.status },
+      },
+      userIds
+    );
+    notified += userIds.length;
+  }
+  return { checked: rows.length, stale: rows.length, notified };
+}
+
+async function inventoryDeadStockCheck(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
+  const days = numParam(job, 'days', 90);
+  const { rows } = await client.query(
+    `SELECT p.id, p.code, p.name, p.type,
+            COALESCE(SUM(i.quantity), 0)::numeric AS on_hand,
+            MAX(m.created_at) AS last_movement
+       FROM products p
+       LEFT JOIN inventory i ON i.product_id = p.id AND i.tenant_id = p.tenant_id
+       LEFT JOIN inventory_movements m ON m.product_id = p.id AND m.tenant_id = p.tenant_id
+      WHERE p.tenant_id = $1
+        AND p.status = 'ACTIVE'
+      GROUP BY p.id
+     HAVING COALESCE(SUM(i.quantity), 0) > 0
+        AND (MAX(m.created_at) IS NULL OR MAX(m.created_at) < now() - ($2::int || ' days')::interval)
+      ORDER BY last_movement ASC NULLS FIRST
+      LIMIT 50`,
+    [ctx.tenantId, days]
+  );
+  const roleCodes = rolesOf(job);
+  let notified = 0;
+  for (const r of rows as Record<string, unknown>[]) {
+    const id = Number(r.id);
+    const name = String(r.name);
+    const code = String(r.code);
+    const onHand = Number(r.on_hand);
+    const userIds = await resolveRecipients(client, ctx, { roleCodes });
+    await notifyUsers(
+      client,
+      ctx,
+      {
+        roleCodes,
+        type: 'inventory.dead_stock',
+        title: `Dead stock: ${name}`,
+        body: `${name} (${code}) has ${onHand} on hand with no movement for ${days} days.`,
+        link: `/inventory/items/${id}`,
+        entityType: 'product',
+        entityId: id,
+        priority: 'NORMAL',
+        severity: 'INFO',
+        actionLabel: 'Review Stock',
+        actionTarget: `/inventory/items/${id}`,
+        channels: ['IN_APP', 'EMAIL'],
+        data: { job: job.code, itemCode: code, onHand, days },
+      },
+      userIds
+    );
+    notified += userIds.length;
+  }
+  return { checked: rows.length, deadStock: rows.length, notified };
+}
+
+async function documentExpiryCheck(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
+  const windowDays = numParam(job, 'window_days', 30);
+  const { rows } = await client.query(
+    `SELECT d.id, d.doc_no, d.title, d.category, d.expires_at
+       FROM documents d
+      WHERE d.tenant_id = $1
+        AND d.status = 'APPROVED'
+        AND d.expires_at IS NOT NULL
+        AND d.expires_at <= (CURRENT_DATE + $2::int)
+      ORDER BY d.expires_at ASC
+      LIMIT 50`,
+    [ctx.tenantId, windowDays]
+  );
+  const roleCodes = rolesOf(job);
+  let notified = 0;
+  for (const r of rows as Record<string, unknown>[]) {
+    const id = Number(r.id);
+    const docNo = String(r.doc_no ?? id);
+    const title = String(r.title ?? 'document');
+    const userIds = await resolveRecipients(client, ctx, { roleCodes });
+    await notifyUsers(
+      client,
+      ctx,
+      {
+        roleCodes,
+        type: 'document.expiry',
+        title: `${title} expires soon`,
+        body: `Document ${docNo} (${title}) expires on ${String(r.expires_at)}.`,
+        link: `/documents/${id}`,
+        entityType: 'document',
+        entityId: id,
+        priority: 'HIGH',
+        severity: 'WARN',
+        actionLabel: 'View Document',
+        actionTarget: `/documents/${id}`,
+        channels: ['IN_APP', 'EMAIL'],
+        data: { job: job.code, docNo, title, windowDays, expiresAt: r.expires_at },
+      },
+      userIds
+    );
+    notified += userIds.length;
+  }
+  return { checked: rows.length, expiring: rows.length, notified };
+}
+
+async function paymentDueReminder(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
+  const days = numParam(job, 'days', 2);
+  const { rows } = await client.query(
+    `SELECT pr.id, pr.pay_no, pr.payee, pr.amount, pr.currency, pr.ref_code, pr.approved_at
+       FROM payment_requests pr
+      WHERE pr.tenant_id = $1
+        AND pr.status = 'APPROVED'
+        AND pr.paid_at IS NULL
+        AND pr.approved_at IS NOT NULL
+        AND pr.approved_at < now() - ($2::int || ' days')::interval
+      ORDER BY pr.approved_at ASC
+      LIMIT 50`,
+    [ctx.tenantId, days]
+  );
+  const roleCodes = rolesOf(job);
+  let notified = 0;
+  for (const r of rows as Record<string, unknown>[]) {
+    const id = Number(r.id);
+    const payNo = String(r.pay_no ?? id);
+    const payee = String(r.payee ?? 'payee');
+    const amount = String(r.amount ?? '0');
+    const currency = String(r.currency ?? 'UGX');
+    const userIds = await resolveRecipients(client, ctx, { roleCodes });
+    await notifyUsers(
+      client,
+      ctx,
+      {
+        roleCodes,
+        type: 'finance.payment_due',
+        title: `Payment ${payNo} is due`,
+        body: `Approved payment ${payNo} to ${payee} (${amount} ${currency}) has not been paid within ${days} days.`,
+        link: `/finance/payments/${id}`,
+        entityType: 'payment_request',
+        entityId: id,
+        priority: 'HIGH',
+        severity: 'WARN',
+        actionLabel: 'Review Payment',
+        actionTarget: `/finance/payments/${id}`,
+        channels: ['IN_APP', 'EMAIL'],
+        data: { job: job.code, payNo, payee, amount, currency, days },
+      },
+      userIds
+    );
+    notified += userIds.length;
+  }
+  return { checked: rows.length, due: rows.length, notified };
+}
+
+async function quarantineAgingCheck(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
+  const days = numParam(job, 'days', 7);
+  const { rows } = await client.query(
+    `SELECT q.id, q.product_id, q.quantity, q.reason, q.created_at, p.name AS product_name
+       FROM quarantine_records q
+       LEFT JOIN products p ON p.id = q.product_id
+      WHERE q.tenant_id = $1
+        AND q.status = 'QUARANTINED'
+        AND q.created_at < now() - ($2::int || ' days')::interval
+      ORDER BY q.created_at ASC
+      LIMIT 50`,
+    [ctx.tenantId, days]
+  );
+  const roleCodes = rolesOf(job);
+  let notified = 0;
+  for (const r of rows as Record<string, unknown>[]) {
+    const id = Number(r.id);
+    const name = String(r.product_name ?? 'product');
+    const quantity = String(r.quantity ?? '0');
+    const userIds = await resolveRecipients(client, ctx, { roleCodes });
+    await notifyUsers(
+      client,
+      ctx,
+      {
+        roleCodes,
+        type: 'quality.quarantine_aging',
+        title: `Quarantine aging: ${name}`,
+        body: `${name} (${quantity}) has been in quarantine for ${days} days. Reason: ${String(r.reason ?? 'n/a')}.`,
+        link: `/quality/quarantine/${id}`,
+        entityType: 'quarantine_record',
+        entityId: id,
+        priority: 'HIGH',
+        severity: 'WARN',
+        actionLabel: 'Review Quarantine',
+        actionTarget: `/quality/quarantine/${id}`,
+        channels: ['IN_APP', 'EMAIL'],
+        data: { job: job.code, productName: name, quantity, days, reason: r.reason },
+      },
+      userIds
+    );
+    notified += userIds.length;
+  }
+  return { checked: rows.length, aged: rows.length, notified };
+}
+
+async function passwordExpiryCheck(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
+  const days = numParam(job, 'days', 90);
+  const { rows } = await client.query(
+    `SELECT u.id, u.email, u.first_name, u.last_name, u.must_change_password, u.password_changed_at
+       FROM users u
+      WHERE u.tenant_id = $1
+        AND u.status = 'ACTIVE'
+        AND (u.must_change_password = true OR u.password_changed_at IS NULL
+             OR u.password_changed_at < now() - ($2::int || ' days')::interval)
+      ORDER BY u.password_changed_at ASC NULLS FIRST
+      LIMIT 50`,
+    [ctx.tenantId, days]
+  );
+  const roleCodes = rolesOf(job);
+  let notified = 0;
+  for (const r of rows as Record<string, unknown>[]) {
+    const id = Number(r.id);
+    const email = String(r.email ?? '');
+    const displayName = [String(r.first_name ?? ''), String(r.last_name ?? '')].filter(Boolean).join(' ') || email;
+    const userIds = await resolveRecipients(client, ctx, { roleCodes });
+    await notifyUsers(
+      client,
+      ctx,
+      {
+        roleCodes,
+        type: 'system.password_expiry',
+        title: `Password change required for ${email}`,
+        body: `User ${displayName} (${email}) requires a password change (${days} days since last change).`,
+        link: `/settings/users/${id}`,
+        entityType: 'user',
+        entityId: id,
+        priority: 'NORMAL',
+        severity: 'INFO',
+        actionLabel: 'Review User',
+        actionTarget: `/settings/users/${id}`,
+        channels: ['IN_APP', 'EMAIL'],
+        data: { job: job.code, email, days, mustChange: r.must_change_password },
+      },
+      userIds
+    );
+    notified += userIds.length;
+  }
+  return { checked: rows.length, expiring: rows.length, notified };
+}
+
+async function emailQueueFlush(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
+  const { rows } = await client.query(
+    `SELECT e.id, e.subject, e.body, e.to, e.entity_type, e.entity_id
+       FROM emails e
+      WHERE e.tenant_id = $1
+        AND e.status = 'QUEUED'
+        AND (e.scheduled_at IS NULL OR e.scheduled_at <= now())
+      ORDER BY e.created_at ASC
+      LIMIT 50`,
+    [ctx.tenantId]
+  );
+  let sent = 0;
+  let failed = 0;
+  for (const r of rows as Record<string, unknown>[]) {
+    const id = Number(r.id);
+    const toAddresses: string[] = [];
+    try {
+      const raw = JSON.parse(String(r.to ?? '[]')) as unknown[];
+      for (const entry of raw) {
+        if (typeof entry === 'string') toAddresses.push(entry);
+        else if (entry && typeof entry === 'object' && 'email' in entry) {
+          const maybe = (entry as { email?: unknown }).email;
+          if (typeof maybe === 'string') toAddresses.push(maybe);
+        }
+      }
+    } catch {
+      // invalid JSON in "to" -> leave empty, email will be marked failed below
+    }
+    if (toAddresses.length === 0) {
+      await client.query(`UPDATE emails SET status = 'FAILED', sent_at = now() WHERE id = $1`, [id]);
+      failed += 1;
+      continue;
+    }
+    const subject = String(r.subject ?? 'HOPE DESIGN ERP');
+    const body = String(r.body ?? '');
+    const result = await sendEmail({ to: toAddresses, subject, html: body, text: body });
+    if (result.ok) {
+      await client.query(`UPDATE emails SET status = 'SENT', sent_at = now() WHERE id = $1`, [id]);
+      sent += 1;
+    } else {
+      await client.query(
+        `UPDATE emails SET status = 'FAILED', sent_at = now(), body = body WHERE id = $1`,
+        [id]
+      );
+      failed += 1;
+    }
+  }
+  return { checked: rows.length, sent, failed };
+}
+
 async function runHandler(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
   switch (job.jobType) {
     case 'STOCK_REORDER_CHECK':
@@ -474,6 +854,22 @@ async function runHandler(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Pro
       return workOrderOverdueCheck(client, ctx, job);
     case 'APPROVAL_ESCALATION':
       return approvalEscalation(client, ctx, job);
+    case 'QUALITY_QC_PENDING_CHECK':
+      return qualityQcPendingCheck(client, ctx, job);
+    case 'PRODUCTION_ORDER_STALE_CHECK':
+      return productionOrderStaleCheck(client, ctx, job);
+    case 'INVENTORY_DEAD_STOCK_CHECK':
+      return inventoryDeadStockCheck(client, ctx, job);
+    case 'DOCUMENT_EXPIRY_CHECK':
+      return documentExpiryCheck(client, ctx, job);
+    case 'PAYMENT_DUE_REMINDER':
+      return paymentDueReminder(client, ctx, job);
+    case 'QUARANTINE_AGING_CHECK':
+      return quarantineAgingCheck(client, ctx, job);
+    case 'PASSWORD_EXPIRY_CHECK':
+      return passwordExpiryCheck(client, ctx, job);
+    case 'EMAIL_QUEUE_FLUSH':
+      return emailQueueFlush(client, ctx, job);
     default:
       return { skipped: true, reason: `Unknown job type ${job.jobType}` };
   }

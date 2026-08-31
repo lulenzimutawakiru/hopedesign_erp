@@ -26,6 +26,7 @@ import { databaseAdminRouter } from './routes/databaseAdmin.js';
 import { adminCronRouter } from './routes/adminCron.js';
 import { runDueReportSchedules } from './services/reportScheduler.js';
 import { runDueCronJobs } from './services/cronJobs.js';
+import { processNotificationDeliveries } from './services/communication.js';
 import { mountCrud } from './routes/registry.js';
 import { salesOpsRouter } from './routes/ops/sales.js';
 import { crmOpsRouter } from './routes/ops/crm.js';
@@ -131,5 +132,12 @@ setInterval(() => {
 setInterval(() => {
   runDueCronJobs().catch((err: unknown) => {
     console.error('[cronJobs]', err instanceof Error ? err.message : err);
+  });
+}, 60_000);
+
+// Notification delivery worker: dispatch queued EMAIL/SMS/WHATSAPP via Bird.
+setInterval(() => {
+  processNotificationDeliveries().catch((err: unknown) => {
+    console.error('[notificationDispatch]', err instanceof Error ? err.message : err);
   });
 }, 60_000);

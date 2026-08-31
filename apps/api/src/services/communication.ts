@@ -1,5 +1,6 @@
 import pg from 'pg';
-import { Ctx } from '../db.js';
+import { Ctx, query } from '../db.js';
+import { dispatchBird } from './bird.js';
 
 export type NotificationPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT' | 'CRITICAL';
 export type NotificationSeverity = 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR';
@@ -88,7 +89,8 @@ export async function notifyUsers(
         `INSERT INTO notification_deliveries
            (tenant_id, notification_id, user_id, channel, recipient, status, provider, sent_at)
          VALUES ($1,$2,$3,$4,
-                 (SELECT email FROM users WHERE id = $3),
+                 CASE WHEN $4 IN ('SMS','WHATSAPP') THEN (SELECT phone FROM users WHERE id = $3)
+                      ELSE (SELECT email FROM users WHERE id = $3) END,
                  CASE WHEN $4 = 'IN_APP' THEN 'DELIVERED' ELSE 'QUEUED' END,
                  $5, now())
          ON CONFLICT DO NOTHING`,
@@ -162,4 +164,83 @@ export function renderTemplate(
       return v == null ? `{{${key}}}` : String(v);
     });
   return { subject: fill(subject), body: fill(body) };
+}
+// ---------------------------------------------------------------------------
+// Delivery dispatcher (Bird email / SMS / WhatsApp)
+// ---------------------------------------------------------------------------
+
+const RETRY_DELAYS_SECONDS = [30, 120, 600];
+const MAX_DELIVERY_RETRIES = 3;
+
+let deliveryLoopRunning = false;
+
+/**
+ * Dispatch queued EMAIL/SMS/WHATSAPP deliveries through the Bird provider.
+ * Called on an interval from the API server (single-flight). On failure the
+ * delivery is retried with an exponential backoff, then marked FAILED.
+ */
+export async function processNotificationDeliveries(): Promise<{ processed: number; ok: number; failed: number }> {
+  if (deliveryLoopRunning) return { processed: 0, ok: 0, failed: 0 };
+  deliveryLoopRunning = true;
+  try {
+    const res = await query(
+      `SELECT d.id, d.user_id, d.channel, d.recipient, d.retry_count,
+              n.title, n.body, u.email, u.phone
+         FROM notification_deliveries d
+         JOIN notifications n ON n.id = d.notification_id
+         JOIN users u ON u.id = d.user_id
+        WHERE d.channel IN ('EMAIL','SMS','WHATSAPP')
+          AND d.status IN ('QUEUED','RETRYING')
+          AND (d.next_retry_at IS NULL OR d.next_retry_at <= now())
+        ORDER BY d.created_at ASC
+        LIMIT 100`
+    );
+    let ok = 0;
+    let failed = 0;
+    for (const row of res.rows as Record<string, unknown>[]) {
+      const deliveryId = Number(row.id);
+      const channel = String(row.channel);
+      const recipient = String(row.recipient ?? '').trim();
+      const email = String(row.email ?? '').trim();
+      const phone = String(row.phone ?? '').trim();
+      const to = channel === 'EMAIL' ? recipient || email : recipient || phone;
+      const result = await dispatchBird(channel, to, {
+        title: String(row.title ?? ''),
+        body: String(row.body ?? ''),
+      });
+      if (result.ok) {
+        await query(
+          `UPDATE notification_deliveries
+              SET status = 'SENT', provider = 'bird', provider_message_id = $1, sent_at = now(), error = NULL
+            WHERE id = $2`,
+          [result.providerMessageId ?? null, deliveryId]
+        );
+        ok += 1;
+      } else {
+        const attempts = Number(row.retry_count ?? 0) + 1;
+        if (attempts <= MAX_DELIVERY_RETRIES) {
+          const delaySeconds =
+            RETRY_DELAYS_SECONDS[attempts - 1] ?? RETRY_DELAYS_SECONDS[RETRY_DELAYS_SECONDS.length - 1];
+          await query(
+            `UPDATE notification_deliveries
+                SET status = 'RETRYING', retry_count = $1, error = $2,
+                    next_retry_at = now() + ($3::int || ' seconds')::interval
+              WHERE id = $4`,
+            [attempts, result.error ?? 'unknown', delaySeconds, deliveryId]
+          );
+        } else {
+          await query(
+            `UPDATE notification_deliveries
+                SET status = 'FAILED', retry_count = $1, error = $2
+              WHERE id = $3`,
+            [attempts, result.error ?? 'unknown', deliveryId]
+          );
+        }
+        failed += 1;
+      }
+    }
+    return { processed: res.rows.length, ok, failed };
+  } finally {
+    deliveryLoopRunning = false;
+  }
 }

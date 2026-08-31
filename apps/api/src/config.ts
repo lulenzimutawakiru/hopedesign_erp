@@ -34,6 +34,13 @@ export const config = {
   rateLimitWindowMs: num(process.env.RATE_LIMIT_WINDOW_MS, 60_000),
   rateLimitMax: num(process.env.RATE_LIMIT_MAX, 300),
   storageRoot: process.env.STORAGE_ROOT ?? './data/uploads',
+  bird: {
+    apiKey: process.env.BIRD_API_KEY ?? '',
+    fromEmail: process.env.BIRD_FROM_EMAIL ?? 'notifications@hopedesign.ug',
+    fromName: process.env.BIRD_FROM_NAME ?? 'HOPE DESIGN ERP',
+    smsFrom: process.env.BIRD_SMS_FROM ?? '',
+    whatsappFrom: process.env.BIRD_WHATSAPP_FROM ?? '',
+  },
 };
 
 export const isProd = config.env === 'production';
