@@ -1052,3 +1052,205 @@ communicationOpsRouter.put(
     return saved;
   })
 );
+// ---------------------------------------------------------------------------
+// Notification rules + personal preferences
+// ---------------------------------------------------------------------------
+export const NOTIFICATION_EVENT_TYPES = [
+  'APPROVAL_REQUIRED', 'APPROVAL_REQUESTED', 'APPROVAL_COMPLETED', 'APPROVAL_REJECTED',
+  'APPROVAL_ESCALATED', 'CONTRACT_EXPIRY', 'CONTRACT_SIGNED', 'INVOICE_CREATED',
+  'PAYMENT_RECEIVED', 'PAYMENT_DUE', 'PAYMENT_RECEIPT', 'LOW_STOCK', 'STOCK_LOW',
+  'STOCK_REORDER', 'LEAVE_APPROVED', 'PAYROLL_PROCESSED', 'SECURITY_EVENT',
+  'QUALITY_INSPECTION_PENDING', 'QUALITY_INSPECTION_REQUEST', 'QUALITY_FAILED',
+  'QUALITY_REJECTED', 'QUALITY_HOLD', 'MACHINE_DOWN', 'MACHINE_BREAKDOWN',
+  'MAINTENANCE_DUE', 'ASSET_MAINTENANCE_DUE', 'ASSET_INSPECTION_DUE',
+  'PRODUCTION_DELAYED', 'PRODUCTION_COMPLETED', 'PRODUCTION_ORDER_RELEASED',
+  'MATERIAL_SHORTAGE', 'DELIVERY_DISPATCH', 'DELIVERY_DISPATCHED', 'DOCUMENT_UPLOADED',
+  'DOCUMENT_EXPIRY', 'INVENTORY_DEAD_STOCK', 'QUARANTINE_AGING', 'WORK_ORDER_STALE',
+  'WORK_ORDER_OVERDUE', 'PASSWORD_EXPIRY', 'CUSTODY_OVERDUE', 'SHIFT_SUMMARY',
+  'GOODS_RECEIPT', 'CREDIT_NOTE', 'CUSTOMER_RECEIPT',
+] as const;
+
+const RULE_CHANNELS = ['IN_APP', 'EMAIL', 'SMS', 'PUSH', 'WHATSAPP'];
+
+
+const boolOf = (item: Record<string, unknown>, snake: string, camel: string, dflt: boolean): boolean => {
+  const v = item[snake] ?? item[camel];
+  return typeof v === 'boolean' ? v : dflt;
+};
+const parseJsonField = (v: unknown, fallback: unknown): string => {
+  if (v === undefined || v === null || v === '') return JSON.stringify(fallback);
+  if (typeof v === 'string') return v;
+  return JSON.stringify(v);
+};
+
+communicationOpsRouter.get(
+  '/rules',
+  ...runGet('communication.notifications.view', async (c, ctx, q) => {
+    const tenantId = ctx.tenantId ?? 0;
+    const where = ['nr.tenant_id = $1'];
+    const params: unknown[] = [tenantId];
+    if (q.event_type) {
+      params.push(String(q.event_type));
+      where.push(`nr.event_type = $${params.length}`);
+    }
+    const { rows } = await c.query(
+      `SELECT nr.*, u.first_name || ' ' || u.last_name AS created_by_name
+         FROM notification_rules nr
+         LEFT JOIN users u ON u.id = nr.created_by
+        WHERE ${where.join(' AND ')}
+        ORDER BY nr.is_active DESC, nr.name ASC`,
+      params
+    );
+    return toCamelRows(rows as Record<string, unknown>[]);
+  })
+);
+
+communicationOpsRouter.post(
+  '/rules',
+  ...run('communication.notifications.manage', async (c, ctx, b) => {
+    if (!ctx.companyId) throw badRequest('Company context is required');
+    const name = String(b.name ?? '').trim();
+    const eventType = String(b.event_type ?? '').trim();
+    if (!name) throw badRequest('Rule name is required');
+    if (!eventType) throw badRequest('Event type is required');
+    const channels = Array.isArray(b.channels) && (b.channels as unknown[]).length
+      ? (b.channels as unknown[]).map(String).filter((ch) => RULE_CHANNELS.includes(ch))
+      : ['IN_APP'];
+    const roleCodes = Array.isArray(b.role_codes) ? (b.role_codes as unknown[]).map(String) : [];
+    const userIds = Array.isArray(b.user_ids) ? (b.user_ids as unknown[]).map(String) : [];
+    const { rows } = await c.query(
+      `INSERT INTO notification_rules
+         (tenant_id, company_id, name, event_type, conditions, channels, role_codes, user_ids, is_active, created_by)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10)
+       RETURNING *`,
+      [
+        ctx.tenantId ?? 0, ctx.companyId, name, eventType,
+        parseJsonField(b.conditions, {}),
+        JSON.stringify(channels),
+        JSON.stringify(roleCodes),
+        JSON.stringify(userIds),
+        b.is_active === false ? false : true,
+        ctx.userId ?? null,
+      ]
+    );
+    const row = toCamelRow(rows[0] as Record<string, unknown>);
+    await auditComms(c, ctx, 'NOTIFICATION_RULE_CREATED', 'notification_rule', Number(row.id), {
+      name, eventType,
+    });
+    return row;
+  })
+);
+
+communicationOpsRouter.patch(
+  '/rules/:id',
+  ...run('communication.notifications.manage', async (c, ctx, b, p) => {
+    const id = Number(p.id);
+    if (!Number.isFinite(id)) throw badRequest('Invalid rule id');
+    const fields: string[] = [];
+    const params: unknown[] = [ctx.tenantId ?? 0, id];
+    const set = (col: string, val: unknown, cast = '') => {
+      params.push(val);
+      fields.push(`${col} = $${params.length}${cast}`);
+    };
+    if (b.name !== undefined) set('name', String(b.name).trim());
+    if (b.event_type !== undefined) set('event_type', String(b.event_type).trim());
+    if (b.conditions !== undefined) set('conditions', parseJsonField(b.conditions, {}), '::jsonb');
+    if (b.channels !== undefined) {
+      const channels = Array.isArray(b.channels) ? (b.channels as unknown[]).map(String).filter((ch) => RULE_CHANNELS.includes(ch)) : ['IN_APP'];
+      set('channels', JSON.stringify(channels), '::jsonb');
+    }
+    if (b.role_codes !== undefined) {
+      const roleCodes = Array.isArray(b.role_codes) ? (b.role_codes as unknown[]).map(String) : [];
+      set('role_codes', JSON.stringify(roleCodes), '::jsonb');
+    }
+    if (b.user_ids !== undefined) {
+      const userIds = Array.isArray(b.user_ids) ? (b.user_ids as unknown[]).map(String) : [];
+      set('user_ids', JSON.stringify(userIds), '::jsonb');
+    }
+    if (b.is_active !== undefined) set('is_active', b.is_active === false ? false : true);
+    if (fields.length === 0) throw badRequest('Nothing to update');
+    const { rows } = await c.query(
+      `UPDATE notification_rules SET ${fields.join(', ')} WHERE tenant_id = $1 AND id = $2 RETURNING *`,
+      params
+    );
+    if (!rows.length) throw notFound('Notification rule not found');
+    const row = toCamelRow(rows[0] as Record<string, unknown>);
+    await auditComms(c, ctx, 'NOTIFICATION_RULE_UPDATED', 'notification_rule', id, {
+      name: row.name, eventType: row.eventType,
+    });
+    return row;
+  })
+);
+
+communicationOpsRouter.get(
+  '/preferences',
+  ...runGet('communication.notifications.view', async (c, ctx) => {
+    const tenantId = ctx.tenantId ?? 0;
+    const uid = ctx.userId ?? 0;
+    const { rows } = await c.query(
+      `SELECT * FROM notification_preferences WHERE tenant_id = $1 AND user_id = $2`,
+      [tenantId, uid]
+    );
+    const stored = new Map<string, Record<string, unknown>>();
+    for (const r of rows) {
+      const key = String(r.event_type);
+      stored.set(key, toCamelRow(r as Record<string, unknown>));
+    }
+    const merged = NOTIFICATION_EVENT_TYPES.map((et) => {
+      const existing = stored.get(et);
+      return {
+        eventType: et,
+        inApp: existing ? existing.inApp : true,
+        email: existing ? existing.email : true,
+        push: existing ? existing.push : true,
+        sms: existing ? existing.sms : false,
+        whatsapp: existing ? existing.whatsapp : false,
+        digest: existing ? existing.digest : 'INSTANT',
+        criticalBypass: existing ? existing.criticalBypass : true,
+      };
+    });
+    return { rows: merged, eventTypes: NOTIFICATION_EVENT_TYPES };
+  })
+);
+
+communicationOpsRouter.put(
+  '/preferences',
+  ...run('communication.notifications.read', async (c, ctx, b) => {
+    const tenantId = ctx.tenantId ?? 0;
+    const uid = ctx.userId ?? 0;
+    if (!uid) throw badRequest('Authenticated user is required');
+    const items = Array.isArray(b.items) ? (b.items as Record<string, unknown>[]) : [];
+    if (!items.length) throw badRequest('At least one preference item is required');
+    const saved: Record<string, unknown>[] = [];
+    for (const item of items) {
+      const eventType = String(item.event_type ?? '').trim();
+      if (!eventType) throw badRequest('event_type is required for each preference');
+      const { rows } = await c.query(
+        `INSERT INTO notification_preferences
+           (tenant_id, user_id, event_type, in_app, email, push, sms, whatsapp, digest, critical_bypass)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (tenant_id, user_id, event_type)
+         DO UPDATE SET in_app = EXCLUDED.in_app, email = EXCLUDED.email,
+           push = EXCLUDED.push, sms = EXCLUDED.sms, whatsapp = EXCLUDED.whatsapp,
+           digest = EXCLUDED.digest, critical_bypass = EXCLUDED.critical_bypass,
+           updated_at = now()
+         RETURNING *`,
+        [
+          tenantId, uid, eventType,
+          boolOf(item, 'in_app', 'inApp', true),
+          boolOf(item, 'email', 'email', true),
+          boolOf(item, 'push', 'push', true),
+          boolOf(item, 'sms', 'sms', false),
+          boolOf(item, 'whatsapp', 'whatsapp', false),
+          String(item.digest ?? 'INSTANT').toUpperCase(),
+          boolOf(item, 'critical_bypass', 'criticalBypass', true),
+        ]
+      );
+      saved.push(toCamelRow(rows[0] as Record<string, unknown>));
+    }
+    await auditComms(c, ctx, 'NOTIFICATION_PREFERENCES_UPDATED', 'notification_preference', null, {
+      count: saved.length,
+    });
+    return { saved: saved.length };
+  })
+);

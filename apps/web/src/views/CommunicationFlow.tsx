@@ -81,6 +81,8 @@ function ComTabs({ active }: { active: string }) {
     { id: 'deliveries', label: 'Delivery Logs', href: '/communication/deliveries', perm: 'communication.delivery_logs.view' },
     { id: 'admin', label: 'Health', href: '/communication/admin', perm: 'communication.command.view' },
     { id: 'settings', label: 'Settings', href: '/communication/settings', perm: 'communication.settings.manage' },
+    { id: 'preferences', label: 'My Preferences', href: '/communication/preferences', perm: 'communication.notifications.view' },
+    { id: 'rules', label: 'Notification Rules', href: '/communication/rules', perm: 'communication.notifications.manage' },
     { id: 'cron', label: 'Cron Jobs', href: '/communication/cron', perm: 'system.cron.view' },
   ].filter((t) => can(user, t.perm));
   const row = (t: { id: string; label: string; href: string }) => (
@@ -2195,6 +2197,430 @@ function CronJobsView() {
   );
 }
 
+function RulesView() {
+  const { user } = useAuth();
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [eventTypes, setEventTypes] = useState<string[]>([]);
+  const [eventFilter, setEventFilter] = useState('');
+  const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Rec | null>(null);
+  const [busy, setBusy] = useState('');
+  const canView = can(user, 'communication.notifications.view');
+  const canManage = can(user, 'communication.notifications.manage');
+  const load = useCallback(async () => {
+    try {
+      const qs = eventFilter ? '?event_type=' + encodeURIComponent(eventFilter) : '';
+      const r = await api<{ data: Rec[] }>('/api/ops/communication/rules' + qs);
+      setRows(r.data ?? []);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load notification rules');
+    }
+  }, [eventFilter]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await api<{ data: { eventTypes: string[] } }>('/api/ops/communication/preferences');
+        setEventTypes(r.data?.eventTypes ?? []);
+      } catch { /* event list is optional */ }
+    })();
+  }, []);
+  const toggle = async (r: Rec) => {
+    const id = Number(r.id);
+    if (busy) return;
+    setBusy('tog-' + id);
+    try {
+      await api('/api/ops/communication/rules/' + id, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_active: !pick(r, 'isActive', 'is_active') }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update the rule');
+    } finally {
+      setBusy('');
+    }
+  };
+  const channelsOf = (r: Rec): string[] =>
+    (Array.isArray(pick(r, 'channels')) ? (pick(r, 'channels') as unknown[]) : []).map(String);
+  const rolesOf = (r: Rec): string[] =>
+    (Array.isArray(pick(r, 'roleCodes', 'role_codes')) ? (pick(r, 'roleCodes', 'role_codes') as unknown[]) : []).map(String);
+  if (!canView) {
+    return (
+      <div className="page">
+        <ComHead title="Notification Rules" subtitle="Automated routing rules for events." />
+        <ComTabs active="rules" />
+        <div className="card card-pad empty-state">
+          <h3>No access</h3>
+          <p>You need the communication.notifications.view permission to view rules.</p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="page">
+      <ComHead
+        title="Notification Rules"
+        subtitle="Automated routing rules that decide who is notified for each event type."
+        actions={canManage ? (
+          <button className="btn btn-primary" type="button" onClick={() => setCreating(true)}>+ New Rule</button>
+        ) : undefined}
+      />
+      <ComTabs active="rules" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="stack">
+        <div className="toolbar">
+          <select value={eventFilter} onChange={(e) => setEventFilter(e.target.value)} aria-label="Filter by event type">
+            <option value="">All event types</option>
+            {eventTypes.map((et) => <option key={et} value={et}>{et}</option>)}
+          </select>
+        </div>
+        <div className="card card-pad table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Event Type</th>
+                <th>Channels</th>
+                <th>Roles</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>
+                    <div className="empty-state">
+                      <h3>No notification rules</h3>
+                      <p>Create a rule to control how events are routed to users.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                rows.map((r) => {
+                  const active = pick(r, 'isActive', 'is_active') !== false;
+                  return (
+                    <tr key={String(r.id)}>
+                      <td><span className="cell-main">{String(pick(r, 'name') ?? '')}</span></td>
+                      <td><Badge value={pick(r, 'eventType', 'event_type')} /></td>
+                      <td className="cell-sub">{channelsOf(r).map(titleCase).join(', ') || '—'}</td>
+                      <td className="cell-sub">{rolesOf(r).join(', ') || 'Everyone'}</td>
+                      <td>{active ? <Badge value="ACTIVE" /> : <Badge value="INACTIVE" />}</td>
+                      <td className="cell-mono">{fmtDate(pick(r, 'createdAt', 'created_at'))}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button className="btn btn-sm btn-ghost" type="button" onClick={() => setEditing(r)} disabled={!canManage}>Edit</button>
+                          <button className="btn btn-sm btn-ghost" type="button" onClick={() => void toggle(r)} disabled={!canManage || busy === 'tog-' + String(r.id)}>
+                            {active ? 'Disable' : 'Enable'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {creating ? <RuleModal initial={null} onClose={() => setCreating(false)} onSaved={() => void load()} /> : null}
+      {editing ? <RuleModal initial={editing} onClose={() => setEditing(null)} onSaved={() => void load()} /> : null}
+    </div>
+  );
+}
+
+function RuleModal({ initial, onClose, onSaved }: { initial: Rec | null; onClose: () => void; onSaved: () => void }) {
+  const init: Rec = initial ?? {};
+  const [name, setName] = useState(String(pick(init, 'name') ?? ''));
+  const [eventType, setEventType] = useState(String(pick(init, 'eventType', 'event_type') ?? ''));
+  const [channels, setChannels] = useState<string[]>(
+    (Array.isArray(pick(init, 'channels')) ? (pick(init, 'channels') as unknown[]) : ['IN_APP']).map(String)
+  );
+  const [roleCodes, setRoleCodes] = useState<string[]>(
+    (Array.isArray(pick(init, 'roleCodes', 'role_codes')) ? (pick(init, 'roleCodes', 'role_codes') as unknown[]) : []).map(String)
+  );
+  const [conditions, setConditions] = useState(() => {
+    const v = pick(init, 'conditions');
+    if (v === undefined || v === null) return '';
+    return typeof v === 'string' ? v : JSON.stringify(v);
+  });
+  const [isActive, setIsActive] = useState(pick(init, 'isActive', 'is_active') !== false);
+  const [eventTypes, setEventTypes] = useState<string[]>([]);
+  const [roles, setRoles] = useState<Rec[]>([]);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [pref, roleRes] = await Promise.all([
+          api<{ data: { eventTypes: string[] } }>('/api/ops/communication/preferences'),
+          api<{ data: { data: Rec[] } }>('/api/admin/roles?pageSize=100'),
+        ]);
+        setEventTypes(pref.data?.eventTypes ?? []);
+        setRoles(roleRes.data?.data ?? []);
+      } catch { /* optional enrichment */ }
+    })();
+  }, []);
+  const toggleChannel = (ch: string) => {
+    setChannels((prev) => (prev.includes(ch) ? prev.filter((x) => x !== ch) : [...prev, ch]));
+  };
+  const toggleRole = (code: string) => {
+    setRoleCodes((prev) => (prev.includes(code) ? prev.filter((x) => x !== code) : [...prev, code]));
+  };
+  const save = async () => {
+    if (busy) return;
+    setErr('');
+    setBusy(true);
+    try {
+      let conditionsJson: Record<string, unknown> | undefined;
+      const trimmed = conditions.trim();
+      if (trimmed) {
+        try {
+          conditionsJson = JSON.parse(trimmed) as Record<string, unknown>;
+        } catch {
+          throw new Error('Conditions must be valid JSON (or empty)');
+        }
+      }
+      const body: Record<string, unknown> = {
+        name,
+        event_type: eventType,
+        channels,
+        role_codes: roleCodes,
+        is_active: isActive,
+      };
+      if (conditionsJson) body.conditions = conditionsJson;
+      await api(initial ? '/api/ops/communication/rules/' + String(init.id) : '/api/ops/communication/rules', {
+        method: initial ? 'PATCH' : 'POST',
+        body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      onSaved();
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not save the rule');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const CHANNELS = ['IN_APP', 'EMAIL', 'SMS', 'PUSH', 'WHATSAPP'];
+  return (
+    <Modal
+      title={initial ? 'Edit notification rule' : 'New notification rule'}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-ghost" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" type="button" onClick={() => void save()} disabled={busy || !name || !eventType}>
+            {busy ? 'Saving…' : 'Save rule'}
+          </button>
+        </>
+      }
+    >
+      {err ? <ErrorBanner error={err} /> : null}
+      <div className="form-grid">
+        <div className="field">
+          <label>Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Supplier invoice approval" />
+        </div>
+        <div className="field">
+          <label>Event Type</label>
+          <select value={eventType} onChange={(e) => setEventType(e.target.value)}>
+            <option value="">Select event…</option>
+            {eventTypes.map((et) => <option key={et} value={et}>{et}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="field">
+        <label>Channels</label>
+        <div className="stack">
+          {CHANNELS.map((ch) => (
+            <label key={ch} className="check-line">
+              <input type="checkbox" checked={channels.includes(ch)} onChange={() => toggleChannel(ch)} />
+              {titleCase(ch)}
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="field">
+        <label>Target Roles</label>
+        <div className="card card-pad" style={{ maxHeight: 180, overflowY: 'auto' }}>
+          {roles.length === 0 ? (
+            <p className="muted">No roles loaded.</p>
+          ) : (
+            roles.map((r) => {
+              const code = String(pick(r, 'code') ?? '');
+              const roleName = String(pick(r, 'name') ?? '');
+              return (
+                <label key={code} className="check-line">
+                  <input type="checkbox" checked={roleCodes.includes(code)} onChange={() => toggleRole(code)} />
+                  {roleName || code}
+                </label>
+              );
+            })
+          )}
+        </div>
+        <p className="muted hint">Leave empty to notify all users for this event.</p>
+      </div>
+      <div className="field">
+        <label>Conditions (JSON, optional)</label>
+        <textarea rows={3} value={conditions} onChange={(e) => setConditions(e.target.value)} placeholder='{"amount_min": 10000000}' />
+      </div>
+      <label className="check-line">
+        <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+        Active
+      </label>
+    </Modal>
+  );
+}
+
+function PreferencesView() {
+  const { user } = useAuth();
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [filter, setFilter] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const canView = can(user, 'communication.notifications.view');
+  const load = useCallback(async () => {
+    try {
+      const r = await api<{ data: { rows: Rec[] } }>('/api/ops/communication/preferences');
+      setRows(r.data?.rows ?? []);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load preferences');
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  const setChannel = (eventType: string, key: string, value: boolean) => {
+    setSaved(false);
+    setRows((prev) => prev.map((r) => (String(pick(r, 'eventType')) === eventType ? { ...r, [key]: value } : r)));
+  };
+  const setDigest = (eventType: string, digest: string) => {
+    setSaved(false);
+    setRows((prev) => prev.map((r) => (String(pick(r, 'eventType')) === eventType ? { ...r, digest } : r)));
+  };
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    setSaved(false);
+    try {
+      const items = rows.map((r) => ({
+        event_type: String(pick(r, 'eventType')),
+        inApp: !!r.inApp,
+        email: !!r.email,
+        push: !!r.push,
+        sms: !!r.sms,
+        whatsapp: !!r.whatsapp,
+        digest: String(r.digest ?? 'INSTANT'),
+        criticalBypass: !!r.criticalBypass,
+      }));
+      await api('/api/ops/communication/preferences', {
+        method: 'PUT',
+        body: JSON.stringify({ items }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      setSaved(true);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save preferences');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const filtered = rows.filter((r) =>
+    String(pick(r, 'eventType')).toLowerCase().includes(filter.trim().toLowerCase())
+  );
+  if (!canView) {
+    return (
+      <div className="page">
+        <ComHead title="My Preferences" subtitle="Personal notification delivery settings." />
+        <ComTabs active="preferences" />
+        <div className="card card-pad empty-state">
+          <h3>No access</h3>
+          <p>You need the communication.notifications.view permission to manage preferences.</p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="page">
+      <ComHead
+        title="My Preferences"
+        subtitle="Choose how you receive notifications for each event type. Critical events always bypass quiet periods."
+        actions={
+          <button className="btn btn-primary" type="button" onClick={() => void save()} disabled={saving}>
+            {saving ? 'Saving…' : 'Save preferences'}
+          </button>
+        }
+      />
+      <ComTabs active="preferences" />
+      {error ? <ErrorBanner error={error} /> : null}
+      {saved ? <div className="notice-banner">✓ Preferences saved.</div> : null}
+      <div className="toolbar">
+        <input className="search-input" placeholder="Filter event type…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      </div>
+      <div className="card card-pad table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Event Type</th>
+              <th>In-App</th>
+              <th>Email</th>
+              <th>Push</th>
+              <th>SMS</th>
+              <th>WhatsApp</th>
+              <th>Digest</th>
+              <th>Critical</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 ? (
+              <tr>
+                <td colSpan={8}>
+                  <div className="empty-state">
+                    <h3>No preferences found</h3>
+                    <p>Adjust the filter to see matching event types.</p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              filtered.map((r) => {
+                const et = String(pick(r, 'eventType'));
+                return (
+                  <tr key={et}>
+                    <td><Badge value={et} /></td>
+                    <td><input type="checkbox" checked={!!r.inApp} onChange={(e) => setChannel(et, 'inApp', e.target.checked)} aria-label={et + ' in-app'} /></td>
+                    <td><input type="checkbox" checked={!!r.email} onChange={(e) => setChannel(et, 'email', e.target.checked)} aria-label={et + ' email'} /></td>
+                    <td><input type="checkbox" checked={!!r.push} onChange={(e) => setChannel(et, 'push', e.target.checked)} aria-label={et + ' push'} /></td>
+                    <td><input type="checkbox" checked={!!r.sms} onChange={(e) => setChannel(et, 'sms', e.target.checked)} aria-label={et + ' sms'} /></td>
+                    <td><input type="checkbox" checked={!!r.whatsapp} onChange={(e) => setChannel(et, 'whatsapp', e.target.checked)} aria-label={et + ' whatsapp'} /></td>
+                    <td>
+                      <select value={String(r.digest ?? 'INSTANT')} onChange={(e) => setDigest(et, e.target.value)} aria-label={et + ' digest'}>
+                        {['INSTANT', '15_MIN', 'HOURLY', 'DAILY', 'WEEKLY'].map((d) => (
+                          <option key={d} value={d}>{titleCase(d)}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td><input type="checkbox" checked={!!r.criticalBypass} onChange={(e) => setChannel(et, 'criticalBypass', e.target.checked)} aria-label={et + ' critical bypass'} /></td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted hint">Critical events (security alerts, machine breakdowns) are always delivered instantly regardless of digest mode.</p>
+    </div>
+  );
+}
+
+
 export default function CommunicationFlow({ path }: { path: string }) {
   const { view, id } = parseCom(path);
   switch (view) {
@@ -2210,6 +2636,8 @@ export default function CommunicationFlow({ path }: { path: string }) {
     case 'templates': return <TemplatesView />;
     case 'deliveries': return <DeliveriesView />;
     case 'settings': return <SettingsView />;
+    case 'preferences': return <PreferencesView />;
+    case 'rules': return <RulesView />;
     case 'cron': return <CronJobsView />;
     default: return <CommandCenter />;
   }
