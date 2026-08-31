@@ -301,9 +301,9 @@ communicationOpsRouter.post(
     for (const uid of members) {
       await c.query(
         `INSERT INTO conversation_members (tenant_id, conversation_id, user_id, role)
-         VALUES ($1,$2,$3, CASE WHEN $3 = $4 THEN 'OWNER' ELSE 'MEMBER' END)
+         VALUES ($1,$2,$3,$4)
          ON CONFLICT (conversation_id, user_id) DO NOTHING`,
-        [tenantId, conv.id, uid, ctx.userId ?? 0]
+        [tenantId, conv.id, uid, uid === (ctx.userId ?? 0) ? 'OWNER' : 'MEMBER']
       );
     }
     await auditComms(c, ctx, 'CONVERSATION_CREATED', 'conversation', Number(conv.id), { kind, title: b.title ?? null });
