@@ -81,6 +81,7 @@ function ComTabs({ active }: { active: string }) {
     { id: 'deliveries', label: 'Delivery Logs', href: '/communication/deliveries', perm: 'communication.delivery_logs.view' },
     { id: 'admin', label: 'Health', href: '/communication/admin', perm: 'communication.command.view' },
     { id: 'settings', label: 'Settings', href: '/communication/settings', perm: 'communication.settings.manage' },
+    { id: 'cron', label: 'Cron Jobs', href: '/communication/cron', perm: 'system.cron.view' },
   ].filter((t) => can(user, t.perm));
   const row = (t: { id: string; label: string; href: string }) => (
     <button key={t.id} className={'tab' + (t.id === active ? ' active' : '')} onClick={() => navigate(t.href)}>
@@ -1986,6 +1987,214 @@ function SettingsView() {
   );
 }
 
+function CronJobsView() {
+  const { user } = useAuth();
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [runs, setRuns] = useState<Rec[]>([]);
+  const [runsError, setRunsError] = useState('');
+  const [runsLoading, setRunsLoading] = useState(false);
+
+  const canView = can(user, 'system.cron.view');
+  const canManage = can(user, 'system.cron.manage');
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api<{ data: { items: Rec[] } }>('/api/admin/cron/jobs');
+      setRows(r.data?.items ?? []);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load cron jobs');
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const runNow = async (j: Rec) => {
+    const id = Number(j.id);
+    if (busy) return;
+    setBusy('run-' + id);
+    try {
+      await api(`/api/admin/cron/jobs/${id}/run`, { method: 'POST' });
+      await load();
+      if (expanded === id) void openRuns(id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not run job');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const toggle = async (j: Rec) => {
+    const id = Number(j.id);
+    if (busy) return;
+    setBusy('tog-' + id);
+    try {
+      await api(`/api/admin/cron/jobs/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: !j.enabled }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update job');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const openRuns = async (id: number) => {
+    setRunsLoading(true);
+    setRunsError('');
+    try {
+      const r = await api<{ data: { items: Rec[] } }>(`/api/admin/cron/jobs/${id}/runs`);
+      setRuns(r.data?.items ?? []);
+    } catch (e) {
+      setRunsError(e instanceof Error ? e.message : 'Could not load run history');
+    } finally {
+      setRunsLoading(false);
+    }
+  };
+
+  const toggleExpand = (id: number) => {
+    if (expanded === id) { setExpanded(null); setRuns([]); return; }
+    setExpanded(id);
+    void openRuns(id);
+  };
+
+  const scheduleOf = (j: Rec): string => {
+    const t = String(pick(j, 'scheduleType', 'schedule_type') ?? '');
+    const runTime = pick(j, 'runTime', 'run_time');
+    const dayOfWeek = pick(j, 'dayOfWeek', 'day_of_week');
+    const dayOfMonth = pick(j, 'dayOfMonth', 'day_of_month');
+    const interval = pick(j, 'intervalMinutes', 'interval_minutes');
+    if (t === 'INTERVAL' && interval) return `Every ${interval} min`;
+    if (t === 'WEEKLY') return `Weekly${dayOfWeek ? ' · day ' + dayOfWeek : ''}${runTime ? ' · ' + runTime : ''}`;
+    if (t === 'MONTHLY') return `Monthly${dayOfMonth ? ' · day ' + dayOfMonth : ''}${runTime ? ' · ' + runTime : ''}`;
+    if (t === 'ONCE') return 'Once';
+    return `Daily${runTime ? ' · ' + runTime : ''}`;
+  };
+
+  const jobBadge = (j: Rec) => {
+    const enabled = !!j.enabled;
+    const last = String(pick(j, 'runStatus', 'last_status') ?? '');
+    const tone = last === 'SUCCESS' ? 'badge-green' : last === 'FAILED' ? 'badge-red' : enabled ? 'badge-blue' : 'badge-neutral';
+    const label = last === 'SUCCESS' ? 'Last run OK' : last === 'FAILED' ? 'Last run failed' : enabled ? 'Enabled' : 'Disabled';
+    const icon = last === 'SUCCESS' ? '\u2713' : last === 'FAILED' ? '\u2715' : enabled ? '\u25CF' : '\u2013';
+    return <span className={`badge ${tone}`}><span className="badge-icon" aria-hidden>{icon}</span>{label}</span>;
+  };
+
+  if (!canView) {
+    return (
+      <div className="page">
+        <ComHead title="Cron Jobs" subtitle="Scheduled background jobs and automation." />
+        <ComTabs active="cron" />
+        <div className="card card-pad empty-state">
+          <h3>No access</h3>
+          <p>You need the system.cron.view permission to manage cron jobs.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="page">
+      <ComHead
+        title="Cron Jobs"
+        subtitle="Scheduled background automation for stock, contracts, assets, work orders and approvals."
+      />
+      <ComTabs active="cron" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="stack">
+        {rows.map((j) => {
+          const id = Number(j.id);
+          return (
+            <section key={id} className="card card-pad">
+              <div className="card-head">
+                <div>
+                  <h3 className="cell-mono">{String(j.code)}</h3>
+                  <p className="muted">{String(j.name)}</p>
+                </div>
+                <div className="head-actions">
+                  {jobBadge(j)}
+                  {canManage ? (
+                    <>
+                      <button className="btn" disabled={!!busy} onClick={() => void toggle(j)}>
+                        {busy === 'tog-' + id ? 'Saving\u2026' : j.enabled ? 'Disable' : 'Enable'}
+                      </button>
+                      <button className="btn btn-primary" disabled={!!busy} onClick={() => void runNow(j)}>
+                        {busy === 'run-' + id ? 'Running\u2026' : 'Run now'}
+                      </button>
+                    </>
+                  ) : null}
+                  <button className="btn" onClick={() => toggleExpand(id)}>
+                    {expanded === id ? 'Hide history' : 'History'}
+                  </button>
+                </div>
+              </div>
+              <p className="muted">{String(j.description ?? '')}</p>
+              <p className="muted">
+                <b>Schedule:</b> {scheduleOf(j)}
+                <span> · </span>
+                <b>Next:</b> {fmtDate(pick(j, 'nextRunAt', 'next_run_at'))}
+                {pick(j, 'runFinishedAt', 'last_run_at') ? (
+                  <>
+                    <span> · </span>
+                    <b>Last:</b> {fmtDate(pick(j, 'runFinishedAt', 'last_run_at'))}
+                    {pick(j, 'runDurationMs', 'last_run_duration_ms') != null
+                      ? ` (${String(pick(j, 'runDurationMs', 'last_run_duration_ms'))} ms)` : ''}
+                  </>
+                ) : null}
+              </p>
+              {expanded === id ? (
+                <div className="stack" style={{ marginTop: 12 }}>
+                  {runsLoading ? <PageLoader /> : null}
+                  {runsError ? <ErrorBanner error={runsError} /> : null}
+                  {!runsLoading && runs.length === 0 ? (
+                    <p className="muted">No runs recorded yet.</p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="data">
+                        <thead>
+                          <tr>
+                            <th>Started</th>
+                            <th>Finished</th>
+                            <th>Status</th>
+                            <th>Duration</th>
+                            <th>Detail</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {runs.map((r) => (
+                            <tr key={String(r.id)}>
+                              <td className="cell-mono">{fmtDate(pick(r, 'startedAt', 'started_at', 'created_at'))}</td>
+                              <td className="cell-mono">{fmtDate(pick(r, 'finishedAt', 'finished_at'))}</td>
+                              <td><Badge value={pick(r, 'status')} /></td>
+                              <td>{pick(r, 'durationMs', 'duration_ms') != null ? String(pick(r, 'durationMs', 'duration_ms')) + ' ms' : '\u2014'}</td>
+                              <td className="muted">{String(pick(r, 'resultSummary', 'result_summary', 'error') ?? '')}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </section>
+          );
+        })}
+        {!error && rows.length === 0 ? (
+          <div className="card card-pad empty-state">
+            <h3>No cron jobs</h3>
+            <p>Scheduled automation will appear here once configured.</p>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function CommunicationFlow({ path }: { path: string }) {
   const { view, id } = parseCom(path);
   switch (view) {
@@ -2001,6 +2210,7 @@ export default function CommunicationFlow({ path }: { path: string }) {
     case 'templates': return <TemplatesView />;
     case 'deliveries': return <DeliveriesView />;
     case 'settings': return <SettingsView />;
+    case 'cron': return <CronJobsView />;
     default: return <CommandCenter />;
   }
 }

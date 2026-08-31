@@ -25,7 +25,7 @@ export interface NotifyInput {
 export async function resolveRecipients(
   client: pg.PoolClient,
   ctx: Ctx,
-  input: NotifyInput
+  input: Pick<NotifyInput, 'userIds' | 'roleCodes'>
 ): Promise<number[]> {
   const tenantId = ctx.tenantId ?? 0;
   const ids = new Set<number>((input.userIds ?? []).map(Number).filter((n) => Number.isFinite(n) && n > 0));

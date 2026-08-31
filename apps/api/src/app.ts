@@ -23,7 +23,9 @@ import { documentsRouter } from './routes/documents.js';
 import { settingsRouter } from './routes/settings.js';
 import { adminRouter } from './routes/admin.js';
 import { databaseAdminRouter } from './routes/databaseAdmin.js';
+import { adminCronRouter } from './routes/adminCron.js';
 import { runDueReportSchedules } from './services/reportScheduler.js';
+import { runDueCronJobs } from './services/cronJobs.js';
 import { mountCrud } from './routes/registry.js';
 import { salesOpsRouter } from './routes/ops/sales.js';
 import { crmOpsRouter } from './routes/ops/crm.js';
@@ -85,6 +87,7 @@ app.use('/api/documents', documentsRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/admin/database', databaseAdminRouter);
+app.use('/api/admin/cron', adminCronRouter);
 
 // Business operations (transactional services; RBAC + SoD + ABAC enforced per route).
 app.use('/api/ops/sales', salesOpsRouter);
@@ -121,5 +124,12 @@ app.use(errorHandler);
 setInterval(() => {
   runDueReportSchedules().catch((err: unknown) => {
     console.error('[reportScheduler]', err instanceof Error ? err.message : err);
+  });
+}, 60_000);
+
+// Cron job worker: run due background jobs every minute (single-flight).
+setInterval(() => {
+  runDueCronJobs().catch((err: unknown) => {
+    console.error('[cronJobs]', err instanceof Error ? err.message : err);
   });
 }, 60_000);
