@@ -793,7 +793,7 @@ async function emailQueueFlush(client: pg.PoolClient, ctx: Ctx, job: CronJobRow)
     `SELECT e.id, e.subject, e.body, e.to, e.entity_type, e.entity_id
        FROM emails e
       WHERE e.tenant_id = $1
-        AND e.status = 'QUEUED'
+        AND e.status IN ('QUEUED','SCHEDULED')
         AND (e.scheduled_at IS NULL OR e.scheduled_at <= now())
       ORDER BY e.created_at ASC
       LIMIT 50`,

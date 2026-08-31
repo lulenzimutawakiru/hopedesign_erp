@@ -705,9 +705,22 @@ communicationOpsRouter.post(
     const tenantId = ctx.tenantId ?? 0;
     const subject = String(b.subject ?? '').trim();
     if (!subject) throw badRequest('subject is required');
-    const to = Array.isArray(b.to) ? b.to.map(String).filter((s: string) => s.trim().length > 0) : [];
-    const cc = Array.isArray(b.cc) ? b.cc.map(String).filter((s: string) => s.trim().length > 0) : [];
-    const bcc = Array.isArray(b.bcc) ? b.bcc.map(String).filter((s: string) => s.trim().length > 0) : [];
+    const asList = (v: unknown): string[] => {
+      if (Array.isArray(v)) {
+        return v
+          .map(String)
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+      }
+      if (typeof v === 'string') {
+        const trimmed = v.trim();
+        return trimmed ? [trimmed] : [];
+      }
+      return [];
+    };
+    const to = asList(b.to);
+    const cc = asList(b.cc);
+    const bcc = asList(b.bcc);
     const { rows } = await c.query(
       `INSERT INTO emails
          (tenant_id, company_id, branch_id, thread_id, direction, subject, body, "to", cc, bcc,
@@ -752,17 +765,106 @@ communicationOpsRouter.post(
     const id = Number(p.id);
     const tenantId = ctx.tenantId ?? 0;
     const { rows } = await c.query(
-      `UPDATE emails SET status = 'SENT', sent_at = COALESCE(sent_at, now()), updated_at = now()
-        WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+      `SELECT * FROM emails WHERE id = $1 AND tenant_id = $2`,
       [id, tenantId]
     );
     if (rows.length === 0) throw notFound('Email not found');
+    const email = rows[0] as Record<string, unknown>;
+    const scheduledAt = email.scheduled_at ? new Date(String(email.scheduled_at)) : null;
+    if (scheduledAt && scheduledAt.getTime() > Date.now()) {
+      await c.query(
+        `UPDATE emails SET status = 'SCHEDULED', updated_at = now() WHERE id = $1`,
+        [id]
+      );
+      await auditComms(c, ctx, 'EMAIL_SCHEDULED', 'email', id, { scheduledAt: scheduledAt.toISOString() });
+      return toCamelRow({ ...email, status: 'SCHEDULED' } as Record<string, unknown>);
+    }
+    const toAddresses: string[] = [];
+    const collect = (entry: unknown) => {
+      if (typeof entry === 'string') {
+        const addr = entry.trim();
+        if (addr) toAddresses.push(addr);
+      } else if (entry && typeof entry === 'object' && 'email' in entry) {
+        const maybe = (entry as { email?: unknown }).email;
+        if (typeof maybe === 'string') {
+          const addr = maybe.trim();
+          if (addr) toAddresses.push(addr);
+        }
+      }
+    };
+    // email_recipients is the authoritative recipient store; fall back to the
+    // emails."to" JSON column when no recipient rows exist yet.
+    const { rows: recRows } = await c.query(
+      'SELECT email FROM email_recipients WHERE email_id = $1 AND kind = $2 AND status = $3 ORDER BY id ASC',
+      [id, 'TO', 'QUEUED']
+    );
+    for (const row of recRows) collect(row.email);
+    if (toAddresses.length === 0) {
+      const rawTo = email.to;
+      if (Array.isArray(rawTo)) {
+        for (const entry of rawTo) collect(entry);
+      } else if (rawTo != null && String(rawTo) !== '[]') {
+        try {
+          const parsed = JSON.parse(String(rawTo)) as unknown;
+          if (Array.isArray(parsed)) {
+            for (const entry of parsed) collect(entry);
+          } else {
+            collect(parsed);
+          }
+        } catch {
+          // invalid JSON in "to" -> email marked failed below
+        }
+      }
+    }
+    const dedup = new Set<string>();
+    const uniqueTo: string[] = [];
+    for (const addr of toAddresses) {
+      const key = addr.toLowerCase();
+      if (!dedup.has(key)) {
+        dedup.add(key);
+        uniqueTo.push(addr);
+      }
+    }
+    toAddresses.splice(0, toAddresses.length, ...uniqueTo);
+    if (toAddresses.length === 0) {
+      await c.query(
+        `UPDATE emails SET status = 'FAILED', sent_at = now(), updated_at = now() WHERE id = $1`,
+        [id]
+      );
+      await c.query(
+        `UPDATE email_recipients SET status = 'FAILED', error = $2 WHERE email_id = $1 AND status = 'QUEUED'`,
+        [id, 'No recipients']
+      );
+      await auditComms(c, ctx, 'EMAIL_SEND_FAILED', 'email', id, { error: 'No recipients' });
+      throw badRequest('Email has no recipients');
+    }
+    const subject = String(email.subject ?? 'HOPE DESIGN ERP');
+    const body = String(email.body ?? '');
+    const result = await sendEmail({ to: toAddresses, subject, html: body, text: body });
+    if (result.ok) {
+      await c.query(
+        `UPDATE emails SET status = 'SENT', sent_at = now(), updated_at = now() WHERE id = $1`,
+        [id]
+      );
+      await c.query(
+        `UPDATE email_recipients
+            SET status = 'SENT', sent_at = now(), provider_message_id = $1, error = NULL
+          WHERE email_id = $2 AND status = 'QUEUED'`,
+        [result.providerMessageId ?? null, id]
+      );
+      await auditComms(c, ctx, 'EMAIL_SENT', 'email', id, { providerMessageId: result.providerMessageId ?? null });
+      return toCamelRow({ ...email, status: 'SENT', sentAt: new Date().toISOString() } as Record<string, unknown>);
+    }
     await c.query(
-      `UPDATE email_recipients SET status = 'SENT', sent_at = now() WHERE email_id = $1 AND status = 'QUEUED'`,
+      `UPDATE emails SET status = 'FAILED', sent_at = now(), updated_at = now() WHERE id = $1`,
       [id]
     );
-    await auditComms(c, ctx, 'EMAIL_SENT', 'email', id);
-    return toCamelRow(rows[0] as Record<string, unknown>);
+    await c.query(
+      `UPDATE email_recipients SET status = 'FAILED', error = $1 WHERE email_id = $2 AND status = 'QUEUED'`,
+      [result.error ?? 'Sending failed', id]
+    );
+    await auditComms(c, ctx, 'EMAIL_SEND_FAILED', 'email', id, { error: result.error ?? null });
+    return toCamelRow({ ...email, status: 'FAILED', error: result.error ?? null } as Record<string, unknown>);
   })
 );
 
