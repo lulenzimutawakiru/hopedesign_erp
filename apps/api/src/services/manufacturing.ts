@@ -492,8 +492,8 @@ export async function materialAvailability(client: pg.PoolClient, ctx: Ctx, work
       status === 'PASS'
         ? 'All materials available'
         : status === 'PARTIAL'
-          ? 'Some materials are short Ã¢â‚¬â€ supervisor override required to release'
-          : 'Critical materials are short Ã¢â‚¬â€ release blocked until override',
+          ? 'Some materials are short — supervisor override required to release'
+          : 'Critical materials are short — release blocked until override',
   };
 }
 
@@ -548,7 +548,7 @@ export async function reserveMaterials(
   );
   const checkStatus = check.rows.length ? String(check.rows[0].status) : null;
   if (checkStatus === 'FAIL' && !input.override && !check.rows[0].overridden) {
-    throw badRequest('Critical material shortage Ã¢â‚¬â€ an authorized override is required to reserve');
+    throw badRequest('Critical material shortage — an authorized override is required to reserve');
   }
 
   const reservationNo = await nextDoc(client, ctx, 'MRV');

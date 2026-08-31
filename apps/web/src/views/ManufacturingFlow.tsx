@@ -95,7 +95,7 @@ function PlantBoard() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Plant board failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading the millâ€¦" />;
+  if (!data) return <PageLoader label="Loading the mill…" />;
   const kpis = (data.kpis ?? {}) as Rec;
   const live = (data.live as Rec[]) ?? [];
   const machines = (data.machines as Rec[]) ?? [];
@@ -152,7 +152,7 @@ function PlantBoard() {
                 <tr key={String(wo.id)} className="row-click" onClick={() => navigate(`/plant/orders/${wo.id}`)}>
                   <td className="cell-mono">{String(wo.woNo)}</td>
                   <td><div className="cell-mono">{String(wo.productCode)}</div>{String(wo.productName)}</td>
-                  <td className="cell-mono">{String(wo.machineCode ?? 'â€”')}</td>
+                  <td className="cell-mono">{String(wo.machineCode ?? '—')}</td>
                   <td><Badge value={wo.status} /></td>
                   <td className="cell-num">{fmtNum(wo.producedQty)} / {fmtNum(wo.quantity)}</td>
                 </tr>
@@ -223,7 +223,7 @@ function WoList() {
       </header>
       {error && <ErrorBanner error={error} />}
       <div className="toolbar">
-        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search WO or productâ€¦" />
+        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search WO or product…" />
       </div>
       <div className="table-wrap card">
         <table className="data">
@@ -295,7 +295,7 @@ function PlanDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening planâ€¦" />;
+  if (!doc) return <PageLoader label="Opening plan…" />;
   const explode = async () => {
     setBusy(true); setError(''); setNotice('');
     try {
@@ -330,7 +330,7 @@ function PlanDesk({ id }: { id: number }) {
                 <tr key={String(i.id)}>
                   <td><div className="cell-mono">{String(i.productCode)}</div>{String(i.productName)}</td>
                   <td className="cell-num">{fmtNum(i.quantity)}</td>
-                  <td>{i.dueDate ? String(i.dueDate).slice(0, 10) : 'â€”'}</td>
+                  <td>{i.dueDate ? String(i.dueDate).slice(0, 10) : '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -401,10 +401,10 @@ function PlanComposer() {
             <select value={productId} onChange={(e) => {
               const p = products.find((x) => String(x.id) === e.target.value);
               setProductId(e.target.value);
-              setProductLabel(p ? `${p.code} Â· ${p.name}` : '');
+              setProductLabel(p ? `${p.code} · ${p.name}` : '');
             }}>
-              <option value="">{productLabel || 'Selectâ€¦'}</option>
-              {products.map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.code)} Â· {String(p.name)}</option>)}
+              <option value="">{productLabel || 'Select…'}</option>
+              {products.map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.code)} · {String(p.name)}</option>)}
             </select>
           </div>
           <div className="field field-required"><label>Quantity</label><input inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} /></div>

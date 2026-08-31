@@ -261,7 +261,7 @@ async function customReportRow(
   return toCamelRow(row as Record<string, unknown>);
 }
 /* ================================================================== */
-/* /api/analytics/* â€” live, database-driven analytics aggregates        */
+/* /api/analytics/* — live, database-driven analytics aggregates        */
 /* ================================================================== */
 
 analyticsRouter.get(
@@ -631,7 +631,7 @@ analyticsRouter.get(
   })
 );
 /* ================================================================== */
-/* /api/reports/kpis â€” configurable KPI management engine              */
+/* /api/reports/kpis — configurable KPI management engine              */
 /* ================================================================== */
 
 reportAnalyticsRouter.get(
@@ -892,7 +892,7 @@ reportAnalyticsRouter.get(
 );
 
 /* ================================================================== */
-/* /api/reports/dashboards â€” dashboard builder                          */
+/* /api/reports/dashboards — dashboard builder                          */
 /* ================================================================== */
 
 reportAnalyticsRouter.get(
@@ -1042,7 +1042,7 @@ reportAnalyticsRouter.delete(
 );
 
 /* ================================================================== */
-/* /api/reports/custom â€” custom report builder                          */
+/* /api/reports/custom — custom report builder                          */
 /* ================================================================== */
 
 reportAnalyticsRouter.get(
