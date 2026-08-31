@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import pg from 'pg';
-import { tx, Ctx } from '../../db.js';
+import { tx, query, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler } from '../../utils.js';
 import * as prod from '../../services/production.js';
@@ -32,6 +32,46 @@ const runGet = (permission: string, fn: QueryFn) => [
 // Production plans
 productionOpsRouter.post('/plans', ...run('production.plans.create', (c, ctx, b) => prod.createProductionPlan(c, ctx, b)));
 productionOpsRouter.post('/plans/:id/submit', ...run('production.plans.submit', (c, ctx, _b, p) => prod.submitProductionPlan(c, ctx, Number(p.id))));
+
+// Active manufacturable products (finished goods / reams / sheets) for production planning.
+// Production roles create orders against these without needing inventory.items.view.
+productionOpsRouter.get(
+  '/products',
+  requirePermission('production.work_orders.create'),
+  asyncHandler(async (req, res) => {
+    const q = req.query.q != null ? String(req.query.q).trim() : '';
+    const { rows } = await query(
+      `SELECT p.id, p.code, p.name, p.type, p.status, p.gsm, p.sheets_per_ream,
+              p.standard_cost, p.unit_id,
+              u.code AS uom, u.name AS uom_name
+       FROM products p
+       LEFT JOIN units u ON u.id = p.unit_id
+       WHERE p.company_id = $1
+         AND p.type IN ('REAM','FINISHED_GOODS','SHEET','SECURITY_ITEM')
+         AND p.status = 'ACTIVE'
+         AND ($2::text IS NULL OR p.code ILIKE '%' || $2 || '%' OR p.name ILIKE '%' || $2 || '%')
+       ORDER BY p.name ASC
+       LIMIT 50`,
+      [req.ctx.companyId ?? null, q || null],
+      req.ctx
+    );
+    res.json({
+      data: rows.map((r) => ({
+        id: r.id,
+        code: r.code,
+        name: r.name,
+        type: r.type,
+        status: r.status,
+        gsm: r.gsm,
+        sheetsPerReam: r.sheets_per_ream,
+        standardCost: r.standard_cost,
+        unitId: r.unit_id,
+        uom: r.uom,
+        uomName: r.uom_name,
+      })),
+    });
+  })
+);
 
 productionOpsRouter.get(
   '/products/:id/setup',

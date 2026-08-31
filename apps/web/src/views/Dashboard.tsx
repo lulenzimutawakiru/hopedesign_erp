@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { api, fmtMoney, fmtNum } from '../api';
+﻿import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { api, fmtDate, fmtMoney, fmtNum } from '../api';
 import { PageLoader, ErrorBanner } from '../components/ui';
 import { navigate } from '../router';
 import { useAuth, can } from '../auth';
@@ -42,10 +42,42 @@ interface Exception {
 }
 
 interface WorkFeed {
+  asOf?: string;
   stockValue: number;
   overdueArAmount: number;
   exceptionCount: number;
   exceptions: Exception[];
+}
+
+const NOW_ICONS: Record<string, string> = {
+  inbox: '🗂️',
+  quote: '🧾',
+  order: '📦',
+  'sales-board': '🧭',
+  stock: '📦',
+  xfer: '🔁',
+  adj: '⚖️',
+  scan: '📷',
+  secure: '🔐',
+  wo: '⚙️',
+  customers: '🤝',
+  'crm-board': '🧭',
+  'crm-mine': '🎯',
+  pipeline: '📈',
+  reports: '📊',
+  work: '✅',
+  plant: '🏭',
+  receive: '📥',
+  pick: '🚚',
+  fin: '💰',
+  je: '🧮',
+  op: '🎛️',
+  'people-board': '🧑‍🤝‍🧑',
+  payroll: '💸',
+};
+
+function tile(key: string, label: string, value: string, sub: string, icon: string, accent: string, action?: () => void) {
+  return { key, label, value, sub, icon, accent, action };
 }
 
 export default function Dashboard() {
@@ -82,20 +114,28 @@ export default function Dashboard() {
 
   const first = user?.first_name ?? 'there';
   const focused = work.exceptions.filter((e) => e.persona === persona || e.persona === 'all' || persona === 'executive');
+  const approvalsWaiting = work.exceptions.find((e) => e.code === 'approvals')?.count ?? 0;
+
+  const heroStats = [
+    { label: 'Live exceptions', value: fmtNum(work.exceptionCount), cls: work.exceptionCount > 0 ? 'crit' : 'ok', href: '/inbox' },
+    { label: 'Decisions', value: fmtNum(approvalsWaiting), cls: approvalsWaiting > 0 ? 'warn' : 'ok', href: '/inbox' },
+    { label: 'Overdue AR', value: fmtMoney(work.overdueArAmount), cls: work.overdueArAmount > 0 ? 'warn' : 'ok', href: '/sales/invoices' },
+  ];
 
   const cards = exec
     ? [
-        { label: 'Stock on books', value: fmtMoney(exec.stockValue), sub: `${fmtNum(exec.stockProducts)} SKUs`, action: () => navigate('/inventory/stock') },
-        { label: 'Open fulfilment', value: fmtNum(exec.openOrders), sub: `${fmtNum(exec.openQuotes)} live quotations`, action: () => navigate('/sales/orders') },
-        { label: 'Cash in', value: fmtMoney(exec.monthRevenue), sub: `${fmtNum(exec.monthInvoices)} invoices this month` },
-        { label: 'Receivable risk', value: fmtMoney(exec.accountsReceivable), sub: `${fmtNum(exec.arOverdue)} overdue`, cls: exec.arOverdue ? 'card-warn' : '', action: () => navigate('/sales/invoices') },
-        { label: 'Plant load', value: fmtNum(exec.workOrdersInProgress), sub: `${fmtNum(exec.workOrdersCompleted)} closed of ${fmtNum(exec.workOrdersTotal)}`, action: () => navigate('/records/production/work_orders') },
-        { label: 'Inbox', value: fmtNum(exec.pendingApprovals), sub: 'decisions on your desk', cls: exec.pendingApprovals ? 'card-accent' : '', action: () => navigate('/inbox') },
+        tile('stock', 'Stock on books', fmtMoney(exec.stockValue), `${fmtNum(exec.stockProducts)} SKUs on hand`, '📦', '#00A6A6', () => navigate('/inventory/stock')),
+        tile('orders', 'Open fulfilment', fmtNum(exec.openOrders), `${fmtNum(exec.openQuotes)} live quotations`, '🧾', '#1261A0', () => navigate('/sales/orders')),
+        tile('revenue', 'Cash in', fmtMoney(exec.monthRevenue), `${fmtNum(exec.monthInvoices)} invoices this month`, '💵', '#168A5B', () => navigate('/sales/invoices')),
+        tile('ar', 'Receivable risk', fmtMoney(exec.accountsReceivable), `${fmtNum(exec.arOverdue)} overdue`, '⏳', '#D99A00', () => navigate('/sales/invoices')),
+        tile('plant', 'Plant load', fmtNum(exec.workOrdersInProgress), `${fmtNum(exec.workOrdersCompleted)} closed of ${fmtNum(exec.workOrdersTotal)}`, '⚙️', '#D97706', () => navigate('/records/production/work_orders')),
+        tile('inbox', 'Decisions on your desk', fmtNum(exec.pendingApprovals), 'need a person', '🗂️', '#8B5CF6', () => navigate('/inbox')),
       ]
     : [
-        { label: 'Exceptions', value: fmtNum(work.exceptionCount), sub: 'need a person', action: () => navigate('/inbox') },
-        { label: 'Stock on books', value: fmtMoney(work.stockValue), sub: 'current valuation', action: () => navigate('/inventory/stock') },
-        { label: 'Overdue AR', value: fmtMoney(work.overdueArAmount), sub: 'collections risk', action: () => navigate('/sales/invoices') },
+        tile('exceptions', 'Exceptions', fmtNum(work.exceptionCount), 'need a person', '⚠️', '#C93636', () => navigate('/inbox')),
+        tile('inbox', 'Decisions on your desk', fmtNum(approvalsWaiting), 'approvals and returns', '🗂️', '#8B5CF6', () => navigate('/inbox')),
+        tile('stock', 'Stock on books', fmtMoney(work.stockValue), 'current valuation', '📦', '#00A6A6', () => navigate('/inventory/stock')),
+        tile('ar', 'Overdue AR', fmtMoney(work.overdueArAmount), 'collections risk', '⏳', '#D99A00', () => navigate('/sales/invoices')),
       ];
 
   return (
@@ -109,11 +149,20 @@ export default function Dashboard() {
               ? `${work.exceptionCount} live exceptions. Start with the inbox — not the module tree.`
               : 'No operational exceptions. Use a workspace or the command bar to start work.'}
           </p>
-          <div className="quick-actions" style={{ padding: 0 }}>
+          <div className="hero-stats">
+            {heroStats.map((s) => (
+              <button key={s.label} className={`hero-stat ${s.cls}`} onClick={() => navigate(s.href)}>
+                <b>{s.value}</b>
+                <span>{s.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="quick-actions" style={{ padding: '14px 0 0' }}>
             <button className="btn btn-primary" onClick={() => navigate('/inbox')}>Open inbox</button>
             {can(user, 'sales.quotations.create') && <button className="btn btn-ghost-on-navy" onClick={() => navigate('/sales/quotations/new')}>New quotation</button>}
             {can(user, 'inventory.stock.view') && <button className="btn btn-ghost-on-navy" onClick={() => navigate('/inventory/stock')}>Stock board</button>}
           </div>
+          {work.asOf && <div className="muted" style={{ marginTop: 14, fontSize: 11 }}>Refreshed {fmtDate(work.asOf)}</div>}
         </div>
         <div className="exception-list">
           {focused.length === 0 && (
@@ -134,22 +183,35 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <h3 style={{ margin: '8px 0 10px', fontSize: 13, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--muted)' }}>Do now</h3>
+      <h3 className="section-title">Do now</h3>
       <div className="do-now">
         {nowActions.map((a) => (
           <button key={a.id} onClick={() => navigate(a.href)}>
-            <strong>{a.label}</strong>
-            <span>{a.hint}</span>
+            <span className="now-ic">{NOW_ICONS[a.id] ?? '→'}</span>
+            <span>
+              <strong>{a.label}</strong>
+              <span>{a.hint}</span>
+            </span>
           </button>
         ))}
       </div>
 
-      <div className="kpi-grid">
+      <h3 className="section-title">At a glance</h3>
+      <div className="kpi-grid--tiles">
         {cards.map((c) => (
-          <button key={c.label} className={`kpi-card ${c.cls ?? ''}`} onClick={c.action} disabled={!c.action}>
-            <span className="kpi-label">{c.label}</span>
-            <span className="kpi-value">{c.value}</span>
-            <span className="kpi-sub">{c.sub}</span>
+          <button
+            key={c.key}
+            className="kpi-tile"
+            style={{ '--tile-accent': c.accent, '--tile-tint': `${c.accent}1F` } as CSSProperties}
+            onClick={c.action}
+            disabled={!c.action}
+          >
+            <span className="kpi-tile-icon">{c.icon}</span>
+            <span className="kpi-tile-body">
+              <span className="kpi-tile-label">{c.label}</span>
+              <span className="kpi-tile-value">{c.value}</span>
+              <span className="kpi-tile-sub">{c.sub}</span>
+            </span>
           </button>
         ))}
       </div>
@@ -160,6 +222,10 @@ export default function Dashboard() {
           <Meter label="Production" value={exec.workOrdersTotal ? (exec.workOrdersCompleted / exec.workOrdersTotal) * 100 : 0} />
           <Meter label="Warehouse cover" value={exec.lowStockCount ? Math.max(20, 100 - exec.lowStockCount * 8) : 91} />
           <Meter label="Sales fulfilment" value={exec.openOrders ? Math.min(95, 40 + exec.openOrders * 4) : 73} />
+          <p className="muted" style={{ margin: '10px 0 0', fontSize: 12 }}>
+            {fmtNum(exec.monthProduced)} units produced · {fmtNum(exec.monthWaste)} waste · {fmtNum(exec.monthScrapped)} scrapped
+            {exec.monthYieldPct != null ? ` · ${exec.monthYieldPct}% yield this month` : ''}
+          </p>
         </section>
       )}
 
@@ -169,9 +235,13 @@ export default function Dashboard() {
           <div className="timeline" style={{ padding: 16 }}>
             {activity.slice(0, 8).map((ev) => (
               <div key={String(ev.id)} className="timeline-item">
-                <div className="timeline-dot" />
-                <div className="timeline-title">{String(ev.event_type ?? ev.eventType)}</div>
-                <div className="timeline-meta">{String(ev.entity_code ?? ev.entityCode ?? ev.entity_type ?? '')} · {String(ev.first_name ?? ev.firstName ?? 'System')}</div>
+                <div className="timeline-title">{String(ev.event_type ?? ev.eventType).replace(/_/g, ' ')}</div>
+                <div className="timeline-meta">
+                  {String(ev.entity_code ?? ev.entityCode ?? '')}
+                  {ev.entity_code || ev.entityCode ? ' · ' : ''}
+                  {String(ev.first_name ?? ev.firstName ?? 'System')}
+                  {ev.created_at ? ` · ${fmtDate(ev.created_at)}` : ''}
+                </div>
               </div>
             ))}
           </div>

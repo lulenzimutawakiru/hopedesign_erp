@@ -43,6 +43,8 @@ import { assetsOpsRouter } from './routes/ops/assets.js';
 import { employeeIdentityOpsRouter } from './routes/ops/employeeIdentity.js';
 import { requisitionsOpsRouter } from './routes/ops/requisitions.js';
 import { expenditureOpsRouter } from './routes/ops/expenditure.js';
+import { communicationOpsRouter } from './routes/ops/communication.js';
+import { documentsOpsRouter } from './routes/ops/documents.js';
 
 export const app = express();
 
@@ -102,7 +104,9 @@ app.use('/api/ops/mrp', mrpOpsRouter);
 app.use('/api/ops/assets', assetsOpsRouter);
 app.use('/api/ops/requisitions', requisitionsOpsRouter);
 app.use('/api/ops/expenditure', expenditureOpsRouter);
-app.use('/api/ops/healthcare', requireModule('healthcare'), healthcareOpsRouter);
+        app.use('/api/ops/communication', communicationOpsRouter);
+        app.use('/api/ops/documents', documentsOpsRouter);
+        app.use('/api/ops/healthcare', requireModule('healthcare'), healthcareOpsRouter);
 
 // Module-activation gate for the healthcare CRUD namespace (multi-tenant SaaS).
 app.use('/api/healthcare', requireModule('healthcare'));

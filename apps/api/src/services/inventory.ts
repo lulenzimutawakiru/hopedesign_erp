@@ -23,7 +23,8 @@ export interface MoveInput {
   valuationMethod?: string;
 }
 
-export const RAW_MATERIAL_TYPES = ['JUMBO_ROLL', 'PAPER_BOBBIN', 'PACKAGING', 'CONSUMABLE', 'SPARE_PART'];
+export const RAW_MATERIAL_TYPES = ['JUMBO_ROLL', 'PAPER_BOBBIN', 'PACKAGING'];
+export const CONSUMABLE_TYPES = ['CONSUMABLE', 'SPARE_PART'];
 
 export async function postMove(client: pg.PoolClient, ctx: Ctx, m: MoveInput) {
   const res = await client.query('SELECT post_inventory_move($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) AS movement_id', [
@@ -332,20 +333,29 @@ export async function stockSummary(client: pg.PoolClient, ctx: Ctx) {
        COALESCE(sum(i.quantity * i.avg_cost), 0)::numeric(18,2) AS stock_value,
        count(*)::int AS lines,
        count(DISTINCT i.product_id)::int AS products,
-       count(*) FILTER (WHERE i.quantity <= COALESCE(p.reorder_point, 0))::int AS low_stock,
+       (SELECT count(*)::int FROM (
+          SELECT i2.product_id
+          FROM inventory i2
+          JOIN products p2 ON p2.id = i2.product_id
+          WHERE i2.tenant_id = $1 AND i2.company_id = $2 AND i2.quantity >= 0
+          GROUP BY i2.product_id
+          HAVING COALESCE(sum(i2.quantity), 0) <= COALESCE(max(p2.reorder_point), 0)
+        ) low) AS low_stock,
        count(*) FILTER (WHERE pb.expiry_date IS NOT NULL AND pb.expiry_date <= now() + interval '30 days')::int AS expiring,
        count(*) FILTER (WHERE i.reserved_qty > 0)::int AS reserved_lines,
        COALESCE(sum(i.reserved_qty), 0)::numeric AS reserved_qty,
        count(DISTINCT i.product_id) FILTER (WHERE p.type = ANY($3::text[]))::int AS material_lines,
-       count(DISTINCT i.product_id) FILTER (WHERE NOT (p.type = ANY($3::text[])))::int AS product_lines,
+       count(DISTINCT i.product_id) FILTER (WHERE p.type = ANY($4::text[]))::int AS consumable_lines,
+       count(DISTINCT i.product_id) FILTER (WHERE NOT (p.type = ANY($3::text[]) OR p.type = ANY($4::text[])))::int AS product_lines,
        (SELECT count(*)::int FROM products p2 WHERE p2.tenant_id = $1 AND p2.company_id = $2 AND p2.type = ANY($3::text[])) AS catalog_materials,
-       (SELECT count(*)::int FROM products p2 WHERE p2.tenant_id = $1 AND p2.company_id = $2 AND NOT (p2.type = ANY($3::text[]))) AS catalog_products,
-       (SELECT count(*)::int FROM assets a WHERE a.tenant_id = $1 AND a.company_id = $2) AS assets
+       (SELECT count(*)::int FROM products p2 WHERE p2.tenant_id = $1 AND p2.company_id = $2 AND p2.type = ANY($4::text[])) AS catalog_consumables,
+       (SELECT count(*)::int FROM products p2 WHERE p2.tenant_id = $1 AND p2.company_id = $2 AND NOT (p2.type = ANY($3::text[]) OR p2.type = ANY($4::text[]))) AS catalog_products,
+       (SELECT count(*)::int FROM asset_register ar WHERE ar.tenant_id = $1 AND ar.company_id = $2 AND NOT ar.is_deleted) AS assets
      FROM inventory i
      JOIN products p ON p.id = i.product_id
      LEFT JOIN product_batches pb ON pb.id = i.batch_id
      WHERE i.tenant_id = $1 AND i.company_id = $2`,
-    [ctx.tenantId, ctx.companyId, RAW_MATERIAL_TYPES]
+    [ctx.tenantId, ctx.companyId, RAW_MATERIAL_TYPES, CONSUMABLE_TYPES]
   );
   return toCamelRow(res.rows[0]);
 }

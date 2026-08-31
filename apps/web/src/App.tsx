@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { useAuth } from './auth';
+import { shortCompanyName, useCompanyProfile } from './company';
 import { useHashRoute } from './router';
 import Login from './views/Login';
 import { BrandMark } from './components/BrandMark';
@@ -11,7 +12,12 @@ const AcceptInvite = lazy(() => import('./views/AcceptInvite'));
 
 export default function App() {
   const { user, loading } = useAuth();
+  const company = useCompanyProfile();
   const path = useHashRoute();
+
+  useEffect(() => {
+    document.title = company.name !== 'Company' ? `${shortCompanyName(company.name)} ERP` : 'Company ERP';
+  }, [company]);
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');

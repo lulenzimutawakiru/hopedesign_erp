@@ -39,6 +39,7 @@ const TABS: { view: string; label: string; perm: string }[] = [
   { view: 'reorder', label: 'Reorder', perm: 'inventory.reorder_recommendations.view' },
   { view: 'forecast', label: 'Forecast', perm: 'inventory.forecasts.view' },
   { view: 'valuation', label: 'Valuation', perm: 'inventory.valuations.view' },
+  { view: 'ageing', label: 'Ageing', perm: 'inventory.stock.view' },
   { view: 'abc', label: 'ABC/XYZ', perm: 'inventory.valuations.view' },
   { view: 'risk', label: 'Risk', perm: 'inventory.risk.view' },
   { view: 'quality', label: 'Data Q', perm: 'inventory.stock.view' },
@@ -88,6 +89,7 @@ export default function InventoryIntel({ path }: { path: string }) {
       {active === 'reorder' && <Reorder />}
       {active === 'forecast' && <Forecasts />}
       {active === 'valuation' && <Valuation />}
+      {active === 'ageing' && <Ageing />}
       {active === 'abc' && <AbcXyz />}
       {active === 'risk' && <Risk />}
       {active === 'quality' && <DataQuality />}
@@ -147,6 +149,26 @@ function CommandCenter() {
   if (error && !data) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader label="Reading the warehouse..." />;
   const alerts = Array.isArray(data.alerts) ? (data.alerts as Rec[]) : [];
+  const today = (data.today && typeof data.today === 'object' ? data.today : {}) as Rec;
+  const todayByType = Array.isArray(today.byType) ? (today.byType as Rec[]) : [];
+  const TODAY_LABELS: Record<string, string> = {
+    RECEIPT: 'Goods received',
+    PRODUCTION_ISSUE: 'Production issues',
+    PRODUCTION_OUTPUT: 'Production output',
+    PRODUCTION_RETURN: 'Production returns',
+    TRANSFER_IN: 'Transfers in',
+    TRANSFER_OUT: 'Transfers out',
+    PICK: 'Picks',
+    PUT_AWAY: 'Put-away',
+    DISPTACH: 'Dispatches',
+    DELIVERY: 'Deliveries',
+    ADJUSTMENT: 'Adjustments',
+    SCRAP: 'Scrap',
+    RETURN_IN: 'Returns in',
+    RETURN_OUT: 'Returns out',
+    CONSUMPTION: 'Consumption',
+    ISSUE: 'Issues',
+  };
   const health: { label: string; value: number; view: string; tone: string }[] = [
     { label: 'Stockouts', value: num(data.stockoutLines ?? data.stockouts), view: 'positions', tone: 'card-warn' },
     { label: 'Low stock', value: num(data.lowStockLines ?? data.lowStock), view: 'reorder', tone: 'card-warn' },
@@ -187,6 +209,25 @@ function CommandCenter() {
             <span className="kpi-sub">Click to drill down</span>
           </button>
         ))}
+      </div>
+      <div className="card card-pad" style={{ marginTop: 12 }}>
+        <div className="card-head" style={{ marginBottom: 8 }}>
+          <h3>Today&apos;s activity</h3>
+          <span className="muted">{fmtNum(num(today.total))} movements in the last 24 hours</span>
+        </div>
+        {todayByType.length === 0 ? (
+          <p className="muted">No inventory movements recorded in the last 24 hours.</p>
+        ) : (
+          <div className="kpi-grid">
+            {todayByType.map((t) => (
+              <div key={str(t.movementType)} className="kpi-card">
+                <span className="kpi-label">{TODAY_LABELS[str(t.movementType)] ?? str(t.movementType).replace(/_/g, ' ')}</span>
+                <span className="kpi-value">{fmtNum(t.n)}</span>
+                <span className="kpi-sub">{fmtNum(t.qty)} units</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       <div className="card card-pad">
         <div className="card-head" style={{ marginBottom: 8 }}><h3>Live alerts</h3></div>
@@ -1528,6 +1569,107 @@ function HandlingUnits() {
           )}
         </>
       )}
+    </>
+  );
+}
+function Ageing() {
+  const [data, setData] = useState<Rec | null>(null);
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    setError('');
+    api<{ data: Rec }>('/api/ops/inventory-intel/ageing')
+      .then((r) => setData(r.data))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Stock ageing failed'));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  if (error && !data) return <ErrorBanner error={error} />;
+  if (!data) return <PageLoader label="Ageing stock analysis..." />;
+  const buckets = Array.isArray(data.buckets) ? (data.buckets as Rec[]) : [];
+  const deadStock = Array.isArray(data.deadStock) ? (data.deadStock as Rec[]) : [];
+  const maxValue = Math.max(1, ...buckets.map((b) => num(b.value)));
+  const bucketNames: Record<string, string> = {
+    '0-30d': '0 - 30 days',
+    '31-60d': '31 - 60 days',
+    '61-90d': '61 - 90 days',
+    '91-180d': '91 - 180 days',
+    '180d+': 'Over 180 days',
+  };
+  return (
+    <>
+      <div className="toolbar">
+        <span className="muted">Generated {fmtDate(data.generatedAt)}</span>
+        <button className="btn btn-ghost" onClick={load}>Refresh</button>
+      </div>
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <span className="kpi-label">Total stock value</span>
+          <span className="kpi-value">{fmtMoney(data.totalValue)}</span>
+          <span className="kpi-sub">Across all ageing buckets</span>
+        </div>
+        <div className="kpi-card">
+          <span className="kpi-label">Total quantity</span>
+          <span className="kpi-value">{fmtNum(data.totalQty)}</span>
+          <span className="kpi-sub">On-hand units with stock</span>
+        </div>
+        <div className="kpi-card card-warn">
+          <span className="kpi-label">Dead stock lines</span>
+          <span className="kpi-value">{fmtNum(deadStock.length)}</span>
+          <span className="kpi-sub">No movement in 180+ days</span>
+        </div>
+      </div>
+      <div className="card card-pad" style={{ marginTop: 12 }}>
+        <div className="card-head"><h3>Stock age distribution</h3></div>
+        {buckets.length === 0 ? (
+          <p className="muted">No positive stock lines to age.</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr><th>Age bucket</th><th className="num">Lines</th><th className="num">Products</th><th className="num">Quantity</th><th className="num">Value</th><th>Share</th></tr>
+              </thead>
+              <tbody>
+                {buckets.map((b) => (
+                  <tr key={str(b.bucket)}>
+                    <td>{bucketNames[str(b.bucket)] ?? str(b.bucket)}</td>
+                    <td className="num">{fmtNum(b.lines)}</td>
+                    <td className="num">{fmtNum(b.products)}</td>
+                    <td className="num">{fmtNum(b.qty)}</td>
+                    <td className="num">{fmtMoney(b.value)}</td>
+                    <td>
+                      <div style={{ background: 'var(--accent, #2563eb)', height: 8, borderRadius: 4, width: `${Math.max(2, Math.round((num(b.value) / maxValue) * 100))}%` }} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <div className="card card-pad" style={{ marginTop: 12 }}>
+        <div className="card-head"><h3>Dead stock candidates</h3></div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr><th>Product</th><th>Type</th><th>Warehouse</th><th>Bin</th><th>Batch</th><th className="num">Qty</th><th className="num">Value</th><th>Last movement</th></tr>
+            </thead>
+            <tbody>
+              {deadStock.map((d) => (
+                <tr key={String(d.id)}>
+                  <td>{str(d.productCode)} - {str(d.productName)}</td>
+                  <td><Badge value={d.productType} /></td>
+                  <td>{str(d.warehouseCode)}</td>
+                  <td className="cell-mono">{str(d.binCode) || '-'}</td>
+                  <td className="cell-mono">{str(d.batchNo) || '-'}</td>
+                  <td className="num">{fmtNum(d.quantity)}</td>
+                  <td className="num">{fmtMoney(d.stockValue)}</td>
+                  <td>{str(d.lastMovementAt) || 'Never'}</td>
+                </tr>
+              ))}
+              {deadStock.length === 0 && <tr><td colSpan={8} className="muted">No dead stock. Every line has moved within the last 180 days.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </>
   );
 }

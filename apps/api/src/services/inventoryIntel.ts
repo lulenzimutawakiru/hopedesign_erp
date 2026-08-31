@@ -49,8 +49,14 @@ export async function commandCenter(client: pg.PoolClient, ctx: Ctx) {
               COALESCE(sum(i.quality_hold_qty * i.avg_cost), 0)::numeric(18,2) AS quality_hold_value,
               count(*)::int AS stock_lines,
               count(*) FILTER (WHERE i.quantity - i.reserved_qty - i.allocated_qty - i.blocked_qty - i.quality_hold_qty <= 0)::int AS stockout_lines,
-              count(*) FILTER (WHERE i.quantity - i.reserved_qty - i.allocated_qty - i.blocked_qty - i.quality_hold_qty > 0
-                AND i.quantity - i.reserved_qty - i.allocated_qty - i.blocked_qty - i.quality_hold_qty <= COALESCE(p.reorder_point, 0))::int AS low_stock_lines,
+              (SELECT count(*)::int FROM (
+                 SELECT i2.product_id
+                 FROM inventory i2
+                 JOIN products p2 ON p2.id = i2.product_id
+                 WHERE i2.tenant_id = $1 AND i2.company_id = $2 AND i2.quantity >= 0
+                 GROUP BY i2.product_id
+                 HAVING COALESCE(sum(i2.quantity - i2.reserved_qty - i2.allocated_qty - i2.blocked_qty - i2.quality_hold_qty), 0) <= COALESCE(max(p2.reorder_point), 0)
+               ) low)::int AS low_stock_lines,
               count(DISTINCT pb.id) FILTER (WHERE pb.expiry_date IS NOT NULL AND pb.expiry_date <= now() + interval '30 days')::int AS expiring_batches,
               count(*) FILTER (WHERE i.quantity < 0)::int AS negative_lines
        FROM inventory i
@@ -79,7 +85,108 @@ export async function commandCenter(client: pg.PoolClient, ctx: Ctx) {
      ORDER BY CASE severity WHEN 'CRITICAL' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END, created_at DESC LIMIT 25`,
     [ctx.tenantId, ctx.companyId]
   );
-  return { ...core, alerts: toCamelRows(alerts.rows) };
+  const today = await client.query(
+    `SELECT movement_type, count(*)::int AS n,
+            COALESCE(sum(abs(quantity)), 0)::numeric AS qty
+     FROM inventory_movements
+     WHERE tenant_id = $1 AND company_id = $2
+       AND created_at >= now() - interval '1 day'
+     GROUP BY movement_type
+     ORDER BY n DESC`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  const todayTotal = today.rows.reduce((acc: number, r: { n: number }) => acc + Number(r.n), 0);
+  return { ...core, today: { total: todayTotal, byType: toCamelRows(today.rows) }, alerts: toCamelRows(alerts.rows) };
+}
+
+// ============================================================
+// Stock ageing analysis (buckets + dead / slow-moving stock)
+// ============================================================
+export async function stockAgeing(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `WITH line_age AS (
+       SELECT i.id, i.product_id, p.code AS product_code, p.name AS product_name, p.type AS product_type,
+              i.warehouse_id, w.code AS warehouse_code, i.bin_id, b.code AS bin_code,
+              i.batch_id, pb.batch_no, i.quantity, i.reserved_qty, i.avg_cost,
+              (i.quantity * i.avg_cost) AS stock_value,
+              COALESCE((
+                SELECT MAX(m.created_at) FROM inventory_movements m
+                WHERE m.product_id = i.product_id
+                  AND m.warehouse_id IS NOT DISTINCT FROM i.warehouse_id
+                  AND m.bin_id IS NOT DISTINCT FROM i.bin_id
+                  AND m.movement_type IN ('RECEIPT','TRANSFER_IN','PRODUCTION_OUTPUT','RETURN_IN','PUT_AWAY')
+              ), pb.received_at, i.created_at) AS last_inbound_at,
+              (SELECT MAX(m2.created_at) FROM inventory_movements m2
+                WHERE m2.product_id = i.product_id
+                  AND m2.warehouse_id IS NOT DISTINCT FROM i.warehouse_id
+                  AND m2.bin_id IS NOT DISTINCT FROM i.bin_id) AS last_movement_at
+       FROM inventory i
+       JOIN products p ON p.id = i.product_id
+       JOIN warehouses w ON w.id = i.warehouse_id
+       LEFT JOIN warehouse_bins b ON b.id = i.bin_id
+       LEFT JOIN product_batches pb ON pb.id = i.batch_id
+       WHERE i.tenant_id = $1 AND i.company_id = $2 AND i.quantity > 0
+     ),
+     buckets AS (
+       SELECT
+         CASE
+           WHEN last_inbound_at >= now() - interval '30 days' THEN '0-30d'
+           WHEN last_inbound_at >= now() - interval '60 days' THEN '31-60d'
+           WHEN last_inbound_at >= now() - interval '90 days' THEN '61-90d'
+           WHEN last_inbound_at >= now() - interval '180 days' THEN '91-180d'
+           ELSE '180d+'
+         END AS bucket,
+         count(*)::int AS lines,
+         count(DISTINCT product_id)::int AS products,
+         COALESCE(sum(quantity), 0)::numeric AS qty,
+         COALESCE(sum(stock_value), 0)::numeric(18,2) AS value
+       FROM line_age
+       GROUP BY 1
+     )
+     SELECT bucket, lines, products, qty, value FROM buckets`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  const bucketOrder = ['0-30d', '31-60d', '61-90d', '91-180d', '180d+'];
+  const buckets = toCamelRows(res.rows).sort(
+    (a: Record<string, unknown>, b: Record<string, unknown>) => bucketOrder.indexOf(String(a.bucket)) - bucketOrder.indexOf(String(b.bucket))
+  );
+  const deadStock = await client.query(
+    `SELECT i.id, i.product_id, p.code AS product_code, p.name AS product_name, p.type AS product_type,
+            w.code AS warehouse_code, b.code AS bin_code, pb.batch_no,
+            i.quantity, i.reserved_qty, i.avg_cost, (i.quantity * i.avg_cost) AS stock_value,
+            TO_CHAR((SELECT MAX(m.created_at) FROM inventory_movements m
+                     WHERE m.product_id = i.product_id
+                       AND m.warehouse_id IS NOT DISTINCT FROM i.warehouse_id
+                       AND m.bin_id IS NOT DISTINCT FROM i.bin_id), 'YYYY-MM-DD') AS last_movement_at
+     FROM inventory i
+     JOIN products p ON p.id = i.product_id
+     JOIN warehouses w ON w.id = i.warehouse_id
+     LEFT JOIN warehouse_bins b ON b.id = i.bin_id
+     LEFT JOIN product_batches pb ON pb.id = i.batch_id
+     WHERE i.tenant_id = $1 AND i.company_id = $2 AND i.quantity > 0
+       AND NOT EXISTS (
+         SELECT 1 FROM inventory_movements m
+         WHERE m.product_id = i.product_id
+           AND m.warehouse_id IS NOT DISTINCT FROM i.warehouse_id
+           AND m.bin_id IS NOT DISTINCT FROM i.bin_id
+           AND m.created_at >= now() - interval '180 days'
+       )
+     ORDER BY (SELECT MAX(m.created_at) FROM inventory_movements m
+               WHERE m.product_id = i.product_id
+                 AND m.warehouse_id IS NOT DISTINCT FROM i.warehouse_id
+                 AND m.bin_id IS NOT DISTINCT FROM i.bin_id) ASC NULLS FIRST
+     LIMIT 100`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  const totalValue = buckets.reduce((acc: number, x: Record<string, unknown>) => acc + Number(x.value), 0);
+  const totalQty = buckets.reduce((acc: number, x: Record<string, unknown>) => acc + Number(x.qty), 0);
+  return {
+    buckets,
+    totalValue,
+    totalQty,
+    deadStock: toCamelRows(deadStock.rows),
+    generatedAt: new Date().toISOString(),
+  };
 }
 
 // ============================================================
@@ -418,7 +525,7 @@ const PRODUCT_WAREHOUSE_TYPES: Record<string, string[]> = {
   REAM: ['FINISHED_GOODS'],
   SHEET: ['FINISHED_GOODS'],
   FINISHED_GOODS: ['FINISHED_GOODS'],
-  PACKAGING: ['RAW_MATERIAL', 'GENERAL'],
+  PACKAGING: ['PACKAGING', 'GENERAL'],
   CONSUMABLE: ['CONSUMABLES', 'GENERAL'],
   SPARE_PART: ['SPARE_PARTS', 'GENERAL'],
   SECURITY_ITEM: ['SECURE'],
@@ -453,15 +560,15 @@ export async function putawayRecommendations(
      LEFT JOIN warehouse_shelves s ON s.id = b.shelf_id
      LEFT JOIN warehouse_racks r ON r.id = s.rack_id
      LEFT JOIN warehouse_zones z ON z.id = r.zone_id
-     LEFT JOIN inventory i ON i.bin_id = b.id AND i.tenant_id = $2 AND i.company_id = $3
-     WHERE w.tenant_id = $2 AND w.company_id = $3 AND w.type = ANY($4)
+     LEFT JOIN inventory i ON i.bin_id = b.id AND i.tenant_id = $1 AND i.company_id = $2
+     WHERE w.tenant_id = $1 AND w.company_id = $2 AND w.type = ANY($3)
        AND COALESCE(b.is_blocked, false) = false
        AND COALESCE(r.is_blocked, false) = false
        AND COALESCE(s.is_blocked, false) = false
        AND COALESCE(z.is_blocked, false) = false
      GROUP BY b.id, w.code, w.name, z.code, r.code, s.code
      ORDER BY b.picking_priority ASC, b.code`,
-    [productId, ctx.tenantId, companyId, whTypes]
+    [ctx.tenantId, companyId, whTypes]
   );
   const candidates = toCamelRows(bins.rows).map((b: any) => {
     const capacity = Number(b.capacityQty ?? 0);
@@ -503,10 +610,10 @@ export async function putawayRecommendations(
     `SELECT w.id, w.code, w.name, w.type, COALESCE(w.capacity_qty, 0)::numeric AS capacity_qty,
             COALESCE(sum(i.quantity), 0)::numeric AS used_qty
      FROM warehouses w
-     LEFT JOIN inventory i ON i.warehouse_id = w.id AND i.tenant_id = $2 AND i.company_id = $3
-     WHERE w.tenant_id = $2 AND w.company_id = $3 AND w.type = ANY($4)
+     LEFT JOIN inventory i ON i.warehouse_id = w.id AND i.tenant_id = $1 AND i.company_id = $2
+     WHERE w.tenant_id = $1 AND w.company_id = $2 AND w.type = ANY($3)
      GROUP BY w.id ORDER BY w.code`,
-    [productId, ctx.tenantId, companyId, whTypes]
+    [ctx.tenantId, companyId, whTypes]
   );
   return {
     product: { id: Number(product.id), code: product.code, name: product.name, type: product.type },

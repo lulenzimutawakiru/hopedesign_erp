@@ -1,0 +1,1674 @@
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { api, fmtDate } from '../api';
+import { useAuth, can } from '../auth';
+import { navigate } from '../router';
+import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
+import { pick, titleCase } from '../helpers';
+
+type Rec = Record<string, unknown>;
+
+function parseCom(path: string): { view: string; id: string | null } {
+  const parts = path.split('/').filter(Boolean);
+  if (parts[0] !== 'communication') return { view: 'center', id: null };
+  return { view: parts[1] ?? 'center', id: parts[2] ?? null };
+}
+
+function prioTone(p: unknown): string {
+  const raw = String(p ?? '').toUpperCase();
+  if (raw === 'CRITICAL') return 'badge-critical';
+  if (raw === 'URGENT') return 'badge-red';
+  if (raw === 'HIGH') return 'badge-amber';
+  if (raw === 'NORMAL') return 'badge-blue';
+  return 'badge-neutral';
+}
+
+function prioBadge(p: unknown) {
+  const raw = String(p ?? '').toUpperCase();
+  if (!raw) return null;
+  const icon = raw === 'CRITICAL' ? '\u2715' : raw === 'URGENT' || raw === 'HIGH' ? '!' : '\u25CF';
+  return (
+    <span className={`badge ${prioTone(p)}`}>
+      <span className="badge-icon" aria-hidden>{icon}</span>
+      {raw}
+    </span>
+  );
+}
+
+function goTarget(t: unknown): string | null {
+  const s = String(t ?? '').trim();
+  if (!s) return null;
+  if (s.startsWith('#/')) return s.slice(1);
+  if (s.startsWith('#')) return s.slice(1);
+  return s.startsWith('/') ? s : `/${s}`;
+}
+
+function fullName(r: Rec): string {
+  const f = pick<string>(r, 'firstName', 'first_name');
+  const l = pick<string>(r, 'lastName', 'last_name');
+  return [f, l].filter(Boolean).join(' ') || String(pick(r, 'username') ?? 'User');
+}
+
+function avatarText(r: Rec): string {
+  const f = String(pick(r, 'firstName', 'first_name') ?? '');
+  const l = String(pick(r, 'lastName', 'last_name') ?? '');
+  if (f || l) return ((f[0] ?? '') + (l[0] ?? '')).toUpperCase() || '?';
+  const t = String(pick(r, 'title') ?? '').trim();
+  const words = t.split(/\s+/).filter(Boolean);
+  return words.slice(0, 2).map((w) => w[0] ?? '').join('').toUpperCase() || '?';
+}
+
+function trunc(s: unknown, n = 110): string {
+  const t = String(s ?? '');
+  return t.length > n ? t.slice(0, n) + '\u2026' : t;
+}
+
+function ComTabs({ active }: { active: string }) {
+  const { user } = useAuth();
+  const tabs: { id: string; label: string; href: string; perm: string }[] = [
+    { id: 'center', label: 'Command Center', href: '/communication', perm: 'communication.command.view' },
+    { id: 'messages', label: 'Messages', href: '/communication/messages', perm: 'communication.messages.view' },
+    { id: 'notifications', label: 'Notifications', href: '/communication/notifications', perm: 'communication.notifications.view' },
+    { id: 'email', label: 'Email', href: '/communication/email', perm: 'communication.emails.view' },
+    { id: 'announcements', label: 'Announcements', href: '/communication/announcements', perm: 'communication.announcements.view' },
+    { id: 'templates', label: 'Templates', href: '/communication/templates', perm: 'communication.templates.view' },
+    { id: 'deliveries', label: 'Delivery Logs', href: '/communication/deliveries', perm: 'communication.delivery_logs.view' },
+    { id: 'settings', label: 'Settings', href: '/communication/settings', perm: 'communication.settings.manage' },
+  ].filter((t) => can(user, t.perm));
+  return (
+    <div className="com-tabs">
+      {tabs.map((t) => (
+        <button key={t.id} className={'tab' + (t.id === active ? ' active' : '')} onClick={() => navigate(t.href)}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ComHead({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
+  return (
+    <header className="page-head">
+      <div>
+        <p className="mod-kicker" data-mod="com">Communication</p>
+        <h1>{title}</h1>
+        {subtitle ? <p className="muted">{subtitle}</p> : null}
+      </div>
+      {actions ? <div className="head-actions">{actions}</div> : null}
+    </header>
+  );
+}
+
+function NotifRow({ n, onChanged, showRead }: { n: Rec; onChanged?: () => void; showRead?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const readAt = pick(n, 'readAt', 'read_at');
+  const unread = !readAt;
+  const ack = pick(n, 'acknowledgedAt', 'acknowledged_at');
+  const actionLabel = pick<string>(n, 'actionLabel', 'action_label');
+  const actionTarget = pick(n, 'actionTarget', 'action_target', 'link');
+  const actionRequired = !!pick(n, 'actionRequired', 'action_required');
+  const run = async (path: string, method: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api(`/api/ops/communication${path}`, { method });
+      onChanged?.();
+    } catch {
+      /* background actions stay quiet */
+    } finally {
+      setBusy(false);
+    }
+  };
+  const act = () => {
+    if (unread) void run(`/notifications/${String(n.id)}/read`, 'PATCH');
+    const target = goTarget(actionTarget);
+    if (target) navigate(target);
+  };
+  const ackPending = actionRequired && !ack;
+  return (
+    <div className={'com-notif' + (unread ? ' com-notif-unread' : '')}>
+      <div className="com-notif-top">
+        <span className="com-notif-title">{String(pick(n, 'title') ?? 'Notification')}</span>
+        {prioBadge(pick(n, 'priority'))}
+      </div>
+      {pick(n, 'body') ? <p className="com-notif-body">{String(pick(n, 'body'))}</p> : null}
+      <div className="com-notif-meta">
+        <span>{fmtDate(pick(n, 'createdAt', 'created_at'))}</span>
+        {pick(n, 'type') ? <span>{titleCase(String(pick(n, 'type')))}</span> : null}
+        {actionRequired ? <span className="com-chip-required">Action required</span> : null}
+      </div>
+      {Boolean(actionLabel || actionTarget) && (
+        <div className="com-notif-actions">
+          {actionLabel ? <button className="btn btn-sm" onClick={act}>{actionLabel}</button> : null}
+          {ackPending ? (
+            <button className="btn btn-sm btn-ghost" onClick={() => void run(`/notifications/${String(n.id)}/acknowledge`, 'PATCH')}>Acknowledge</button>
+          ) : null}
+          {showRead && unread ? (
+            <button className="btn btn-sm btn-ghost" onClick={() => void run(`/notifications/${String(n.id)}/read`, 'PATCH')}>Mark read</button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommandCenter() {
+  const { user } = useAuth();
+  const [data, setData] = useState<Rec | null>(null);
+  const [alerts, setAlerts] = useState<Rec[]>([]);
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    try {
+      const [cmd, ntf] = await Promise.all([
+        api<{ data: Rec }>('/api/ops/communication/command'),
+        api<{ data: { rows: Rec[] } }>('/api/ops/communication/notifications?pageSize=8&unread=true'),
+      ]);
+      setData(cmd.data);
+      setAlerts(ntf.data.rows ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Command center failed');
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  if (error && !data) return <ErrorBanner error={error} />;
+  if (!data) return <PageLoader label="Loading command center…" />;
+  const kpis = (data.kpis ?? {}) as Rec;
+  const cards: { label: string; value: number; href: string; icon: string }[] = [
+    { label: 'Urgent notifications', value: Number(kpis.urgentNotifications ?? 0), href: '/communication/notifications', icon: '\u26A0' },
+    { label: 'Unread messages', value: Number(kpis.unreadMessages ?? 0), href: '/communication/messages', icon: '\u{1F4AC}' },
+    { label: 'Active conversations', value: Number(kpis.activeConversations ?? 0), href: '/communication/messages', icon: '\u{1F465}' },
+    { label: 'Pending approvals', value: Number(kpis.pendingApprovals ?? 0), href: '/approvals', icon: '\u2705' },
+    { label: 'Pending deliveries', value: Number(kpis.pendingDeliveries ?? 0), href: '/communication/deliveries', icon: '\u{1F4E8}' },
+  ];
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const name = user ? [user.first_name, user.last_name].filter(Boolean).join(' ') : 'Factory Manager';
+  const quick: { label: string; href: string; perm?: string; desc: string }[] = [
+    { label: 'Start a conversation', href: '/communication/messages', perm: 'communication.messages.send', desc: 'Chat with the team around a job' },
+    { label: 'Compose email', href: '/communication/email', perm: 'communication.emails.send', desc: 'Send from a template or from scratch' },
+    { label: 'Publish announcement', href: '/communication/announcements', perm: 'communication.announcements.create', desc: 'Reach the whole factory' },
+    { label: 'Review approvals', href: '/approvals', desc: 'Clear your decision queue' },
+    { label: 'Open My Work', href: '/work', desc: 'Tasks, approvals and action items' },
+  ].filter((q) => !q.perm || can(user, q.perm));
+  return (
+    <div className="page">
+      <ComHead
+        title={`${greet}, ${name}`}
+        subtitle="HOPE DESIGN communication center — emails, messages, notifications and approvals in one place."
+      />
+      <ComTabs active="center" />
+      <div className="kpi-grid">
+        {cards.map((k) => (
+          <button key={k.label} className="kpi-card" onClick={() => navigate(k.href)}>
+            <span className="kpi-label">{k.label}</span>
+            <span className="kpi-value">{k.value}</span>
+            <span className="kpi-sub" aria-hidden>{k.icon} Open center</span>
+          </button>
+        ))}
+      </div>
+      <div className="grid-2">
+        <section className="card card-pad">
+          <div className="card-head">
+            <h3>Priority alerts</h3>
+            <span className="muted">{alerts.length} unread</span>
+          </div>
+          {alerts.length === 0 ? (
+            <div className="empty-state">
+              <h3>You're all caught up</h3>
+              <p>No unread notifications right now.</p>
+            </div>
+          ) : (
+            <div className="com-list">
+              {alerts.map((n) => <NotifRow key={String(n.id)} n={n} onChanged={load} />)}
+            </div>
+          )}
+        </section>
+        <section className="card card-pad">
+          <div className="card-head"><h3>Quick actions</h3></div>
+          <div className="stack">
+            {quick.map((q) => (
+              <button key={q.label} className="com-quick" onClick={() => navigate(q.href)}>
+                <span className="com-quick-label">{q.label}</span>
+                <span className="muted">{q.desc}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+function convoName(cv: Rec, peers: Map<number, Rec>, selfId: number): string {
+  const title = pick<string>(cv, 'title');
+  if (title && title.trim()) return title;
+  const kind = String(pick(cv, 'kind') ?? '');
+  const others = [...peers.entries()].filter(([id]) => id !== selfId).map(([, p]) => p);
+  if (kind === 'DIRECT' && others.length > 0) return fullName(others[0]);
+  if (others.length > 0) return others.slice(0, 3).map(fullName).join(', ');
+  return kind === 'CHANNEL' ? 'Channel' : 'Conversation';
+}
+
+function convoAvatar(cv: Rec, peers: Map<number, Rec>, selfId: number): string {
+  const title = pick<string>(cv, 'title');
+  const words = (title && title.trim() ? title.trim() : convoName(cv, peers, selfId)).split(/\s+/).filter(Boolean);
+  return words.slice(0, 2).map((w) => w[0] ?? '').join('').toUpperCase() || '#';
+}
+
+function PeoplePicker({ selected, onChange }: { selected: Rec[]; onChange: (p: Rec[]) => void }) {
+  const [q, setQ] = useState('');
+  const [people, setPeople] = useState<Rec[]>([]);
+  useEffect(() => {
+    let live = true;
+    const t = window.setTimeout(() => {
+      if (!q.trim()) {
+        setPeople([]);
+        return;
+      }
+      api<{ data: Rec[] }>(`/api/ops/communication/people?q=${encodeURIComponent(q.trim())}`)
+        .then((r) => { if (live) setPeople(r.data ?? []); })
+        .catch(() => { if (live) setPeople([]); });
+    }, 250);
+    return () => { live = false; window.clearTimeout(t); };
+  }, [q]);
+  const toggle = (p: Rec) => {
+    if (selected.some((s) => Number(s.id) === Number(p.id))) {
+      onChange(selected.filter((s) => Number(s.id) !== Number(p.id)));
+    } else {
+      onChange([...selected, p]);
+    }
+  };
+  return (
+    <div className="com-picker">
+      <div className="com-picker-chips">
+        {selected.map((p) => (
+          <button key={String(p.id)} className="chip chip-active" type="button" onClick={() => toggle(p)}>
+            {fullName(p)} <span className="chip-x" aria-hidden>&times;</span>
+          </button>
+        ))}
+        <input
+          className="search-input"
+          placeholder="Search people by name, username or email…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+      {q.trim() ? (
+        <div className="com-picker-results">
+          {people.length === 0 ? (
+            <p className="muted">No matches</p>
+          ) : (
+            people.map((p) => (
+              <button
+                key={String(p.id)}
+                className={'com-picker-row' + (selected.some((s) => Number(s.id) === Number(p.id)) ? ' com-picker-row-on' : '')}
+                type="button"
+                onClick={() => toggle(p)}
+              >
+                <span className="com-avatar com-avatar-sm">{avatarText(p)}</span>
+                <span className="com-picker-name">
+                  <span>{fullName(p)}</span>
+                  <span className="muted">{[pick(p, 'jobTitle'), pick(p, 'departmentName')].filter(Boolean).join(' · ')}</span>
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ComposeConvo({ onClose, onCreated }: { onClose: () => void; onCreated: (id: number) => void }) {
+  const [kind, setKind] = useState('DIRECT');
+  const [title, setTitle] = useState('');
+  const [channelId, setChannelId] = useState('');
+  const [channels, setChannels] = useState<Rec[]>([]);
+  const [people, setPeople] = useState<Rec[]>([]);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (kind !== 'CHANNEL') return;
+    let live = true;
+    api<{ data: Rec[] }>('/api/ops/communication/channels')
+      .then((r) => { if (live) setChannels(r.data ?? []); })
+      .catch(() => { if (live) setChannels([]); });
+    return () => { live = false; };
+  }, [kind]);
+  const save = async () => {
+    if (busy) return;
+    setErr('');
+    setBusy(true);
+    try {
+      const payload: Rec = { kind };
+      if (kind === 'DIRECT') {
+        if (people.length !== 1) throw new Error('Select exactly one person for a direct message');
+        payload.userIds = people.map((p) => Number(p.id));
+      } else if (kind === 'GROUP') {
+        if (!title.trim()) throw new Error('Give the conversation a name');
+        payload.title = title.trim();
+        payload.userIds = people.map((p) => Number(p.id));
+      } else {
+        if (!channelId) throw new Error('Choose a channel');
+        payload.channelId = Number(channelId);
+      }
+      const r = await api<{ data: Rec }>('/api/ops/communication/conversations', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      onCreated(Number((r.data as Rec).id));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not start the conversation');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title="Start a conversation"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>
+            {busy ? 'Creating…' : 'Create conversation'}
+          </button>
+        </>
+      }
+    >
+      {err ? <ErrorBanner error={err} /> : null}
+      <div className="form-grid">
+        <div className="field">
+          <label>Type</label>
+          <select value={kind} onChange={(e) => setKind(e.target.value)}>
+            <option value="DIRECT">Direct message</option>
+            <option value="GROUP">Group message</option>
+            <option value="CHANNEL">Channel</option>
+          </select>
+        </div>
+        {kind === 'CHANNEL' ? (
+          <div className="field">
+            <label>Channel</label>
+            <select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
+              <option value="">Select a channel…</option>
+              {channels.map((ch) => (
+                <option key={String(ch.id)} value={String(ch.id)}>
+                  {String(pick(ch, 'name') ?? '')}{ch.isDefault ? ' (default)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+        {kind === 'GROUP' ? (
+          <div className="field">
+            <label>Name</label>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Production team" />
+          </div>
+        ) : null}
+      </div>
+      {kind !== 'CHANNEL' ? (
+        <div className="field">
+          <label>{kind === 'DIRECT' ? 'Person' : 'Members'}</label>
+          <PeoplePicker selected={people} onChange={setPeople} />
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
+function ConversationRow({ cv, peers, active, onOpen }: { cv: Rec; peers: Map<number, Rec>; active: boolean; onOpen: () => void }) {
+  const { user } = useAuth();
+  const selfId = Number(user?.id ?? 0);
+  const unread = Number(pick(cv, 'unreadCount', 'unread_count') ?? 0);
+  const last = String(pick(cv, 'lastMessage', 'last_message') ?? '');
+  return (
+    <button className={'com-conv' + (active ? ' com-conv-active' : '')} type="button" onClick={onOpen}>
+      <span className="com-avatar">{convoAvatar(cv, peers, selfId)}</span>
+      <span className="com-conv-main">
+        <span className="com-conv-top">
+          <span className="com-conv-name">{convoName(cv, peers, selfId)}</span>
+          <span className="com-conv-date">{fmtDate(pick(cv, 'lastMessageAt', 'last_message_at', 'updatedAt', 'updated_at'))}</span>
+        </span>
+        <span className="com-conv-last">{last ? trunc(last, 70) : 'No messages yet'}</span>
+      </span>
+      {unread > 0 ? <span className="com-unread">{unread > 99 ? '99+' : unread}</span> : null}
+    </button>
+  );
+}
+
+function MessageRow({ m, mine }: { m: Rec; mine: boolean }) {
+  const reactions = Array.isArray(m.reactions) ? (m.reactions as unknown[]) : [];
+  return (
+    <div className={'com-msg' + (mine ? ' com-msg-mine' : '')}>
+      {!mine ? <span className="com-avatar com-avatar-sm">{avatarText(m)}</span> : null}
+      <div className="com-msg-bubble">
+        {!mine ? <span className="com-msg-name">{fullName(m)}</span> : null}
+        <span className="com-msg-body">{String(m.body ?? '')}</span>
+        <span className="com-msg-meta">
+          <span>{fmtDate(m.createdAt ?? m.created_at)}</span>
+          {reactions.length > 0 ? <span aria-label="reactions">{reactions.map((r) => String(r)).join(' ')}</span> : null}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ThreadPane({ convId, onBack, onChanged }: { convId: number; onBack: () => void; onChanged: () => void }) {
+  const { user } = useAuth();
+  const selfId = Number(user?.id ?? 0);
+  const [conv, setConv] = useState<Rec | null>(null);
+  const [msgs, setMsgs] = useState<Rec[]>([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const load = useCallback(async () => {
+    try {
+      const [c, m] = await Promise.all([
+        api<{ data: Rec }>(`/api/ops/communication/conversations/${convId}`),
+        api<{ data: Rec[] }>(`/api/ops/communication/conversations/${convId}/messages?pageSize=100`),
+      ]);
+      setConv(c.data);
+      setMsgs(m.data ?? []);
+      setErr('');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not load conversation');
+    }
+  }, [convId]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void api(`/api/ops/communication/conversations/${convId}/read`, { method: 'POST' }).catch(() => undefined);
+  }, [convId, msgs.length]);
+  useEffect(() => {
+    const t = window.setInterval(() => { void load(); }, 8000);
+    return () => window.clearInterval(t);
+  }, [load]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [msgs]);
+  const send = async () => {
+    const body = input.trim();
+    if (!body || busy) return;
+    setBusy(true);
+    try {
+      await api(`/api/ops/communication/conversations/${convId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ body }),
+      });
+      setInput('');
+      await load();
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not send message');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const viewMsgs = [...msgs].reverse();
+  return (
+    <div className="com-thread">
+      <div className="com-thread-head">
+        <button className="btn btn-sm btn-ghost" type="button" onClick={onBack}>‹ Back</button>
+        <div>
+          <h3>{conv ? convoName(conv, new Map(), selfId) : 'Conversation'}</h3>
+          <span className="muted">{conv ? String(conv.kind ?? '') : ''}</span>
+        </div>
+      </div>
+      {err ? <ErrorBanner error={err} /> : null}
+      <div className="com-thread-msgs">
+        {viewMsgs.length === 0 ? (
+          <div className="empty-state">
+            <h3>No messages yet</h3>
+            <p>Say hello to start the conversation.</p>
+          </div>
+        ) : (
+          viewMsgs.map((m) => (
+            <MessageRow key={String(m.id)} m={m} mine={Number(m.senderId ?? m.sender_id) === selfId} />
+          ))
+        )}
+        <div ref={endRef} />
+      </div>
+      <div className="com-thread-input">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
+          placeholder="Type a message… (Enter to send)"
+        />
+        <button className="btn btn-primary" type="button" onClick={() => void send()} disabled={busy || !input.trim()}>Send</button>
+      </div>
+    </div>
+  );
+}
+
+function MessagesView({ initialId }: { initialId: string | null }) {
+  const { user } = useAuth();
+  const [convos, setConvos] = useState<Rec[]>([]);
+  const [peers, setPeers] = useState<Map<number, Rec>>(new Map());
+  const [kind, setKind] = useState('');
+  const [search, setSearch] = useState('');
+  const [hits, setHits] = useState<Rec[]>([]);
+  const [activeId, setActiveId] = useState<number | null>(initialId ? Number(initialId) : null);
+  const [compose, setCompose] = useState(false);
+  const [error, setError] = useState('');
+  const loadConvos = useCallback(async () => {
+    try {
+      const qs = kind ? `?kind=${kind}` : '';
+      const r = await api<{ data: Rec[] }>(`/api/ops/communication/conversations${qs}`);
+      const rows = r.data ?? [];
+      setConvos(rows);
+      const unnamed = rows.filter((cv) => !pick<string>(cv, 'title')).slice(0, 10);
+      const m = new Map<number, Rec>();
+      await Promise.all(unnamed.map(async (cv) => {
+        try {
+          const d = await api<{ data: Rec }>(`/api/ops/communication/conversations/${String(cv.id)}`);
+          const members = Array.isArray(d.data.members) ? (d.data.members as Rec[]) : [];
+          for (const mb of members) m.set(Number(mb.userId ?? mb.user_id), mb);
+        } catch {
+          /* skip untitled conversation */
+        }
+      }));
+      setPeers(m);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load conversations');
+    }
+  }, [kind]);
+  useEffect(() => { void loadConvos(); }, [loadConvos]);
+  useEffect(() => {
+    if (!search.trim()) {
+      setHits([]);
+      return;
+    }
+    let live = true;
+    const t = window.setTimeout(() => {
+      api<{ data: Rec[] }>(`/api/ops/communication/messages/search?q=${encodeURIComponent(search.trim())}`)
+        .then((r) => { if (live) setHits(r.data ?? []); })
+        .catch(() => { if (live) setHits([]); });
+    }, 250);
+    return () => { live = false; window.clearTimeout(t); };
+  }, [search]);
+  const openId = (id: number) => {
+    setActiveId(id);
+    navigate(`/communication/messages/${id}`);
+  };
+  return (
+    <div className="page">
+      <ComHead
+        title="Messages"
+        subtitle="Chat with your team around jobs, machines and decisions."
+        actions={
+          can(user, 'communication.messages.send') ? (
+            <button className="btn btn-primary" type="button" onClick={() => setCompose(true)}>+ Start conversation</button>
+          ) : undefined
+        }
+      />
+      <ComTabs active="messages" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="com-msg-layout">
+        <aside className="com-conv-pane">
+          <div className="com-conv-tools">
+            <input className="search-input" placeholder="Search messages…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Filter conversations">
+              <option value="">All</option>
+              <option value="DIRECT">Direct</option>
+              <option value="GROUP">Groups</option>
+              <option value="CHANNEL">Channels</option>
+            </select>
+          </div>
+          {search.trim() ? (
+            <div className="stack">
+              {hits.length === 0 ? (
+                <p className="muted">No message matches</p>
+              ) : (
+                hits.map((h) => (
+                  <button key={String(h.id)} className="com-search-hit" type="button" onClick={() => openId(Number(h.conversationId ?? h.conversation_id))}>
+                    <span className="com-conv-name">{String(pick(h, 'conversationTitle', 'conversation_title') ?? 'Message')}</span>
+                    <span className="muted">{trunc(pick(h, 'body'), 90)}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          ) : (
+            <div className="com-conv-list">
+              {convos.length === 0 ? (
+                <div className="empty-state">
+                  <h3>No conversations yet</h3>
+                  <p>Start a direct message or a group chat to get going.</p>
+                </div>
+              ) : (
+                convos.map((cv) => (
+                  <ConversationRow key={String(cv.id)} cv={cv} peers={peers} active={Number(cv.id) === activeId} onOpen={() => openId(Number(cv.id))} />
+                ))
+              )}
+            </div>
+          )}
+        </aside>
+        <section className="com-thread-pane">
+          {activeId ? (
+            <ThreadPane convId={activeId} onBack={() => { setActiveId(null); navigate('/communication/messages'); }} onChanged={() => void loadConvos()} />
+          ) : (
+            <div className="empty-state">
+              <h3>Select a conversation</h3>
+              <p>Pick a chat from the list, or start a new one.</p>
+            </div>
+          )}
+        </section>
+      </div>
+      {compose ? (
+        <ComposeConvo onClose={() => setCompose(false)} onCreated={(id) => { setCompose(false); openId(id); }} />
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+function NotificationsView() {
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [prio, setPrio] = useState('');
+  const [onlyUnread, setOnlyUnread] = useState(true);
+  const [error, setError] = useState('');
+  const pageSize = 20;
+  const load = useCallback(async () => {
+    try {
+      const qs = new URLSearchParams();
+      qs.set('page', String(page));
+      qs.set('pageSize', String(pageSize));
+      if (prio) qs.set('priority', prio);
+      if (onlyUnread) qs.set('unread', 'true');
+      const r = await api<{ data: { rows: Rec[]; pagination: { page: number; pageSize: number; total: number } } }>(
+        `/api/ops/communication/notifications?${qs.toString()}`
+      );
+      setRows(r.data.rows ?? []);
+      setTotal(r.data.pagination?.total ?? 0);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load notifications');
+    }
+  }, [page, prio, onlyUnread, pageSize]);
+  useEffect(() => { void load(); }, [load]);
+  const markAll = async () => {
+    try {
+      await api('/api/ops/communication/notifications/read-all', { method: 'POST' });
+      void load();
+    } catch {
+      /* quiet */
+    }
+  };
+  return (
+    <div className="page">
+      <ComHead
+        title="Notifications"
+        subtitle="Your attention list — approvals, alerts and actions."
+        actions={<button className="btn btn-ghost" type="button" onClick={() => void markAll()}>Mark all read</button>}
+      />
+      <ComTabs active="notifications" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="filter-bar">
+        <select value={prio} onChange={(e) => { setPrio(e.target.value); setPage(1); }} aria-label="Priority filter">
+          <option value="">All priorities</option>
+          <option value="CRITICAL">Critical</option>
+          <option value="URGENT">Urgent</option>
+          <option value="HIGH">High</option>
+          <option value="NORMAL">Normal</option>
+          <option value="LOW">Low</option>
+        </select>
+        <label className="filter-chip">
+          <input type="checkbox" checked={onlyUnread} onChange={(e) => { setOnlyUnread(e.target.checked); setPage(1); }} />
+          Unread only
+        </label>
+      </div>
+      <div className="com-list">
+        {rows.length === 0 ? (
+          <div className="empty-state">
+            <h3>All clear</h3>
+            <p>No notifications match this view.</p>
+          </div>
+        ) : (
+          rows.map((n) => <NotifRow key={String(n.id)} n={n} onChanged={() => void load()} showRead />)
+        )}
+      </div>
+      <Pager page={page} pageSize={pageSize} total={total} onPage={setPage} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Email
+// ---------------------------------------------------------------------------
+function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [to, setTo] = useState('');
+  const [cc, setCc] = useState('');
+  const [bcc, setBcc] = useState('');
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [templateCode, setTemplateCode] = useState('');
+  const [templates, setTemplates] = useState<Rec[]>([]);
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api<{ data: Rec[] }>('/api/ops/communication/templates')
+      .then((r) => setTemplates(r.data ?? []))
+      .catch(() => setTemplates([]));
+  }, []);
+  const applyTemplate = (code: string) => {
+    setTemplateCode(code);
+    const t = templates.find((x) => String(x.code) === code);
+    if (t) {
+      setSubject(String(pick(t, 'subject') ?? ''));
+      setBody(String(pick(t, 'body') ?? ''));
+    }
+  };
+  const split = (s: string) => s.split(/[,\n;]/).map((x) => x.trim()).filter(Boolean);
+  const save = async (send: boolean) => {
+    if (busy) return;
+    setErr('');
+    setBusy(true);
+    try {
+      const payload: Rec = {
+        subject: subject.trim(),
+        body,
+        to: split(to),
+        cc: split(cc),
+        bcc: split(bcc),
+        status: send ? 'SENT' : 'DRAFT',
+        templateCode: templateCode || undefined,
+      };
+      if (scheduledAt) payload.scheduledAt = scheduledAt;
+      const r = await api<{ data: Rec }>('/api/ops/communication/emails', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      if (send) await api(`/api/ops/communication/emails/${String((r.data as Rec).id)}/send`, { method: 'POST' });
+      onSaved();
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not save email');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title="Compose email"
+      onClose={onClose}
+      wide
+      footer={
+        <>
+          <button className="btn btn-ghost" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" type="button" onClick={() => void save(false)} disabled={busy}>Save draft</button>
+          <button className="btn btn-success" type="button" onClick={() => void save(true)} disabled={busy}>Send</button>
+        </>
+      }
+    >
+      {err ? <ErrorBanner error={err} /> : null}
+      <div className="form-grid">
+        <div className="field">
+          <label>Template</label>
+          <select value={templateCode} onChange={(e) => applyTemplate(e.target.value)}>
+            <option value="">Start from scratch</option>
+            {templates.map((t) => (
+              <option key={String(t.id)} value={String(t.code)}>{String(t.name ?? t.code)}</option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Subject</label>
+          <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Email subject" />
+        </div>
+        <div className="field">
+          <label>To</label>
+          <input value={to} onChange={(e) => setTo(e.target.value)} placeholder="one@example.com, two@example.com" />
+        </div>
+        <div className="field">
+          <label>CC</label>
+          <input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="optional" />
+        </div>
+        <div className="field">
+          <label>BCC</label>
+          <input value={bcc} onChange={(e) => setBcc(e.target.value)} placeholder="optional" />
+        </div>
+        <div className="field">
+          <label>Schedule send (optional)</label>
+          <input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+        </div>
+      </div>
+      <div className="field">
+        <label>Message</label>
+        <textarea rows={7} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write your message…" />
+      </div>
+    </Modal>
+  );
+}
+
+function EmailDetail({ id, onClose }: { id: number; onClose: () => void }) {
+  const [email, setEmail] = useState<Rec | null>(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api<{ data: Rec }>(`/api/ops/communication/emails/${id}`)
+      .then((r) => setEmail(r.data))
+      .catch((e) => setErr(e instanceof Error ? e.message : 'Could not load email'));
+  }, [id]);
+  if (err) return <Modal title="Email" onClose={onClose}><ErrorBanner error={err} /></Modal>;
+  if (!email) return <Modal title="Email" onClose={onClose}><PageLoader label="Loading email…" /></Modal>;
+  const recips = Array.isArray(email.recipients) ? (email.recipients as Rec[]) : [];
+  const list = (kind: string) => recips.filter((r) => String(r.kind) === kind).map((r) => String(r.email)).join(', ');
+  return (
+    <Modal title={String(email.subject ?? 'Email')} onClose={onClose} wide>
+      <div className="stack">
+        <div className="com-mail-meta">
+          <span><b>Status</b> <Badge value={email.status} /></span>
+          <span><b>Direction</b> {String(email.direction ?? 'OUT')}</span>
+          <span><b>Created</b> {fmtDate(email.createdAt ?? email.created_at)}</span>
+          <span><b>Recipients</b> {recips.length}</span>
+        </div>
+        {list('TO') ? <p><b>To:</b> {list('TO')}</p> : null}
+        {list('CC') ? <p><b>CC:</b> {list('CC')}</p> : null}
+        {list('BCC') ? <p><b>BCC:</b> {list('BCC')}</p> : null}
+        <div className="com-mail-body">{String(email.body ?? '')}</div>
+      </div>
+    </Modal>
+  );
+}
+
+function EmailView() {
+  const { user } = useAuth();
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [direction, setDirection] = useState('');
+  const [status, setStatus] = useState('');
+  const [compose, setCompose] = useState(false);
+  const [detailId, setDetailId] = useState<number | null>(null);
+  const [error, setError] = useState('');
+  const pageSize = 20;
+  const load = useCallback(async () => {
+    try {
+      const qs = new URLSearchParams();
+      qs.set('page', String(page));
+      qs.set('pageSize', String(pageSize));
+      if (direction) qs.set('direction', direction);
+      if (status) qs.set('status', status);
+      const r = await api<{ data: { rows: Rec[]; pagination: { page: number; pageSize: number; total: number } } }>(
+        `/api/ops/communication/emails?${qs.toString()}`
+      );
+      setRows(r.data.rows ?? []);
+      setTotal(r.data.pagination?.total ?? 0);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load emails');
+    }
+  }, [page, direction, status, pageSize]);
+  useEffect(() => { void load(); }, [load]);
+  return (
+    <div className="page">
+      <ComHead
+        title="Email"
+        subtitle="Compose, send and track enterprise email."
+        actions={
+          can(user, 'communication.emails.send') ? (
+            <button className="btn btn-primary" type="button" onClick={() => setCompose(true)}>+ Compose email</button>
+          ) : undefined
+        }
+      />
+      <ComTabs active="email" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="filter-bar">
+        <select value={direction} onChange={(e) => { setDirection(e.target.value); setPage(1); }} aria-label="Direction filter">
+          <option value="">All directions</option>
+          <option value="OUT">Outbound</option>
+          <option value="IN">Inbound</option>
+        </select>
+        <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} aria-label="Status filter">
+          <option value="">All statuses</option>
+          <option value="DRAFT">Draft</option>
+          <option value="SENT">Sent</option>
+          <option value="SCHEDULED">Scheduled</option>
+          <option value="FAILED">Failed</option>
+        </select>
+      </div>
+      <div className="card card-pad">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Subject</th>
+              <th>Status</th>
+              <th>Recipients</th>
+              <th>Created</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={5}>
+                  <div className="empty-state">
+                    <h3>No emails yet</h3>
+                    <p>Compose your first message or use a template.</p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              rows.map((e) => (
+                <tr key={String(e.id)} className="row-click" onClick={() => setDetailId(Number(e.id))}>
+                  <td>
+                    <span className="cell-main">{String(e.subject ?? '')}</span>
+                    <span className="cell-sub muted">{String(e.templateCode ?? e.creatorName ?? '')}</span>
+                  </td>
+                  <td><Badge value={e.status} /></td>
+                  <td>{String(e.recipientCount ?? 0)}</td>
+                  <td className="cell-mono">{fmtDate(e.createdAt ?? e.created_at)}</td>
+                  <td>
+                    <button className="btn btn-sm btn-ghost" type="button" onClick={(ev) => { ev.stopPropagation(); setDetailId(Number(e.id)); }}>View</button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+        <Pager page={page} pageSize={pageSize} total={total} onPage={setPage} />
+      </div>
+      {compose ? <ComposeEmail onClose={() => setCompose(false)} onSaved={() => void load()} /> : null}
+      {detailId ? <EmailDetail id={detailId} onClose={() => setDetailId(null)} /> : null}
+    </div>
+  );
+}
+
+const ANNOUNCE_ROLES: { code: string; label: string }[] = [
+  { code: 'managing_director', label: 'Managing Director' },
+  { code: 'operations_director', label: 'Operations Director' },
+  { code: 'production_manager', label: 'Production Manager' },
+  { code: 'production_planner', label: 'Production Planner' },
+  { code: 'production_supervisor', label: 'Shift Supervisor' },
+  { code: 'quality_manager', label: 'Quality Manager' },
+  { code: 'quality_inspector', label: 'Quality Inspector' },
+  { code: 'warehouse_manager', label: 'Warehouse Manager' },
+  { code: 'storekeeper', label: 'Storekeeper' },
+  { code: 'maintenance_manager', label: 'Maintenance Manager' },
+  { code: 'finance_manager', label: 'Finance Manager' },
+  { code: 'hr_manager', label: 'HR Manager' },
+  { code: 'sales_manager', label: 'Sales Manager' },
+];
+
+function PublishAnnouncement({ onClose, onPublished }: { onClose: () => void; onPublished: () => void }) {
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [category, setCategory] = useState('GENERAL');
+  const [priority, setPriority] = useState('NORMAL');
+  const [requiresAck, setRequiresAck] = useState(true);
+  const [expiresAt, setExpiresAt] = useState('');
+  const [roles, setRoles] = useState<Rec[]>([]);
+  const [people, setPeople] = useState<Rec[]>([]);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const toggleRole = (code: string) => {
+    setRoles((prev) => (prev.some((r) => String(r.code) === code) ? prev.filter((r) => String(r.code) !== code) : [...prev, { code }]));
+  };
+  const save = async () => {
+    if (busy) return;
+    setErr('');
+    if (!title.trim() || !body.trim()) {
+      setErr('Title and message are required');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api('/api/ops/communication/announcements', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: title.trim(),
+          body: body.trim(),
+          category,
+          priority,
+          audience: {
+            roles: roles.map((r) => String(r.code)),
+            userIds: people.map((p) => Number(p.id)),
+          },
+          requiresAck,
+          expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+        }),
+      });
+      onPublished();
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not publish the announcement');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title="Publish announcement"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>
+            {busy ? 'Publishing…' : 'Publish'}
+          </button>
+        </>
+      }
+    >
+      {err ? <ErrorBanner error={err} /> : null}
+      <div className="form-grid">
+        <div className="field">
+          <label>Title</label>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Scheduled factory maintenance" />
+        </div>
+        <div className="field">
+          <label>Category</label>
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
+            {['GENERAL', 'OPERATIONS', 'MAINTENANCE', 'SAFETY', 'HR', 'FINANCE', 'EMERGENCY'].map((v) => (
+              <option key={v} value={v}>{titleCase(v)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div className="field">
+        <label>Message</label>
+        <textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)} placeholder="What does the factory need to know?" />
+      </div>
+      <div className="form-grid">
+        <div className="field">
+          <label>Priority</label>
+          <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+            {['LOW', 'NORMAL', 'HIGH', 'URGENT', 'CRITICAL'].map((v) => (
+              <option key={v} value={v}>{titleCase(v)}</option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Expires</label>
+          <input type="datetime-local" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
+        </div>
+      </div>
+      <div className="field">
+        <label>Audience — roles</label>
+        <div className="com-picker-chips">
+          {ANNOUNCE_ROLES.map((r) => (
+            <button
+              key={r.code}
+              type="button"
+              className={'chip' + (roles.some((x) => String(x.code) === r.code) ? ' chip-active' : '')}
+              onClick={() => toggleRole(r.code)}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+        <p className="muted">Leave empty to reach all active staff.</p>
+      </div>
+      <div className="field">
+        <label>Audience — specific people</label>
+        <PeoplePicker selected={people} onChange={setPeople} />
+      </div>
+      <label className="check-line">
+        <input type="checkbox" checked={requiresAck} onChange={(e) => setRequiresAck(e.target.checked)} />
+        Require acknowledgement from readers
+      </label>
+    </Modal>
+  );
+}
+
+function AnnouncementsView() {
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [error, setError] = useState('');
+  const [publish, setPublish] = useState(false);
+  const load = useCallback(async () => {
+    try {
+      const r = await api<{ data: { rows: Rec[]; pagination: { page: number; pageSize: number; total: number } } }>(
+        `/api/ops/communication/announcements?page=${page}&pageSize=${pageSize}`
+      );
+      setRows(r.data.rows ?? []);
+      setTotal(r.data.pagination?.total ?? 0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load announcements');
+    }
+  }, [page, pageSize]);
+  useEffect(() => { void load(); }, [load]);
+  const mark = async (id: number, acknowledge: boolean) => {
+    try {
+      await api(`/api/ops/communication/announcements/${id}/read`, {
+        method: 'POST',
+        body: JSON.stringify({ acknowledge }),
+      });
+      void load();
+    } catch {
+      /* background action stays quiet */
+    }
+  };
+  const audienceSummary = (a: Rec): string => {
+    const aud = (pick(a, 'audience') ?? {}) as Rec;
+    const rl = Array.isArray(aud.roles) ? aud.roles : [];
+    const us = Array.isArray(aud.userIds) ? aud.userIds : [];
+    if (rl.length === 0 && us.length === 0) return 'All staff';
+    const labels = rl
+      .map((rc) => ANNOUNCE_ROLES.find((r) => r.code === String(rc))?.label)
+      .filter(Boolean);
+    const extra = us.length > 0 ? `${us.length} individual${us.length > 1 ? 's' : ''}` : '';
+    return [labels.join(', '), extra].filter(Boolean).join(' + ') || 'Selected staff';
+  };
+  return (
+    <div className="page">
+      <ComHead
+        title="Announcements"
+        subtitle="Company-wide notices with read and acknowledgement tracking."
+        actions={
+          <button className="btn btn-primary" onClick={() => setPublish(true)}>+ Publish</button>
+        }
+      />
+      <ComTabs active="announcements" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="stack">
+        {rows.length === 0 && !error ? (
+          <div className="card card-pad empty-state">
+            <h3>No announcements</h3>
+            <p>Publish a company-wide notice to keep the factory informed.</p>
+            <button className="btn btn-primary" onClick={() => setPublish(true)}>Publish announcement</button>
+          </div>
+        ) : (
+          rows.map((a) => {
+            const requiresAck = !!pick(a, 'requiresAck', 'requires_ack');
+            const viewed = !!pick(a, 'viewed');
+            const acknowledged = !!pick(a, 'acknowledged');
+            const pendingAck = requiresAck && !acknowledged;
+            return (
+              <article key={String(a.id)} className={'card card-pad com-notif' + (viewed ? '' : ' com-notif-unread')}>
+                <div className="com-notif-top">
+                  <span className="com-notif-title">{String(pick(a, 'title') ?? 'Announcement')}</span>
+                  <span className="stack-row">
+                    <Badge value={pick(a, 'category')} />
+                    {prioBadge(pick(a, 'priority'))}
+                  </span>
+                </div>
+                <p className="com-notif-body">{String(pick(a, 'body') ?? '')}</p>
+                <div className="com-notif-meta">
+                  <span>{fmtDate(pick(a, 'publishedAt', 'published_at'))}</span>
+                  <span>{String(pick(a, 'publisherName', 'publisher_name') ?? '')}</span>
+                  <span>{audienceSummary(a)}</span>
+                  {pendingAck ? <span className="com-chip-required">Acknowledgement required</span> : null}
+                </div>
+                <div className="com-notif-actions">
+                  {!viewed ? (
+                    <button className="btn btn-sm" onClick={() => void mark(Number(a.id), false)}>Mark as read</button>
+                  ) : null}
+                  {pendingAck ? (
+                    <button className="btn btn-sm btn-primary" onClick={() => void mark(Number(a.id), true)}>Acknowledge</button>
+                  ) : null}
+                  {viewed ? <span className="muted">✓ Read{acknowledged ? ' and acknowledged' : ''}</span> : null}
+                </div>
+              </article>
+            );
+          })
+        )}
+        {rows.length > 0 ? <Pager page={page} pageSize={pageSize} total={total} onPage={setPage} /> : null}
+      </div>
+      {publish ? <PublishAnnouncement onClose={() => setPublish(false)} onPublished={() => void load()} /> : null}
+    </div>
+  );
+}
+
+function TemplateModal({ initial, onClose, onSaved }: { initial: Rec | null; onClose: () => void; onSaved: () => void }) {
+  const init: Rec = initial ?? {};
+  const [code, setCode] = useState(String(pick(init, 'code') ?? ''));
+  const [name, setName] = useState(String(pick(init, 'name') ?? ''));
+  const [category, setCategory] = useState(String(pick(init, 'category') ?? 'GENERAL'));
+  const [subject, setSubject] = useState(String(pick(init, 'subject') ?? ''));
+  const [body, setBody] = useState(String(pick(init, 'body') ?? ''));
+  const [isActive, setIsActive] = useState(pick(init, 'isActive', 'is_active') !== false);
+  const [vars, setVars] = useState(
+    (Array.isArray(pick(init, 'variables')) ? (pick(init, 'variables') as unknown[]) : []).map(String).join(', ')
+  );
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<{ subject: string; body: string } | null>(null);
+  const variableList = () => vars.split(',').map((v) => v.trim()).filter(Boolean);
+  const save = async () => {
+    if (busy) return;
+    setErr('');
+    setBusy(true);
+    try {
+      await api('/api/ops/communication/templates', {
+        method: 'POST',
+        body: JSON.stringify({
+          code,
+          name,
+          category,
+          subject,
+          body,
+          variables: variableList(),
+          isActive,
+        }),
+      });
+      onSaved();
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not save the template');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const runPreview = async () => {
+    setErr('');
+    try {
+      const r = await api<{ data: { subject: string; body: string } }>('/api/ops/communication/templates/preview', {
+        method: 'POST',
+        body: JSON.stringify({ subject, body, variables: {} }),
+      });
+      setPreview(r.data);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Preview failed');
+    }
+  };
+  return (
+    <Modal
+      title={initial ? 'Edit template' : 'New template'}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-ghost" onClick={() => void runPreview()}>Preview</button>
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>
+            {busy ? 'Saving…' : 'Save template'}
+          </button>
+        </>
+      }
+    >
+      {err ? <ErrorBanner error={err} /> : null}
+      <div className="form-grid">
+        <div className="field">
+          <label>Code</label>
+          <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. INVOICE_REMINDER" disabled={!!initial} />
+        </div>
+        <div className="field">
+          <label>Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Payment reminder" />
+        </div>
+        <div className="field">
+          <label>Category</label>
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
+            {['GENERAL', 'SALES', 'PROCUREMENT', 'FINANCE', 'HR', 'OPERATIONS', 'SYSTEM'].map((v) => (
+              <option key={v} value={v}>{titleCase(v)}</option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Variables (comma separated)</label>
+          <input value={vars} onChange={(e) => setVars(e.target.value)} placeholder="CUSTOMER_NAME, AMOUNT, DUE_DATE" />
+        </div>
+      </div>
+      <div className="field">
+        <label>Subject</label>
+        <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Invoice {{INVOICE_NUMBER}} is due" />
+      </div>
+      <div className="field">
+        <label>Body</label>
+        <textarea rows={7} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Dear {{CUSTOMER_NAME}},…" />
+      </div>
+      <label className="check-line">
+        <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+        Active
+      </label>
+      {preview ? (
+        <div className="com-mail-body">
+          <p className="mod-kicker" data-mod="com">Preview</p>
+          <strong>{preview.subject || '(no subject)'}</strong>
+          <p className="muted whitespace-pre">{preview.body || '(empty body)'}</p>
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
+function TemplatesView() {
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [error, setError] = useState('');
+  const [editing, setEditing] = useState<Rec | null>(null);
+  const [creating, setCreating] = useState(false);
+  const load = useCallback(async () => {
+    try {
+      const r = await api<{ data: Rec[] }>('/api/ops/communication/templates');
+      setRows(r.data ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load templates');
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  const varsOf = (t: Rec): string => {
+    const v = pick(t, 'variables');
+    return Array.isArray(v) ? v.map(String).join(', ') : '';
+  };
+  return (
+    <div className="page">
+      <ComHead
+        title="Email templates"
+        subtitle="Reusable email templates with variables for every business document."
+        actions={<button className="btn btn-primary" onClick={() => setCreating(true)}>+ New template</button>}
+      />
+      <ComTabs active="templates" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="card card-pad table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Name</th>
+              <th>Category</th>
+              <th>Subject</th>
+              <th>Variables</th>
+              <th>Status</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={7}>
+                  <div className="empty-state">
+                    <h3>No templates yet</h3>
+                    <p>Create a template to send consistent, branded emails.</p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              rows.map((t) => (
+                <tr key={String(t.id)} className="row-click" onClick={() => setEditing(t)}>
+                  <td className="cell-mono">{String(pick(t, 'code') ?? '')}</td>
+                  <td><span className="cell-main">{String(pick(t, 'name') ?? '')}</span></td>
+                  <td><Badge value={pick(t, 'category')} /></td>
+                  <td className="cell-sub">{trunc(pick(t, 'subject'), 60)}</td>
+                  <td className="cell-sub muted">{varsOf(t)}</td>
+                  <td>{pick(t, 'isActive', 'is_active') === false ? <Badge value="INACTIVE" /> : <Badge value="ACTIVE" />}</td>
+                  <td>
+                    <button className="btn btn-sm btn-ghost" type="button" onClick={(ev) => { ev.stopPropagation(); setEditing(t); }}>Edit</button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      {creating ? <TemplateModal initial={null} onClose={() => setCreating(false)} onSaved={() => void load()} /> : null}
+      {editing ? <TemplateModal initial={editing} onClose={() => setEditing(null)} onSaved={() => void load()} /> : null}
+    </div>
+  );
+}
+
+function DeliveriesView() {
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(15);
+  const [total, setTotal] = useState(0);
+  const [status, setStatus] = useState('');
+  const [channel, setChannel] = useState('');
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    try {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (status) qs.set('status', status);
+      if (channel) qs.set('channel', channel);
+      const r = await api<{ data: { rows: Rec[]; pagination: { page: number; pageSize: number; total: number } } }>(
+        `/api/ops/communication/deliveries?${qs.toString()}`
+      );
+      setRows(r.data.rows ?? []);
+      setTotal(r.data.pagination?.total ?? 0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load delivery logs');
+    }
+  }, [page, pageSize, status, channel]);
+  useEffect(() => { void load(); }, [load]);
+  const recipient = (d: Rec): string => {
+    const f = String(pick(d, 'firstName', 'first_name') ?? '');
+    const l = String(pick(d, 'lastName', 'last_name') ?? '');
+    const name = [f, l].filter(Boolean).join(' ') || String(pick(d, 'username') ?? '');
+    const email = String(pick(d, 'userEmail', 'user_email') ?? '');
+    return email ? `${name} · ${email}` : name || '—';
+  };
+  return (
+    <div className="page">
+      <ComHead
+        title="Delivery logs"
+        subtitle="Every email, SMS and notification delivery with provider status and retries."
+      />
+      <ComTabs active="deliveries" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="filter-row">
+        <select className="search-input" value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
+          <option value="">All statuses</option>
+          {['QUEUED', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'RETRYING', 'CANCELLED'].map((s) => (
+            <option key={s} value={s}>{titleCase(s)}</option>
+          ))}
+        </select>
+        <select className="search-input" value={channel} onChange={(e) => { setPage(1); setChannel(e.target.value); }}>
+          <option value="">All channels</option>
+          {['IN_APP', 'EMAIL', 'PUSH', 'SMS', 'WHATSAPP'].map((ch) => (
+            <option key={ch} value={ch}>{titleCase(ch.replace('_', ' '))}</option>
+          ))}
+        </select>
+      </div>
+      <div className="card card-pad table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Recipient</th>
+              <th>Channel</th>
+              <th>Status</th>
+              <th>Notification</th>
+              <th>Priority</th>
+              <th>Retries</th>
+              <th>Sent</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={7}>
+                  <div className="empty-state">
+                    <h3>No deliveries found</h3>
+                    <p>Deliveries will appear here as notifications are sent.</p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              rows.map((d) => (
+                <tr key={String(d.id)}>
+                  <td><span className="cell-main">{recipient(d)}</span></td>
+                  <td><Badge value={pick(d, 'channel')} /></td>
+                  <td><Badge value={pick(d, 'status')} /></td>
+                  <td className="cell-sub">{trunc(pick(d, 'notificationTitle', 'notification_title'), 60)}</td>
+                  <td>{prioBadge(pick(d, 'notificationPriority', 'notification_priority'))}</td>
+                  <td>{String(pick(d, 'retryCount', 'retry_count') ?? 0)}</td>
+                  <td className="cell-mono">{fmtDate(pick(d, 'sentAt', 'sent_at', 'createdAt', 'created_at'))}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+        {rows.length > 0 ? <Pager page={page} pageSize={pageSize} total={total} onPage={setPage} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function SettingRow({ item, onSaved }: { item: Rec; onSaved: () => void }) {
+  const raw = pick(item, 'value');
+  const value = (raw && typeof raw === 'object' ? raw : { value: String(raw ?? '') }) as Rec;
+  const [json, setJson] = useState(JSON.stringify(value, null, 2));
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const keys = Object.keys(value);
+  const simpleText = keys.length === 1 && keys[0] === 'value' && typeof value.value === 'string';
+  const simpleBool = keys.length === 1 && keys[0] === 'enabled' && typeof value.enabled === 'boolean';
+  const digestMode = keys.includes('digest');
+  const label = titleCase(String(pick(item, 'key') ?? '')).replace(/_/g, ' ');
+  const save = async (next: Rec) => {
+    if (busy) return;
+    setBusy(true);
+    setErr('');
+    try {
+      await api('/api/ops/communication/settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          items: [{ category: pick(item, 'category'), key: pick(item, 'key'), value: next }],
+        }),
+      });
+      setDirty(false);
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not save the setting');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const parseJson = (): Rec | null => {
+    try {
+      const parsed = JSON.parse(json) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('expected an object');
+      return parsed as Rec;
+    } catch {
+      setErr('Value must be valid JSON (an object)');
+      return null;
+    }
+  };
+  return (
+    <div className="com-setting">
+      <div className="com-setting-main">
+        <span className="com-setting-name">{label}</span>
+        {err ? <span className="badge badge-red">{err}</span> : null}
+        {simpleText ? (
+          <input
+            className="search-input"
+            value={String(value.value ?? '')}
+            onChange={(e) => {
+              setJson(JSON.stringify({ value: e.target.value }, null, 2));
+              setDirty(true);
+            }}
+          />
+        ) : simpleBool ? (
+          <label className="check-line">
+            <input
+              type="checkbox"
+              checked={!!value.enabled}
+              onChange={(e) => {
+                setJson(JSON.stringify({ enabled: e.target.checked }, null, 2));
+                setDirty(true);
+              }}
+            />
+            Enabled
+          </label>
+        ) : digestMode ? (
+          <select
+            className="search-input"
+            value={String(value.digest ?? 'INSTANT')}
+            onChange={(e) => {
+              setJson(JSON.stringify({ ...value, digest: e.target.value }, null, 2));
+              setDirty(true);
+            }}
+          >
+            {['INSTANT', '15_MINUTES', 'HOURLY', 'DAILY', 'WEEKLY'].map((m) => (
+              <option key={m} value={m}>{titleCase(m.replace('_', ' '))}</option>
+            ))}
+          </select>
+        ) : (
+          <textarea
+            className="search-input com-setting-json"
+            rows={4}
+            value={json}
+            onChange={(e) => { setJson(e.target.value); setDirty(true); }}
+          />
+        )}
+      </div>
+      {dirty ? (
+        <div className="com-setting-actions">
+          <button className="btn btn-sm btn-primary" onClick={() => { const next = parseJson(); if (next) void save(next); }} disabled={busy}>
+            Save
+          </button>
+          <button className="btn btn-sm btn-ghost" onClick={() => { setJson(JSON.stringify(value, null, 2)); setDirty(false); setErr(''); }}>
+            Cancel
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SettingsView() {
+  const [groups, setGroups] = useState<Map<string, Rec[]>>(new Map());
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    try {
+      const r = await api<{ data: Rec[] }>('/api/ops/communication/settings');
+      const g = new Map<string, Rec[]>();
+      for (const s of r.data ?? []) {
+        const cat = String(pick(s, 'category') ?? 'GENERAL');
+        g.set(cat, [...(g.get(cat) ?? []), s]);
+      }
+      setGroups(g);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load communication settings');
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  const groupLabels: Record<string, string> = {
+    GENERAL: 'General',
+    EMAIL: 'Email',
+    NOTIFICATIONS: 'Notifications',
+    ESCALATION: 'Escalation',
+    SMTP: 'SMTP',
+    DIGEST: 'Digest',
+    PUSH: 'Push',
+  };
+  return (
+    <div className="page">
+      <ComHead
+        title="Communication settings"
+        subtitle="Digest modes, escalation rules, retry policies and channel configuration."
+      />
+      <ComTabs active="settings" />
+      {error ? <ErrorBanner error={error} /> : null}
+      {groups.size === 0 && !error ? (
+        <div className="card card-pad empty-state">
+          <h3>No settings configured</h3>
+          <p>Communication settings will appear here once configured for this company.</p>
+        </div>
+      ) : (
+        [...groups.entries()].map(([cat, items]) => (
+          <section key={cat} className="card card-pad">
+            <div className="card-head">
+              <h3>{groupLabels[cat] ?? titleCase(cat)}</h3>
+              <span className="muted">{items.length} setting{items.length > 1 ? 's' : ''}</span>
+            </div>
+            <div className="stack">
+              {items.map((it) => <SettingRow key={String(it.id)} item={it} onSaved={() => void load()} />)}
+            </div>
+          </section>
+        ))
+      )}
+    </div>
+  );
+}
+
+export default function CommunicationFlow({ path }: { path: string }) {
+  const { view, id } = parseCom(path);
+  switch (view) {
+    case 'messages': return <MessagesView initialId={id} />;
+    case 'notifications': return <NotificationsView />;
+    case 'email': return <EmailView />;
+    case 'announcements': return <AnnouncementsView />;
+    case 'templates': return <TemplatesView />;
+    case 'deliveries': return <DeliveriesView />;
+    case 'settings': return <SettingsView />;
+    default: return <CommandCenter />;
+  }
+}

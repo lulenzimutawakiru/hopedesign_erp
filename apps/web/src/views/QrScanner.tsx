@@ -163,7 +163,7 @@ export default function QrScanner({ onClose, sheet }: { onClose: () => void; she
               autoFocus
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="HDG-FG-2026-00000001 or scan with USB/handheld"
+              placeholder="FG-2026-00000001 or scan with USB/handheld"
             />
           </label>
           <div className="grid-2">

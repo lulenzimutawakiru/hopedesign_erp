@@ -2,9 +2,12 @@ import { FormEvent, useState } from 'react';
 import { useAuth } from '../auth';
 import { ApiError } from '../api';
 import { BrandMark } from '../components/BrandMark';
+import { branchLabel, shortCompanyName, useCompanyProfile } from '../company';
 
 export default function Login() {
   const { login } = useAuth();
+  const company = useCompanyProfile();
+  const branch = branchLabel(company);
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -30,7 +33,7 @@ export default function Login() {
       <div className="login-hero">
         <div>
           <BrandMark size="lg" tone="hope" />
-          <div className="eyebrow">Hope Design Group Ltd · Kampala</div>
+          <div className="eyebrow">{company.name}{branch ? ` · ${branch}` : ''}</div>
           <h2>The mill, the press, and the money in one operating system.</h2>
           <p>Paper manufacturing, security printing and QR custody — role-bound, dual-controlled, auditable.</p>
         </div>
@@ -38,7 +41,7 @@ export default function Login() {
       </div>
       <form className="login-card" onSubmit={submit}>
         <BrandMark size="lg" />
-        <h1>Hope OS</h1>
+        <h1>{shortCompanyName(company.name)} OS</h1>
         <p className="muted">Sign in with your plant identity. Sessions are named, scoped and logged.</p>
         {error && <div className="alert alert-error">{error}</div>}
         <label className="field">
@@ -63,7 +66,7 @@ export default function Login() {
         <button type="submit" className="btn btn-primary btn-block" disabled={busy || !identifier || !password}>
           {busy ? 'Checking clearance…' : 'Enter the mill'}
         </button>
-        <p className="hint">Demo floor: <code>admin</code> · commercial: <code>sarah.sales</code> · warehouse: <code>willy.wh</code> / <code>ChangeMe!2026</code></p>
+        <p className="hint">Forgot your password? Contact your system administrator.</p>
       </form>
     </div>
   );

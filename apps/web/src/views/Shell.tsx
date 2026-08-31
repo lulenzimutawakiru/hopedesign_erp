@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+﻿import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../auth';
 import { useHashRoute, navigate, matchRoute } from '../router';
 import { api } from '../api';
 import Dashboard from './Dashboard';
+import Approvals from './Approvals';
 import Inbox from './Inbox';
 import MyWork from './MyWork';
 import Reports from './Reports';
@@ -33,6 +34,8 @@ const HrFlow = lazy(() => import('./HrFlow'));
 const WorkOrderWizard = lazy(() => import('./WorkOrderWizard'));
 const AssetsFlow = lazy(() => import('./AssetsFlow'));
 const AdminFlow = lazy(() => import('./AdminFlow'));
+const CommunicationFlow = lazy(() => import('./CommunicationFlow'));
+const DocumentsFlow = lazy(() => import('./DocumentsFlow'));
 const InventoryIntel = lazy(() => import('./InventoryIntel'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
@@ -50,9 +53,11 @@ import {
 } from '../components/nav';
 import { isFocusPath, itemVisible, normalizePath, requiredPermForPath, track } from '../nav';
 import { BrandMark } from '../components/BrandMark';
+import { useCompanyProfile } from '../company';
 
 export default function Shell() {
   const { user, logout } = useAuth();
+  const company = useCompanyProfile();
   const rawPath = useHashRoute();
   const path = normalizePath(rawPath);
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -65,6 +70,10 @@ export default function Shell() {
   const [prefs, setPrefs] = useState<Prefs>(() => loadPrefs());
   const [gMode, setGMode] = useState(false);
   const bp = useBreakpoint();
+  const brandCompany = {
+    name: company.name !== 'Company' || company.code ? company.name : (user?.company_name ?? user?.tenant_name ?? ''),
+    code: company.code || (user?.company_code ?? user?.tenant_code ?? ''),
+  };
 
   useEffect(() => { applyPrefs(prefs); }, [prefs]);
   useEffect(() => { track('route', { path, bp }); }, [path, bp]);
@@ -90,7 +99,7 @@ export default function Shell() {
       }
       if (typing) return;
       if (e.key === 's' || e.key === 'S') { setScannerOpen(true); return; }
-      if (e.key === 'a' || e.key === 'A') { navigate('/inbox'); return; }
+  if (e.key === 'a' || e.key === 'A') { navigate('/approvals'); return; }
       if (e.key === 'n' || e.key === 'N') { setCmdOpen(true); return; }
       if (e.key === '?') { setHelpOpen(true); return; }
       if (gMode) {
@@ -142,7 +151,8 @@ export default function Shell() {
   if (denied) body = <AccessDenied path={path} />;
   else if (path === '/dashboard' || path === '/' || path === '') body = <Dashboard />;
   else if (path === '/work') body = <MyWork />;
-  else if (path === '/approvals' || path === '/inbox') body = <Inbox />;
+  else if (path === '/approvals') body = <Approvals />;
+  else if (path === '/inbox') body = <Inbox />;
   else if (path === '/plant/new') body = <WorkOrderWizard />;
   else if (path === '/plant' || path.startsWith('/plant/')) body = <ManufacturingFlow path={path} />;
   else if (path === '/warehouse' || path === '/warehouse/floor') body = <WarehouseRoom handheld={path === '/warehouse/floor' || compact} />;
@@ -166,6 +176,8 @@ export default function Shell() {
   else if (inventoryPath) body = <InventoryFlow path={path} />;
   else if (assetsPath) body = <AssetsFlow path={path} />;
   else if (path === '/admin' || path.startsWith('/admin/')) body = <AdminFlow path={path} />;
+  else if (path === '/communication' || path.startsWith('/communication/')) body = <CommunicationFlow path={path} />;
+  else if (path === '/documents' || path.startsWith('/documents/')) body = <DocumentsFlow path={path} />;
   else if (detailMatch) body = <EntityDetail route={detailMatch} />;
   else if (listMatch) body = <EntityList route={listMatch} />;
   else body = <AccessDenied path={path} />;
@@ -194,6 +206,8 @@ export default function Shell() {
         <Sidebar
           path={path}
           user={user}
+          companyName={brandCompany.name}
+          companyCode={brandCompany.code}
           collapsed={collapsed && !compact}
           open={sideOpen}
           peek={peek && !compact}
@@ -217,7 +231,7 @@ export default function Shell() {
             <button className="icon-btn" onClick={() => history.back()} aria-label="Back">←</button>
           )}
           {compact && (
-            <button className="topbar-brand" onClick={() => navigate('/dashboard')} aria-label="Hope Design dashboard">
+            <button className="topbar-brand" onClick={() => navigate('/dashboard')} aria-label={`${brandCompany.name} dashboard`}>
               <BrandMark size="sm" />
             </button>
           )}

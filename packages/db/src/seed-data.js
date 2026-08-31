@@ -174,13 +174,13 @@ async function ensureOpeningStock(client, tenantId) {
   const companyId = company.rows[0].id;
 
   const opening = [
-    ["A4-80", "FG-WH", 8000],
+    ["NATEX-A4", "FG-WH", 8000],
     ["A3-80", "FG-WH", 2500],
     ["SEC-WM", "SEC-WH", 600],
     ["JUMBO-105", "RAW-MAT", 24],
     ["BOB-80", "RAW-MAT", 40],
-    ["CARTON-A4", "RAW-MAT", 1200],
-    ["LBL-REAM", "RAW-MAT", 20000],
+    ["CARTON-A4", "PACK-WH", 1200],
+    ["LBL-REAM", "PACK-WH", 20000],
   ];
 
   let inserted = 0;
@@ -1829,7 +1829,7 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
   );
   for (const r of batchRows) batch[r.product_id] = r.id;
 
-  const prodA4 = prod["A4-80"].id;
+  const prodA4 = prod["NATEX-A4"].id;
   const prodJumbo = prod["JUMBO-105"].id;
   const prodBob = prod["BOB-80"].id;
   const prodCarton = prod["CARTON-A4"].id;
@@ -1887,6 +1887,38 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
     quality_spec: "GSM 76-84, whiteness per standard, sheet count 500",
     shelf_life_days: 365, is_active: true,
   });
+
+  // 2b. Production standard + packaging hierarchy (NATEX A4)
+  await guarded("production_standards", "company_id = $1 AND product_id = $2", [companyId, prodA4], {
+    company_id: companyId, tenant_id: tenantId, branch_id: branchId,
+    product_id: prodA4, version: 1,
+    standard_setup_min: 45, standard_run_min_per_unit: 0.004,
+    standard_labour_hours: 2, expected_output: 12000,
+    expected_waste_pct: 4, waste_tolerance_pct: 2,
+    standard_cost: 12000, cost_rate: 4500,
+    quality_checkpoints: [
+      { parameter: "Sheet count", method: "Counter", standard: "500", unit: "sheets" },
+      { parameter: "GSM", method: "Scale", standard: "80", unit: "gsm" },
+      { parameter: "Dimensions", method: "Ruler", standard: "210 x 297", unit: "mm" },
+      { parameter: "Packaging", method: "Visual", standard: "Sealed & labelled", unit: "" },
+    ],
+    attributes: { product_type: "REAM", line: "SCA4-1100" },
+    is_active: true,
+    notes: "NATEX A4 80gsm premium superior white - SCA4-1100 production line",
+    created_by: peter,
+  });
+  for (const pk of [
+    { level: 1, level_code: "SHEET", name: "Sheet", qty_per_parent: 1, weight_kg: 0.005, sort_order: 10 },
+    { level: 2, level_code: "REAM", name: "Ream (500 sheets)", qty_per_parent: 500, weight_kg: 2.5, sort_order: 20 },
+    { level: 3, level_code: "CARTON", name: "Carton (5 reams)", qty_per_parent: 5, weight_kg: 12.5, sort_order: 30 },
+    { level: 4, level_code: "PALLET", name: "Pallet (50 cartons)", qty_per_parent: 50, weight_kg: 625, sort_order: 40 },
+  ]) {
+    await guarded("packaging_hierarchies", "company_id = $1 AND product_id = $2 AND level = $3", [companyId, prodA4, pk.level], {
+      company_id: companyId, tenant_id: tenantId,
+      product_id: prodA4, level: pk.level, level_code: pk.level_code, name: pk.name,
+      qty_per_parent: pk.qty_per_parent, weight_kg: pk.weight_kg, sort_order: pk.sort_order, is_active: true,
+    });
+  }
 
   // 3. BOM versions, lines, substitutes, co-products
   const bv1 = await guarded("bom_versions", "company_id = $1 AND bom_id = $2 AND version_no = $3", [companyId, bomId["BOM-A4-80"], 1], {
@@ -2304,6 +2336,12 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
     from_operator_id: opus, status: "PENDING",
   });
 
+  // Ensure the SHO numbering sequence starts at 1 for auto-created handovers.
+  await client.query(
+    "INSERT INTO document_numbers (tenant_id, prefix, doc_year, last_seq) VALUES ($1, 'SHO', $2, 0) ON CONFLICT (tenant_id, prefix, doc_year) DO NOTHING",
+    [tenantId, new Date().getFullYear()]
+  );
+
   // 17. Material availability checks (before release)
   const avLine = (code, required, onHand, critical) => {
     const p = prod[code];
@@ -2544,20 +2582,51 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
   await mcState(m6, "MAINTENANCE", 7.0, 1.0, "IN_PROGRESS");
   await client.query("UPDATE machines SET status = 'MAINTENANCE' WHERE id = $1", [m6]);
 
-  const newMachine = async (code, name, wcId, type, capacity, capUnit) => {
+  const newMachine = async (code, name, wcId, type, capacity, capUnit, opts = {}) => {
     return guarded("machines", "company_id = $1 AND code = $2", [companyId, code], {
       company_id: companyId, tenant_id: tenantId, facility_id: facilityId,
       work_centre_id: wcId, code, name, type,
-      capacity, capacity_unit: capUnit, hourly_rate: 150000,
-      status: "OPERATIONAL", machine_state: "RUNNING",
-      production_hours: 7.474, downtime_hours: 0.4, maintenance_status: "NONE",
-      is_secure: false, attributes: {},
+      capacity, capacity_unit: capUnit, hourly_rate: opts.hourlyRate ?? 150000,
+      status: "OPERATIONAL", machine_state: opts.machineState ?? "RUNNING",
+      production_hours: opts.productionHours ?? 7.474, downtime_hours: opts.downtimeHours ?? 0.4,
+      maintenance_status: "NONE", is_secure: false, attributes: opts.attributes ?? {},
     });
   };
   const m7 = await newMachine("FSS207", "FSS207 Sheet Cutter", wc["MC-CUT"], "CUTTING", 1200, "REAMS/HR");
   const m8 = await newMachine("FSS208", "FSS208 Sheet Cutter", wc["MC-CUT"], "CUTTING", 1100, "REAMS/HR");
   const m9 = await newMachine("PACK-02", "PACK-02 Ream Packing", wc["MC-PACK"], "PACKING", 800, "CARTONS/HR");
   const m10 = await newMachine("CART-01", "CART-01 Cartoning Line", wc["MC-PACK"], "PACKING", 700, "CARTONS/HR");
+
+  // SCA4-1100 primary A4 production line (NATEX A4) - QR identity, machine,
+  // daily capacity and routing wiring. Guarded for idempotency.
+  const sca4Admin = (
+    await client.query(
+      "SELECT id FROM users WHERE company_id = $1 AND email = 'admin@hopedesign.co.ug' ORDER BY id LIMIT 1",
+      [companyId]
+    )
+  ).rows[0]?.id ?? null;
+  const sca4Qr = await guarded("qr_codes", "company_id = $1 AND code = $2", [companyId, "HDG-MC-SCA4-1100"], {
+    company_id: companyId, tenant_id: tenantId, code: "HDG-MC-SCA4-1100",
+    secret_hash: qrSecretHash(qrSecret()), entity_type: "MACHINE", entity_id: null,
+    status: "ACTIVE", generated_by: sca4Admin,
+  });
+  const m11 = await newMachine("SCA4-1100", "SCA4-1100 A4 Production Line", wc["MC-CUT"], "SHEET_CUTTER", 1200, "REAMS/HR", {
+    hourlyRate: 35000,
+    attributes: { line: "SCA4-1100", primary: true, only_manufactured_fg: "NATEX-A4" },
+  });
+  await client.query("UPDATE qr_codes SET entity_id = $1 WHERE id = $2 AND entity_id IS NULL", [m11, sca4Qr]);
+  await client.query("UPDATE machines SET qr_id = $1 WHERE id = $2", [sca4Qr, m11]);
+  // Wire SCA4-1100 into the NATEX A4 routing as the primary slitting/cutting step
+  if (routing1 && op1) {
+    await client.query(
+      "UPDATE routing_operations SET name = 'Slitting / Cutting', machine_id = $1 WHERE id = $2",
+      [m11, op1]
+    );
+    await client.query(
+      "UPDATE work_instructions SET title = 'A4 Slitting / Cutting - SCA4-1100' WHERE company_id = $1 AND code = 'WI-A4-CUT-001' AND version = 1",
+      [companyId]
+    );
+  }
 
   const cap = async (mId, wcId, dtHrs, actualHrs) => {
     return guarded("machine_capacity",
@@ -2588,6 +2657,7 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
   await cap(m8, wc["MC-CUT"], 0.4, 7.474);
   await cap(m9, wc["MC-PACK"], 0.4, 7.474);
   await cap(m10, wc["MC-PACK"], 0.4, 7.474);
+  await cap(m11, wc["MC-CUT"], 0.4, 7.474);
 
   return { inserted };
 }
@@ -2748,16 +2818,19 @@ async function seedAll(pool) {
     // 2. Warehouses, zones, racks, shelves, bins
     // ============================================================
     const warehouses = [
-      ["RAW-MAT", "Raw Materials", "RAW_MATERIAL", false],
-      ["WIP", "Work in Progress", "WIP", false],
-      ["FG-WH", "Finished Goods Warehouse", "FINISHED_GOODS", false],
-      ["SEC-WH", "Secure Store", "SECURE", true],
-      ["QUARANTINE", "Quarantine", "QUARANTINE", false],
-      ["DAMAGED", "Damaged Goods", "DAMAGED", false],
-      ["RETURNS", "Customer Returns", "RETURNS", false],
+      ["RAW-MAT", "Raw Materials", "RAW_MATERIAL", false, 120000],
+      ["WIP", "Work in Progress", "WIP", false, 5000],
+      ["FG-WH", "Finished Goods Warehouse", "FINISHED_GOODS", false, 100000],
+      ["SEC-WH", "Secure Store", "SECURE", true, 2000],
+      ["QUARANTINE", "Quarantine", "QUARANTINE", false, 1000],
+      ["DAMAGED", "Damaged Goods", "DAMAGED", false, 1000],
+      ["RETURNS", "Customer Returns", "RETURNS", false, 1000],
+      ["CONS-WH", "Consumables Store", "CONSUMABLES", false, 30000],
+      ["SPARE-WH", "Spare Parts Store", "SPARE_PARTS", false, 2000],
+      ["PACK-WH", "Packaging Materials Store", "PACKAGING", false, 30000],
     ];
     const whId = {};
-    for (const [code, name, type, isSecure] of warehouses) {
+    for (const [code, name, type, isSecure, capacity] of warehouses) {
       whId[code] = await insertOne(client, "warehouses", {
         company_id: companyId,
         tenant_id: tenantId,
@@ -2767,6 +2840,7 @@ async function seedAll(pool) {
         name,
         type,
         is_secure: isSecure,
+        capacity_qty: capacity,
         status: "ACTIVE",
       });
       bump("warehouses");
@@ -2792,6 +2866,7 @@ async function seedAll(pool) {
         code: "BIN-01",
         name: `${name} Bin 1`,
         is_secure: isSecure,
+        capacity_qty: capacity,
       });
       bump("warehouse_bins");
     }
@@ -3272,9 +3347,9 @@ async function seedAll(pool) {
         desc: "Paper bobbin 80gsm for security printing reels.",
       },
       {
-        code: "A4-80",
-        name: "A4 Copy Paper 80gsm (Ream)",
-        sku: "FG-A4-80",
+        code: "NATEX-A4",
+        name: "NATEX A4 Premium Superior White",
+        sku: "FG-NATEX-A4",
         type: "REAM",
         category: "PAPER-PROD",
         unit: "REAM",
@@ -3289,13 +3364,14 @@ async function seedAll(pool) {
         safety: 500,
         leadTime: 7,
         lotSize: 1000,
-        desc: "A4 80gsm copy paper, 500 sheets per ream.",
+        desc: "NATEX A4 80gsm premium superior white, 500 sheets per ream - sole manufactured finished good.",
       },
       {
         code: "A3-80",
         name: "A3 Copy Paper 80gsm (Ream)",
         sku: "FG-A3-80",
         type: "REAM",
+        status: "DISCONTINUED",
         category: "PAPER-PROD",
         unit: "REAM",
         gsm: 80,
@@ -3316,6 +3392,7 @@ async function seedAll(pool) {
         name: "Security Watermarked Paper",
         sku: "SEC-WM-80",
         type: "SECURITY_ITEM",
+        status: "DISCONTINUED",
         category: "SEC-PROD",
         unit: "REAM",
         gsm: 80,
@@ -3391,7 +3468,7 @@ async function seedAll(pool) {
         is_tracked: true,
         is_serialized: false,
         security_classification: p.security || "NONE",
-        status: "ACTIVE",
+        status: p.status || "ACTIVE",
         attributes: { manufacturing: p.type === "JUMBO_ROLL" || p.type === "PAPER_BOBBIN" || p.type === "REAM" || p.type === "SECURITY_ITEM" },
         description: p.desc,
       };
@@ -3508,8 +3585,8 @@ async function seedAll(pool) {
     const bomDefs = [
       {
         code: "BOM-A4-80",
-        name: "A4 80gsm Copy Paper BOM",
-        product: "A4-80",
+        name: "NATEX A4 Ream BOM",
+        product: "NATEX-A4",
         qty: 1000,
         unit: "REAM",
         items: [
@@ -3564,8 +3641,8 @@ async function seedAll(pool) {
     const routingDefs = [
       {
         code: "ROUT-A4-80",
-        name: "A4 80gsm Production Routing",
-        product: "A4-80",
+        name: "NATEX A4 Production Routing",
+        product: "NATEX-A4",
         ops: [
           { seq: 10, name: "Cutting / Slitting", wc: "MC-CUT", machine: "FSS104", setup: 30, run: 0.05, teardown: 10 },
           { seq: 20, name: "Sheet Cutting", wc: "MC-CUT", machine: "FSS300", setup: 20, run: 0.08, teardown: 10 },
@@ -3641,8 +3718,8 @@ async function seedAll(pool) {
       },
       {
         code: "INSP-FIN-A4",
-        name: "Final A4 Copy Paper Inspection",
-        product: "A4-80",
+        name: "Final NATEX A4 Inspection",
+        product: "NATEX-A4",
         kind: "FINAL",
         params: [
           { name: "gsm", label: "Grammage", unit: "g/m2", method: "Grammage test", target: 80, min: 76, max: 84 },

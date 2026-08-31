@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api, fmtDate, fmtMoney, fmtNum, ListResult, openDocument } from '../api';
 import { useAuth, can } from '../auth';
-import { navigate } from '../router';
+import { navigate, useHashQuery } from '../router';
 import { pick } from '../helpers';
 import DownloadMenu from '../components/DownloadMenu';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
 
 const RESOURCES: { resource: string; label: string; perm: string }[] = [
   { resource: 'quotations', label: 'Quotations', perm: 'sales.quotations.view' },
+  { resource: 'customers', label: 'Customers', perm: 'sales.quotations.view' },
   { resource: 'orders', label: 'Sales Orders', perm: 'sales.orders.view' },
   { resource: 'delivery_notes', label: 'Delivery Notes', perm: 'sales.delivery_notes.view' },
   { resource: 'invoices', label: 'Invoices', perm: 'sales.invoices.view' },
@@ -46,6 +47,8 @@ export default function SalesFlow({ path }: { path: string }) {
   const { resource, id } = parseSalesPath(path);
   if (resource === 'board' || resource === '') return <SalesBoard />;
   if (id === 'new') return <Composer resource={resource} />;
+  if (resource === 'customers' && id && Number(id) > 0) return <CustomerDesk id={Number(id)} />;
+  if (resource === 'customers') return <CustomerDirectory />;
   if (id && Number(id) > 0) return <DocumentDetail resource={resource} id={Number(id)} />;
   return <DocumentList resource={resource} />;
 }
@@ -55,94 +58,203 @@ function SalesBoard() {
   const [data, setData] = useState<Rec | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
-    api<{ data: Rec }>('/api/ops/sales/board')
+    api<{ data: Rec }>('/api/ops/sales/command-center')
       .then((r) => setData(r.data))
-      .catch((e) => setError(e instanceof Error ? e.message : 'Sales board failed'));
+      .catch((e) => setError(e instanceof Error ? e.message : 'Sales command center failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening commercial…" />;
-  const kpis = (data.kpis ?? {}) as Rec;
+  if (!data) return <PageLoader label="Opening command center…" />;
+
+  const k = (data.kpis ?? {}) as Rec;
+  const alerts = (data.alerts as Rec[]) ?? [];
+  const funnelOrders = ((data.funnel as Rec)?.orders as Rec[]) ?? [];
+  const topProducts = (data.topProducts as Rec[]) ?? [];
   const quotes = (data.quotes as Rec[]) ?? [];
   const orders = (data.orders as Rec[]) ?? [];
   const invoices = (data.invoices as Rec[]) ?? [];
+  const n = (v: unknown) => Number(v ?? 0);
+  const todaySales = n(k.todaySales);
+  const monthSales = n(k.monthSales);
+  const prevMonth = n(k.prevMonthSales);
+  const target = n(k.target);
+  const targetPct = k.targetAchievementPct != null ? n(k.targetAchievementPct) : null;
+  const grossProfit = n(k.grossProfit);
+  const grossMargin = k.grossMargin != null ? n(k.grossMargin) : null;
+  const conversion = k.conversionRate != null ? n(k.conversionRate) : null;
+  const monthDelta = prevMonth > 0 ? Math.round(((monthSales - prevMonth) / prevMonth) * 100) : null;
+
+  const tiles: { key: string; icon: string; label: string; value: string; sub: string; accent: string; href: string }[] = [
+    { key: 'today', icon: '💵', label: "Today's sales", value: fmtMoney(todaySales), sub: `${fmtMoney(n(k.todayReceipts))} collected today`, accent: '#00A6A6', href: '/sales/invoices' },
+    { key: 'month', icon: '📈', label: 'Monthly sales', value: fmtMoney(monthSales), sub: `${fmtNum(n(k.monthInvoices))} invoices${monthDelta != null ? ` · ${monthDelta > 0 ? '+' : ''}${monthDelta}% vs last month` : ''}`, accent: '#168A5B', href: '/sales/invoices' },
+    { key: 'target', icon: '🎯', label: 'Target', value: targetPct != null ? `${fmtNum(targetPct)}%` : '—', sub: `of ${fmtMoney(target)} monthly`, accent: '#D99A00', href: '/sales/orders' },
+    { key: 'orders', icon: '🧾', label: 'Open orders', value: fmtNum(n(k.openOrders)), sub: `${fmtNum(n(k.awaitingStock))} await stock`, accent: '#1261A0', href: '/sales/orders' },
+    { key: 'quotes', icon: '📝', label: 'Open quotes', value: fmtNum(n(k.openQuotes)), sub: conversion != null ? `${fmtNum(conversion)}% converted` : 'no conversions yet', accent: '#8B5CF6', href: '/sales/quotations' },
+    { key: 'ar', icon: '⏳', label: 'Outstanding AR', value: fmtMoney(n(k.openAr)), sub: `${fmtNum(n(k.overdueInvoices))} overdue`, accent: '#C93636', href: '/sales/invoices' },
+    { key: 'mfg', icon: '🏭', label: 'In production', value: fmtNum(n(k.awaitingProduction)), sub: `${fmtNum(n(k.awaitingDispatch))} ready to dispatch`, accent: '#D97706', href: '/records/production/work_orders' },
+    { key: 'aov', icon: '🧮', label: 'Average order', value: fmtMoney(n(k.averageOrderValue)), sub: 'per invoice this month', accent: '#0E7490', href: '/sales/invoices' },
+    { key: 'margin', icon: '💹', label: 'Gross margin', value: grossMargin != null ? `${fmtNum(grossMargin)}%` : '—', sub: `GP ${fmtMoney(grossProfit)} this month`, accent: '#166534', href: '/sales/invoices' },
+  ];
+
+  const stageDefs: { status: string; label: string }[] = [
+    { status: 'DRAFT', label: 'Draft' },
+    { status: 'SUBMITTED', label: 'Submitted' },
+    { status: 'APPROVED', label: 'Stock ready' },
+    { status: 'ALLOCATED', label: 'Allocated' },
+    { status: 'PARTIALLY_DISPATCHED', label: 'Partial ship' },
+    { status: 'DISPATCHED', label: 'Dispatched' },
+    { status: 'INVOICED', label: 'Invoiced' },
+  ];
+  const stageCount = (status: string) => n(funnelOrders.find((r) => String(r.status) === status)?.c);
+  const activeTotal = stageDefs.reduce((acc, s) => acc + stageCount(s.status), 0);
+  const closed = funnelOrders.reduce((acc, r) => acc + (['CANCELLED', 'VOID', 'CLOSED'].includes(String(r.status)) ? n(r.c) : 0), 0);
+  const funnelMax = Math.max(activeTotal, 1);
+
+  const severityCls = (sev: unknown) => (sev === 'crit' ? 'severity-critical' : sev === 'warn' ? 'severity-high' : 'severity-medium');
+  const alertIcon: Record<string, string> = { stock: '📦', production: '🏭', quote: '📝', ar: '⏳', delivery: '🚚' };
+
   return (
     <div className="page">
       <header className="page-head">
         <div>
           <p className="mod-kicker" data-mod="sales">Sales</p>
-          <h1>Order to cash</h1>
-          <p className="muted">Quote, convert, allocate, ship, invoice, collect. Credit is checked before a quote is saved.</p>
+          <h1>Sales Command Center</h1>
+          <p className="muted">Customer to cash: quote, convert, allocate, produce, ship, invoice, collect — live.</p>
         </div>
         <div className="head-actions">
           {can(user, 'sales.quotations.create') && <button className="btn" onClick={() => navigate('/sales/quotations/new')}>New quotation</button>}
-          {can(user, 'sales.orders.create') && <button className="btn btn-primary" onClick={() => navigate('/sales/orders/new')}>New order</button>}
+          {can(user, 'sales.orders.create') && <button className="btn" onClick={() => navigate('/sales/orders/new')}>New order</button>}
+          {can(user, 'sales.receipts.create') && <button className="btn btn-primary" onClick={() => navigate('/sales/receipts/new')}>Record payment</button>}
         </div>
       </header>
-      <div className="kpi-grid">
-        <button className="kpi-card" onClick={() => navigate('/sales/quotations')}>
-          <span className="kpi-label">Open quotes</span>
-          <span className="kpi-value">{fmtNum(kpis.openQuotes)}</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/sales/orders')}>
-          <span className="kpi-label">Open orders</span>
-          <span className="kpi-value">{fmtNum(kpis.openOrders)}</span>
-          <span className="kpi-sub">{fmtNum(kpis.toShip)} to ship</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/sales/invoices')}>
-          <span className="kpi-label">To invoice</span>
-          <span className="kpi-value">{fmtNum(kpis.toInvoice)}</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/finance/ar')}>
-          <span className="kpi-label">Open AR</span>
-          <span className="kpi-value">{fmtMoney(kpis.openAr)}</span>
-        </button>
+
+      <div className="kpi-grid--tiles">
+        {tiles.map((t) => (
+          <button
+            key={t.key}
+            className="kpi-tile"
+            style={{ '--tile-accent': t.accent, '--tile-tint': `${t.accent}1A` } as CSSProperties}
+            onClick={() => navigate(t.href)}
+          >
+            <span className="kpi-tile-icon">{t.icon}</span>
+            <span className="kpi-tile-body">
+              <span className="kpi-tile-label">{t.label}</span>
+              <span className="kpi-tile-value">{t.value}</span>
+              <span className="kpi-tile-sub">{t.sub}</span>
+            </span>
+          </button>
+        ))}
       </div>
+
+      {alerts.length > 0 && (
+        <section className="card card-pad" style={{ marginBottom: 16 }}>
+          <h3 style={{ marginTop: 0 }}>Alerts</h3>
+          <div className="exception-list">
+            {alerts.map((a, i) => (
+              <button key={`${String(a.kind)}-${i}`} className={`exception-item ${severityCls(a.severity)}`} onClick={() => navigate(String(a.href))}>
+                <div>
+                  <strong>{alertIcon[String(a.kind)] ?? '⚠'} {String(a.title)}</strong>
+                  <div className="muted">{String(a.meta)}</div>
+                </div>
+                <span className="ex-count">{fmtNum(n(a.count))}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="card">
+        <div className="card-head">
+          <h3>Order fulfilment pipeline</h3>
+          <span className="muted">{fmtNum(activeTotal)} active{closed > 0 ? ` · ${fmtNum(closed)} closed` : ''}</span>
+        </div>
+        <div className="funnel-strip">
+          {stageDefs.map((s) => {
+            const count = stageCount(s.status);
+            const pct = Math.round((count / funnelMax) * 100);
+            return (
+              <button key={s.status} className="funnel-step" onClick={() => navigate('/sales/orders')}>
+                <span className="funnel-count">{fmtNum(count)}</span>
+                <span className="funnel-label">{s.label}</span>
+                <span className="mini-progress-track"><span className="mini-progress-fill" style={{ width: `${pct}%` }} /></span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <h3 className="section-title">Do now</h3>
       <div className="do-now">
-        <button onClick={() => navigate('/sales/quotations')}><strong>Quotations</strong><span>Submit and convert</span></button>
-        <button onClick={() => navigate('/sales/orders')}><strong>Orders</strong><span>Allocate and ship</span></button>
-        <button onClick={() => navigate('/inventory/pick')}><strong>Warehouse pick</strong><span>Fulfilment</span></button>
-        <button onClick={() => navigate('/crm')}><strong>Accounts</strong><span>Pipeline and credit</span></button>
+        <button onClick={() => navigate('/sales/quotations')}><span className="now-ic">📝</span><span><strong>Quotations</strong><span>Submit and convert</span></span></button>
+        <button onClick={() => navigate('/sales/orders')}><span className="now-ic">🧾</span><span><strong>Orders</strong><span>Allocate and ship</span></span></button>
+        <button onClick={() => navigate('/inventory/pick')}><span className="now-ic">🧺</span><span><strong>Warehouse pick</strong><span>Fulfilment</span></span></button>
+        <button onClick={() => navigate('/records/production/work_orders')}><span className="now-ic">🏭</span><span><strong>Production</strong><span>Sales-linked work orders</span></span></button>
+        <button onClick={() => navigate('/sales/delivery_notes')}><span className="now-ic">🚚</span><span><strong>Deliveries</strong><span>Dispatch and POD</span></span></button>
+        <button onClick={() => navigate('/crm')}><span className="now-ic">👥</span><span><strong>Accounts</strong><span>Pipeline and credit</span></span></button>
       </div>
-      <section className="card">
-        <div className="card-head"><h3>Live orders</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>SO</th><th>Customer</th><th>Status</th><th className="cell-num">Total</th></tr></thead>
-            <tbody>
-              {orders.map((r) => (
-                <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/sales/orders/${r.id}`)}>
-                  <td className="cell-mono">{String(r.orderNo)}</td>
-                  <td>{String(r.customerName)}</td>
-                  <td><Badge value={r.status} /></td>
-                  <td className="cell-num">{fmtMoney(r.total)}</td>
-                </tr>
-              ))}
-              {orders.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: 24 }}>No open orders.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section className="card">
-        <div className="card-head"><h3>Quotes in play</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Quote</th><th>Customer</th><th>Status</th><th className="cell-num">Total</th></tr></thead>
-            <tbody>
-              {quotes.map((r) => (
-                <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/sales/quotations/${r.id}`)}>
-                  <td className="cell-mono">{String(r.quotationNo)}</td>
-                  <td>{String(r.customerName)}</td>
-                  <td><Badge value={r.status} /></td>
-                  <td className="cell-num">{fmtMoney(r.total)}</td>
-                </tr>
-              ))}
-              {quotes.length === 0 && <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>No open quotes.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section className="card">
-        <div className="card-head"><h3>Open invoices</h3></div>
+
+      {topProducts.length > 0 && (
+        <section className="card" style={{ marginTop: 16 }}>
+          <div className="card-head"><h3>Top products this month</h3><button className="btn btn-sm" onClick={() => navigate('/inventory/items')}>All items</button></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Product</th><th className="cell-num">Qty</th><th className="cell-num">Revenue</th></tr></thead>
+              <tbody>
+                {topProducts.map((r) => (
+                  <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/inventory/items/${r.id}`)}>
+                    <td><span className="cell-mono">{String(r.code)}</span> {String(r.name)}</td>
+                    <td className="cell-num">{fmtNum(n(r.qty))}</td>
+                    <td className="cell-num">{fmtMoney(r.revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      <div className="grid-2" style={{ marginTop: 16 }}>
+        <section className="card">
+          <div className="card-head"><h3>Live orders</h3><button className="btn btn-sm" onClick={() => navigate('/sales/orders')}>All orders</button></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>SO</th><th>Customer</th><th>Status</th><th className="cell-num">Total</th></tr></thead>
+              <tbody>
+                {orders.map((r) => (
+                  <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/sales/orders/${r.id}`)}>
+                    <td className="cell-mono">{String(r.orderNo)}</td>
+                    <td>{String(r.customerName)}</td>
+                    <td><Badge value={r.status} /></td>
+                    <td className="cell-num">{fmtMoney(r.total)}</td>
+                  </tr>
+                ))}
+                {orders.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: 24 }}>No open orders.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section className="card">
+          <div className="card-head"><h3>Quotes in play</h3><button className="btn btn-sm" onClick={() => navigate('/sales/quotations')}>All quotes</button></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Quote</th><th>Customer</th><th>Status</th><th className="cell-num">Total</th></tr></thead>
+              <tbody>
+                {quotes.map((r) => (
+                  <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/sales/quotations/${r.id}`)}>
+                    <td className="cell-mono">{String(r.quotationNo)}</td>
+                    <td>{String(r.customerName)}</td>
+                    <td><Badge value={r.status} /></td>
+                    <td className="cell-num">{fmtMoney(r.total)}</td>
+                  </tr>
+                ))}
+                {quotes.length === 0 && <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>No open quotes.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section className="card" style={{ marginTop: 16 }}>
+        <div className="card-head"><h3>Open invoices</h3><button className="btn btn-sm" onClick={() => navigate('/sales/invoices')}>All invoices</button></div>
         <div className="table-wrap">
           <table className="data">
             <thead><tr><th>Invoice</th><th>Customer</th><th>Status</th><th className="cell-num">Open</th></tr></thead>
@@ -167,6 +279,374 @@ function SalesBoard() {
 function ResourceTabs({ resource }: { resource: string }) {
   void resource;
   return null;
+}
+
+function CustomerDirectory() {
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [q, setQ] = useState('');
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    const p = new URLSearchParams();
+    if (q.trim()) p.set('q', q.trim());
+    api<{ data: Rec[] }>(`/api/ops/sales/customers/directory?${p.toString()}`)
+      .then((r) => setRows(r.data ?? []))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Customers failed'));
+  }, [q]);
+  useEffect(() => { load(); }, [load]);
+  const totalOutstanding = rows.reduce((s, r) => s + num(r.outstanding), 0);
+  const openAccts = rows.filter((r) => num(r.openOrders) > 0).length;
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <p className="mod-kicker" data-mod="sales">Sales</p>
+          <h1>Customers</h1>
+          <p className="muted">Directory with credit position and sales activity for every account.</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn btn-primary" onClick={() => navigate('/sales/quotations/new')}>New quotation</button>
+        </div>
+      </header>
+      {error && <ErrorBanner error={error} />}
+      <div className="summary-chips">
+        <span className="summary-chip"><b>{fmtNum(rows.length)}</b> accounts</span>
+        <span className="summary-chip"><b>{fmtNum(openAccts)}</b> with open orders</span>
+        <span className="summary-chip"><b>{fmtMoney(totalOutstanding)}</b> outstanding</span>
+      </div>
+      <div className="toolbar">
+        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search code, name, email, phone" />
+      </div>
+      <div className="table-wrap card">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th className="cell-num">Credit limit</th>
+              <th className="cell-num">Outstanding</th>
+              <th className="cell-num">Open orders</th>
+              <th className="cell-num">Month sales</th>
+              <th>Last order</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/sales/customers/${r.id}`)}>
+                <td className="cell-mono">{String(r.code)}</td>
+                <td>{String(r.name)}</td>
+                <td>{String(r.customerType ?? '-')}</td>
+                <td><Badge value={r.status} /></td>
+                <td className="cell-num">{Number(r.creditLimit) > 0 ? fmtMoney(r.creditLimit) : '-'}</td>
+                <td className="cell-num">{fmtMoney(r.outstanding)}</td>
+                <td className="cell-num">{fmtNum(r.openOrders)}</td>
+                <td className="cell-num">{fmtMoney(r.monthSales)}</td>
+                <td>{r.lastOrderDate ? fmtDate(r.lastOrderDate) : '-'}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={9} className="muted" style={{ textAlign: 'center', padding: 24 }}>No customers found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function CustomerDesk({ id }: { id: number }) {
+  const { user } = useAuth();
+  const [doc, setDoc] = useState<Rec | null>(null);
+  const [error, setError] = useState('');
+  const [tab, setTab] = useState('overview');
+  const load = useCallback(() => {
+    api<{ data: Rec }>(`/api/ops/sales/customers/${id}/360`)
+      .then((r) => setDoc(r.data))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Customer failed'));
+  }, [id]);
+  useEffect(() => { load(); }, [load]);
+  if (error && !doc) return <ErrorBanner error={error} />;
+  if (!doc) return <PageLoader label="Opening customer..." />;
+  const c = (doc.customer ?? {}) as Rec;
+  const credit = (doc.credit ?? {}) as Rec;
+  const aging = (doc.aging ?? {}) as Rec;
+  const summary = (doc.summary ?? {}) as Rec;
+  const favourites = (doc.favouriteProducts as Rec[]) ?? [];
+  const orders = (doc.orders as Rec[]) ?? [];
+  const quotes = (doc.quotes as Rec[]) ?? [];
+  const invoices = (doc.invoices as Rec[]) ?? [];
+  const deliveries = (doc.deliveries as Rec[]) ?? [];
+  const payments = (doc.payments as Rec[]) ?? [];
+  const contacts = (doc.contacts as Rec[]) ?? [];
+  const timeline = (doc.timeline as Rec[]) ?? [];
+
+  const creditOk = Boolean(credit.ok);
+  const kindRes: Record<string, string> = {
+    order: 'orders',
+    quotation: 'quotations',
+    invoice: 'invoices',
+    delivery: 'delivery_notes',
+    payment: 'receipts',
+  };
+  const go = (resource: string) =>
+    navigate(`/sales/${resource}/new`, { query: { customer: id, customerLabel: `${String(c.code)} - ${String(c.name)}` } });
+  const tabs = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'contacts', label: 'Contacts' },
+    { key: 'orders', label: 'Quotations & Orders' },
+    { key: 'invoices', label: 'Invoices' },
+    { key: 'payments', label: 'Payments' },
+    { key: 'deliveries', label: 'Deliveries' },
+  ];
+  const agingRows: [string, unknown][] = [
+    ['Current', aging.current],
+    ['1-30', aging.days130],
+    ['31-60', aging.days3160],
+    ['61-90', aging.days6190],
+    ['90+', aging.days90Plus],
+  ];
+
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <button className="btn btn-sm" onClick={() => navigate('/sales/customers')}>Back</button>
+          <h1>{String(c.name)} <span className="cell-mono">{String(c.code)}</span></h1>
+          <p className="muted">
+            <Badge value={c.status} />
+            <span className={`badge ${creditOk ? 'badge-green' : 'badge-warn'}`}>
+              <span className="badge-icon" aria-hidden>{creditOk ? 'OK' : '!'}</span>
+              {creditOk ? 'Credit approved' : 'Credit hold'}
+            </span>
+            <span>{fmtNum(c.paymentTermsDays)}d terms</span>
+          </p>
+        </div>
+        <div className="head-actions">
+          {can(user, 'sales.quotations.create') && <button className="btn" onClick={() => go('quotations')}>New quotation</button>}
+          {can(user, 'sales.orders.create') && <button className="btn btn-primary" onClick={() => go('orders')}>New order</button>}
+          <button className="btn" onClick={() => navigate('/finance/ar')}>View AR</button>
+        </div>
+      </header>
+      {error && <ErrorBanner error={error} />}
+      <section className="card card-pad">
+        <div className="card-head"><h3>Credit check</h3></div>
+        <div className="kpi-grid">
+          <div className="kpi-card">
+            <span className="kpi-label">Credit limit</span>
+            <span className="kpi-value">{Number(credit.creditLimit) > 0 ? fmtMoney(credit.creditLimit) : 'Open'}</span>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-label">Outstanding AR</span>
+            <span className="kpi-value">{fmtMoney(credit.openAr)}</span>
+            <span className="kpi-sub">{fmtNum(credit.overdueInvoices)} overdue</span>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-label">Available credit</span>
+            <span className="kpi-value">{credit.available != null ? fmtMoney(credit.available) : 'Unlimited'}</span>
+          </div>
+          <div className={`kpi-card ${creditOk ? '' : 'card-warn'}`}>
+            <span className="kpi-label">Status</span>
+            <span className="kpi-value">{creditOk ? 'OK' : 'Hold'}</span>
+            <span className="kpi-sub">{creditOk ? 'Within credit limit' : String(credit.reason ?? 'Overdue / over limit')}</span>
+          </div>
+        </div>
+        <div className="aging-row" style={{ marginTop: 12 }}>
+          {agingRows.map(([label, val]) => (
+            <div key={label} className="aging-cell">
+              <span className="muted">{label}</span>
+              <strong>{fmtMoney(val)}</strong>
+            </div>
+          ))}
+        </div>
+        {!creditOk && (
+          <div className="alert alert-error" style={{ marginTop: 12 }}>
+            <strong>Credit hold:</strong> {String(credit.reason ?? 'Check the account')}. New orders will require approval.
+            <button className="btn btn-sm" style={{ marginLeft: 8 }} onClick={() => navigate('/inbox')}>View approvals</button>
+          </div>
+        )}
+      </section>
+      <div className="summary-chips">
+        <span className="summary-chip"><b>{fmtMoney(summary.monthSales)}</b> month</span>
+        <span className="summary-chip"><b>{fmtMoney(summary.yearSales)}</b> YTD</span>
+        <span className="summary-chip"><b>{fmtNum(summary.openOrderCount)}</b> open orders</span>
+        <span className="summary-chip"><b>{fmtNum(summary.orderCount)}</b> total orders</span>
+        <span className="summary-chip"><b>{fmtMoney(summary.avgOrderValue)}</b> AOV</span>
+      </div>
+      <div className="sales-tabs">
+        {tabs.map((t) => (
+          <button key={t.key} className={tab === t.key ? 'active' : ''} onClick={() => setTab(t.key)}>{t.label}</button>
+        ))}
+      </div>
+      {tab === 'overview' && (
+        <div className="grid-2">
+          <section className="card">
+            <div className="card-head"><h3>Favourite products</h3></div>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Product</th><th className="cell-num">Qty</th><th className="cell-num">Revenue</th></tr></thead>
+                <tbody>
+                  {favourites.map((p) => (
+                    <tr key={String(p.id)}>
+                      <td>{String(p.name)} <span className="cell-mono">{String(p.code)}</span></td>
+                      <td className="cell-num">{fmtNum(p.qty)}</td>
+                      <td className="cell-num">{fmtMoney(p.revenue)}</td>
+                    </tr>
+                  ))}
+                  {favourites.length === 0 && <tr><td colSpan={3} className="muted" style={{ textAlign: 'center', padding: 20 }}>No orders yet.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section className="card">
+            <div className="card-head"><h3>Activity</h3></div>
+            <div className="related-list">
+              {timeline.map((e, i) => {
+                const res = kindRes[String(e.kind)] ?? 'orders';
+                return (
+                  <button key={`${String(e.kind)}-${String(e.ref)}-${i}`} className="related-item" onClick={() => navigate(`/sales/${res}/${String(e.ref)}`)}>
+                    <span><span className="muted">{fmtDate(e.at)}</span> <span className="cell-mono">{String(e.label)}</span></span>
+                    <Badge value={e.status} />
+                  </button>
+                );
+              })}
+              {timeline.length === 0 && <p className="muted" style={{ padding: 12 }}>No activity yet.</p>}
+            </div>
+          </section>
+        </div>
+      )}
+      {tab === 'contacts' && (
+        <section className="card">
+          <div className="card-head"><h3>Contacts</h3></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Name</th><th>Title</th><th>Email</th><th>Phone</th><th>Department</th></tr></thead>
+              <tbody>
+                {contacts.map((p) => (
+                  <tr key={String(p.id)}>
+                    <td>{String(p.firstName)} {String(p.lastName)} {p.isPrimary ? <span className="badge badge-green">primary</span> : null}</td>
+                    <td>{String(p.title ?? '-')}</td>
+                    <td>{String(p.email ?? '-')}</td>
+                    <td>{String(p.phone ?? p.mobile ?? '-')}</td>
+                    <td>{String(p.department ?? '-')}</td>
+                  </tr>
+                ))}
+                {contacts.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 20 }}>No contacts on file.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      {tab === 'orders' && (
+        <>
+          <section className="card">
+            <div className="card-head"><h3>Quotations</h3></div>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Number</th><th>Status</th><th className="cell-num">Total</th><th>Date</th><th>Valid until</th></tr></thead>
+                <tbody>
+                  {quotes.map((qt) => (
+                    <tr key={String(qt.id)} className="row-click" onClick={() => navigate(`/sales/quotations/${qt.id}`)}>
+                      <td className="cell-mono">{String(qt.quotationNo)}</td>
+                      <td><Badge value={qt.status} /></td>
+                      <td className="cell-num">{fmtMoney(qt.total)}</td>
+                      <td>{fmtDate(qt.quotationDate)}</td>
+                      <td>{qt.validUntil ? fmtDate(qt.validUntil) : '-'}</td>
+                    </tr>
+                  ))}
+                  {quotes.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 20 }}>No quotations yet.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section className="card">
+            <div className="card-head"><h3>Sales orders</h3></div>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Number</th><th>Status</th><th className="cell-num">Total</th><th>Order date</th><th>Requested</th></tr></thead>
+                <tbody>
+                  {orders.map((o) => (
+                    <tr key={String(o.id)} className="row-click" onClick={() => navigate(`/sales/orders/${o.id}`)}>
+                      <td className="cell-mono">{String(o.orderNo)}</td>
+                      <td><Badge value={o.status} /></td>
+                      <td className="cell-num">{fmtMoney(o.total)}</td>
+                      <td>{fmtDate(o.orderDate)}</td>
+                      <td>{o.requestedDate ? fmtDate(o.requestedDate) : '-'}</td>
+                    </tr>
+                  ))}
+                  {orders.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 20 }}>No sales orders yet.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
+      {tab === 'invoices' && (
+        <section className="card">
+          <div className="card-head"><h3>Invoices</h3></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Number</th><th>Status</th><th className="cell-num">Total</th><th className="cell-num">Balance</th><th>Date</th></tr></thead>
+              <tbody>
+                {invoices.map((inv) => (
+                  <tr key={String(inv.id)} className="row-click" onClick={() => navigate(`/sales/invoices/${inv.id}`)}>
+                    <td className="cell-mono">{String(inv.invoiceNo)}</td>
+                    <td><Badge value={inv.status} /></td>
+                    <td className="cell-num">{fmtMoney(inv.total)}</td>
+                    <td className="cell-num">{fmtMoney(inv.balance)}</td>
+                    <td>{fmtDate(inv.invoiceDate)}</td>
+                  </tr>
+                ))}
+                {invoices.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 20 }}>No invoices yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      {tab === 'payments' && (
+        <section className="card">
+          <div className="card-head"><h3>Payments</h3></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Receipt</th><th>Method</th><th className="cell-num">Amount</th><th>Date</th><th>Reference</th><th>Status</th></tr></thead>
+              <tbody>
+                {payments.map((p) => (
+                  <tr key={String(p.id)} className="row-click" onClick={() => navigate(`/sales/receipts/${p.id}`)}>
+                    <td className="cell-mono">{String(p.receiptNo)}</td>
+                    <td>{String(p.method ?? '-')}</td>
+                    <td className="cell-num">{fmtMoney(p.amount)}</td>
+                    <td>{fmtDate(p.receiptDate)}</td>
+                    <td>{String(p.reference ?? '-')}</td>
+                    <td><Badge value={p.status} /></td>
+                  </tr>
+                ))}
+                {payments.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 20 }}>No payments yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      {tab === 'deliveries' && (
+        <section className="card">
+          <div className="card-head"><h3>Deliveries</h3></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Delivery note</th><th>Status</th><th>Dispatched</th><th>Delivered</th></tr></thead>
+              <tbody>
+                {deliveries.map((d) => (
+                  <tr key={String(d.id)} className="row-click" onClick={() => navigate(`/sales/delivery_notes/${d.id}`)}>
+                    <td className="cell-mono">{String(d.deliveryNo)}</td>
+                    <td><Badge value={d.status} /></td>
+                    <td>{d.dispatchDate ? fmtDate(d.dispatchDate) : '-'}</td>
+                    <td>{d.deliveredAt ? fmtDate(d.deliveredAt) : '-'}</td>
+                  </tr>
+                ))}
+                {deliveries.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: 20 }}>No deliveries yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+    </div>
+  );
 }
 
 function DocumentList({ resource }: { resource: string }) {
@@ -356,6 +836,22 @@ function Composer({ resource }: { resource: string }) {
   const [bankName, setBankName] = useState('');
   const [bankAccountName, setBankAccountName] = useState('');
   const [bankAccountNumber, setBankAccountNumber] = useState('');
+  const q = useHashQuery();
+  useEffect(() => {
+    const cid = Number(q.get('customer'));
+    const label = q.get('customerLabel');
+    if (cid > 0) {
+      setCustomerId(cid);
+      if (label) setCustomerLabel(label);
+      else
+        api<{ data: Rec[] }>('/api/ops/sales/customers/directory')
+          .then((r) => {
+            const found = (r.data ?? []).find((row) => num(row.id) === cid);
+            if (found) setCustomerLabel(`${String(found.code)} - ${String(found.name)}`);
+          })
+          .catch(() => undefined);
+    }
+  }, [q]);
 
   const subtotal = useMemo(
     () => lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0),

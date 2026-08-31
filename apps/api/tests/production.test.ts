@@ -6,7 +6,7 @@ describe('Work order wizard setup', () => {
     const { token } = await loginAs('admin');
     const products = await api.get('/api/inventory/items?pageSize=20').set(auth(token));
     expect(products.status).toBe(200);
-    const product = products.body.data.find((p: { code: string }) => p.code === 'A4-80') ?? products.body.data[0];
+    const product = products.body.data.find((p: { code: string }) => p.code === 'NATEX-A4') ?? products.body.data[0];
     expect(product).toBeTruthy();
 
     const setup = await api
@@ -29,7 +29,7 @@ describe('Work order wizard setup', () => {
   it('runs a work order from draft through release, start, output and complete', async () => {
     const { token } = await loginAs('admin');
     const products = await api.get('/api/inventory/items?pageSize=20').set(auth(token));
-    const product = products.body.data.find((p: { code: string }) => p.code === 'A4-80') ?? products.body.data[0];
+    const product = products.body.data.find((p: { code: string }) => p.code === 'NATEX-A4') ?? products.body.data[0];
     const created = await api.post('/api/ops/production/work-orders').set(auth(token)).send({
       productId: product.id,
       quantity: 10,

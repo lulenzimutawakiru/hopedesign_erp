@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, DocFormat, fmtDate, fmtMoney, fmtNum, openDocument } from '../api';
 import { useAuth, can } from '../auth';
+import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, PageLoader, StaffPhoto } from '../components/ui';
 import RecruitmentFlow from './RecruitmentFlow';
@@ -1935,12 +1936,13 @@ const AUG2026_STARTERS = ['Emile Niyungeko', 'Gloria Nakakawa', 'Racheal Tagulwa
 const refRate = (v: number) => v.toLocaleString('en-UG', { minimumFractionDigits: 2, maximumFractionDigits: 5 });
 
 function PayrollAugustReference() {
+  const company = useCompanyProfile();
   return (
     <>
       <section className="card">
         <div className="card-head"><h3>Statutory rates &amp; deductions - August 2026 reference</h3></div>
         <div className="card-pad">
-          <p className="muted" style={{ marginTop: 0 }}>Rates and schedules applied to the August 2026 payroll for HOPE DESIGN LIMITED.</p>
+          <p className="muted" style={{ marginTop: 0 }}>Rates and schedules applied to the August 2026 payroll for {company.name}.</p>
           <p className="kpi-label">NSSF</p>
           <div className="table-wrap">
             <table className="data">

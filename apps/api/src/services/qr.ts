@@ -20,6 +20,7 @@ const ENTITY_PREFIX: Record<string, string> = {
   DELIVERY: 'HDG-DL',
   CUSTOMER: 'HDG-CU',
   RAW_MATERIAL: 'HDG-RM',
+  CONSUMABLE: 'HDG-CN',
 };
 
 export interface QrGenerated {

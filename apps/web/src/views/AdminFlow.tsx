@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
+import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { ConfirmDialog, Drawer, EmptyState, Skeleton } from '../components/os';
@@ -59,6 +60,7 @@ export default function AdminFlow({ path }: { path: string }) {
 
 function Dashboard() {
   const { user } = useAuth();
+  const company = useCompanyProfile();
   const [data, setData] = useState<Rec | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -93,7 +95,7 @@ function Dashboard() {
     <div className="page">
       <AdminHeader
         title="Administration control plane"
-        sub="Identity, access, governance and security for the Hope Design Group ERP. Every action here is enforced by RBAC, ABAC, organizational scope and audit."
+        sub={`Identity, access, governance and security for the ${company.name} ERP. Every action here is enforced by RBAC, ABAC, organizational scope and audit.`}
         actions={
           <>
             {can(user, 'admin.users.create') && <button className="btn btn-primary" onClick={() => navigate('/admin/users?new=1')}>Add user</button>}
@@ -2428,6 +2430,7 @@ function FeatureModal({ initial, onClose, onSaved }: { initial: Rec | null; onCl
 }
 
 function Health() {
+  const company = useCompanyProfile();
   const [data, setData] = useState<Rec | null>(null);
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -2453,7 +2456,7 @@ function Health() {
     <div className="page">
       <AdminHeader
         title="Platform health"
-        sub="Application, database, background job and API health for the Hope Design ERP control plane."
+        sub={`Application, database, background job and API health for the ${company.name} ERP control plane.`}
         actions={
           <button className="btn" disabled={refreshing} onClick={load}>
             {refreshing ? 'Checking...' : 'Refresh'}

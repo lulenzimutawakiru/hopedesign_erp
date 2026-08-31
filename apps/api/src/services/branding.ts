@@ -372,10 +372,15 @@ export interface PublicCompanyInfo {
   name: string;
   tagline: string;
   legal_name: string;
+  code: string;
   address: string;
   phone: string;
   email: string;
   website: string;
+  branch_name: string;
+  branch_address: string;
+  branch_phone: string;
+  branch_email: string;
   brand_color: string;
   brand_color_secondary: string;
   logo_url: string;
@@ -389,10 +394,15 @@ export function toPublicCompany(p: CompanyProfile): PublicCompanyInfo {
     name: p.name,
     tagline: p.tagline,
     legal_name: p.legalName,
+    code: p.code,
     address: p.address,
     phone: p.phone,
     email: p.supportEmail || p.email,
     website: p.website,
+    branch_name: p.branchName,
+    branch_address: p.branchAddress,
+    branch_phone: p.branchPhone,
+    branch_email: p.branchEmail,
     brand_color: p.brandColor,
     brand_color_secondary: p.brandColorSecondary,
     logo_url: p.logoUrl,

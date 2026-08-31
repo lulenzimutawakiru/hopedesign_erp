@@ -30,8 +30,11 @@ const runGet = (permission: string, fn: QueryFn) => [
 ];
 
 salesOpsRouter.get('/board', ...runGet('sales.orders.view', (c, ctx) => sales.salesBoard(c, ctx)));
+salesOpsRouter.get('/command-center', ...runGet('sales.orders.view', (c, ctx) => sales.commandCenter(c, ctx)));
 salesOpsRouter.get('/products', ...runGet('sales.quotations.create', (c, ctx) => sales.listSellableProducts(c, ctx)));
 salesOpsRouter.get('/customers', ...runGet('sales.quotations.view', (c, ctx, q) => sales.listCustomers(c, ctx, q.q != null ? String(q.q) : undefined)));
+salesOpsRouter.get('/customers/directory', ...runGet('sales.quotations.view', (c, ctx, q) => sales.customerDirectory(c, ctx, q.q != null ? String(q.q) : undefined)));
+salesOpsRouter.get('/customers/:id/360', ...runGet('sales.quotations.view', (c, ctx, _q, p) => sales.customer360(c, ctx, Number(p.id))));
 
 salesOpsRouter.get('/quotations', ...runGet('sales.quotations.view', (c, ctx, q) => sales.listQuotations(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,

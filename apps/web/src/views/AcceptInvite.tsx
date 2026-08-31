@@ -2,8 +2,11 @@ import { FormEvent, useState } from 'react';
 import { api, setToken, ApiError } from '../api';
 import { useHashQuery } from '../router';
 import { BrandMark } from '../components/BrandMark';
+import { branchLabel, shortCompanyName, useCompanyProfile } from '../company';
 
 export default function AcceptInvite() {
+  const company = useCompanyProfile();
+  const branch = branchLabel(company);
   const q = useHashQuery();
   const token = q.get('token') ?? '';
   const [password, setPassword] = useState('');
@@ -43,8 +46,8 @@ export default function AcceptInvite() {
       <div className="login-hero">
         <div>
           <BrandMark size="lg" tone="hope" />
-          <div className="eyebrow">Hope Design Group Ltd - Kampala</div>
-          <h2>Welcome to Hope OS.</h2>
+          <div className="eyebrow">{company.name}{branch ? ` · ${branch}` : ''}</div>
+          <h2>Welcome to {shortCompanyName(company.name)} OS.</h2>
           <p>Set your password to activate your account and join the mill.</p>
         </div>
         <div className="eyebrow">Invitation - Secure token - Audited</div>
@@ -52,7 +55,7 @@ export default function AcceptInvite() {
       <form className="login-card" onSubmit={submit}>
         <BrandMark size="lg" />
         <h1>Accept invitation</h1>
-        <p className="muted">Choose a password for your Hope Design account.</p>
+        <p className="muted">Choose a password for your {company.name} account.</p>
         {!token && <div className="alert alert-error">This invitation link is missing its token. Check the link you were sent.</div>}
         {error && <div className="alert alert-error">{error}</div>}
         <label className="field">

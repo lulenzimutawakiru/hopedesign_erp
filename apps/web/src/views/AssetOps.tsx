@@ -201,7 +201,7 @@ export function AssetScan() {
           <form onSubmit={submit}>
             <label className="field">
               <span>QR code / payload</span>
-              <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="HDG-AST-2026-000001 or scanned payload" autoComplete="off" />
+              <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="AST-2026-000001 or scanned payload" autoComplete="off" />
             </label>
             <div className="grid-2">
               <label className="field">
@@ -1387,7 +1387,7 @@ export function TransfersFlow() {
                 <div className="form-grid">
                   <div className="field" style={{ gridColumn: '1 / -1' }}>
                     <label htmlFor="cm-codes">Scanned QR payloads (one per line)</label>
-                    <textarea id="cm-codes" rows={4} value={scanCodes} onChange={(e) => setScanCodes(e.target.value)} placeholder={'HDG-AST-2026-000001\nHDG-AST-2026-000002'} />
+                    <textarea id="cm-codes" rows={4} value={scanCodes} onChange={(e) => setScanCodes(e.target.value)} placeholder={'AST-2026-000001\nAST-2026-000002'} />
                   </div>
                   <div className="table-wrap" style={{ gridColumn: '1 / -1' }}>
                     <table className="data">

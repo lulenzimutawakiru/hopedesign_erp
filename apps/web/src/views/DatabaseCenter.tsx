@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
+import { useCompanyProfile } from '../company';
 import { ErrorBanner, Modal } from '../components/ui';
 import { ConfirmDialog, EmptyState, Meter, Skeleton } from '../components/os';
 import { Rec, s, tileStyle } from './assetsShared';
@@ -101,6 +102,7 @@ const TABS: Array<[string, string, string]> = [
 ];
 
 export default function DatabaseCenter() {
+  const company = useCompanyProfile();
   const { user } = useAuth();
   const [tab, setTab] = useState('overview');
   return (
@@ -110,7 +112,7 @@ export default function DatabaseCenter() {
           <p className="mod-kicker" data-mod="adm">Administration</p>
           <h1>Database Management Center</h1>
           <p className="muted" style={{ maxWidth: 880 }}>
-            Real-time control plane for the Hope Design Group ERP PostgreSQL database. Health, storage, connections,
+            Real-time control plane for the {company.name} ERP PostgreSQL database. Health, storage, connections,
             queries, indexes, locks, maintenance, backups, restores, integrity, data quality, retention, migrations and audit — protected by RBAC + ABAC.
           </p>
         </div>

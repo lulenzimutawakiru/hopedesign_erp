@@ -36,6 +36,7 @@ const numQ = (q: Record<string, unknown>, key: string): number | null =>
 // ---- Command center & stock intelligence ----
 inventoryIntelRouter.get('/command-center', ...runGet('inventory.stock.view', (c, ctx) => intel.commandCenter(c, ctx)));
 inventoryIntelRouter.get('/stock-positions', ...runGet('inventory.stock.view', (c, ctx, q) => intel.stockPositions(c, ctx, numQ(q, 'productId'))));
+inventoryIntelRouter.get('/ageing', ...runGet('inventory.stock.view', (c, ctx) => intel.stockAgeing(c, ctx)));
 inventoryIntelRouter.get('/atp-ctp/:productId', ...runGet('inventory.stock.view', (c, ctx, _q, p) => intel.atpCtp(c, ctx, Number(p.productId))));
 inventoryIntelRouter.get('/fifo-suggestions', ...runGet('inventory.stock.view', (c, ctx, q) => intel.fifoSuggestions(c, ctx, Number(q.productId), numQ(q, 'qty'), q.method === 'FEFO' ? 'FEFO' : 'FIFO')));
 inventoryIntelRouter.get('/putaway-recommendations', ...runGet('inventory.stock.view', (c, ctx, q) => intel.putawayRecommendations(c, ctx, Number(q.productId), numQ(q, 'qty'))));

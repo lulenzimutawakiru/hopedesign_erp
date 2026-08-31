@@ -72,9 +72,14 @@ dashboardRouter.get(
     );
 
     const lowStock = await query(
-      `SELECT count(*)::int AS count FROM inventory i
-       JOIN products p ON p.id = i.product_id
-       WHERE i.quantity <= p.reorder_point AND i.quantity > 0 AND i.company_id = $1`,
+      `SELECT count(*)::int AS count FROM (
+         SELECT i2.product_id
+         FROM inventory i2
+         JOIN products p2 ON p2.id = i2.product_id
+         WHERE i2.quantity >= 0 AND i2.company_id = $1
+         GROUP BY i2.product_id
+         HAVING COALESCE(sum(i2.quantity), 0) <= COALESCE(max(p2.reorder_point), 0)
+       ) low`,
       [company ?? -1], ctx
     ).catch(() => ({ rows: [{ count: 0 }] }));
 
@@ -141,9 +146,14 @@ dashboardRouter.get(
       [tenant, company]
     );
     const lowStock = await safe(
-      `SELECT count(*)::int AS count FROM inventory i
-       JOIN products p ON p.id = i.product_id
-       WHERE i.quantity <= COALESCE(p.reorder_point, 0) AND i.company_id = $1`,
+      `SELECT count(*)::int AS count FROM (
+         SELECT i2.product_id
+         FROM inventory i2
+         JOIN products p2 ON p2.id = i2.product_id
+         WHERE i2.quantity >= 0 AND i2.company_id = $1
+         GROUP BY i2.product_id
+         HAVING COALESCE(sum(i2.quantity), 0) <= COALESCE(max(p2.reorder_point), 0)
+       ) low`,
       [company ?? -1]
     );
     const openOrders = await safe(

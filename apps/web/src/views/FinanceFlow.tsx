@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
+import { useCompanyProfile } from '../company';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, PageLoader, Modal, Pager } from '../components/ui';
 import { ConfirmDialog } from '../components/os';
@@ -74,6 +75,7 @@ function StatusSelect({ value, onChange, options }: { value: string; onChange: (
 }
 
 function Overview() {
+  const company = useCompanyProfile();
   const { user } = useAuth();
   const [data, setData] = useState<Rec | null>(null);
   const [error, setError] = useState('');
@@ -89,7 +91,7 @@ function Overview() {
       <header className="page-head">
         <div>
           <p className="mod-kicker" data-mod="fin">General ledger</p>
-          <h1>Books of Hope Design</h1>
+          <h1>Books of {company.name}</h1>
           <p className="muted">
             Double-entry only. {data.trialBalanceOk ? 'Trial balance is in balance.' : 'Trial balance is out of balance - investigate before period close.'}
           </p>

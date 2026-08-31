@@ -15,6 +15,7 @@ const TABS: { resource: string; label: string; perm: string }[] = [
   { resource: 'stock', label: 'Stock', perm: 'inventory.stock.view' },
   { resource: 'assets', label: 'Assets', perm: 'assets.register.view' },
   { resource: 'materials', label: 'Raw Materials', perm: 'inventory.items.view' },
+  { resource: 'consumables', label: 'Consumables', perm: 'inventory.items.view' },
   { resource: 'warehouses', label: 'Warehouses', perm: 'inventory.warehouses.view' },
   { resource: 'movements', label: 'Movements', perm: 'inventory.movements.view' },
   { resource: 'transfers', label: 'Transfers', perm: 'inventory.transfers.view' },
@@ -32,7 +33,13 @@ interface CatalogSpec {
   createLabel?: string;
   createPerm?: string;
   detail?: (id: number) => string;
+  /** Client-side type filter so the Products catalogue stays separated from raw materials. */
+  types?: string[];
 }
+
+// Products catalogue = finished goods only. Raw materials, packaging and
+// consumables belong to the Raw Materials catalogue (server-filtered).
+const FG_TYPES = ['REAM', 'FINISHED_GOODS', 'SHEET', 'SECURITY_ITEM'];
 
 const CATALOGS: Record<string, CatalogSpec> = {
   items: {
@@ -41,13 +48,21 @@ const CATALOGS: Record<string, CatalogSpec> = {
     createLabel: 'New product',
     createPerm: 'inventory.items.create',
     detail: (id) => `/inventory/items/${id}`,
+    types: FG_TYPES,
   },
   materials: {
     resource: 'materials', module: 'inventory', label: 'Raw Materials',
-    tagline: 'Jumbo rolls, paper bobbins, packaging, consumables and spares consumed by production.',
+    tagline: 'Jumbo rolls, paper bobbins and packaging consumed by production.',
     createLabel: 'New material',
     createPerm: 'inventory.items.create',
     detail: (id) => `/inventory/materials/${id}`,
+  },
+  consumables: {
+    resource: 'consumables', module: 'inventory', label: 'Consumables',
+    tagline: 'Consumables, spares and other production supplies — kept separate from raw materials.',
+    createLabel: 'New consumable',
+    createPerm: 'inventory.items.create',
+    detail: (id) => `/inventory/consumables/${id}`,
   },
   assets: {
     resource: 'register', module: 'assets', label: 'Assets',
@@ -91,18 +106,30 @@ function expiryBadge(expiry: unknown) {
   return <span className="muted">{String(expiry)}</span>;
 }
 
-const RAW_TYPES = ['JUMBO_ROLL', 'PAPER_BOBBIN', 'PACKAGING', 'CONSUMABLE', 'SPARE_PART'];
+const RAW_TYPES = ['JUMBO_ROLL', 'PAPER_BOBBIN', 'PACKAGING'];
+const CONSUMABLE_TYPES = ['CONSUMABLE', 'SPARE_PART'];
 
 const TYPE_CHIPS: { label: string; value: string }[] = [
   { label: 'All types', value: '' },
   { label: 'Ream', value: 'REAM' },
   { label: 'Raw materials', value: RAW_TYPES.join(',') },
+  { label: 'Consumables', value: CONSUMABLE_TYPES.join(',') },
   { label: 'Finished goods', value: 'FINISHED_GOODS,SHEET' },
   { label: 'Security', value: 'SECURITY_ITEM' },
 ];
 
 function isRawType(t: unknown): boolean {
   return typeof t === 'string' && RAW_TYPES.includes(t);
+}
+
+function isConsumableType(t: unknown): boolean {
+  return typeof t === 'string' && CONSUMABLE_TYPES.includes(t);
+}
+
+function productDetailPath(t: unknown, id: number): string {
+  if (isRawType(t)) return `/inventory/materials/${id}`;
+  if (isConsumableType(t)) return `/inventory/consumables/${id}`;
+  return `/inventory/items/${id}`;
 }
 
 const OPS = new Set(['ops', 'receive', 'pick', 'issue', 'demand', 'putaway', 'reservations']);
@@ -119,6 +146,7 @@ export default function InventoryFlow({ path }: { path: string }) {
     if (resource === 'adjustments') return <AdjustmentDetail id={Number(id)} />;
     if (resource === 'items') return <ProductStock id={Number(id)} />;
     if (resource === 'materials') return <EntityDetail route={{ segments: ['records', 'inventory', 'materials', String(id)] }} />;
+    if (resource === 'consumables') return <EntityDetail route={{ segments: ['records', 'inventory', 'consumables', String(id)] }} />;
     if (resource === 'warehouses') return <StockBoard warehouseId={Number(id)} />;
   }
   if (resource === 'stock' || resource === 'warehouses' && !id) {
@@ -211,6 +239,9 @@ function StockBoard({ warehouseId }: { warehouseId?: number }) {
           <button className="kpi-card" onClick={() => navigate('/inventory/materials')}>
             <span className="kpi-label">Raw materials</span><span className="kpi-value">{fmtNum(summary.catalogMaterials)}</span><span className="kpi-sub">{fmtNum(summary.materialLines)} stocked · consumed by production</span>
           </button>
+          <button className="kpi-card" onClick={() => navigate('/inventory/consumables')}>
+            <span className="kpi-label">Consumables</span><span className="kpi-value">{fmtNum(summary.catalogConsumables)}</span><span className="kpi-sub">{fmtNum(summary.consumableLines)} stocked · spares & supplies</span>
+          </button>
           <button className="kpi-card" onClick={() => navigate('/inventory/items')}>
             <span className="kpi-label">Products</span><span className="kpi-value">{fmtNum(summary.catalogProducts)}</span><span className="kpi-sub">{fmtNum(summary.productLines)} stocked · reams and finished goods</span>
           </button>
@@ -267,7 +298,7 @@ function StockBoard({ warehouseId }: { warehouseId?: number }) {
                 const availPct = onHand > 0 ? Math.max(0, Math.min(100, (available / onHand) * 100)) : 0;
                 const productId = Number(pick(row, 'productId'));
                 return (
-                  <tr key={String(row.id)} className={`row-click ${low ? 'row-warn' : ''}`} onClick={() => navigate(isRawType(pick(row, 'productType')) ? `/inventory/materials/${productId}` : `/inventory/items/${productId}`)}>
+                  <tr key={String(row.id)} className={`row-click ${low ? 'row-warn' : ''}`} onClick={() => navigate(productDetailPath(pick(row, 'productType'), productId))}>
                     <td>
                       <div className="cell-mono">{String(pick(row, 'productCode') ?? '')}</div>
                       <div>{String(pick(row, 'productName') ?? '')}</div>
@@ -606,7 +637,7 @@ function DocumentList({ resource }: { resource: string }) {
   );
 }
 
-function CatalogList({ resource, module = 'inventory', label, tagline, createLabel, createPerm, detail }: CatalogSpec) {
+function CatalogList({ resource, module = 'inventory', label, tagline, createLabel, createPerm, detail, types }: CatalogSpec) {
   const { user } = useAuth();
   const [meta, setMeta] = useState<EntityMeta | null>(null);
   const [rows, setRows] = useState<Rec[]>([]);
@@ -627,7 +658,11 @@ function CatalogList({ resource, module = 'inventory', label, tagline, createLab
     const params = new URLSearchParams({ page: String(p), pageSize: '25' });
     if (query.trim()) params.set('q', query.trim());
     api<ListResult>(`/api/${module}/${resource}?${params}`)
-      .then((r) => { setRows(r.data); setTotal(r.pagination?.total ?? r.data.length); })
+      .then((r) => {
+        const rows2 = types ? r.data.filter((x) => types.includes(String(pick(x, 'type') ?? ''))) : r.data;
+        setRows(rows2);
+        setTotal(types ? rows2.length : (r.pagination?.total ?? r.data.length));
+      })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'));
   }, [meta, module, resource]);
 

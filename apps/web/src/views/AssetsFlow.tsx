@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, fmtDate, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
+import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { EmptyState, Skeleton } from '../components/os';
@@ -68,6 +69,7 @@ function KpiTile({ label, value, sub, icon, accent, tint, href, money }: {
 }
 
 function AssetBoard() {
+  const company = useCompanyProfile();
   const { user } = useAuth();
   const [data, setData] = useState<Rec | null>(null);
   const [recent, setRecent] = useState<Rec[]>([]);
@@ -105,7 +107,7 @@ function AssetBoard() {
       <ModuleHeader
         kicker="Asset management"
         title="Asset command centre"
-        sub="Register, tag, track and manage every physical and capital asset across Hope Design Group — from procurement and custody to maintenance, depreciation and disposal."
+        sub={`Register, tag, track and manage every physical and capital asset across ${company.name} — from procurement and custody to maintenance, depreciation and disposal.`}
         actions={
           <>
             {can(user, 'assets.register.create') && <button className="btn btn-primary" onClick={() => navigate('/assets/register?new=1')}>Register asset</button>}

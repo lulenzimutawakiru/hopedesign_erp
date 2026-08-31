@@ -1487,6 +1487,100 @@ export async function productionCosting(client: pg.PoolClient, ctx: Ctx, workOrd
   return toCamelRows(rows.rows);
 }
 
+// Costing desk: standard vs actual cost across every work order, cost mix
+// components and per-unit economics driven by the packaging hierarchy.
+export async function costingDesk(client: pg.PoolClient, ctx: Ctx) {
+  const rows = await client.query(
+    `SELECT wo.id, wo.wo_no, wo.status, wo.priority, wo.quantity, wo.produced_qty, wo.scrapped_qty,
+            wo.rework_qty, wo.waste_qty, wo.standard_cost, wo.actual_material_cost, wo.actual_labour_cost,
+            wo.actual_machine_cost, wo.actual_overhead_cost, wo.actual_waste_cost, wo.actual_other_cost,
+            wo.actual_cost, wo.cost_variance, wo.yield_percent, wo.efficiency_percent,
+            wo.start_date, wo.due_date, wo.started_at, wo.completed_at,
+            p.id AS product_id, p.code AS product_code, p.name AS product_name,
+            m.code AS machine_code, m.name AS machine_name,
+            u.code AS unit_code, u.name AS unit_name
+     FROM work_orders wo
+     JOIN products p ON p.id = wo.product_id
+     LEFT JOIN machines m ON m.id = wo.machine_id
+     LEFT JOIN units u ON u.id = wo.unit_id
+     WHERE wo.tenant_id = $1 AND wo.status <> 'DRAFT'
+     ORDER BY wo.id DESC LIMIT 400`,
+    [ctx.tenantId]
+  );
+  const sum = await client.query(
+    `SELECT COUNT(*)::int AS orders,
+            COUNT(*) FILTER (WHERE wo.status IN ('COMPLETED','CLOSED'))::int AS completed,
+            COUNT(*) FILTER (WHERE wo.status NOT IN ('COMPLETED','CLOSED','DRAFT'))::int AS open,
+            COUNT(*) FILTER (WHERE wo.actual_cost < wo.standard_cost)::int AS favourable,
+            COUNT(*) FILTER (WHERE wo.actual_cost > wo.standard_cost)::int AS adverse,
+            COALESCE(SUM(wo.standard_cost),0)::numeric AS total_standard,
+            COALESCE(SUM(wo.actual_cost),0)::numeric AS total_actual,
+            COALESCE(SUM(wo.cost_variance),0)::numeric AS total_variance,
+            COALESCE(SUM(wo.actual_material_cost),0)::numeric AS total_material,
+            COALESCE(SUM(wo.actual_labour_cost),0)::numeric AS total_labour,
+            COALESCE(SUM(wo.actual_machine_cost),0)::numeric AS total_machine,
+            COALESCE(SUM(wo.actual_overhead_cost),0)::numeric AS total_overhead,
+            COALESCE(SUM(wo.actual_waste_cost),0)::numeric AS total_waste
+     FROM work_orders wo WHERE wo.tenant_id = $1 AND wo.status <> 'DRAFT'`,
+    [ctx.tenantId]
+  );
+  const posted = await client.query(
+    `SELECT COUNT(*)::int AS count, COALESCE(SUM(pc.actual_cost),0)::numeric AS value
+     FROM production_costs pc WHERE pc.tenant_id = $1 AND pc.status = 'POSTED'`,
+    [ctx.tenantId]
+  );
+  const hier = await client.query(
+    `SELECT product_id, level_code, qty_per_parent, weight_kg
+     FROM packaging_hierarchies WHERE tenant_id = $1 AND is_active = true
+     ORDER BY product_id, sort_order`,
+    [ctx.tenantId]
+  );
+  const pkgByProduct = new Map<number, { sheetsPerReam: number; reamKg: number; reamsPerCarton: number; cartonsPerPallet: number; cartonKg: number; palletKg: number }>();
+  for (const h of hier.rows) {
+    const pid = Number(h.product_id);
+    const level = String(h.level_code ?? '').toUpperCase();
+    const m = pkgByProduct.get(pid) ?? { sheetsPerReam: 0, reamKg: 0, reamsPerCarton: 0, cartonsPerPallet: 0, cartonKg: 0, palletKg: 0 };
+    if (level === 'REAM') {
+      m.sheetsPerReam = Number(h.qty_per_parent);
+      m.reamKg = Number(h.weight_kg);
+    } else if (level === 'CARTON') {
+      m.reamsPerCarton = Number(h.qty_per_parent);
+      m.cartonKg = Number(h.weight_kg);
+    } else if (level === 'PALLET') {
+      m.cartonsPerPallet = Number(h.qty_per_parent);
+      m.palletKg = Number(h.weight_kg);
+    }
+    pkgByProduct.set(pid, m);
+  }
+  const s = sum.rows[0];
+  const p = posted.rows[0];
+  return {
+    summary: {
+      orders: Number(s.orders),
+      completed: Number(s.completed),
+      open: Number(s.open),
+      favourable: Number(s.favourable),
+      adverse: Number(s.adverse),
+      posted: Number(p.count),
+      postedValue: round2(Number(p.value)),
+      totalStandard: round2(Number(s.total_standard)),
+      totalActual: round2(Number(s.total_actual)),
+      totalVariance: round2(Number(s.total_variance)),
+      variancePct: round2(pct(Number(s.total_variance), Number(s.total_standard))),
+      totalMaterial: round2(Number(s.total_material)),
+      totalLabour: round2(Number(s.total_labour)),
+      totalMachine: round2(Number(s.total_machine)),
+      totalOverhead: round2(Number(s.total_overhead)),
+      totalWaste: round2(Number(s.total_waste)),
+    },
+    rows: rows.rows.map((r) => {
+      const pkg = pkgByProduct.get(Number(r.product_id)) ?? null;
+      const complete = !!pkg && pkg.reamKg > 0 && pkg.reamsPerCarton > 0 && pkg.cartonsPerPallet > 0;
+      return toCamelRow({ ...r, pkg: complete ? pkg : null });
+    }),
+  };
+}
+
 export async function workOrderCosting(client: pg.PoolClient, ctx: Ctx, workOrderId: number) {
   const wo = await getWorkOrder(client, ctx, workOrderId);
   const costs = await client.query(
@@ -2124,4 +2218,767 @@ export async function managementKpis(client: pg.PoolClient, ctx: Ctx) {
       reworkOrders: num(reworkOrders.rows[0].count),
     },
   };
+}
+
+// ============================================================
+// MMS enterprise dashboard + operation desks
+// ============================================================
+
+/** Comprehensive Manufacturing Command Center aggregation. */
+export async function mfgDashboard(client: pg.PoolClient, ctx: Ctx) {
+  const T = ctx.tenantId ?? 0;
+
+  const prod = await client.query(
+    `SELECT
+       COUNT(*)::int AS orders,
+       COALESCE(SUM(quantity) FILTER (WHERE status NOT IN ('DRAFT','CANCELLED','REJECTED')),0)::numeric AS planned_qty,
+       COALESCE(SUM(produced_qty) FILTER (WHERE status NOT IN ('DRAFT','CANCELLED','REJECTED')),0)::numeric AS produced_qty,
+       COALESCE(SUM(quantity) FILTER (WHERE due_date = CURRENT_DATE AND status NOT IN ('DRAFT','CANCELLED','REJECTED','COMPLETED','CLOSED')),0)::numeric AS planned_today,
+       COALESCE(SUM(produced_qty) FILTER (WHERE completed_at::date = CURRENT_DATE),0)::numeric AS output_today,
+       COALESCE(SUM(produced_qty) FILTER (WHERE completed_at >= date_trunc('week', CURRENT_DATE)),0)::numeric AS output_week,
+       COALESCE(SUM(produced_qty) FILTER (WHERE completed_at >= date_trunc('month', CURRENT_DATE)),0)::numeric AS output_month,
+       COALESCE(SUM(waste_qty + scrapped_qty),0)::numeric AS waste_qty,
+       COALESCE(AVG(efficiency_percent) FILTER (WHERE efficiency_percent IS NOT NULL),0)::numeric AS efficiency_pct,
+       COUNT(*) FILTER (WHERE status IN ('IN_PROGRESS','ON_HOLD','QUALITY_INSPECTION'))::int AS live,
+       COUNT(*) FILTER (WHERE status IN ('COMPLETED','CLOSED'))::int AS completed
+     FROM work_orders WHERE tenant_id = $1 AND status NOT IN ('CANCELLED','REJECTED')`,
+    [T]
+  );
+  const p = prod.rows[0];
+  const plannedQty = num(p.planned_qty);
+  const producedQty = num(p.produced_qty);
+
+  const mach = await client.query(
+    `SELECT COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE machine_state = 'RUNNING')::int AS running,
+       COUNT(*) FILTER (WHERE machine_state = 'IDLE')::int AS idle,
+       COUNT(*) FILTER (WHERE machine_state IN ('SETUP','CHANGEOVER'))::int AS setup,
+       COUNT(*) FILTER (WHERE machine_state = 'MAINTENANCE')::int AS maintenance,
+       COUNT(*) FILTER (WHERE machine_state = 'BREAKDOWN')::int AS breakdown,
+       COUNT(*) FILTER (WHERE machine_state = 'OFFLINE')::int AS offline,
+       COALESCE(SUM(production_hours),0)::numeric AS running_hours,
+       COALESCE(SUM(downtime_hours),0)::numeric AS downtime_hours
+     FROM machines WHERE tenant_id = $1`,
+    [T]
+  );
+  const mc = mach.rows[0];
+
+  const cap = await client.query(
+    `SELECT COALESCE(SUM(available_hours),0)::numeric AS available,
+            COALESCE(SUM(actual_hours),0)::numeric AS actual,
+            COALESCE(SUM(downtime_hours + maintenance_hours + changeover_hours),0)::numeric AS lost,
+            COALESCE(AVG(oee_pct) FILTER (WHERE oee_pct IS NOT NULL),0)::numeric AS oee,
+            COALESCE(AVG(utilization_pct) FILTER (WHERE utilization_pct IS NOT NULL),0)::numeric AS utilization
+     FROM machine_capacity WHERE tenant_id = $1 AND capacity_date = CURRENT_DATE`,
+    [T]
+  );
+  const c = cap.rows[0];
+
+  const mat = await client.query(
+    `SELECT COALESCE(SUM(i.quantity),0)::numeric AS available,
+            COALESCE(SUM(i.reserved_qty),0)::numeric AS reserved
+     FROM inventory i JOIN products pr ON pr.id = i.product_id
+     WHERE i.tenant_id = $1 AND pr.type IN ('JUMBO_ROLL','PAPER_BOBBIN','SHEET','PACKAGING','CONSUMABLE')`,
+    [T]
+  );
+  const issue = await client.query(
+    `SELECT COALESCE(SUM(issued_qty),0)::numeric AS issued,
+            COALESCE(SUM(consumed_qty),0)::numeric AS consumed,
+            COALESCE(SUM(required_qty),0)::numeric AS required
+     FROM production_material_reservations WHERE tenant_id = $1`,
+    [T]
+  );
+  const wip = await client.query(
+    `SELECT COALESCE(SUM(wb.quantity),0)::numeric AS qty FROM wip_balances wb WHERE wb.tenant_id = $1`,
+    [T]
+  );
+  const fg = await client.query(
+    `SELECT COALESCE(SUM(wo.produced_qty),0)::numeric AS qty
+     FROM work_orders wo JOIN products pr ON pr.id = wo.product_id
+     WHERE wo.tenant_id = $1 AND wo.status IN ('COMPLETED','CLOSED') AND pr.type IN ('REAM','FINISHED_GOODS')`,
+    [T]
+  );
+
+  const qres = await client.query(
+    `SELECT COUNT(*) FILTER (WHERE ir.passed)::int AS passed,
+            COUNT(*) FILTER (WHERE ir.passed = false)::int AS failed,
+            COUNT(*)::int AS total
+     FROM inspection_results ir JOIN inspections i ON i.id = ir.inspection_id
+     WHERE i.tenant_id = $1 AND ir.passed IS NOT NULL`,
+    [T]
+  );
+  const q = qres.rows[0];
+  const rework = await client.query(
+    `SELECT COALESCE(SUM(rework_qty),0)::numeric AS qty FROM work_orders WHERE tenant_id = $1`,
+    [T]
+  );
+  const defects = await client.query(
+    `SELECT COUNT(*)::int AS count, COALESCE(SUM(quantity),0)::numeric AS qty FROM defects WHERE tenant_id = $1`,
+    [T]
+  );
+
+  const waste = await client.query(
+    `SELECT COALESCE(SUM(wr.waste_qty),0)::numeric AS qty,
+            COALESCE(SUM(wr.waste_qty * (wo.actual_material_cost / NULLIF(wo.quantity,0))),0)::numeric AS cost,
+            COUNT(*) FILTER (WHERE wr.is_abnormal)::int AS abnormal
+     FROM waste_records wr JOIN work_orders wo ON wo.id = wr.work_order_id
+     WHERE wr.tenant_id = $1`,
+    [T]
+  );
+  const scrap = await client.query(
+    `SELECT COALESCE(SUM(quantity),0)::numeric AS qty,
+            COALESCE(SUM(quantity * unit_cost),0)::numeric AS value
+     FROM scrap_records WHERE tenant_id = $1`,
+    [T]
+  );
+  const stdWaste = await client.query(
+    `SELECT COALESCE(SUM(ps.expected_waste_pct * wo.quantity),0)::numeric AS qty
+     FROM production_standards ps JOIN work_orders wo ON wo.product_id = ps.product_id AND ps.is_active
+     WHERE ps.tenant_id = $1 AND wo.status NOT IN ('DRAFT','CANCELLED','REJECTED')`,
+    [T]
+  );
+
+  const trend = await client.query(
+    `WITH days AS (SELECT generate_series(CURRENT_DATE - 13, CURRENT_DATE, interval '1 day')::date AS day)
+     SELECT days.day,
+            COALESCE(wp.planned,0)::numeric AS planned,
+            COALESCE(wa.actual,0)::numeric AS actual
+     FROM days
+     LEFT JOIN (SELECT due_date, SUM(quantity) AS planned FROM work_orders
+                WHERE tenant_id = $1 AND status NOT IN ('DRAFT','CANCELLED','REJECTED') GROUP BY due_date) wp
+       ON wp.due_date = days.day
+     LEFT JOIN (SELECT completed_at::date AS d, SUM(produced_qty) AS actual FROM work_orders
+                WHERE tenant_id = $1 AND completed_at IS NOT NULL GROUP BY 1) wa
+       ON wa.d = days.day
+     ORDER BY days.day`,
+    [T]
+  );
+
+  const machines = await client.query(
+    `SELECT m.id, m.code, m.name, m.type, m.machine_state, m.status, m.production_hours, m.downtime_hours,
+            m.maintenance_status, m.hourly_rate, m.work_centre_id,
+            wc.code AS work_centre_code, wc.name AS work_centre_name,
+            (SELECT wo.wo_no FROM work_orders wo
+             WHERE wo.machine_id = m.id AND wo.status IN ('IN_PROGRESS','ON_HOLD','QUALITY_INSPECTION')
+             ORDER BY wo.id DESC LIMIT 1) AS current_wo,
+            (SELECT wo.id FROM work_orders wo
+             WHERE wo.machine_id = m.id AND wo.status IN ('IN_PROGRESS','ON_HOLD','QUALITY_INSPECTION')
+             ORDER BY wo.id DESC LIMIT 1) AS current_wo_id
+     FROM machines m LEFT JOIN work_centres wc ON wc.id = m.work_centre_id
+     WHERE m.tenant_id = $1 ORDER BY m.code`,
+    [T]
+  );
+
+  const alerts = await client.query(
+    `SELECT id, alert_type, severity, title, message, status, created_at
+     FROM production_alerts WHERE tenant_id = $1 AND status != 'RESOLVED'
+     ORDER BY id DESC LIMIT 20`,
+    [T]
+  );
+
+  const activity = await client.query(
+    `SELECT id, event_type, entity_type, entity_code, payload, severity, created_at
+     FROM system_events
+     WHERE tenant_id = $1 AND event_type LIKE 'production.%'
+     ORDER BY id DESC LIMIT 12`,
+    [T]
+  );
+
+  const wasteQty = num(waste.rows[0].qty);
+  const totalOut = producedQty + wasteQty;
+  const qTotal = num(q.total);
+  const passRate = qTotal > 0 ? pct(num(q.passed), qTotal) : 100;
+  const todayPlanned = num(p.planned_today);
+
+  return {
+    production: {
+      orders: num(p.orders),
+      live: num(p.live),
+      completed: num(p.completed),
+      planned: plannedQty,
+      produced: producedQty,
+      achievementPct: pct(producedQty, plannedQty),
+      efficiencyPct: round2(num(p.efficiency_pct)),
+      variance: round2(producedQty - plannedQty),
+      plannedToday: todayPlanned,
+      outputToday: num(p.output_today),
+      achievementTodayPct: pct(num(p.output_today), todayPlanned),
+      outputWeek: num(p.output_week),
+      outputMonth: num(p.output_month),
+    },
+    machine: {
+      total: num(mc.total),
+      running: num(mc.running),
+      idle: num(mc.idle),
+      setup: num(mc.setup),
+      maintenance: num(mc.maintenance),
+      breakdown: num(mc.breakdown),
+      offline: num(mc.offline),
+      runningHours: round2(num(mc.running_hours)),
+      downtimeHours: round2(num(mc.downtime_hours)),
+      availableHours: round2(num(c.available)),
+      actualHours: round2(num(c.actual)),
+      lostHours: round2(num(c.lost)),
+      oeePct: round2(num(c.oee)),
+      utilizationPct: round2(num(c.utilization)),
+    },
+    material: {
+      available: round2(num(mat.rows[0].available)),
+      reserved: round2(num(mat.rows[0].reserved)),
+      issued: round2(num(issue.rows[0].issued)),
+      consumed: round2(num(issue.rows[0].consumed)),
+      required: round2(num(issue.rows[0].required)),
+      wipQty: round2(num(wip.rows[0].qty)),
+      finishedGoods: round2(num(fg.rows[0].qty)),
+    },
+    quality: {
+      passRatePct: round2(passRate),
+      rejectionRatePct: round2(100 - passRate),
+      passed: num(q.passed),
+      failed: num(q.failed),
+      total: qTotal,
+      reworkQty: round2(num(rework.rows[0].qty)),
+      defectCount: num(defects.rows[0].count),
+      defectQty: round2(num(defects.rows[0].qty)),
+    },
+    waste: {
+      standardQty: round2(num(stdWaste.rows[0].qty)),
+      actualQty: wasteQty,
+      wastePct: totalOut > 0 ? round2((wasteQty / totalOut) * 100) : 0,
+      cost: round2(num(waste.rows[0].cost)),
+      abnormalCount: num(waste.rows[0].abnormal),
+      scrapQty: round2(num(scrap.rows[0].qty)),
+      scrapValue: round2(num(scrap.rows[0].value)),
+    },
+    trend: toCamelRows(trend.rows),
+    machines: toCamelRows(machines.rows),
+    alerts: toCamelRows(alerts.rows),
+    activity: toCamelRows(activity.rows),
+  };
+}
+
+/** Machine status desk: enriched machines with live work order and operator. */
+export async function machineStatusDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT m.id, m.code, m.name, m.make, m.model, m.serial_no, m.type, m.machine_state, m.status,
+            m.production_hours, m.downtime_hours, m.maintenance_status, m.hourly_rate, m.capacity, m.capacity_unit,
+            m.location, m.work_centre_id, wc.code AS work_centre_code, wc.name AS work_centre_name,
+            (SELECT wo.wo_no FROM work_orders wo
+             WHERE wo.machine_id = m.id AND wo.status IN ('IN_PROGRESS','ON_HOLD','QUALITY_INSPECTION')
+             ORDER BY wo.id DESC LIMIT 1) AS current_wo,
+            (SELECT wo.id FROM work_orders wo
+             WHERE wo.machine_id = m.id AND wo.status IN ('IN_PROGRESS','ON_HOLD','QUALITY_INSPECTION')
+             ORDER BY wo.id DESC LIMIT 1) AS current_wo_id,
+            (SELECT u.first_name || ' ' || u.last_name FROM work_orders wo JOIN users u ON u.id = wo.operator_id
+             WHERE wo.machine_id = m.id AND wo.status IN ('IN_PROGRESS','ON_HOLD')
+             ORDER BY wo.id DESC LIMIT 1) AS operator_name
+     FROM machines m LEFT JOIN work_centres wc ON wc.id = m.work_centre_id
+     WHERE m.tenant_id = $1 ORDER BY wc.code, m.code`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Production standards master data. */
+export async function productionStandardsDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT ps.*, p.code AS product_code, p.name AS product_name, p.type AS product_type, u.code AS unit_code
+     FROM production_standards ps
+     JOIN products p ON p.id = ps.product_id
+     LEFT JOIN units u ON u.id = p.unit_id
+     WHERE ps.tenant_id = $1
+     ORDER BY p.code, ps.version DESC`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+export async function upsertProductionStandard(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+  const productId = Number(b.productId);
+  if (!productId) throw badRequest('productId is required');
+  const existing = await client.query(
+    `SELECT id FROM production_standards WHERE tenant_id = $1 AND product_id = $2 AND is_active ORDER BY version DESC LIMIT 1`,
+    [ctx.tenantId ?? 0, productId]
+  );
+  const fields: Record<string, unknown> = {
+    company_id: ctx.companyId ?? null,
+    tenant_id: ctx.tenantId ?? null,
+    branch_id: ctx.branchId ?? null,
+    product_id: productId,
+    version: existing.rows.length ? Number(existing.rows[0].version) + 1 : 1,
+    standard_setup_min: b.standardSetupMin != null ? Number(b.standardSetupMin) : 0,
+    standard_run_min_per_unit: b.standardRunMinPerUnit != null ? Number(b.standardRunMinPerUnit) : 0,
+    standard_labour_hours: b.standardLabourHours != null ? Number(b.standardLabourHours) : 0,
+    expected_output: b.expectedOutput != null ? Number(b.expectedOutput) : null,
+    expected_waste_pct: b.expectedWastePct != null ? Number(b.expectedWastePct) : 0,
+    waste_tolerance_pct: b.wasteTolerancePct != null ? Number(b.wasteTolerancePct) : 0,
+    standard_cost: b.standardCost != null ? Number(b.standardCost) : 0,
+    cost_rate: b.costRate != null ? Number(b.costRate) : 0,
+    quality_checkpoints: b.qualityCheckpoints != null ? JSON.stringify(b.qualityCheckpoints) : '[]',
+    attributes: b.attributes != null ? JSON.stringify(b.attributes) : '{}',
+    is_active: b.isActive !== false,
+    notes: b.notes != null ? String(b.notes) : null,
+    created_by: ctx.userId ?? null,
+  };
+  await client.query(
+    `UPDATE production_standards SET is_active = false WHERE tenant_id = $1 AND product_id = $2 AND is_active`,
+    [ctx.tenantId ?? 0, productId]
+  );
+  const cols = Object.keys(fields);
+  const params = cols.map((k, i) => `$${i + 1}`);
+  const { rows } = await client.query(
+    `INSERT INTO production_standards (${cols.join(', ')}) VALUES (${params.join(', ')}) RETURNING id`,
+    cols.map((k) => fields[k])
+  );
+  await mesEvent(client, ctx, {
+    eventType: 'PRODUCTION_STANDARD_UPSERTED',
+    entityType: 'production_standards',
+    entityId: Number(rows[0].id),
+    entityCode: String(productId),
+    payload: { productId, version: fields.version },
+  });
+  return { id: Number(rows[0].id), version: fields.version };
+}
+
+/** Quality inspections desk (incoming / in-process / final). */
+export async function qualityInspectionsDesk(client: pg.PoolClient, ctx: Ctx, q: Record<string, unknown>) {
+  const kind = q.kind != null && String(q.kind) !== '' ? String(q.kind) : null;
+  const result = q.result != null && String(q.result) !== '' ? String(q.result) : null;
+  const res = await client.query(
+    `SELECT i.*, p.code AS product_code, p.name AS product_name, wo.wo_no, pb.batch_no,
+            (SELECT COALESCE(json_agg(ir ORDER BY ir.id), '[]'::json) FROM inspection_results ir WHERE ir.inspection_id = i.id) AS results
+     FROM inspections i
+     JOIN products p ON p.id = i.product_id
+     LEFT JOIN work_orders wo ON wo.id = i.work_order_id
+     LEFT JOIN product_batches pb ON pb.id = i.batch_id
+     WHERE i.tenant_id = $1
+       AND ($2::text IS NULL OR i.kind = $2)
+       AND ($3::text IS NULL OR i.result = $3)
+     ORDER BY i.id DESC LIMIT 200`,
+    [ctx.tenantId ?? 0, kind, result]
+  );
+  return toCamelRows(res.rows);
+}
+
+export async function createInspection(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+  const productId = Number(b.productId);
+  if (!productId) throw badRequest('productId is required');
+  const kind = String(b.kind ?? 'FINAL');
+  const inspectionNo = await nextDoc(client, ctx, 'QC');
+  const { rows } = await client.query(
+    `INSERT INTO inspections
+       (company_id, tenant_id, branch_id, inspection_no, plan_id, kind, ref_type, ref_id, product_id,
+        batch_id, work_order_id, quantity, sampled_qty, inspector_id, notes, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'SUBMITTED')
+     RETURNING id`,
+    [
+      ctx.companyId ?? null,
+      ctx.tenantId ?? null,
+      ctx.branchId ?? null,
+      inspectionNo,
+      b.planId != null ? Number(b.planId) : null,
+      kind,
+      String(b.refType ?? 'WORK_ORDER'),
+      Number(b.refId ?? b.workOrderId ?? 0),
+      productId,
+      b.batchId != null ? Number(b.batchId) : null,
+      b.workOrderId != null ? Number(b.workOrderId) : null,
+      b.quantity != null ? Number(b.quantity) : null,
+      b.sampledQty != null ? Number(b.sampledQty) : null,
+      ctx.userId ?? null,
+      b.notes != null ? String(b.notes) : null,
+    ]
+  );
+  await mesEvent(client, ctx, {
+    eventType: 'QUALITY_INSPECTION_CREATED',
+    entityType: 'inspections',
+    entityId: Number(rows[0].id),
+    entityCode: inspectionNo,
+    payload: { kind, productId, workOrderId: b.workOrderId ?? null },
+  });
+  return { id: Number(rows[0].id), inspectionNo };
+}
+
+export async function submitInspection(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+  const inspectionId = Number(b.id);
+  if (!inspectionId) throw badRequest('inspection id is required');
+  const insp = await client.query(
+    `SELECT * FROM inspections WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+    [inspectionId, ctx.tenantId ?? 0]
+  );
+  if (insp.rows.length === 0) throw notFound('Inspection not found');
+  const results = Array.isArray(b.results) ? (b.results as Record<string, unknown>[]) : [];
+  for (const r of results) {
+    await client.query(
+      `INSERT INTO inspection_results (inspection_id, parameter, method, standard_value, actual_value, unit, passed, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        inspectionId,
+        String(r.parameter ?? ''),
+        r.method != null ? String(r.method) : null,
+        r.standardValue != null ? String(r.standardValue) : null,
+        r.actualValue != null ? String(r.actualValue) : null,
+        r.unit != null ? String(r.unit) : null,
+        r.passed != null ? Boolean(r.passed) : null,
+        r.notes != null ? String(r.notes) : null,
+      ]
+    );
+  }
+  const result = String(b.result ?? 'PASSED').toUpperCase();
+  if (!['PASSED', 'FAILED', 'QUARANTINED', 'PENDING'].includes(result)) throw badRequest(`Invalid result: ${result}`);
+  await client.query(
+    `UPDATE inspections SET result = $2, inspected_at = now(), completed_at = now(), notes = COALESCE($3, notes)
+     WHERE id = $1`,
+    [inspectionId, result, b.notes != null ? String(b.notes) : null]
+  );
+  const row = insp.rows[0];
+  if (row.batch_id) {
+    if (result === 'PASSED') {
+      await client.query(
+        `UPDATE product_batches SET status = 'COMPLETED' WHERE id = $1 AND status IN ('OPEN','IN_PRODUCTION','QUALITY_HOLD')`,
+        [row.batch_id]
+      );
+    } else if (result === 'FAILED') {
+      await client.query(
+        `UPDATE product_batches SET status = 'QUALITY_HOLD' WHERE id = $1 AND status IN ('OPEN','IN_PRODUCTION')`,
+        [row.batch_id]
+      );
+    }
+  }
+  await mesEvent(client, ctx, {
+    eventType: 'QUALITY_INSPECTION_RESULT',
+    entityType: 'inspections',
+    entityId: inspectionId,
+    entityCode: String(row.inspection_no),
+    payload: { result, tests: results.length, workOrderId: row.work_order_id ?? null },
+    severity: result === 'FAILED' ? 'WARN' : 'INFO',
+  });
+  return { id: inspectionId, result, tests: results.length };
+}
+
+/** Non-conformance report desk. */
+export async function ncrDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT n.*, p.code AS product_code, p.name AS product_name
+     FROM ncrs n LEFT JOIN products p ON p.id = n.product_id
+     WHERE n.tenant_id = $1 ORDER BY n.id DESC LIMIT 200`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** WIP desk: materials and semi-finished units moving through the floor. */
+export async function wipDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT wb.*, wo.wo_no, p.code AS product_code, p.name AS product_name,
+            m.code AS machine_code, m.name AS machine_name,
+            wc.name AS work_centre_name, r.name AS routing_name,
+            op.name AS operation_name, u.code AS unit_code
+     FROM wip_balances wb
+     JOIN work_orders wo ON wo.id = wb.work_order_id
+     JOIN products p ON p.id = wb.product_id
+     LEFT JOIN machines m ON m.id = wb.machine_id
+     LEFT JOIN work_centres wc ON wc.id = wb.work_centre_id
+     LEFT JOIN routing_operations op ON op.id = wb.routing_operation_id
+     LEFT JOIN routings r ON r.id = wo.routing_id
+     LEFT JOIN units u ON u.id = wb.unit_id
+     WHERE wb.tenant_id = $1 AND wb.quantity != 0
+     ORDER BY wb.updated_at DESC LIMIT 250`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Production output ledger (good / reject / rework / scrap). */
+export async function outputsDesk(client: pg.PoolClient, ctx: Ctx, q: Record<string, unknown>) {
+  const outType = q.outputType != null && String(q.outputType) !== '' ? String(q.outputType) : null;
+  const res = await client.query(
+    `SELECT po.*, wo.wo_no, p.code AS product_code, p.name AS product_name, pb.batch_no
+     FROM production_outputs po
+     JOIN work_orders wo ON wo.id = po.work_order_id
+     JOIN products p ON p.id = wo.product_id
+     LEFT JOIN product_batches pb ON pb.id = po.batch_id
+     WHERE wo.tenant_id = $1 AND ($2::text IS NULL OR po.output_type = $2)
+     ORDER BY po.recorded_at DESC LIMIT 250`,
+    [ctx.tenantId ?? 0, outType]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Material reservations desk. */
+export async function reservationDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT pmr.*, wo.wo_no, p.code AS product_code, p.name AS product_name,
+            w.code AS warehouse_code, w.name AS warehouse_name, u.code AS unit_code
+     FROM production_material_reservations pmr
+     JOIN work_orders wo ON wo.id = pmr.work_order_id
+     JOIN products p ON p.id = pmr.product_id
+     LEFT JOIN warehouses w ON w.id = pmr.warehouse_id
+     LEFT JOIN units u ON u.id = p.unit_id
+     WHERE pmr.tenant_id = $1
+     ORDER BY pmr.id DESC LIMIT 250`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Material issues desk. */
+export async function issueDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT pmi.*, wo.wo_no, p.code AS product_code, p.name AS product_name,
+            w.code AS warehouse_code, pb.batch_no
+     FROM production_material_issues pmi
+     JOIN work_orders wo ON wo.id = pmi.work_order_id
+     JOIN products p ON p.id = pmi.product_id
+     LEFT JOIN warehouses w ON w.id = pmi.warehouse_id
+     LEFT JOIN product_batches pb ON pb.id = pmi.batch_id
+     WHERE pmi.tenant_id = $1
+     ORDER BY pmi.id DESC LIMIT 250`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Waste ledger desk. */
+export async function wasteDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT wr.*, wo.wo_no, m.code AS machine_code, m.name AS machine_name,
+            pb.batch_no, u.code AS unit_code
+     FROM waste_records wr
+     JOIN work_orders wo ON wo.id = wr.work_order_id
+     LEFT JOIN machines m ON m.id = wr.machine_id
+     LEFT JOIN product_batches pb ON pb.id = wr.production_batch_id
+     LEFT JOIN units u ON u.id = wr.unit_id
+     WHERE wr.tenant_id = $1
+     ORDER BY wr.recorded_at DESC LIMIT 250`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Scrap ledger desk. */
+export async function scrapDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT sr.*, wo.wo_no, p.code AS product_code, p.name AS product_name,
+            m.code AS machine_code, pb.batch_no
+     FROM scrap_records sr
+     JOIN work_orders wo ON wo.id = sr.work_order_id
+     JOIN products p ON p.id = sr.product_id
+     LEFT JOIN machines m ON m.id = sr.machine_id
+     LEFT JOIN product_batches pb ON pb.id = sr.production_batch_id
+     WHERE sr.tenant_id = $1
+     ORDER BY sr.recorded_at DESC LIMIT 250`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Downtime ledger desk. */
+export async function downtimeDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT de.*, wo.wo_no, m.code AS machine_code, m.name AS machine_name,
+            wc.name AS work_centre_name
+     FROM downtime_events de
+     JOIN machines m ON m.id = de.machine_id
+     LEFT JOIN work_orders wo ON wo.id = de.work_order_id
+     LEFT JOIN work_centres wc ON wc.id = de.work_centre_id
+     WHERE de.tenant_id = $1
+     ORDER BY de.started_at DESC LIMIT 250`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Gantt schedule data: machine rows x date columns with work order bars. */
+export async function ganttDesk(client: pg.PoolClient, ctx: Ctx, from?: string | null, to?: string | null) {
+  const fromDate = from ?? null;
+  const toDate = to ?? null;
+  const res = await client.query(
+    `SELECT m.id AS machine_id, m.code AS machine_code, m.name AS machine_name,
+            wo.id AS wo_id, wo.wo_no, p.code AS product_code, p.name AS product_name,
+            wo.status, wo.priority, wo.quantity, wo.produced_qty, wo.start_date, wo.due_date
+     FROM work_orders wo
+     JOIN machines m ON m.id = wo.machine_id
+     JOIN products p ON p.id = wo.product_id
+     WHERE wo.tenant_id = $1 AND wo.status NOT IN ('DRAFT','CANCELLED','REJECTED')
+       AND wo.machine_id IS NOT NULL
+       AND ($2::date IS NULL OR wo.due_date >= $2)
+       AND ($3::date IS NULL OR wo.start_date <= $3)
+     ORDER BY m.code, wo.start_date NULLS LAST, wo.id`,
+    [ctx.tenantId ?? 0, fromDate, toDate]
+  );
+  const machines = await client.query(
+    `SELECT id, code, name, machine_state FROM machines WHERE tenant_id = $1 ORDER BY code`,
+    [ctx.tenantId ?? 0]
+  );
+  return { bars: toCamelRows(res.rows), machines: toCamelRows(machines.rows) };
+}
+
+/** Packaging hierarchy configuration. */
+export async function packagingHierarchyDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT ph.*, p.code AS product_code, p.name AS product_name
+     FROM packaging_hierarchies ph
+     JOIN products p ON p.id = ph.product_id
+     WHERE ph.tenant_id = $1
+     ORDER BY p.code, ph.sort_order, ph.level`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+export async function upsertPackagingHierarchy(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+  const productId = Number(b.productId);
+  const level = Number(b.level ?? 1);
+  if (!productId) throw badRequest('productId is required');
+  await client.query(
+    `INSERT INTO packaging_hierarchies
+       (company_id, tenant_id, product_id, level, level_code, name, qty_per_parent, weight_kg, sort_order, is_active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT (company_id, product_id, level)
+     DO UPDATE SET level_code = EXCLUDED.level_code, name = EXCLUDED.name,
+       qty_per_parent = EXCLUDED.qty_per_parent, weight_kg = EXCLUDED.weight_kg,
+       sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, updated_at = now()`,
+    [
+      ctx.companyId ?? null,
+      ctx.tenantId ?? null,
+      productId,
+      level,
+      String(b.levelCode ?? `LV${level}`),
+      String(b.name ?? `Level ${level}`),
+      b.qtyPerParent != null ? Number(b.qtyPerParent) : 1,
+      b.weightKg != null ? Number(b.weightKg) : null,
+      b.sortOrder != null ? Number(b.sortOrder) : level,
+      b.isActive !== false,
+    ]
+  );
+  return { productId, level };
+}
+
+// ---------------------------------------------------------------------------
+// BOM & Engineering desk (bills of materials + routings)
+// ---------------------------------------------------------------------------
+export async function bomsDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT b.*, p.code AS product_code, p.name AS product_name, p.type AS product_type, u.code AS unit_code,
+       (SELECT count(*) FROM bom_items bi WHERE bi.bom_id = b.id) AS item_count,
+       (SELECT COALESCE(sum(bi.quantity), 0) FROM bom_items bi WHERE bi.bom_id = b.id) AS total_material_qty
+     FROM boms b
+     JOIN products p ON p.id = b.product_id
+     LEFT JOIN units u ON u.id = b.unit_id
+     WHERE b.tenant_id = $1
+     ORDER BY p.code, b.version DESC`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+export async function bomDetail(client: pg.PoolClient, ctx: Ctx, id: number) {
+  const hdr = await client.query(
+    `SELECT b.*, p.code AS product_code, p.name AS product_name, p.type AS product_type, u.code AS unit_code
+     FROM boms b
+     JOIN products p ON p.id = b.product_id
+     LEFT JOIN units u ON u.id = b.unit_id
+     WHERE b.id = $1 AND b.tenant_id = $2`,
+    [id, ctx.tenantId ?? 0]
+  );
+  if (hdr.rows.length === 0) throw notFound('BOM not found');
+  const items = await client.query(
+    `SELECT bi.id, bi.product_id AS material_id, bi.quantity, bi.scrap_percent, bi.is_consumable,
+       p.code AS material_code, p.name AS material_name, p.type AS material_type, u.code AS unit_code
+     FROM bom_items bi
+     JOIN products p ON p.id = bi.product_id
+     LEFT JOIN units u ON u.id = bi.unit_id
+     WHERE bi.bom_id = $1
+     ORDER BY bi.is_consumable, bi.id`,
+    [id]
+  );
+  return { ...toCamelRow(hdr.rows[0]), items: toCamelRows(items.rows) };
+}
+
+export async function routingsDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT r.*, p.code AS product_code, p.name AS product_name,
+       (SELECT count(*) FROM routing_operations ro WHERE ro.routing_id = r.id) AS op_count,
+       (SELECT COALESCE(sum(ro.setup_time_min + ro.teardown_time_min), 0)
+          FROM routing_operations ro WHERE ro.routing_id = r.id) AS setup_teardown_min
+     FROM routings r
+     JOIN products p ON p.id = r.product_id
+     WHERE r.tenant_id = $1
+     ORDER BY p.code, r.version DESC`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+export async function routingDetail(client: pg.PoolClient, ctx: Ctx, id: number) {
+  const hdr = await client.query(
+    `SELECT r.*, p.code AS product_code, p.name AS product_name
+     FROM routings r
+     JOIN products p ON p.id = r.product_id
+     WHERE r.id = $1 AND r.tenant_id = $2`,
+    [id, ctx.tenantId ?? 0]
+  );
+  if (hdr.rows.length === 0) throw notFound('Routing not found');
+  const ops = await client.query(
+    `SELECT ro.id, ro.seq, ro.name, ro.setup_time_min, ro.run_time_per_unit_min, ro.teardown_time_min,
+       wc.code AS work_centre_code, wc.name AS work_centre_name,
+       m.code AS machine_code, m.name AS machine_name
+     FROM routing_operations ro
+     LEFT JOIN work_centres wc ON wc.id = ro.work_centre_id
+     LEFT JOIN machines m ON m.id = ro.machine_id
+     WHERE ro.routing_id = $1
+     ORDER BY ro.seq`,
+    [id]
+  );
+  return { ...toCamelRow(hdr.rows[0]), operations: toCamelRows(ops.rows) };
+}
+
+export async function createBom(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+  const productId = Number(b.productId);
+  if (!productId) throw badRequest('productId is required');
+  const code = b.code != null ? String(b.code).trim() : null;
+  const res = await client.query(
+    `INSERT INTO boms
+       (company_id, tenant_id, product_id, code, name, version, quantity, unit_id, is_active, effective_from, effective_to, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     RETURNING id, code, name`,
+    [
+      ctx.companyId ?? null,
+      ctx.tenantId ?? null,
+      productId,
+      code,
+      String(b.name ?? 'BOM'),
+      Number(b.version ?? 1),
+      b.quantity != null ? Number(b.quantity) : 1,
+      b.unitId != null ? Number(b.unitId) : null,
+      b.isActive !== false,
+      b.effectiveFrom != null ? new Date(String(b.effectiveFrom)) : null,
+      b.effectiveTo != null ? new Date(String(b.effectiveTo)) : null,
+      String(b.status ?? 'DRAFT'),
+    ]
+  );
+  return toCamelRow(res.rows[0]);
+}
+
+export async function createRouting(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+  const productId = Number(b.productId);
+  if (!productId) throw badRequest('productId is required');
+  const code = b.code != null ? String(b.code).trim() : null;
+  const res = await client.query(
+    `INSERT INTO routings
+       (company_id, tenant_id, product_id, code, name, version, is_active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING id, code, name`,
+    [
+      ctx.companyId ?? null,
+      ctx.tenantId ?? null,
+      productId,
+      code,
+      String(b.name ?? 'Routing'),
+      Number(b.version ?? 1),
+      b.isActive !== false,
+    ]
+  );
+  return toCamelRow(res.rows[0]);
 }

@@ -1,6 +1,6 @@
 ﻿import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { tx } from '../db.js';
+import { query, tx } from '../db.js';
 import { verifyQrPublic } from '../services/qr.js';
 import { verifyEmployeePublic } from '../services/employeeIdentity.js';
 import { verifyContractDocument } from '../services/contracts.js';
@@ -152,6 +152,50 @@ publicVerificationRouter.get(
       }
     }
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Contract signature not found' } });
+  })
+);
+
+/**
+ * Public, read-only company branding profile for login screens, portals and
+ * verification pages. Mirrors the branding image routes: accepts optional
+ * tenant/company/branch query params, falls back to the authenticated context
+ * (when present) or to the first tenant for single-tenant deployments.
+ */
+publicVerificationRouter.get(
+  '/company',
+  asyncHandler(async (req, res) => {
+    const tenantParam = String(req.query.tenant ?? req.ctx.tenantId ?? '');
+    const companyParam = String(req.query.company ?? req.ctx.companyId ?? '');
+    const branchParam = String(req.query.branch ?? req.ctx.branchId ?? '');
+    if (tenantParam && !/^\d+$/.test(tenantParam)) throw badRequest('Invalid tenant');
+    if (companyParam && !/^\d+$/.test(companyParam)) throw badRequest('Invalid company');
+    if (branchParam && !/^\d+$/.test(branchParam)) throw badRequest('Invalid branch');
+
+    const tenantId = tenantParam
+      ? Number(tenantParam)
+      : Number((await query<{ id: string }>('SELECT id FROM tenants ORDER BY id ASC LIMIT 1')).rows[0]?.id) || 0;
+    const companyId = companyParam ? Number(companyParam) : null;
+    const branchId = branchParam ? Number(branchParam) : null;
+
+    const profile = await tx(
+      async (client) => {
+        let resolvedBranch = branchId;
+        if (!resolvedBranch) {
+          const br = await client.query<{ id: string }>(
+            `SELECT b.id FROM branches b
+             WHERE b.tenant_id = $1 AND ($2::bigint IS NULL OR b.company_id = $2)
+             ORDER BY b.id ASC LIMIT 1`,
+            [tenantId, companyId]
+          );
+          resolvedBranch = br.rows[0]?.id ? Number(br.rows[0].id) : null;
+        }
+        return toPublicCompany(
+          await loadCompanyProfile(client, { tenantId, companyId, branchId: resolvedBranch })
+        );
+      },
+      { tenantId, companyId, branchId }
+    );
+    res.json({ data: profile });
   })
 );
 

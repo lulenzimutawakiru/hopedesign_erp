@@ -7,3 +7,6 @@ coverage/
 .DS_Store
 data/
 apps/web/dist/
+
+.codex-patches/
+/prod-probe.cjs

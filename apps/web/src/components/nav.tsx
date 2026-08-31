@@ -19,6 +19,7 @@ import {
 } from '../nav';
 import { personaLabel, personaOf } from '../work';
 import { BrandMark } from './BrandMark';
+import { shortCompanyName } from '../company';
 import { CreateMenu } from './os';
 
 export function useBreakpoint(): Breakpoint {
@@ -155,6 +156,8 @@ function badgeCount(kind: BadgeKind | undefined, counts: Record<string, number>)
 export function Sidebar({
   path,
   user,
+  companyName,
+  companyCode,
   collapsed,
   open,
   peek,
@@ -167,6 +170,8 @@ export function Sidebar({
 }: {
   path: string;
   user: MeUser | null;
+  companyName?: string;
+  companyCode?: string;
   collapsed: boolean;
   open: boolean;
   peek: boolean;
@@ -194,8 +199,8 @@ export function Sidebar({
         <BrandMark size="md" />
         {expanded && (
           <div>
-            <strong>Hope OS</strong>
-            <span className="brand-sub">Design Group</span>
+            <strong>{shortCompanyName(companyName || 'Company')}</strong>
+            {companyCode ? <span className="brand-sub">{companyCode}</span> : null}
           </div>
         )}
       </div>
@@ -391,7 +396,7 @@ export function ScopeChip({ user }: { user: MeUser | null }) {
   return (
     <div className="scope-wrap">
       <button className="scope-chip" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="dialog" title={`${user.company_name ?? user.tenant_name ?? ''}${(user.company_name ?? user.tenant_name) ? ' · ' : ''}${user.company_code ?? user.tenant_code ?? ''}${user.branch_id ? ` · ${user.branch_name ?? ''} (${user.branch_code ?? ''})` : ''}${user.department_id ? ` · ${user.department_name ?? ''} (${user.department_code ?? ''})` : ''}${user.division_id ? ` · ${user.division_name ?? ''} (${user.division_code ?? ''})` : ''}${user.requester_code ? ` · Requester ${user.requester_name ?? ''} (${user.requester_code ?? ''})` : ''}${user.requesting_location_code ? ` · Requesting ${user.requesting_location_name ?? ''} (${user.requesting_location_code ?? ''})` : ''}${user.cost_centre_code ? ` · Cost Centre ${user.cost_centre_name ?? ''} (${user.cost_centre_code ?? ''})` : ''}${user.project_code ? ` · Project ${user.project_name ?? ''} (${user.project_code ?? ''})` : ''}${user.budget_code ? ` · Budget ${user.budget_code}` : ''}${user.fiscal_year_code ? ` · Fiscal Year ${user.fiscal_year_code}` : ''}${user.request_date ? ` · Requested ${user.request_date}` : ''}${user.required_by_date ? ` · Required by ${user.required_by_date}` : ''}${user.default_priority ? ` · Priority ${user.default_priority}` : ''}${user.default_procurement_category ? ` · Category ${user.default_procurement_category}` : ''}${user.default_purpose ? ` · Purpose set` : ''}${user.default_business_justification ? ` · Justification set` : ''}${user.default_delivery_location ? ` · Delivery set` : ''}${user.default_currency_code ? ` · Currency ${user.default_currency_code}` : ''}${user.default_expected_total ? ` · Expected ${Number(user.default_expected_total).toLocaleString()}` : ''}${user.default_confidentiality_level ? ` · Confidentiality ${user.default_confidentiality_level}` : ''}${user.default_emergency_purchase ? ` · Emergency default` : ''}${user.default_recurring_purchase ? ` · Recurring default` : ''}`.trim()}>
-        <span>{user.company_code ?? user.tenant_code ?? 'HDG'}</span>
+        <span>{user.company_code ?? user.tenant_code ?? ''}</span>
         {user.branch_id ? <span className="muted"> · {user.branch_code ?? user.branch_name ?? `B${user.branch_id}`}</span> : null}
       </button>
       {open && (

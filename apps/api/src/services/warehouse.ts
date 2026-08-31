@@ -46,9 +46,13 @@ export async function workQueue(client: pg.PoolClient, ctx: Ctx) {
   );
   const low = await client.query(
     `SELECT count(*)::int AS n
-     FROM inventory i JOIN products p ON p.id = i.product_id
-     WHERE i.tenant_id = $1 AND i.company_id = $2
-       AND i.quantity <= COALESCE(p.reorder_point, 0)`,
+     FROM (
+       SELECT i.product_id
+       FROM inventory i JOIN products p ON p.id = i.product_id
+       WHERE i.tenant_id = $1 AND i.company_id = $2 AND i.quantity >= 0
+       GROUP BY i.product_id
+       HAVING COALESCE(sum(i.quantity), 0) <= COALESCE(max(p.reorder_point), 0)
+     ) low`,
     [ctx.tenantId, ctx.companyId]
   );
   return {

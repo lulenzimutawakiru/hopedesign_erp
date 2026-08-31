@@ -1,4 +1,4 @@
-import { can, type MeUser } from './auth';
+﻿import { can, type MeUser } from './auth';
 
 export type NavGroupId =
   | 'home'
@@ -10,6 +10,8 @@ export type NavGroupId =
   | 'spend'
   | 'people'
   | 'analytics'
+  | 'communication'
+  | 'documents'
   | 'admin';
 
 export type BadgeKind = 'approvals' | 'exceptions' | 'inventory' | 'quality' | 'security';
@@ -46,7 +48,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'dashboard', label: 'Dashboard', href: '/dashboard', accent: 'exec', keywords: 'home today mission' },
       { id: 'work', label: 'My Work', href: '/work', accent: 'exec', keywords: 'tasks assigned queue' },
-      { id: 'approvals', label: 'Approvals', href: '/inbox', accent: 'exec', badge: 'approvals', keywords: 'approve reject inbox' },
+      { id: 'approvals', label: 'Approvals', href: '/approvals', accent: 'exec', badge: 'approvals', keywords: 'approve reject inbox decisions' },
     ],
   },
   {
@@ -72,9 +74,12 @@ export const NAV_GROUPS: NavGroup[] = [
         id: 'sales', label: 'Sales', href: '/sales', perm: 'sales.orders.view', module: 'sales', accent: 'sales',
         keywords: 'quote order invoice cash otc',
         children: [
-          { id: 'overview', label: 'Board', href: '/sales', perm: 'sales.orders.view' },
+          { id: 'overview', label: 'Command Center', href: '/sales', perm: 'sales.orders.view' },
+          { id: 'customers', label: 'Customers', href: '/sales/customers', perm: 'sales.quotations.view' },
           { id: 'quotations', label: 'Quotations', href: '/sales/quotations', perm: 'sales.quotations.view' },
           { id: 'orders', label: 'Sales Orders', href: '/sales/orders', perm: 'sales.orders.view' },
+          { id: 'production', label: 'Production Orders', href: '/records/production/work_orders', perm: 'production.work_orders.view' },
+          { id: 'pick', label: 'Warehouse Pick', href: '/inventory/pick', perm: 'inventory.stock.view' },
           { id: 'deliveries', label: 'Delivery Notes', href: '/sales/delivery_notes', perm: 'sales.delivery_notes.view' },
           { id: 'invoices', label: 'Invoices', href: '/sales/invoices', perm: 'sales.invoices.view' },
           { id: 'receipts', label: 'Receipts', href: '/sales/receipts', perm: 'sales.receipts.view' },
@@ -112,6 +117,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'assets', label: 'Assets', href: '/inventory/assets', perm: 'assets.register.view' },
           { id: 'intel', label: 'Intelligence', href: '/inventory-intel/command', perm: 'inventory.stock.view' },
           { id: 'materials', label: 'Raw Materials', href: '/inventory/materials', perm: 'inventory.items.view' },
+          { id: 'consumables', label: 'Consumables', href: '/inventory/consumables', perm: 'inventory.items.view' },
           { id: 'products', label: 'Products', href: '/inventory/items', perm: 'inventory.items.view' },
           { id: 'stock', label: 'Stock', href: '/inventory/stock', perm: 'inventory.stock.view' },
           { id: 'ops', label: 'Operations', href: '/inventory/ops', perm: 'inventory.stock.view' },
@@ -150,13 +156,37 @@ export const NAV_GROUPS: NavGroup[] = [
         keywords: 'plant machine wo manufacture mrp requisition',
         children: [
           { id: 'command', label: 'Command Center', href: '/plant/command', perm: 'production.kpis.view' },
+          { id: 'live_factory', label: 'Live Factory', href: '/plant/live', perm: 'production.machines.view' },
+          { id: 'alert_center', label: 'Factory Alerts', href: '/plant/alerts', perm: 'production.kpis.view' },
+          { id: 'production_wizard', label: 'Quick Create', href: '/plant/wizard', perm: 'production.work_orders.create' },
+          { id: 'visual_schedule', label: 'Visual Schedule', href: '/plant/gantt-ux', perm: 'production.plans.view' },
+          { id: 'operator_hub', label: 'Operator Hub', href: '/plant/operator-ux', perm: 'production.work_orders.start' },
+          { id: 'qc_checklist', label: 'QC Checklist', href: '/plant/inspections-ux', perm: 'quality.inspections.view' },
+          { id: 'material_issue_ux', label: 'Quick Issue', href: '/plant/issue-ux', perm: 'production.work_orders.issue' },
+          { id: 'waste_recorder', label: 'Quick Waste', href: '/plant/waste-ux', perm: 'production.outputs.view' },
           { id: 'overview', label: 'Board', href: '/plant', perm: 'production.work_orders.view' },
           { id: 'demand', label: 'Sales Demand', href: '/plant/demand', perm: 'production.work_orders.view' },
           { id: 'plans', label: 'Plans', href: '/plant/plans', perm: 'production.plans.view' },
           { id: 'mrp', label: 'MRP & Requisitions', href: '/plant/mrp', perm: 'production.plans.view' },
+          { id: 'dashboard', label: 'Manufacturing Dashboard', href: '/plant/dashboard', perm: 'production.kpis.view' },
+          { id: 'schedule', label: 'Schedule (Gantt)', href: '/plant/gantt', perm: 'production.plans.view' },
+          { id: 'standards', label: 'Standards', href: '/plant/standards', perm: 'production.work_orders.view' },
+          { id: 'packaging', label: 'Packaging', href: '/plant/packaging', perm: 'production.work_orders.view' },
+          { id: 'inspections', label: 'QC Inspections', href: '/plant/inspections', perm: 'quality.inspections.view' },
+          { id: 'wip', label: 'WIP', href: '/plant/wip', perm: 'production.work_orders.view' },
+          { id: 'outputs', label: 'Outputs', href: '/plant/outputs', perm: 'production.work_orders.view' },
+          { id: 'reservations', label: 'Reservations', href: '/plant/reservations', perm: 'inventory.stock.view' },
+          { id: 'issues', label: 'Material Issues', href: '/plant/issues', perm: 'production.work_orders.view' },
+          { id: 'waste', label: 'Waste', href: '/plant/waste', perm: 'production.work_orders.view' },
+          { id: 'scrap', label: 'Scrap', href: '/plant/scrap', perm: 'production.work_orders.view' },
+          { id: 'downtime', label: 'Downtime', href: '/plant/downtime', perm: 'production.kpis.view' },
+          { id: 'machine_status', label: 'Machine Status', href: '/plant/machines', perm: 'production.machines.view' },
+          { id: 'ncr', label: 'Manufacturing NCRs', href: '/plant/ncr', perm: 'quality.ncrs.view' },
           { id: 'work_orders', label: 'Work Orders', href: '/plant/orders', perm: 'production.work_orders.view' },
-          { id: 'machines', label: 'Machines', href: '/records/production/machines', perm: 'production.machines.view' },
-          { id: 'boms', label: 'BOMs', href: '/records/production/boms', perm: 'production.boms.view' },
+          { id: 'shifts', label: 'Shift Handover', href: '/plant/shifts', perm: 'production.work_orders.view' },
+            { id: 'machines', label: 'Machines', href: '/records/production/machines', perm: 'production.machines.view' },
+{ id: 'boms', label: 'BOMs', href: '/plant/boms', perm: 'production.boms.view' },
+          { id: 'costing', label: 'Costing', href: '/plant/costing', perm: 'production.costing.view' },
           { id: 'operator', label: 'Operator Floor', href: '/operator', perm: 'production.work_orders.start' },
         ],
       },
@@ -199,6 +229,18 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'ncrs', label: 'NCRs', href: '/records/quality/ncrs', perm: 'quality.ncrs.view' },
           { id: 'capa', label: 'CAPA', href: '/records/quality/capa', perm: 'quality.capa.view' },
           { id: 'defects', label: 'Defects', href: '/records/quality/defects', perm: 'quality.defects.view' },
+        ],
+      },
+      {
+        id: 'documents', label: 'Document Management', href: '/documents', perm: 'documents.view', module: 'documents', accent: 'doc',
+        keywords: 'documents dms library folders policies procedures contracts qms files',
+        children: [
+          { id: 'doc_dashboard', label: 'Dashboard', href: '/documents', perm: 'documents.command.view' },
+          { id: 'doc_library', label: 'Library', href: '/documents/library', perm: 'documents.view' },
+          { id: 'doc_folders', label: 'Folders', href: '/documents/folders', perm: 'documents.folders.manage' },
+          { id: 'doc_approvals', label: 'Approvals', href: '/documents/approvals', perm: 'documents.approve' },
+          { id: 'doc_audit', label: 'Activity', href: '/documents/audit', perm: 'documents.command.view' },
+          { id: 'doc_settings', label: 'Settings', href: '/documents/settings', perm: 'documents.settings.manage' },
         ],
       },
     ],
@@ -326,6 +368,26 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    id: 'communication',
+    label: 'Communication',
+    items: [
+      {
+        id: 'communication_center', label: 'Comm Center', href: '/communication', perm: 'communication.command.view', module: 'communication', accent: 'com',
+        keywords: 'inbox messages notifications email announcements templates delivery logs chat comms communication',
+        children: [
+          { id: 'com_center', label: 'Command Center', href: '/communication', perm: 'communication.command.view' },
+          { id: 'com_messages', label: 'Messages', href: '/communication/messages', perm: 'communication.messages.view' },
+          { id: 'com_notifications', label: 'Notifications', href: '/communication/notifications', perm: 'communication.notifications.view' },
+          { id: 'com_email', label: 'Email', href: '/communication/email', perm: 'communication.emails.view' },
+          { id: 'com_announcements', label: 'Announcements', href: '/communication/announcements', perm: 'communication.announcements.view' },
+          { id: 'com_templates', label: 'Templates', href: '/communication/templates', perm: 'communication.templates.view' },
+          { id: 'com_deliveries', label: 'Delivery Logs', href: '/communication/deliveries', perm: 'communication.delivery_logs.view' },
+          { id: 'com_settings', label: 'Settings', href: '/communication/settings', perm: 'communication.settings.manage' },
+        ],
+      },
+    ],
+  },
+  {
     id: 'admin',
     label: 'Administration',
     items: [
@@ -423,6 +485,8 @@ export function moduleActive(href: string, path: string): boolean {
   if (href === '/crm' && (path.startsWith('/crm') || path.includes('/crm/'))) return true;
   if (href === '/people' && (path.startsWith('/people') || path.includes('/hr/'))) return true;
   if (href === '/security-jobs' && (path.startsWith('/security') || path.includes('/security_printing/'))) return true;
+  if (href === '/communication' && path.startsWith('/communication')) return true;
+  if (href === '/documents' && path.startsWith('/documents')) return true;
   if (href.includes('/crm/') && path.includes('/crm/')) return true;
   if (href.includes('/procurement/') && path.includes('/procurement/')) return true;
   if (href.includes('/quality/') && path.includes('/quality/')) return true;
@@ -630,6 +694,7 @@ export function requiredPermForPath(path: string): string | undefined {
     };
     return map[parts[1] ?? ''] ?? 'procurement.orders.view';
   }
+  if (parts[0] === 'sales' && parts[1] === 'customers') return 'sales.quotations.view';
   if (parts[0] === 'sales' && parts[1]) return `sales.${parts[1]}.view`;
   if (parts[0] === 'inventory-intel') return 'inventory.stock.view';
   if (parts[0] === 'inventory' && parts[1]) {
@@ -652,6 +717,25 @@ export function requiredPermForPath(path: string): string | undefined {
       reservations: 'inventory.reservations.view',
     };
     return map[parts[1]];
+  }
+  if (parts[0] === 'communication') {
+    const map: Record<string, string> = {
+      messages: 'communication.messages.view',
+      notifications: 'communication.notifications.view',
+      email: 'communication.emails.view',
+      announcements: 'communication.announcements.view',
+      templates: 'communication.templates.view',
+      deliveries: 'communication.delivery_logs.view',
+      settings: 'communication.settings.manage',
+    };
+    return map[parts[1] ?? ''] ?? 'communication.command.view';
+  if (parts[0] === 'documents') {
+    const map: Record<string, string> = {
+      library: 'documents.view', folders: 'documents.view', approvals: 'documents.approve',
+      audit: 'documents.command.view', settings: 'documents.settings.manage',
+    };
+    return map[parts[1] ?? ''] ?? 'documents.command.view';
+  }
   }
   if (parts[0] === 'assets') {
     const map: Record<string, string> = {

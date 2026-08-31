@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useCompanyProfile } from '../company';
 
 interface VerifyMember {
   reamNo?: string;
@@ -78,6 +79,7 @@ const copyText = async (value: string) => {
 };
 
 export default function PublicVerify() {
+  const company = useCompanyProfile();
   const [payload, setPayload] = useState('');
   const [data, setData] = useState<VerifyResult | null>(null);
   const [error, setError] = useState('');
@@ -222,7 +224,7 @@ export default function PublicVerify() {
       <header className="page-head">
         <div>
           <h1>Verify Authenticity</h1>
-          <p className="muted">Public authenticity portal for Hope Design reams, cartons and employment contracts.</p>
+          <p className="muted">Public authenticity portal for {company.name} reams, cartons and employment contracts.</p>
         </div>
       </header>
 
@@ -233,7 +235,7 @@ export default function PublicVerify() {
             <input
               value={payload}
               onChange={(e) => setPayload(e.target.value)}
-              placeholder="HDG-RE-2026-00000001|secret  (scan the label QR or paste the payload)"
+              placeholder="RE-2026-00000001|secret  (scan the label QR or paste the payload)"
               autoComplete="off"
             />
           </label>
@@ -418,7 +420,7 @@ export default function PublicVerify() {
               <input
                 value={contrCode}
                 onChange={(e) => setContrCode(e.target.value)}
-                placeholder="HDG-CON-2026-000001  (code from the QR or document)"
+                placeholder="CON-2026-000001  (code from the QR or document)"
                 autoComplete="off"
               />
             </label>

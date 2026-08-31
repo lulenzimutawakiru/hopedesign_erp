@@ -1032,6 +1032,235 @@ export async function getSalesOrder(client: pg.PoolClient, ctx: Ctx, orderId: nu
   };
 }
 
+
+/** Sales Command Center aggregates: KPIs, funnel, alerts, top products, recent lists. */
+export async function commandCenter(client: pg.PoolClient, ctx: Ctx) {
+  const scope = (alias: string) => `${alias}.tenant_id = $1 AND ${alias}.company_id = $2`;
+  const params = [ctx.tenantId, ctx.companyId];
+
+  const kpis = await client.query(
+    `SELECT
+       (SELECT COALESCE(sum(total),0) FROM customer_invoices WHERE tenant_id = $1 AND company_id = $2 AND status NOT IN ('DRAFT','VOID') AND invoice_date = CURRENT_DATE)::numeric AS today_sales,
+       (SELECT COALESCE(sum(amount),0) FROM receipts WHERE tenant_id = $1 AND company_id = $2 AND status = 'POSTED' AND receipt_date = CURRENT_DATE)::numeric AS today_receipts,
+       (SELECT COALESCE(sum(total),0) FROM customer_invoices WHERE tenant_id = $1 AND company_id = $2 AND status NOT IN ('DRAFT','VOID') AND date_trunc('month', invoice_date) = date_trunc('month', now()))::numeric AS month_sales,
+       (SELECT count(*) FROM customer_invoices WHERE tenant_id = $1 AND company_id = $2 AND status NOT IN ('DRAFT','VOID') AND date_trunc('month', invoice_date) = date_trunc('month', now()))::int AS month_invoices,
+       (SELECT COALESCE(sum(total),0) FROM customer_invoices WHERE tenant_id = $1 AND company_id = $2 AND status NOT IN ('DRAFT','VOID') AND date_trunc('month', invoice_date) = date_trunc('month', now() - interval '1 month'))::numeric AS prev_month_sales,
+       (SELECT COALESCE(sum(total),0) FROM customer_invoices WHERE tenant_id = $1 AND company_id = $2 AND status NOT IN ('DRAFT','VOID') AND date_trunc('year', invoice_date) = date_trunc('year', now()))::numeric AS year_sales,
+       (SELECT count(*) FROM sales_quotations WHERE tenant_id = $1 AND company_id = $2 AND status IN ('DRAFT','SUBMITTED','APPROVED'))::int AS open_quotes,
+       (SELECT count(*) FROM sales_quotations WHERE tenant_id = $1 AND company_id = $2 AND status = 'CONVERTED')::int AS converted_quotes,
+       (SELECT count(*) FROM sales_quotations WHERE tenant_id = $1 AND company_id = $2 AND status <> 'DRAFT')::int AS submitted_quotes,
+       (SELECT count(*) FROM sales_orders WHERE tenant_id = $1 AND company_id = $2 AND status IN ('DRAFT','SUBMITTED','APPROVED','ALLOCATED','PARTIALLY_DISPATCHED'))::int AS open_orders,
+       (SELECT count(*) FROM sales_orders WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','ALLOCATED'))::int AS awaiting_dispatch,
+       (SELECT count(*) FROM sales_orders so WHERE ${scope('so')} AND so.status IN ('SUBMITTED','APPROVED','ALLOCATED')
+          AND EXISTS (SELECT 1 FROM sales_order_items i WHERE i.order_id = so.id AND i.allocated_qty < i.quantity))::int AS awaiting_stock,
+       (SELECT count(*) FROM work_orders wo WHERE ${scope('wo')} AND wo.sales_order_id IS NOT NULL AND wo.status IN ('RELEASED','IN_PROGRESS','ON_HOLD'))::int AS awaiting_production,
+       (SELECT count(*) FROM delivery_notes d WHERE ${scope('d')} AND d.status NOT IN ('DELIVERED','CANCELLED','FAILED') AND d.dispatch_date < CURRENT_DATE)::int AS overdue_deliveries,
+       (SELECT count(*) FROM sales_orders so WHERE ${scope('so')} AND so.status IN ('SUBMITTED','APPROVED','ALLOCATED','PARTIALLY_DISPATCHED')
+          AND so.requested_date IS NOT NULL AND so.requested_date < CURRENT_DATE)::int AS overdue_orders,
+       (SELECT COALESCE(sum(ci.total - ci.amount_paid),0) FROM customer_invoices ci WHERE ${scope('ci')} AND ci.status NOT IN ('VOID','PAID'))::numeric AS open_ar,
+       (SELECT count(*) FROM customer_invoices ci WHERE ${scope('ci')} AND ci.status <> 'VOID' AND ci.total - ci.amount_paid > 0 AND now()::date > ci.due_date)::int AS overdue_invoices`,
+    params
+  );
+
+  const margin = await client.query(
+    `SELECT COALESCE(sum(ii.quantity * ii.unit_price),0)::numeric AS revenue,
+            COALESCE(sum(ii.quantity * COALESCE(p.standard_cost,0)),0)::numeric AS cogs
+     FROM invoice_items ii
+     JOIN customer_invoices ci ON ci.id = ii.invoice_id
+     LEFT JOIN products p ON p.id = ii.product_id
+     WHERE ${scope('ci')} AND ci.status NOT IN ('DRAFT','VOID')
+       AND date_trunc('month', ci.invoice_date) = date_trunc('month', now())`,
+    params
+  );
+
+  let target: number | null = null;
+  const hasTargets = await client.query(
+    `SELECT to_regclass('sales_targets') AS t`, []
+  );
+  if (hasTargets.rows[0]?.t) {
+    const tr = await client.query(
+      `SELECT amount FROM sales_targets WHERE tenant_id = $1 AND company_id = $2 AND target_month = date_trunc('month', now()) LIMIT 1`,
+      params
+    );
+    if (tr.rows[0]?.amount != null) target = Number(tr.rows[0].amount);
+  }
+
+  const k = kpis.rows[0];
+  const todaySales = Number(k.today_sales ?? 0);
+  const monthSales = Number(k.month_sales ?? 0);
+  const monthRevenue = Number(margin.rows[0]?.revenue ?? 0);
+  const monthCogs = Number(margin.rows[0]?.cogs ?? 0);
+  const grossProfit = round2(monthRevenue - monthCogs);
+  const grossMargin = monthRevenue > 0 ? round2((grossProfit / monthRevenue) * 100) : null;
+  const monthInvoices = Number(k.month_invoices ?? 0);
+  const averageOrderValue = monthInvoices > 0 ? round2(monthSales / monthInvoices) : 0;
+  const submittedQuotes = Number(k.submitted_quotes ?? 0);
+  const convertedQuotes = Number(k.converted_quotes ?? 0);
+  const conversionRate = submittedQuotes > 0 ? round2((convertedQuotes / submittedQuotes) * 100) : null;
+  const prevMonthSales = Number(k.prev_month_sales ?? 0);
+  if (target == null) {
+    target = prevMonthSales > 0 ? round2(prevMonthSales * 1.15) : round2(monthSales * 1.25);
+  }
+  const targetAchievementPct = target > 0 ? round2((monthSales / target) * 100) : null;
+  const openAr = Number(k.open_ar ?? 0);
+
+  const funnelQuotes = await client.query(
+    `SELECT status, count(*)::int AS c FROM sales_quotations WHERE tenant_id = $1 AND company_id = $2 GROUP BY status`,
+    params
+  );
+  const funnelOrders = await client.query(
+    `SELECT status, count(*)::int AS c FROM sales_orders WHERE tenant_id = $1 AND company_id = $2 GROUP BY status`,
+    params
+  );
+  const funnelDeliveries = await client.query(
+    `SELECT status, count(*)::int AS c FROM delivery_notes WHERE tenant_id = $1 AND company_id = $2 GROUP BY status`,
+    params
+  );
+
+  const shortage = await client.query(
+    `SELECT so.id, so.order_no, c.name AS customer_name, count(*)::int AS line_count
+     FROM sales_orders so
+     JOIN customers c ON c.id = so.customer_id
+     JOIN sales_order_items i ON i.order_id = so.id AND i.allocated_qty < i.quantity
+     WHERE ${scope('so')} AND so.status IN ('SUBMITTED','APPROVED')
+     GROUP BY so.id, so.order_no, c.name ORDER BY so.id DESC LIMIT 6`,
+    params
+  );
+  const productionDelay = await client.query(
+    `SELECT wo.id, wo.wo_no, so.order_no, p.name AS product_name
+     FROM work_orders wo
+     LEFT JOIN sales_orders so ON so.id = wo.sales_order_id
+     JOIN products p ON p.id = wo.product_id
+     WHERE ${scope('wo')} AND wo.sales_order_id IS NOT NULL
+       AND wo.status IN ('RELEASED','IN_PROGRESS','ON_HOLD') AND wo.due_date < CURRENT_DATE
+     ORDER BY wo.id DESC LIMIT 6`,
+    params
+  );
+  const expiring = await client.query(
+    `SELECT q.id, q.quotation_no, q.valid_until, q.total, c.name AS customer_name
+     FROM sales_quotations q JOIN customers c ON c.id = q.customer_id
+     WHERE ${scope('q')} AND q.status IN ('DRAFT','SUBMITTED','APPROVED')
+       AND q.valid_until IS NOT NULL AND q.valid_until BETWEEN CURRENT_DATE AND CURRENT_DATE + 7
+     ORDER BY q.valid_until LIMIT 6`,
+    params
+  );
+  const overdueInv = await client.query(
+    `SELECT ci.id, ci.invoice_no, ci.due_date, (ci.total - ci.amount_paid)::numeric AS balance, c.name AS customer_name
+     FROM customer_invoices ci JOIN customers c ON c.id = ci.customer_id
+     WHERE ${scope('ci')} AND ci.status <> 'VOID' AND ci.total - ci.amount_paid > 0 AND now()::date > ci.due_date
+     ORDER BY ci.due_date LIMIT 6`,
+    params
+  );
+
+  const alerts: Record<string, unknown>[] = [];
+  if (Number(k.awaiting_stock ?? 0) > 0) {
+    alerts.push({
+      kind: 'stock', severity: 'warn', title: 'Stock shortages on open orders',
+      meta: `${String(k.awaiting_stock)} orders need allocation`, count: Number(k.awaiting_stock),
+      href: '/sales/orders', rows: toCamelRows(shortage.rows),
+    });
+  }
+  if (productionDelay.rows.length > 0) {
+    alerts.push({
+      kind: 'production', severity: 'crit', title: 'Production behind on sales orders',
+      meta: `${productionDelay.rows.length} linked work orders past due`, count: productionDelay.rows.length,
+      href: '/records/production/work_orders', rows: toCamelRows(productionDelay.rows),
+    });
+  }
+  if (expiring.rows.length > 0) {
+    alerts.push({
+      kind: 'quote', severity: 'warn', title: 'Quotations expiring this week',
+      meta: `${expiring.rows.length} quotes to follow up`, count: expiring.rows.length,
+      href: '/sales/quotations', rows: toCamelRows(expiring.rows),
+    });
+  }
+  if (Number(k.overdue_invoices ?? 0) > 0) {
+    alerts.push({
+      kind: 'ar', severity: 'crit', title: 'Overdue invoices',
+      meta: `${String(k.overdue_invoices)} invoices past due`, count: Number(k.overdue_invoices),
+      href: '/sales/invoices', rows: toCamelRows(overdueInv.rows),
+    });
+  }
+  if (Number(k.overdue_deliveries ?? 0) > 0) {
+    alerts.push({
+      kind: 'delivery', severity: 'warn', title: 'Deliveries past dispatch date',
+      meta: `${String(k.overdue_deliveries)} delivery notes delayed`, count: Number(k.overdue_deliveries),
+      href: '/sales/delivery_notes', rows: [],
+    });
+  }
+
+  const topProducts = await client.query(
+    `SELECT p.id, p.code, p.name, sum(ii.quantity)::numeric AS qty, sum(ii.quantity * ii.unit_price)::numeric AS revenue
+     FROM invoice_items ii
+     JOIN customer_invoices ci ON ci.id = ii.invoice_id
+     JOIN products p ON p.id = ii.product_id
+     WHERE ${scope('ci')} AND ci.status NOT IN ('DRAFT','VOID')
+       AND date_trunc('month', ci.invoice_date) = date_trunc('month', now())
+     GROUP BY p.id, p.code, p.name ORDER BY revenue DESC LIMIT 6`,
+    params
+  );
+
+  const quotes = await client.query(
+    `SELECT q.id, q.quotation_no, q.status, q.total, c.name AS customer_name
+     FROM sales_quotations q JOIN customers c ON c.id = q.customer_id
+     WHERE ${scope('q')} AND q.status IN ('DRAFT','APPROVED')
+     ORDER BY q.id DESC LIMIT 8`,
+    params
+  );
+  const orders = await client.query(
+    `SELECT so.id, so.order_no, so.status, so.total, so.requested_date, c.name AS customer_name
+     FROM sales_orders so JOIN customers c ON c.id = so.customer_id
+     WHERE ${scope('so')}
+       AND so.status IN ('DRAFT','SUBMITTED','APPROVED','ALLOCATED','PARTIALLY_DISPATCHED','DISPATCHED')
+     ORDER BY so.id DESC LIMIT 10`,
+    params
+  );
+  const invoices = await client.query(
+    `SELECT inv.id, inv.invoice_no, inv.status, inv.total, inv.amount_paid, c.name AS customer_name
+     FROM customer_invoices inv JOIN customers c ON c.id = inv.customer_id
+     WHERE ${scope('inv')} AND inv.status NOT IN ('VOID','PAID')
+     ORDER BY inv.due_date NULLS LAST, inv.id DESC LIMIT 8`,
+    params
+  );
+
+  return {
+    kpis: {
+      todaySales,
+      todayReceipts: Number(k.today_receipts ?? 0),
+      monthSales,
+      monthInvoices,
+      yearSales: Number(k.year_sales ?? 0),
+      prevMonthSales,
+      target,
+      targetAchievementPct,
+      grossProfit,
+      grossMargin,
+      averageOrderValue,
+      conversionRate,
+      openQuotes: Number(k.open_quotes ?? 0),
+      openOrders: Number(k.open_orders ?? 0),
+      awaitingStock: Number(k.awaiting_stock ?? 0),
+      awaitingProduction: Number(k.awaiting_production ?? 0),
+      awaitingDispatch: Number(k.awaiting_dispatch ?? 0),
+      overdueDeliveries: Number(k.overdue_deliveries ?? 0),
+      overdueOrders: Number(k.overdue_orders ?? 0),
+      openAr,
+      overdueInvoices: Number(k.overdue_invoices ?? 0),
+    },
+    funnel: {
+      quotes: toCamelRows(funnelQuotes.rows),
+      orders: toCamelRows(funnelOrders.rows),
+      deliveries: toCamelRows(funnelDeliveries.rows),
+    },
+    alerts,
+    topProducts: toCamelRows(topProducts.rows),
+    quotes: toCamelRows(quotes.rows),
+    orders: toCamelRows(orders.rows),
+    invoices: toCamelRows(invoices.rows),
+  };
+}
+
+
 export async function getDeliveryNote(client: pg.PoolClient, ctx: Ctx, deliveryNoteId: number) {
   const res = await client.query(
     `SELECT dn.*, so.order_no, so.customer_id, so.id AS sales_order_id, c.name AS customer_name, c.code AS customer_code,
@@ -1135,6 +1364,162 @@ export async function listCustomers(client: pg.PoolClient, ctx: Ctx, q?: string)
     params
   );
   return toCamelRows(res.rows);
+}
+
+
+export async function customerDirectory(client: pg.PoolClient, ctx: Ctx, q?: string) {
+  const params: unknown[] = [ctx.tenantId, ctx.companyId];
+  const where = ['c.tenant_id = $1', 'c.company_id = $2'];
+  if (q?.trim()) {
+    params.push(`%${q.trim()}%`);
+    where.push(`(c.code ILIKE $${params.length} OR c.name ILIKE $${params.length} OR c.email ILIKE $${params.length} OR c.phone ILIKE $${params.length})`);
+  }
+  const res = await client.query(
+    `SELECT c.id, c.code, c.name, c.customer_type, c.status, c.credit_limit, c.payment_terms_days,
+            c.phone, c.email, c.branch_id, c.owner_user_id,
+            TRIM(BOTH FROM COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS owner_name,
+            COALESCE((SELECT sum(i.total - i.amount_paid) FROM customer_invoices i
+                      WHERE i.customer_id = c.id AND i.status NOT IN ('VOID','PAID')), 0)::numeric AS outstanding,
+            (SELECT count(*) FROM sales_orders so WHERE so.customer_id = c.id
+              AND so.status IN ('DRAFT','SUBMITTED','APPROVED','ALLOCATED','PARTIALLY_DISPATCHED'))::int AS open_orders,
+            (SELECT COALESCE(sum(total),0) FROM customer_invoices i
+             WHERE i.customer_id = c.id AND i.status NOT IN ('DRAFT','VOID')
+               AND date_trunc('month', i.invoice_date) = date_trunc('month', now()))::numeric AS month_sales,
+            (SELECT max(so.order_date) FROM sales_orders so WHERE so.customer_id = c.id)::date AS last_order_date
+     FROM customers c
+     LEFT JOIN users u ON u.id = c.owner_user_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY c.name
+     LIMIT 200`,
+    params
+  );
+  return toCamelRows(res.rows);
+}
+
+export async function customer360(client: pg.PoolClient, ctx: Ctx, customerId: number) {
+  const cRes = await client.query(
+    `SELECT c.*, TRIM(BOTH FROM COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS owner_name
+     FROM customers c LEFT JOIN users u ON u.id = c.owner_user_id
+     WHERE c.id = $1 AND c.tenant_id = $2`,
+    [customerId, ctx.tenantId]
+  );
+  if (cRes.rows.length === 0) throw notFound('Customer not found');
+  const c = cRes.rows[0];
+
+  const creditLimit = Number(c.credit_limit) || 0;
+  const arRes = await client.query(
+    `SELECT COALESCE(sum(i.total - i.amount_paid),0)::numeric AS open_ar,
+            count(*) FILTER (WHERE i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE AND i.status <> 'VOID')::int AS overdue_invoices,
+            COALESCE(sum(i.total - i.amount_paid) FILTER (WHERE i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE AND i.status <> 'VOID'),0)::numeric AS overdue_amount
+     FROM customer_invoices i WHERE i.customer_id = $1 AND i.status NOT IN ('VOID','PAID')`,
+    [customerId]
+  );
+  const openAr = Number(arRes.rows[0]?.open_ar ?? 0);
+  const overdueInvoices = Number(arRes.rows[0]?.overdue_invoices ?? 0);
+  const overdueAmount = Number(arRes.rows[0]?.overdue_amount ?? 0);
+  const blocked = ['BLOCKED', 'INACTIVE'].includes(String(c.status));
+  const overLimit = creditLimit > 0 && openAr > creditLimit;
+  const credit = {
+    creditLimit,
+    openAr,
+    overdueInvoices,
+    overdueAmount,
+    available: creditLimit > 0 ? round2(creditLimit - openAr) : null,
+    exposure: openAr,
+    ok: !blocked && !overLimit,
+    reason: blocked ? `Customer is ${c.status}` : overLimit ? 'Credit limit exceeded' : null,
+  };
+
+  const [orders, quotes, invoices, deliveries, payments, contacts, activities, summary] = await Promise.all([
+    client.query(`SELECT id, order_no, status, total, order_date, requested_date
+                  FROM sales_orders so WHERE so.customer_id = $1 ORDER BY so.id DESC LIMIT 15`, [customerId]),
+    client.query(`SELECT id, quotation_no, status, total, quotation_date, valid_until
+                  FROM sales_quotations WHERE customer_id = $1 ORDER BY id DESC LIMIT 10`, [customerId]),
+    client.query(`SELECT id, invoice_no, status, total, amount_paid, (total - amount_paid) AS balance, invoice_date, due_date
+                  FROM customer_invoices WHERE customer_id = $1 ORDER BY id DESC LIMIT 15`, [customerId]),
+    client.query(`SELECT d.id, d.delivery_no, d.status, d.dispatch_date, d.delivered_at
+                  FROM delivery_notes d JOIN sales_orders so ON so.id = d.order_id
+                  WHERE so.customer_id = $1 ORDER BY d.id DESC LIMIT 12`, [customerId]),
+    client.query(`SELECT id, receipt_no, amount, receipt_date, method, reference, status
+                  FROM receipts WHERE customer_id = $1 ORDER BY id DESC LIMIT 10`, [customerId]),
+    client.query(`SELECT id, first_name, last_name, title, email, phone, mobile, department, is_primary
+                  FROM contacts WHERE customer_id = $1 ORDER BY is_primary DESC, id`, [customerId]),
+    client.query(`SELECT id, activity_type, subject, notes, due_at, done, assigned_to, created_at
+                  FROM activities WHERE tenant_id = $1 AND entity_type = 'customers' AND entity_id = $2
+                  ORDER BY done ASC, due_at NULLS LAST, id DESC LIMIT 20`, [ctx.tenantId, customerId]),
+    client.query(`SELECT
+        (SELECT COALESCE(sum(total),0) FROM customer_invoices i WHERE i.customer_id = $1 AND i.status NOT IN ('DRAFT','VOID')
+          AND date_trunc('month', i.invoice_date) = date_trunc('month', now()))::numeric AS month_sales,
+        (SELECT COALESCE(sum(total),0) FROM customer_invoices i WHERE i.customer_id = $1 AND i.status NOT IN ('DRAFT','VOID')
+          AND date_trunc('year', i.invoice_date) = date_trunc('year', now()))::numeric AS year_sales,
+        (SELECT count(*) FROM sales_orders so WHERE so.customer_id = $1)::int AS order_count,
+        (SELECT count(*) FROM sales_orders so WHERE so.customer_id = $1
+          AND so.status IN ('DRAFT','SUBMITTED','APPROVED','ALLOCATED','PARTIALLY_DISPATCHED'))::int AS open_order_count,
+        (SELECT COALESCE(avg(total),0) FROM customer_invoices i WHERE i.customer_id = $1 AND i.status NOT IN ('DRAFT','VOID'))::numeric AS avg_order_value`, [customerId]),
+  ]);
+
+  const agingRes = await client.query(
+    `SELECT
+       COALESCE(SUM(CASE WHEN due_date IS NULL OR due_date >= CURRENT_DATE THEN GREATEST(total - amount_paid, 0) ELSE 0 END), 0)::numeric AS current,
+       COALESCE(SUM(CASE WHEN due_date < CURRENT_DATE AND due_date >= CURRENT_DATE - 30 THEN GREATEST(total - amount_paid, 0) ELSE 0 END), 0)::numeric AS days_1_30,
+       COALESCE(SUM(CASE WHEN due_date < CURRENT_DATE - 30 AND due_date >= CURRENT_DATE - 60 THEN GREATEST(total - amount_paid, 0) ELSE 0 END), 0)::numeric AS days_31_60,
+       COALESCE(SUM(CASE WHEN due_date < CURRENT_DATE - 60 AND due_date >= CURRENT_DATE - 90 THEN GREATEST(total - amount_paid, 0) ELSE 0 END), 0)::numeric AS days_61_90,
+       COALESCE(SUM(CASE WHEN due_date < CURRENT_DATE - 90 THEN GREATEST(total - amount_paid, 0) ELSE 0 END), 0)::numeric AS days_90_plus
+     FROM customer_invoices
+     WHERE customer_id = $1 AND status NOT IN ('VOID','PAID')`,
+    [customerId]
+  );
+  const a = agingRes.rows[0] ?? {};
+  const aging = {
+    current: Number(a.current ?? 0),
+    days130: Number(a.days_1_30 ?? 0),
+    days3160: Number(a.days_31_60 ?? 0),
+    days6190: Number(a.days_61_90 ?? 0),
+    days90Plus: Number(a.days_90_plus ?? 0),
+  };
+
+  const s = summary.rows[0] ?? {};
+  const favRes = await client.query(
+    `SELECT p.id, p.code, p.name, sum(soi.quantity)::numeric AS qty, sum(soi.quantity * soi.unit_price)::numeric AS revenue
+     FROM sales_order_items soi JOIN products p ON p.id = soi.product_id
+     JOIN sales_orders so ON so.id = soi.order_id
+     WHERE so.customer_id = $1
+     GROUP BY p.id, p.code, p.name ORDER BY qty DESC LIMIT 6`,
+    [customerId]
+  );
+
+  const timeline = [
+    ...(orders.rows as { id: unknown; order_no: unknown; status: unknown; order_date: unknown }[]).map((r) => ({ at: r.order_date, kind: 'order', label: String(r.order_no), status: r.status, ref: r.id })),
+    ...(quotes.rows as { id: unknown; quotation_no: unknown; status: unknown; quotation_date: unknown }[]).map((r) => ({ at: r.quotation_date, kind: 'quotation', label: String(r.quotation_no), status: r.status, ref: r.id })),
+    ...(invoices.rows as { id: unknown; invoice_no: unknown; status: unknown; invoice_date: unknown }[]).map((r) => ({ at: r.invoice_date, kind: 'invoice', label: String(r.invoice_no), status: r.status, ref: r.id })),
+    ...(deliveries.rows as { id: unknown; delivery_no: unknown; status: unknown; dispatch_date: unknown }[]).map((r) => ({ at: r.dispatch_date, kind: 'delivery', label: String(r.delivery_no), status: r.status, ref: r.id })),
+    ...(payments.rows as { id: unknown; receipt_no: unknown; status: unknown; receipt_date: unknown }[]).map((r) => ({ at: r.receipt_date, kind: 'payment', label: String(r.receipt_no), status: r.status, ref: r.id })),
+  ]
+    .filter((e) => e.at)
+    .sort((x, y) => new Date(String(y.at)).getTime() - new Date(String(x.at)).getTime())
+    .slice(0, 40);
+
+  return {
+    customer: toCamelRow(c),
+    credit,
+    aging,
+    summary: {
+      monthSales: Number(s.month_sales ?? 0),
+      yearSales: Number(s.year_sales ?? 0),
+      orderCount: Number(s.order_count ?? 0),
+      openOrderCount: Number(s.open_order_count ?? 0),
+      avgOrderValue: Number(s.avg_order_value ?? 0),
+    },
+    favouriteProducts: toCamelRows(favRes.rows),
+    orders: toCamelRows(orders.rows),
+    quotes: toCamelRows(quotes.rows),
+    invoices: toCamelRows(invoices.rows),
+    deliveries: toCamelRows(deliveries.rows),
+    payments: toCamelRows(payments.rows),
+    contacts: toCamelRows(contacts.rows),
+    activities: toCamelRows(activities.rows),
+    timeline,
+  };
 }
 
 export async function listQuotations(

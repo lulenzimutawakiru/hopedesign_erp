@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+﻿import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { api, fmtDate, fmtMoney, fmtNum } from '../api';
 import { Badge, ErrorBanner, PageLoader } from '../components/ui';
 import { EmptyState } from '../components/os';
@@ -38,8 +38,21 @@ function hrefForRow(entityType: unknown, entityId: unknown): string {
   const type = String(entityType ?? '');
   const id = Number(entityId);
   if (!type || !id) return '/work';
-  return pathForEntity(type.includes('.') ? type : type, id);
+  return pathForEntity(type, id);
 }
+
+function tile(key: string, label: string, value: string, sub: string, icon: string, accent: string, action: () => void) {
+  return { key, label, value, sub, icon, accent, action };
+}
+
+const NOW_ICONS: Record<string, string> = {
+  inbox: '🗂️',
+  'crm-mine': '🎯',
+  sales: '🧭',
+  plant: '🏭',
+  stock: '📦',
+  reports: '📊',
+};
 
 export default function MyWork() {
   const { user } = useAuth();
@@ -82,6 +95,7 @@ export default function MyWork() {
   const opps = bundle.opportunities ?? [];
   const acts = bundle.activities ?? [];
   const complaints = bundle.complaints ?? [];
+  const exceptionTotal = ex.reduce((s, e) => s + e.count, 0);
   const empty =
     !bundle.approvals.length &&
     !bundle.workOrders.length &&
@@ -94,6 +108,21 @@ export default function MyWork() {
 
   const name = user ? `${user.first_name}` : 'there';
   const persona = personaLabel(personaOf(user));
+
+  const tiles = [
+    tile('approvals', 'Approvals', fmtNum(bundle.counts.approvals), 'on your desk', '🗂️', '#8B5CF6', () => navigate('/inbox')),
+    tile('followups', 'Follow-ups', fmtNum((bundle.counts.activities ?? 0) + bundle.counts.tasks), `${fmtNum(bundle.counts.overdue)} overdue`, '📅', '#00A6A6', () => navigate('/crm/activities')),
+    tile('pipeline', 'My pipeline', fmtNum(bundle.counts.opportunities), `${fmtNum(bundle.counts.leads)} leads · ${fmtNum(bundle.counts.complaints)} complaints`, '📈', '#1261A0', () => navigate('/crm/mine')),
+    tile('jobs', 'My jobs', fmtNum(bundle.counts.workOrders), 'live work orders', '⚙️', '#D97706', () => navigate('/operator')),
+    tile('exceptions', 'Exceptions', fmtNum(exceptionTotal), 'need a person', '⚠️', '#C93636', () => navigate('/inbox')),
+  ];
+
+  const nowActions = [
+    { id: 'inbox', label: 'Inbox', hint: 'Decide approvals', href: '/inbox' },
+    { id: 'crm-mine', label: 'CRM desk', hint: 'Leads and pipeline', href: '/crm/mine' },
+    { id: 'sales', label: 'Sales', hint: 'Quote to cash', href: '/sales' },
+    { id: 'plant', label: 'Plant', hint: 'Live work orders', href: '/plant' },
+  ];
 
   return (
     <div className="page">
@@ -111,36 +140,34 @@ export default function MyWork() {
 
       {error && <ErrorBanner error={error} />}
 
-      <div className="kpi-grid">
-        <button className="kpi-card" onClick={() => navigate('/inbox')}>
-          <span className="kpi-label">Approvals</span>
-          <span className="kpi-value">{fmtNum(bundle.counts.approvals)}</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/crm/activities')}>
-          <span className="kpi-label">Follow-ups</span>
-          <span className="kpi-value">{fmtNum((bundle.counts.activities ?? 0) + bundle.counts.tasks)}</span>
-          <span className="kpi-sub">{fmtNum(bundle.counts.overdue)} overdue</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/crm/mine')}>
-          <span className="kpi-label">My pipeline</span>
-          <span className="kpi-value">{fmtNum(bundle.counts.opportunities)}</span>
-          <span className="kpi-sub">{fmtNum(bundle.counts.leads)} leads · {fmtNum(bundle.counts.complaints)} complaints</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/plant')}>
-          <span className="kpi-label">My jobs</span>
-          <span className="kpi-value">{fmtNum(bundle.counts.workOrders)}</span>
-        </button>
-        <button className={`kpi-card ${ex.length ? 'card-warn' : ''}`} onClick={() => navigate('/inbox')}>
-          <span className="kpi-label">Exceptions</span>
-          <span className="kpi-value">{fmtNum(ex.reduce((s, e) => s + e.count, 0))}</span>
-        </button>
+      <div className="kpi-grid--tiles">
+        {tiles.map((c) => (
+          <button
+            key={c.key}
+            className="kpi-tile"
+            style={{ '--tile-accent': c.accent, '--tile-tint': `${c.accent}1F` } as CSSProperties}
+            onClick={c.action}
+          >
+            <span className="kpi-tile-icon">{c.icon}</span>
+            <span className="kpi-tile-body">
+              <span className="kpi-tile-label">{c.label}</span>
+              <span className="kpi-tile-value">{c.value}</span>
+              <span className="kpi-tile-sub">{c.sub}</span>
+            </span>
+          </button>
+        ))}
       </div>
 
       <div className="do-now">
-        <button onClick={() => navigate('/inbox')}><strong>Inbox</strong><span>Decide approvals</span></button>
-        <button onClick={() => navigate('/crm/mine')}><strong>CRM desk</strong><span>Leads and pipeline</span></button>
-        <button onClick={() => navigate('/sales')}><strong>Sales</strong><span>Quote to cash</span></button>
-        <button onClick={() => navigate('/plant')}><strong>Plant</strong><span>Live work orders</span></button>
+        {nowActions.map((a) => (
+          <button key={a.id} onClick={() => navigate(a.href)}>
+            <span className="now-ic">{NOW_ICONS[a.id] ?? '→'}</span>
+            <span>
+              <strong>{a.label}</strong>
+              <span>{a.hint}</span>
+            </span>
+          </button>
+        ))}
       </div>
 
       {empty && (
@@ -154,20 +181,37 @@ export default function MyWork() {
 
       {bundle.approvals.length > 0 && (
         <section className="card">
-          <div className="card-head"><h3>Decisions</h3><button className="btn btn-sm" onClick={() => navigate('/inbox')}>Open inbox</button></div>
-          {bundle.approvals.map((row) => (
-            <button
-              key={String(row.task_id ?? row.taskId)}
-              className="exception-item"
-              onClick={() => navigate(hrefForRow(row.entity_type ?? row.entityType, row.entity_id ?? row.entityId))}
-            >
-              <div>
-                <strong>{String(pick(row, 'entity_code', 'entityCode') ?? 'Document')}</strong>
-                <div className="muted">{String(pick(row, 'entity_type', 'entityType'))} · {String(pick(row, 'step_label', 'stepLabel') ?? 'Approval')}</div>
-              </div>
-              <Badge value={pick(row, 'status')} />
-            </button>
-          ))}
+          <div className="card-head">
+            <h3>Decisions</h3>
+            <span className="queue-count"><b>{bundle.approvals.length}</b> waiting</span>
+            <button className="btn btn-sm" onClick={() => navigate('/inbox')}>Open inbox</button>
+          </div>
+          <div className="queue">
+            {bundle.approvals.map((row) => {
+              const entityType = String(pick(row, 'entity_type', 'entityType') ?? 'Document');
+              const href = hrefForRow(row.entity_type ?? row.entityType, row.entity_id ?? row.entityId);
+              const dueAt = pick(row, 'due_at', 'dueAt');
+              return (
+                <div key={String(row.task_id ?? row.taskId)} className="queue-row">
+                  <div className="queue-row-main">
+                    <span className="queue-row-title">
+                      <span className="cell-mono">{String(pick(row, 'entity_code', 'entityCode') ?? 'Document')}</span>
+                      <Badge value={pick(row, 'step_label', 'stepLabel') ?? 'Approval'} />
+                    </span>
+                    <span className="queue-row-meta">
+                      {entityType.replace(/\./g, ' · ')}
+                      {dueAt ? <><span className="sep">·</span>Due {fmtDate(dueAt)}</> : null}
+                      <span className="sep">·</span>Awaiting your decision
+                    </span>
+                  </div>
+                  <div className="queue-row-side">
+                    <Badge value={pick(row, 'status')} />
+                    {href !== '/work' && <button className="btn btn-sm" onClick={() => navigate(href)}>Open</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </section>
       )}
 
@@ -179,7 +223,7 @@ export default function MyWork() {
               <thead><tr><th>Type</th><th>Subject</th><th>On</th><th>Due</th><th /></tr></thead>
               <tbody>
                 {acts.map((t) => (
-                  <tr key={String(t.id)} className={t.overdue ? 'row-click' : 'row-click'}>
+                  <tr key={String(t.id)} className={`row-click ${t.overdue ? 'row-overdue' : ''}`}>
                     <td>{String(pick(t, 'activity_type', 'activityType'))}</td>
                     <td>
                       <button className="linkish" onClick={() => navigate(hrefForRow(t.entity_type ?? t.entityType, t.entity_id ?? t.entityId))}>
@@ -187,7 +231,10 @@ export default function MyWork() {
                       </button>
                     </td>
                     <td className="cell-mono">{String(pick(t, 'entity_type', 'entityType'))} #{String(pick(t, 'entity_id', 'entityId'))}</td>
-                    <td>{t.due_at || t.dueAt ? fmtDate(pick(t, 'due_at', 'dueAt')) : '—'}{t.overdue ? ' · overdue' : ''}</td>
+                    <td className={t.overdue ? 'cell-due' : ''}>
+                      {t.due_at || t.dueAt ? fmtDate(pick(t, 'due_at', 'dueAt')) : '—'}
+                      {t.overdue ? ' · overdue' : ''}
+                    </td>
                     <td>
                       {can(user, 'crm.activities.complete') && (
                         <button className="btn btn-sm" disabled={busy} onClick={() => completeActivity(Number(t.id))}>Done</button>
@@ -204,22 +251,24 @@ export default function MyWork() {
       {bundle.tasks.length > 0 && (
         <section className="card">
           <div className="card-head"><h3>Tasks</h3></div>
-          {bundle.tasks.map((t) => (
-            <button
-              key={String(t.id)}
-              className="exception-item"
-              onClick={() => {
-                const href = hrefForRow(t.entity_type ?? t.entityType, t.entity_id ?? t.entityId);
-                if (href !== '/work') navigate(href);
-              }}
-            >
-              <div>
-                <strong>{String(pick(t, 'title'))}</strong>
-                <div className="muted">Due {fmtDate(pick(t, 'due_at', 'dueAt'))}</div>
-              </div>
-              <Badge value={pick(t, 'status')} />
-            </button>
-          ))}
+          <div className="queue">
+            {bundle.tasks.map((t) => {
+              const href = hrefForRow(t.entity_type ?? t.entityType, t.entity_id ?? t.entityId);
+              return (
+                <button
+                  key={String(t.id)}
+                  className="queue-row queue-row-click"
+                  onClick={() => { if (href !== '/work') navigate(href); }}
+                >
+                  <span className="queue-row-main">
+                    <span className="queue-row-title">{String(pick(t, 'title'))}</span>
+                    <span className="queue-row-meta">Due {fmtDate(pick(t, 'due_at', 'dueAt'))}</span>
+                  </span>
+                  <span className="queue-row-side"><Badge value={pick(t, 'status')} /></span>
+                </button>
+              );
+            })}
+          </div>
         </section>
       )}
 
@@ -291,17 +340,27 @@ export default function MyWork() {
           <div className="card-head"><h3>Production jobs</h3><button className="btn btn-sm" onClick={() => navigate('/operator')}>Operator floor</button></div>
           <div className="table-wrap">
             <table className="data">
-              <thead><tr><th>WO</th><th>Product</th><th>Machine</th><th>Status</th><th className="cell-num">Done</th></tr></thead>
+              <thead><tr><th>WO</th><th>Product</th><th>Machine</th><th>Status</th><th>Progress</th></tr></thead>
               <tbody>
-                {bundle.workOrders.map((wo) => (
-                  <tr key={String(wo.id)} className="row-click" onClick={() => navigate(`/operator/${wo.id}`)}>
-                    <td className="cell-mono">{String(pick(wo, 'wo_no', 'woNo'))}</td>
-                    <td>{String(pick(wo, 'product_name', 'productName') ?? '—')}</td>
-                    <td className="cell-mono">{String(pick(wo, 'machine_code', 'machineCode') ?? '—')}</td>
-                    <td><Badge value={pick(wo, 'status')} /></td>
-                    <td className="cell-num">{fmtNum(pick(wo, 'produced_qty', 'producedQty'))} / {fmtNum(pick(wo, 'quantity'))}</td>
-                  </tr>
-                ))}
+                {bundle.workOrders.map((wo) => {
+                  const quantity = Number(pick(wo, 'quantity') ?? 0);
+                  const produced = Number(pick(wo, 'produced_qty', 'producedQty') ?? 0);
+                  const pct = quantity > 0 ? Math.max(0, Math.min(100, (produced / quantity) * 100)) : 0;
+                  return (
+                    <tr key={String(wo.id)} className="row-click" onClick={() => navigate(`/operator/${wo.id}`)}>
+                      <td className="cell-mono">{String(pick(wo, 'wo_no', 'woNo'))}</td>
+                      <td>{String(pick(wo, 'product_name', 'productName') ?? '—')}</td>
+                      <td className="cell-mono">{String(pick(wo, 'machine_code', 'machineCode') ?? '—')}</td>
+                      <td><Badge value={pick(wo, 'status')} /></td>
+                      <td>
+                        <span className={`mini-progress ${pct >= 100 ? 'done' : ''}`}>
+                          <span className="mini-progress-track"><span className="mini-progress-fill" style={{ width: `${pct}%` }} /></span>
+                          <span>{fmtNum(produced)}/{fmtNum(quantity)}</span>
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

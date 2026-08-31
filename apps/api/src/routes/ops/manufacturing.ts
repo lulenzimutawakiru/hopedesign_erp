@@ -185,7 +185,7 @@ manufacturingOpsRouter.post('/subcontract/:id/status', ...run('production.work_o
 // ---------------------------------------------------------------------------
 // 29/45. Costing + documents
 // ---------------------------------------------------------------------------
-manufacturingOpsRouter.get('/costing', ...runGet('production.costing.view', (c, ctx) => mfg.productionCosting(c, ctx)));
+manufacturingOpsRouter.get('/costing', ...runGet('production.costing.view', (c, ctx) => mfg.costingDesk(c, ctx)));
 manufacturingOpsRouter.get('/costing/:workOrderId', ...runGet('production.costing.view', (c, ctx, _q, p) => mfg.workOrderCosting(c, ctx, Number(p.workOrderId))));
 manufacturingOpsRouter.get('/documents', ...runGet('production.work_orders.print', (c, ctx) => mfg.listProductionDocuments(c, ctx)));
 manufacturingOpsRouter.get('/documents/:workOrderId', ...runGet('production.work_orders.print', (c, ctx, _q, p) => mfg.listProductionDocuments(c, ctx, Number(p.workOrderId))));
@@ -207,3 +207,36 @@ manufacturingOpsRouter.get('/analytics', ...runGet('production.analytics.view', 
 })));
 manufacturingOpsRouter.get('/kpis', ...runGet('production.kpis.view', (c, ctx) => mfg.managementKpis(c, ctx)));
 manufacturingOpsRouter.get('/ai/assistant', ...runGet('production.ai.view', (c, ctx, q) => mfg.aiAssistant(c, ctx, q.q != null ? String(q.q) : null)));
+
+// ---------------------------------------------------------------------------
+// MMS enterprise dashboards + desks (dashboard, machines, gantt, standards,
+// packaging hierarchy, quality, WIP, outputs, reservations, issues, waste)
+// ---------------------------------------------------------------------------
+manufacturingOpsRouter.get('/dashboard', ...runGet('production.kpis.view', (c, ctx) => mfg.mfgDashboard(c, ctx)));
+manufacturingOpsRouter.get('/machines/status', ...runGet('production.machines.view', (c, ctx) => mfg.machineStatusDesk(c, ctx)));
+manufacturingOpsRouter.get('/gantt', ...runGet('production.plans.view', (c, ctx, q) => mfg.ganttDesk(c, ctx, q.from != null ? String(q.from) : null, q.to != null ? String(q.to) : null)));
+manufacturingOpsRouter.get('/standards', ...runGet('production.plans.view', (c, ctx) => mfg.productionStandardsDesk(c, ctx)));
+manufacturingOpsRouter.post('/standards', ...run('production.plans.create', (c, ctx, b) => mfg.upsertProductionStandard(c, ctx, b)));
+manufacturingOpsRouter.get('/packaging', ...runGet('production.plans.view', (c, ctx) => mfg.packagingHierarchyDesk(c, ctx)));
+manufacturingOpsRouter.post('/packaging', ...run('production.plans.create', (c, ctx, b) => mfg.upsertPackagingHierarchy(c, ctx, b)));
+manufacturingOpsRouter.get('/inspections', ...runGet('quality.inspections.view', (c, ctx, q) => mfg.qualityInspectionsDesk(c, ctx, q)));
+manufacturingOpsRouter.post('/inspections', ...run('quality.inspections.execute', (c, ctx, b) => mfg.createInspection(c, ctx, b)));
+manufacturingOpsRouter.post('/inspections/:id/submit', ...run('quality.inspections.approve', (c, ctx, b, p) => mfg.submitInspection(c, ctx, { ...b, id: Number(p.id) })));
+manufacturingOpsRouter.get('/ncr', ...runGet('quality.ncrs.view', (c, ctx) => mfg.ncrDesk(c, ctx)));
+manufacturingOpsRouter.get('/wip', ...runGet('production.work_orders.view', (c, ctx) => mfg.wipDesk(c, ctx)));
+manufacturingOpsRouter.get('/outputs', ...runGet('production.outputs.view', (c, ctx, q) => mfg.outputsDesk(c, ctx, q)));
+manufacturingOpsRouter.get('/reservations', ...runGet('production.work_orders.view', (c, ctx) => mfg.reservationDesk(c, ctx)));
+manufacturingOpsRouter.get('/issues', ...runGet('production.work_orders.view', (c, ctx) => mfg.issueDesk(c, ctx)));
+manufacturingOpsRouter.get('/waste', ...runGet('production.outputs.view', (c, ctx) => mfg.wasteDesk(c, ctx)));
+manufacturingOpsRouter.get('/scrap', ...runGet('production.outputs.view', (c, ctx) => mfg.scrapDesk(c, ctx)));
+manufacturingOpsRouter.get('/downtime', ...runGet('production.downtime.view', (c, ctx) => mfg.downtimeDesk(c, ctx)));
+
+// ---------------------------------------------------------------------------
+// BOM + Routing engineering desk (bills of materials, routings, explosion)
+// ---------------------------------------------------------------------------
+manufacturingOpsRouter.get('/boms', ...runGet('production.boms.view', (c, ctx) => mfg.bomsDesk(c, ctx)));
+manufacturingOpsRouter.get('/boms/:id', ...runGet('production.boms.view', (c, ctx, _q, p) => mfg.bomDetail(c, ctx, Number(p.id))));
+manufacturingOpsRouter.post('/boms', ...run('production.boms.create', (c, ctx, b) => mfg.createBom(c, ctx, b)));
+manufacturingOpsRouter.get('/routings', ...runGet('production.boms.view', (c, ctx) => mfg.routingsDesk(c, ctx)));
+manufacturingOpsRouter.get('/routings/:id', ...runGet('production.boms.view', (c, ctx, _q, p) => mfg.routingDetail(c, ctx, Number(p.id))));
+manufacturingOpsRouter.post('/routings', ...run('production.boms.create', (c, ctx, b) => mfg.createRouting(c, ctx, b)));
