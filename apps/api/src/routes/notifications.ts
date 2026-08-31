@@ -33,7 +33,9 @@ notificationsRouter.get(
   asyncHandler(async (req, res) => {
     const res2 = await query(
       `SELECT count(*)::int AS count FROM notifications
-       WHERE user_id = $1 AND tenant_id = $2 AND read_at IS NULL`,
+       WHERE user_id = $1 AND tenant_id = $2 AND read_at IS NULL
+         AND archived_at IS NULL
+         AND (snoozed_until IS NULL OR snoozed_until <= now())`,
       [req.auth!.id, req.auth!.tenant_id],
       req.ctx
     );

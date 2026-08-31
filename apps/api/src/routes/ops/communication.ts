@@ -501,7 +501,13 @@ communicationOpsRouter.get(
     const { page, pageSize, offset } = parsePagination(q);
     const where = ['n.user_id = $1', 'n.tenant_id = $2'];
     const params: unknown[] = [uid, tenantId];
-    if (q.priority) {
+    if (q.archived !== 'true') {
+      where.push('n.archived_at IS NULL');
+      where.push('(n.snoozed_until IS NULL OR n.snoozed_until <= now())');
+    }
+    if (q.urgent === 'true') {
+      where.push("n.priority IN ('CRITICAL','URGENT')");
+    } else if (q.priority) {
       params.push(String(q.priority).toUpperCase());
       where.push(`n.priority = $${params.length}`);
     }
@@ -510,6 +516,10 @@ communicationOpsRouter.get(
       where.push(`n.type = $${params.length}`);
     }
     if (q.unread === 'true') where.push('n.read_at IS NULL');
+    if (q.q) {
+      params.push(`%${String(q.q)}%`);
+      where.push(`(n.title ILIKE $${params.length} OR n.body ILIKE $${params.length})`);
+    }
     const { rows } = await c.query(
       `SELECT n.*, COUNT(*) OVER() AS _total FROM notifications n
         WHERE ${where.join(' AND ')}
@@ -527,7 +537,6 @@ communicationOpsRouter.get(
     };
   })
 );
-
 communicationOpsRouter.patch(
   '/notifications/:id/read',
   ...run('communication.notifications.read', async (c, ctx, _b, p) => {
@@ -569,7 +578,89 @@ communicationOpsRouter.post(
     return { updated: rowCount ?? 0 };
   })
 );
+communicationOpsRouter.patch(
+  '/notifications/:id/unread',
+  ...run('communication.notifications.read', async (c, ctx, _b, p) => {
+    const id = Number(p.id);
+    const { rows } = await c.query(
+      `UPDATE notifications SET read_at = NULL
+        WHERE id = $1 AND user_id = $2 AND tenant_id = $3 RETURNING *`,
+      [id, ctx.userId ?? 0, ctx.tenantId ?? 0]
+    );
+    if (rows.length === 0) throw notFound('Notification not found');
+    await auditComms(c, ctx, 'NOTIFICATION_UNREAD', 'notification', id);
+    return toCamelRow(rows[0] as Record<string, unknown>);
+  })
+);
 
+communicationOpsRouter.patch(
+  '/notifications/:id/archive',
+  ...run('communication.notifications.read', async (c, ctx, _b, p) => {
+    const id = Number(p.id);
+    const { rows } = await c.query(
+      `UPDATE notifications
+          SET archived_at = COALESCE(archived_at, now())
+        WHERE id = $1 AND user_id = $2 AND tenant_id = $3 RETURNING *`,
+      [id, ctx.userId ?? 0, ctx.tenantId ?? 0]
+    );
+    if (rows.length === 0) throw notFound('Notification not found');
+    await auditComms(c, ctx, 'NOTIFICATION_ARCHIVED', 'notification', id);
+    return toCamelRow(rows[0] as Record<string, unknown>);
+  })
+);
+
+communicationOpsRouter.patch(
+  '/notifications/:id/snooze',
+  ...run('communication.notifications.read', async (c, ctx, b, p) => {
+    const id = Number(p.id);
+    const until = b.until ? new Date(String(b.until)) : null;
+    if (!until || Number.isNaN(until.getTime())) throw badRequest('until is required as an ISO date');
+    const { rows } = await c.query(
+      `UPDATE notifications
+          SET read_at = COALESCE(read_at, now()), snoozed_until = $4
+        WHERE id = $1 AND user_id = $2 AND tenant_id = $3 RETURNING *`,
+      [id, ctx.userId ?? 0, ctx.tenantId ?? 0, until.toISOString()]
+    );
+    if (rows.length === 0) throw notFound('Notification not found');
+    await auditComms(c, ctx, 'NOTIFICATION_SNOOZED', 'notification', id, { until: until.toISOString() });
+    return toCamelRow(rows[0] as Record<string, unknown>);
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Communication summary (health + analytics aggregates)
+// ---------------------------------------------------------------------------
+communicationOpsRouter.get(
+  '/summary',
+  ...runGet('communication.command.view', async (c, ctx) => {
+    const uid = ctx.userId ?? 0;
+    const tenantId = ctx.tenantId ?? 0;
+    const [messages, emails, notifications, deliveries, templates, channels, unread, urgent] = await Promise.all([
+      c.query(`SELECT count(*)::int AS v FROM conversation_messages WHERE tenant_id = $1`, [tenantId]),
+      c.query(`SELECT count(*)::int AS v FROM emails WHERE tenant_id = $1`, [tenantId]),
+      c.query(`SELECT count(*)::int AS v FROM notifications WHERE user_id = $1 AND tenant_id = $2`, [uid, tenantId]),
+      c.query(`SELECT status, count(*)::int AS v FROM notification_deliveries WHERE user_id = $1 AND tenant_id = $2 GROUP BY status`, [uid, tenantId]),
+      c.query(`SELECT count(*)::int AS v FROM email_templates WHERE tenant_id = $1`, [tenantId]),
+      c.query(`SELECT count(*)::int AS v FROM communication_channels WHERE tenant_id = $1`, [tenantId]),
+      c.query(`SELECT count(*)::int AS v FROM notifications WHERE user_id = $1 AND tenant_id = $2 AND read_at IS NULL AND archived_at IS NULL AND (snoozed_until IS NULL OR snoozed_until <= now())`, [uid, tenantId]),
+      c.query(`SELECT count(*)::int AS v FROM notifications WHERE user_id = $1 AND tenant_id = $2 AND read_at IS NULL AND archived_at IS NULL AND priority IN ('URGENT','CRITICAL') AND (snoozed_until IS NULL OR snoozed_until <= now())`, [uid, tenantId]),
+    ]);
+    const deliveryByStatus: Record<string, number> = {};
+    for (const r of deliveries.rows) deliveryByStatus[String(r.status)] = Number(r.v);
+    return {
+      totals: {
+        messages: Number(messages.rows[0].v),
+        emails: Number(emails.rows[0].v),
+        notifications: Number(notifications.rows[0].v),
+        templates: Number(templates.rows[0].v),
+        channels: Number(channels.rows[0].v),
+        unreadNotifications: Number(unread.rows[0].v),
+        urgentNotifications: Number(urgent.rows[0].v),
+      },
+      deliveries: deliveryByStatus,
+    };
+  })
+);
 // ---------------------------------------------------------------------------
 // Email centre
 // ---------------------------------------------------------------------------

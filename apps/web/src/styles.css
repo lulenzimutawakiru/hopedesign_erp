@@ -1,5 +1,5 @@
-﻿/* ============================================================
-   Corporate ERP â€” industrial + security-printing palette
+/* ============================================================
+   Corporate ERP — industrial + security-printing palette
    Navy authority, brand blue actions, teal operations.
    ============================================================ */
 
@@ -781,7 +781,7 @@ html[data-theme='dark'] .delivery-row { border-color: #254154; }
 
 .trace-chain { display: flex; flex-wrap: wrap; gap: 0; list-style: none; padding: 0; margin: 0 0 16px; }
 .trace-chain li { display: flex; align-items: center; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); background: var(--sheet); border: 1px solid var(--line); padding: 8px 10px; }
-.trace-chain li:not(:last-child)::after { content: 'â†’'; margin-left: 8px; color: var(--brass); }
+.trace-chain li:not(:last-child)::after { content: '→'; margin-left: 8px; color: var(--brass); }
 
 .operator-card { max-width: 520px; }
 .op-qty { font-size: 28px !important; font-family: var(--mono); text-align: center; }
@@ -2029,7 +2029,7 @@ a.verify-company-v:hover { color: var(--hope); text-decoration: underline; }
 
 
 /* ============================================================
-   Contract module â€” modern command-centre design system
+   Contract module — modern command-centre design system
    (avatars, KPI tiles, stepper, lifecycle rail, def sections)
    ============================================================ */
 .avatar { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-weight: 700; letter-spacing: 0.02em; color: #fff; flex: none; user-select: none; }
@@ -2323,7 +2323,7 @@ html[data-theme='dark'] .action-tile, html[data-theme='dark'] .emp-hero, html[da
 html[data-theme='dark'] .action-tile-icon { background: rgba(139, 92, 246, 0.18); }
 html[data-theme='dark'] .doc-card { background: #0B1F33; }
 
-/* ---------- Org chart (HCM) â€” modern ---------- */
+/* ---------- Org chart (HCM) — modern ---------- */
 .org-tree { margin-top: 12px; overflow-x: auto; padding-bottom: 4px; }
 
 /* Toolbar: search, filters, expand/focus controls */
@@ -2871,7 +2871,7 @@ html[data-theme='dark'] .self-sig-item { background: #0B1F33; border-color: #2A4
 /* Wizard stepper */
 .fos-stepper { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; padding: 0; }
 .fos-stepper li { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
-.fos-stepper li:not(:last-child)::after { content: 'â†’'; color: var(--muted-2); margin: 0 4px; }
+.fos-stepper li:not(:last-child)::after { content: '→'; color: var(--muted-2); margin: 0 4px; }
 .fos-step-dot {
   width: 24px; height: 24px; border-radius: 50%; flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
@@ -3220,6 +3220,74 @@ html[data-theme='dark'] .com-msg-mine .com-msg-bubble { background: #123237; bor
 
 .com-mail-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 4px; }
 .com-mail-body { border: 1px solid var(--line); border-radius: 10px; background: var(--paper-2); padding: 14px; margin-top: 8px; white-space: pre-wrap; line-height: 1.55; }
+
+/* ---------- Communication Center 2.0 ---------- */
+.com-tabs-wrap { display: flex; flex-direction: column; }
+.com-tabs-wrap .com-tabs:last-child { margin-top: -10px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.com-tabs-wrap .com-tabs:last-child button { font-size: 11px; padding: 3px 10px; color: var(--muted); }
+
+.com-work-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.com-work-bucket .card-head h3 { font-size: 12px; letter-spacing: 0.07em; }
+.com-work-hint { font-size: 12px; color: var(--muted); margin: -4px 0 10px; }
+.com-work-more { margin-top: 10px; }
+
+.com-health-list { display: flex; flex-direction: column; gap: 8px; }
+.com-health-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-2); }
+.com-health-name { font-weight: 600; font-size: 13px; flex: 1; }
+.com-deliv-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.com-deliv-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-2); }
+.com-deliv-count { font-weight: 700; font-size: 13px; color: var(--ink); }
+
+/* Notification bell drawer */
+.com-bell-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); z-index: 90; }
+.com-bell-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(400px, 100vw); background: var(--sheet); border-left: 1px solid var(--line); z-index: 95; display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(15, 23, 42, 0.18); }
+html[data-theme='dark'] .com-bell-backdrop { background: rgba(2, 6, 23, 0.6); }
+html[data-theme='dark'] .com-bell-drawer { background: #0B1F33; border-color: #2A4A66; }
+.com-bell-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.com-bell-head h3 { font-size: 15px; margin: 0; }
+.com-bell-tabs { display: flex; gap: 6px; padding: 10px 16px 4px; }
+.com-bell-tabs .tab { border: 1px solid var(--line); background: var(--paper-2); color: var(--muted); border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.com-bell-tabs .tab.active { background: #DDF3F1; border-color: var(--mod-com); color: var(--mod-com); }
+html[data-theme='dark'] .com-bell-tabs .tab { background: #0B1F33; border-color: #2A4A66; color: #A8B6C4; }
+html[data-theme='dark'] .com-bell-tabs .tab.active { background: #123237; border-color: #2DD4BF; color: #5EEAD4; }
+.com-bell-tools { padding: 10px 16px; }
+.com-bell-tools .search-input { width: 100%; }
+.com-bell-body { flex: 1; overflow-y: auto; padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.com-bell-error { padding: 4px 0; font-size: 12px; }
+.com-bell-row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.com-bell-snooze { position: relative; }
+.com-bell-snooze-menu { position: absolute; bottom: 110%; right: 0; background: var(--sheet); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16); padding: 4px; display: flex; flex-direction: column; gap: 2px; min-width: 132px; z-index: 20; }
+.com-bell-snooze-menu button { border: 0; background: transparent; padding: 7px 10px; border-radius: 6px; font-family: var(--font); font-size: 12.5px; color: var(--ink); cursor: pointer; text-align: left; }
+.com-bell-snooze-menu button:hover { background: var(--paper-2); }
+.com-bell-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--paper-2); }
+
+/* Messaging 3-pane + mentions */
+.com-msg-layout { grid-template-columns: 300px minmax(0, 1fr) 250px; }
+.com-context-pane { min-width: 0; }
+.com-context { border: 1px solid var(--line); border-radius: 12px; background: var(--sheet); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.com-context-head { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.com-context h3 { font-size: 14px; margin: 0; line-height: 1.3; }
+.com-context-type { font-family: var(--mono); font-size: 12px; color: var(--mod-com); }
+.com-context-empty { align-items: center; justify-content: center; text-align: center; min-height: 200px; }
+.com-thread-input { position: relative; }
+.com-thread-input textarea { font-family: var(--font); font-size: 13px; color: var(--ink); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--sheet); line-height: 1.4; }
+.com-mentions { position: absolute; bottom: calc(100% + 6px); left: 12px; right: 12px; z-index: 20; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--sheet); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16); padding: 4px; max-height: 200px; overflow-y: auto; }
+.com-mention { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; font-family: var(--font); color: var(--ink); text-align: left; width: 100%; }
+.com-mention:hover { background: var(--paper-2); }
+
+/* Email related-record rail */
+.com-mail-related { margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.com-mail-related-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+.com-mail-related-card { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-2); padding: 10px 12px; }
+.com-mail-related-type { font-weight: 600; font-size: 13px; flex: 1; }
+
+@media (max-width: 1200px) {
+  .com-msg-layout { grid-template-columns: 280px minmax(0, 1fr); }
+  .com-context-pane { display: none; }
+}
+@media (max-width: 900px) {
+  .com-work-grid { grid-template-columns: 1fr; }
+}
 
 .com-setting { display: grid; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); gap: 12px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .com-setting:last-child { border-bottom: 0; }

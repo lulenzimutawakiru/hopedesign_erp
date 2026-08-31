@@ -4,6 +4,7 @@ import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { pick, titleCase } from '../helpers';
+import { pathForEntity } from '../work';
 
 type Rec = Record<string, unknown>;
 
@@ -64,23 +65,38 @@ function trunc(s: unknown, n = 110): string {
 
 function ComTabs({ active }: { active: string }) {
   const { user } = useAuth();
-  const tabs: { id: string; label: string; href: string; perm: string }[] = [
+  const daily: { id: string; label: string; href: string; perm: string }[] = [
     { id: 'center', label: 'Command Center', href: '/communication', perm: 'communication.command.view' },
+    { id: 'work', label: 'My Work', href: '/communication/work', perm: 'communication.command.view' },
     { id: 'messages', label: 'Messages', href: '/communication/messages', perm: 'communication.messages.view' },
     { id: 'notifications', label: 'Notifications', href: '/communication/notifications', perm: 'communication.notifications.view' },
-    { id: 'email', label: 'Email', href: '/communication/email', perm: 'communication.emails.view' },
+    { id: 'email', label: 'Inbox', href: '/communication/email', perm: 'communication.emails.view' },
+    { id: 'sent', label: 'Sent', href: '/communication/sent', perm: 'communication.emails.view' },
+    { id: 'drafts', label: 'Drafts', href: '/communication/drafts', perm: 'communication.emails.view' },
     { id: 'announcements', label: 'Announcements', href: '/communication/announcements', perm: 'communication.announcements.view' },
+    { id: 'archive', label: 'Archive', href: '/communication/archive', perm: 'communication.notifications.view' },
+  ].filter((t) => can(user, t.perm));
+  const admin: { id: string; label: string; href: string; perm: string }[] = [
     { id: 'templates', label: 'Templates', href: '/communication/templates', perm: 'communication.templates.view' },
     { id: 'deliveries', label: 'Delivery Logs', href: '/communication/deliveries', perm: 'communication.delivery_logs.view' },
+    { id: 'admin', label: 'Health', href: '/communication/admin', perm: 'communication.command.view' },
     { id: 'settings', label: 'Settings', href: '/communication/settings', perm: 'communication.settings.manage' },
   ].filter((t) => can(user, t.perm));
+  const row = (t: { id: string; label: string; href: string }) => (
+    <button key={t.id} className={'tab' + (t.id === active ? ' active' : '')} onClick={() => navigate(t.href)}>
+      {t.label}
+    </button>
+  );
   return (
-    <div className="com-tabs">
-      {tabs.map((t) => (
-        <button key={t.id} className={'tab' + (t.id === active ? ' active' : '')} onClick={() => navigate(t.href)}>
-          {t.label}
-        </button>
-      ))}
+    <div className="com-tabs-wrap">
+      <div className="com-tabs" role="tablist" aria-label="Communication">
+        {daily.map(row)}
+      </div>
+      {admin.length > 0 ? (
+        <div className="com-tabs com-tabs-admin" role="tablist" aria-label="Communication administration">
+          {admin.map(row)}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -241,6 +257,189 @@ function CommandCenter() {
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
+function bucketNotifs(rows: Rec[]): { now: Rec[]; today: Rec[]; later: Rec[]; info: Rec[] } {
+  const now: Rec[] = [];
+  const today: Rec[] = [];
+  const later: Rec[] = [];
+  const info: Rec[] = [];
+  for (const n of rows) {
+    const p = String(n.priority ?? '').toUpperCase();
+    const actionRequired = !!n.actionRequired;
+    if (p === 'CRITICAL' || p === 'URGENT') now.push(n);
+    else if (p === 'HIGH' || actionRequired) today.push(n);
+    else if (p === 'LOW') info.push(n);
+    else later.push(n);
+  }
+  return { now, today, later, info };
+}
+
+function ComWorkView() {
+  const { user } = useAuth();
+  const [summary, setSummary] = useState<Rec | null>(null);
+  const [notifs, setNotifs] = useState<Rec[]>([]);
+  const [work, setWork] = useState<Rec | null>(null);
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    try {
+      const [s, n, w] = await Promise.all([
+        api<{ data: Rec }>('/api/ops/communication/summary'),
+        api<{ data: { rows: Rec[] } }>('/api/ops/communication/notifications?pageSize=50&unread=true'),
+        api<{ data: Rec }>('/api/dashboard/my-work').catch(() => null),
+      ]);
+      setSummary(s.data);
+      setNotifs(n.data.rows ?? []);
+      setWork(w?.data ?? null);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load your work');
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  if (error && !summary) return <ErrorBanner error={error} />;
+  if (!summary) return <PageLoader label="Building your action center…" />;
+  const totals = (summary.totals ?? {}) as Rec;
+  const counts = ((work?.counts ?? {}) as Rec) ?? {};
+  const buckets = bucketNotifs(notifs);
+  const name = user ? [user.first_name, user.last_name].filter(Boolean).join(' ') : 'there';
+  const tiles: { label: string; value: number; href: string; icon: string }[] = [
+    { label: 'Approvals', value: Number(counts.approvals ?? 0), href: '/inbox', icon: '\u{1F4C1}' },
+    { label: 'Tasks', value: Number(counts.tasks ?? 0), href: '/work', icon: '\u2705' },
+    { label: 'Unread notifications', value: Number(totals.unreadNotifications ?? 0), href: '/communication/notifications', icon: '\u{1F514}' },
+    { label: 'Urgent', value: Number(totals.urgentNotifications ?? 0), href: '/communication/notifications', icon: '\u26A0' },
+    { label: 'Messages', value: Number(totals.messages ?? 0), href: '/communication/messages', icon: '\u{1F4AC}' },
+  ];
+  const bucketsView: { key: 'now' | 'today' | 'later' | 'info'; label: string; hint: string }[] = [
+    { key: 'now', label: 'DO NOW', hint: 'Critical and urgent — decide immediately' },
+    { key: 'today', label: 'DO TODAY', hint: 'High priority and action required' },
+    { key: 'later', label: 'UPCOMING', hint: 'Normal priority items' },
+    { key: 'info', label: 'INFORMATION', hint: 'Low priority updates' },
+  ];
+  return (
+    <div className="page">
+      <ComHead title={`What needs you, ${name.split(' ')[0]}`} subtitle="Approvals, tasks, messages and urgent alerts — your personal action center." />
+      <ComTabs active="work" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="kpi-grid">
+        {tiles.map((k) => (
+          <button key={k.label} className="kpi-card" onClick={() => navigate(k.href)}>
+            <span className="kpi-label">{k.label}</span>
+            <span className="kpi-value">{k.value}</span>
+            <span className="kpi-sub" aria-hidden>{k.icon} Open</span>
+          </button>
+        ))}
+      </div>
+      <div className="com-work-grid">
+        {bucketsView.map((b) => (
+          <section key={b.key} className="card card-pad com-work-bucket">
+            <div className="card-head">
+              <h3>{b.label}</h3>
+              <span className="muted">{buckets[b.key].length}</span>
+            </div>
+            <p className="com-work-hint">{b.hint}</p>
+            {buckets[b.key].length === 0 ? (
+              <div className="empty-state">
+                <h3>All clear</h3>
+                <p>Nothing in this bucket right now.</p>
+              </div>
+            ) : (
+              <div className="com-list">
+                {buckets[b.key].slice(0, 6).map((n) => <NotifRow key={String(n.id)} n={n} onChanged={() => void load()} showRead />)}
+              </div>
+            )}
+            {buckets[b.key].length > 6 ? (
+              <button className="btn btn-sm btn-ghost com-work-more" type="button" onClick={() => navigate('/communication/notifications')}>
+                View all {buckets[b.key].length}
+              </button>
+            ) : null}
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CommunicationAdmin() {
+  const [summary, setSummary] = useState<Rec | null>(null);
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    try {
+      const r = await api<{ data: Rec }>('/api/ops/communication/summary');
+      setSummary(r.data);
+      setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load communication health');
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  if (error && !summary) return <ErrorBanner error={error} />;
+  if (!summary) return <PageLoader label="Loading communication health…" />;
+  const totals = (summary.totals ?? {}) as Rec;
+  const deliveries = (summary.deliveries ?? {}) as Rec;
+  const statusKeys = ['QUEUED', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'BOUNCED', 'RETRYING', 'CANCELLED'];
+  const toneFor = (s: string) =>
+    s === 'FAILED' || s === 'BOUNCED' ? 'badge-critical'
+    : s === 'RETRYING' ? 'badge-amber'
+    : s === 'READ' || s === 'DELIVERED' ? 'badge-success'
+    : 'badge-blue';
+  const failed = Number(deliveries.FAILED ?? 0) + Number(deliveries.BOUNCED ?? 0);
+  const health: { name: string; icon: string; note: string; tone: string }[] = [
+    { name: 'Email', icon: '\u2709', note: `${Number(totals.emails ?? 0)} messages tracked`, tone: 'badge-success' },
+    { name: 'Messaging', icon: '\u{1F4AC}', note: `${Number(totals.messages ?? 0)} messages sent`, tone: 'badge-success' },
+    { name: 'Notifications', icon: '\u{1F514}', note: `${Number(totals.notifications ?? 0)} total · ${Number(totals.unreadNotifications ?? 0)} unread`, tone: 'badge-success' },
+    { name: 'SMS / WhatsApp', icon: '\u{1F4F1}', note: failed > 0 ? `${failed} failed deliveries` : 'Operational', tone: failed > 0 ? 'badge-critical' : 'badge-success' },
+  ];
+  const tiles: { label: string; value: number; href: string; perm?: string }[] = [
+    { label: 'Email templates', value: Number(totals.templates ?? 0), href: '/communication/templates', perm: 'communication.templates.view' },
+    { label: 'Channels', value: Number(totals.channels ?? 0), href: '/communication/settings', perm: 'communication.settings.manage' },
+    { label: 'Emails', value: Number(totals.emails ?? 0), href: '/communication/email', perm: 'communication.emails.view' },
+    { label: 'Delivery failures', value: failed, href: '/communication/deliveries', perm: 'communication.delivery_logs.view', },
+  ];
+  return (
+    <div className="page">
+      <ComHead title="Communication health" subtitle="Delivery status, channel health and configuration at a glance." />
+      <ComTabs active="admin" />
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="kpi-grid">
+        {tiles.map((t) => (
+          <button key={t.label} className="kpi-card" onClick={() => navigate(t.href)}>
+            <span className="kpi-label">{t.label}</span>
+            <span className="kpi-value">{t.value}</span>
+            <span className="kpi-sub" aria-hidden>Open</span>
+          </button>
+        ))}
+      </div>
+      <div className="grid-2">
+        <section className="card card-pad">
+          <div className="card-head"><h3>Channels</h3><span className="muted">Health</span></div>
+          <div className="com-health-list">
+            {health.map((h) => (
+              <div key={h.name} className="com-health-row">
+                <span className="com-health-name">{h.icon} {h.name}</span>
+                <span className={`badge ${h.tone}`}>
+                  <span className="badge-icon" aria-hidden>{h.tone === 'badge-success' ? '✓' : '✕'}</span>
+                  {h.tone === 'badge-success' ? 'OPERATIONAL' : 'ATTENTION'}
+                </span>
+                <span className="muted">{h.note}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="card card-pad">
+          <div className="card-head"><h3>Delivery queue</h3><span className="muted">By status</span></div>
+          <div className="com-deliv-list">
+            {statusKeys.map((s) => (
+              <div key={s} className="com-deliv-row">
+                <span className={`badge ${toneFor(s)}`}>{s}</span>
+                <span className="com-deliv-count">{Number(deliveries[s] ?? 0)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function convoName(cv: Rec, peers: Map<number, Rec>, selfId: number): string {
   const title = pick<string>(cv, 'title');
   if (title && title.trim()) return title;
@@ -463,7 +662,12 @@ function ThreadPane({ convId, onBack, onChanged }: { convId: number; onBack: () 
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [mentionQ, setMentionQ] = useState('');
+  const [people, setPeople] = useState<Rec[]>([]);
+  const [showPeople, setShowPeople] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const mentionTimer = useRef<number | null>(null);
   const load = useCallback(async () => {
     try {
       const [c, m] = await Promise.all([
@@ -506,6 +710,37 @@ function ThreadPane({ convId, onBack, onChanged }: { convId: number; onBack: () 
       setBusy(false);
     }
   };
+  const searchPeople = useCallback(async (q: string) => {
+    try {
+      const r = await api<{ data: Rec[] }>(`/api/ops/communication/people?q=${encodeURIComponent(q)}`);
+      setPeople(r.data ?? []);
+    } catch {
+      setPeople([]);
+    }
+  }, []);
+  const onInput = (v: string) => {
+    setInput(v);
+    const at = v.lastIndexOf('@');
+    if (at >= 0) {
+      const q = v.slice(at + 1).trim();
+      setMentionQ(q);
+      setShowPeople(true);
+      if (mentionTimer.current) window.clearTimeout(mentionTimer.current);
+      mentionTimer.current = window.setTimeout(() => { void searchPeople(q); }, 200);
+    } else {
+      setShowPeople(false);
+      if (mentionTimer.current) { window.clearTimeout(mentionTimer.current); mentionTimer.current = null; }
+    }
+  };
+  const pickMention = (p: Rec) => {
+    const at = input.lastIndexOf('@');
+    const before = at >= 0 ? input.slice(0, at) : input;
+    const after = at >= 0 ? input.slice(at + 1 + mentionQ.length) : '';
+    setInput(`${before}@${fullName(p)} ${after}`.trim());
+    setShowPeople(false);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  };
+  useEffect(() => () => { if (mentionTimer.current) window.clearTimeout(mentionTimer.current); }, []);
   const viewMsgs = [...msgs].reverse();
   return (
     <div className="com-thread">
@@ -531,11 +766,26 @@ function ThreadPane({ convId, onBack, onChanged }: { convId: number; onBack: () 
         <div ref={endRef} />
       </div>
       <div className="com-thread-input">
-        <input
+        {showPeople && people.length > 0 ? (
+          <div className="com-mentions" role="listbox" aria-label="Mention someone">
+            {people.slice(0, 6).map((p) => (
+              <button key={String(p.id)} type="button" className="com-mention" role="option" onClick={() => pickMention(p)}>
+                <span className="com-avatar com-avatar-sm">{avatarText(p)}</span>
+                <span className="com-picker-name">
+                  <span>{fullName(p)}</span>
+                  <span className="muted">{String(pick(p, 'jobTitle', 'job_title', 'departmentName', 'department_name') ?? '')}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <textarea
+          ref={inputRef}
+          rows={2}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => onInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
-          placeholder="Type a message… (Enter to send)"
+          placeholder="Type a message… (@ to mention, Enter to send)"
         />
         <button className="btn btn-primary" type="button" onClick={() => void send()} disabled={busy || !input.trim()}>Send</button>
       </div>
@@ -552,6 +802,7 @@ function MessagesView({ initialId }: { initialId: string | null }) {
   const [hits, setHits] = useState<Rec[]>([]);
   const [activeId, setActiveId] = useState<number | null>(initialId ? Number(initialId) : null);
   const [compose, setCompose] = useState(false);
+  const [convDetail, setConvDetail] = useState<Rec | null>(null);
   const [error, setError] = useState('');
   const loadConvos = useCallback(async () => {
     try {
@@ -577,6 +828,17 @@ function MessagesView({ initialId }: { initialId: string | null }) {
     }
   }, [kind]);
   useEffect(() => { void loadConvos(); }, [loadConvos]);
+  useEffect(() => {
+    if (!activeId) {
+      setConvDetail(null);
+      return;
+    }
+    let live = true;
+    api<{ data: Rec }>(`/api/ops/communication/conversations/${activeId}`)
+      .then((r) => { if (live) setConvDetail(r.data); })
+      .catch(() => { if (live) setConvDetail(null); });
+    return () => { live = false; };
+  }, [activeId]);
   useEffect(() => {
     if (!search.trim()) {
       setHits([]);
@@ -656,6 +918,32 @@ function MessagesView({ initialId }: { initialId: string | null }) {
             </div>
           )}
         </section>
+        <aside className="com-context-pane">
+          {convDetail ? (
+            <div className="com-context">
+              <div className="com-context-head">
+                <span className="muted">{convDetail.kind === 'RECORD' ? 'Related record' : 'Conversation'}</span>
+              </div>
+              <h3>{String(convDetail.title ?? 'Untitled')}</h3>
+              {convDetail.kind ? <p><Badge value={convDetail.kind} /></p> : null}
+              {convDetail.entityType ? <p className="com-context-type">{String(convDetail.entityType)}</p> : null}
+              {convDetail.entityId ? <p className="cell-mono">{String(convDetail.entityId)}</p> : null}
+              {Array.isArray(convDetail.members) ? (
+                <p className="muted">{(convDetail.members as Rec[]).length} member(s)</p>
+              ) : null}
+              {convDetail.entityType && Number(convDetail.entityId) ? (
+                <button className="btn btn-primary" type="button" onClick={() => {
+                  const target = pathForEntity(String(convDetail.entityType), Number(convDetail.entityId));
+                  if (target && !target.startsWith('/records//')) navigate(target);
+                }}>Open record</button>
+              ) : null}
+            </div>
+          ) : (
+            <div className="com-context com-context-empty">
+              <span className="muted">Select a conversation to see its context.</span>
+            </div>
+          )}
+        </aside>
       </div>
       {compose ? (
         <ComposeConvo onClose={() => setCompose(false)} onCreated={(id) => { setCompose(false); openId(id); }} />
@@ -667,12 +955,12 @@ function MessagesView({ initialId }: { initialId: string | null }) {
 // ---------------------------------------------------------------------------
 // Notifications
 // ---------------------------------------------------------------------------
-function NotificationsView() {
+function NotificationsView({ archived }: { archived?: boolean }) {
   const [rows, setRows] = useState<Rec[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [prio, setPrio] = useState('');
-  const [onlyUnread, setOnlyUnread] = useState(true);
+  const [onlyUnread, setOnlyUnread] = useState(!archived);
   const [error, setError] = useState('');
   const pageSize = 20;
   const load = useCallback(async () => {
@@ -682,6 +970,7 @@ function NotificationsView() {
       qs.set('pageSize', String(pageSize));
       if (prio) qs.set('priority', prio);
       if (onlyUnread) qs.set('unread', 'true');
+      if (archived) qs.set('archived', 'true');
       const r = await api<{ data: { rows: Rec[]; pagination: { page: number; pageSize: number; total: number } } }>(
         `/api/ops/communication/notifications?${qs.toString()}`
       );
@@ -691,8 +980,13 @@ function NotificationsView() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load notifications');
     }
-  }, [page, prio, onlyUnread, pageSize]);
+  }, [page, prio, onlyUnread, pageSize, archived]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    setPage(1);
+    setOnlyUnread(!archived);
+    setPrio('');
+  }, [archived]);
   const markAll = async () => {
     try {
       await api('/api/ops/communication/notifications/read-all', { method: 'POST' });
@@ -704,11 +998,11 @@ function NotificationsView() {
   return (
     <div className="page">
       <ComHead
-        title="Notifications"
-        subtitle="Your attention list — approvals, alerts and actions."
-        actions={<button className="btn btn-ghost" type="button" onClick={() => void markAll()}>Mark all read</button>}
+        title={archived ? 'Archived' : 'Notifications'}
+        subtitle={archived ? 'Items you have archived for the record.' : 'Your attention list — approvals, alerts and actions.'}
+        actions={archived ? undefined : <button className="btn btn-ghost" type="button" onClick={() => void markAll()}>Mark all read</button>}
       />
-      <ComTabs active="notifications" />
+      <ComTabs active={archived ? 'archive' : 'notifications'} />
       {error ? <ErrorBanner error={error} /> : null}
       <div className="filter-bar">
         <select value={prio} onChange={(e) => { setPrio(e.target.value); setPage(1); }} aria-label="Priority filter">
@@ -719,16 +1013,18 @@ function NotificationsView() {
           <option value="NORMAL">Normal</option>
           <option value="LOW">Low</option>
         </select>
-        <label className="filter-chip">
-          <input type="checkbox" checked={onlyUnread} onChange={(e) => { setOnlyUnread(e.target.checked); setPage(1); }} />
-          Unread only
-        </label>
+        {!archived ? (
+          <label className="filter-chip">
+            <input type="checkbox" checked={onlyUnread} onChange={(e) => { setOnlyUnread(e.target.checked); setPage(1); }} />
+            Unread only
+          </label>
+        ) : null}
       </div>
       <div className="com-list">
         {rows.length === 0 ? (
           <div className="empty-state">
-            <h3>All clear</h3>
-            <p>No notifications match this view.</p>
+            <h3>{archived ? 'No archived notifications' : 'All clear'}</h3>
+            <p>{archived ? 'Archived notifications will appear here.' : 'No notifications match this view.'}</p>
           </div>
         ) : (
           rows.map((n) => <NotifRow key={String(n.id)} n={n} onChanged={() => void load()} showRead />)
@@ -751,6 +1047,8 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [templateCode, setTemplateCode] = useState('');
   const [templates, setTemplates] = useState<Rec[]>([]);
   const [scheduledAt, setScheduledAt] = useState('');
+  const [entityType, setEntityType] = useState('');
+  const [entityId, setEntityId] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -780,6 +1078,8 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
         bcc: split(bcc),
         status: send ? 'SENT' : 'DRAFT',
         templateCode: templateCode || undefined,
+        entityType: entityType.trim() || undefined,
+        entityId: entityId.trim() || undefined,
       };
       if (scheduledAt) payload.scheduledAt = scheduledAt;
       const r = await api<{ data: Rec }>('/api/ops/communication/emails', {
@@ -836,10 +1136,31 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
           <input value={bcc} onChange={(e) => setBcc(e.target.value)} placeholder="optional" />
         </div>
         <div className="field">
+          <label>Related record type</label>
+          <input value={entityType} onChange={(e) => setEntityType(e.target.value)} placeholder="e.g. sales.orders, procurement.orders" />
+        </div>
+        <div className="field">
+          <label>Related record ID</label>
+          <input value={entityId} onChange={(e) => setEntityId(e.target.value)} placeholder="Record number" />
+        </div>
+        <div className="field">
           <label>Schedule send (optional)</label>
           <input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
         </div>
       </div>
+      {entityType.trim() && entityId.trim() ? (
+        <div className="com-mail-related">
+          <span className="muted com-mail-related-label">Related record</span>
+          <div className="com-mail-related-card">
+            <span className="com-mail-related-type">{entityType.trim()}</span>
+            <span className="cell-mono">{entityId.trim()}</span>
+            <button className="btn btn-sm btn-ghost" type="button" onClick={() => {
+              const target = pathForEntity(entityType.trim(), Number(entityId.trim()));
+              if (target && !target.startsWith('/records//')) navigate(target);
+            }}>Open</button>
+          </div>
+        </div>
+      ) : null}
       <div className="field">
         <label>Message</label>
         <textarea rows={7} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write your message…" />
@@ -878,17 +1199,22 @@ function EmailDetail({ id, onClose }: { id: number; onClose: () => void }) {
   );
 }
 
-function EmailView() {
+function EmailView({ preset }: { preset?: 'inbox' | 'sent' | 'drafts' }) {
   const { user } = useAuth();
   const [rows, setRows] = useState<Rec[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [direction, setDirection] = useState('');
-  const [status, setStatus] = useState('');
+  const [direction, setDirection] = useState(preset === 'sent' ? 'OUT' : '');
+  const [status, setStatus] = useState(preset === 'sent' ? 'SENT' : preset === 'drafts' ? 'DRAFT' : '');
   const [compose, setCompose] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
   const [error, setError] = useState('');
   const pageSize = 20;
+  useEffect(() => {
+    setPage(1);
+    setDirection(preset === 'sent' ? 'OUT' : '');
+    setStatus(preset === 'sent' ? 'SENT' : preset === 'drafts' ? 'DRAFT' : '');
+  }, [preset]);
   const load = useCallback(async () => {
     try {
       const qs = new URLSearchParams();
@@ -907,18 +1233,19 @@ function EmailView() {
     }
   }, [page, direction, status, pageSize]);
   useEffect(() => { void load(); }, [load]);
+  const title = preset === 'sent' ? 'Sent' : preset === 'drafts' ? 'Drafts' : 'Inbox';
   return (
     <div className="page">
       <ComHead
-        title="Email"
-        subtitle="Compose, send and track enterprise email."
+        title={title}
+        subtitle={preset === 'sent' ? 'Emails you have sent.' : preset === 'drafts' ? 'Saved drafts waiting to be sent.' : 'Compose, send and track enterprise email.'}
         actions={
           can(user, 'communication.emails.send') ? (
             <button className="btn btn-primary" type="button" onClick={() => setCompose(true)}>+ Compose email</button>
           ) : undefined
         }
       />
-      <ComTabs active="email" />
+      <ComTabs active={preset ?? 'email'} />
       {error ? <ErrorBanner error={error} /> : null}
       <div className="filter-bar">
         <select value={direction} onChange={(e) => { setDirection(e.target.value); setPage(1); }} aria-label="Direction filter">
@@ -1663,8 +1990,13 @@ export default function CommunicationFlow({ path }: { path: string }) {
   const { view, id } = parseCom(path);
   switch (view) {
     case 'messages': return <MessagesView initialId={id} />;
-    case 'notifications': return <NotificationsView />;
-    case 'email': return <EmailView />;
+    case 'notifications': return <NotificationsView key="ntf" archived={false} />;
+    case 'archive': return <NotificationsView key="arc" archived />;
+    case 'work': return <ComWorkView />;
+    case 'admin': return <CommunicationAdmin />;
+    case 'email': return <EmailView key="email" preset="inbox" />;
+    case 'sent': return <EmailView key="sent" preset="sent" />;
+    case 'drafts': return <EmailView key="drafts" preset="drafts" />;
     case 'announcements': return <AnnouncementsView />;
     case 'templates': return <TemplatesView />;
     case 'deliveries': return <DeliveriesView />;
