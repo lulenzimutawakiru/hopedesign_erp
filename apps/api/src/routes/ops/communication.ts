@@ -13,9 +13,10 @@ import {
 import {
   auditComms,
   notifyUsers,
+  renderEmailForSend,
   renderTemplate,
 } from '../../services/communication.js';
-import { sendEmail, sendSms, sendWhatsApp } from '../../services/bird.js';
+import { sendEmail, sendSms, sendWhatsApp, type ProviderOverride } from '../../services/bird.js';
 
 export const communicationOpsRouter = Router();
 
@@ -724,8 +725,8 @@ communicationOpsRouter.post(
     const { rows } = await c.query(
       `INSERT INTO emails
          (tenant_id, company_id, branch_id, thread_id, direction, subject, body, "to", cc, bcc,
-          status, scheduled_at, entity_type, entity_id, template_code, created_by)
-       VALUES ($1,$2,$3,$4,'OUT',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+          status, scheduled_at, entity_type, entity_id, template_code, template_vars, created_by)
+       VALUES ($1,$2,$3,$4,'OUT',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
       [
         tenantId,
         ctx.companyId ?? null,
@@ -741,6 +742,9 @@ communicationOpsRouter.post(
         b.entityType ?? null,
         NUM(b.entityId),
         b.templateCode ?? null,
+        b.templateVars && typeof b.templateVars === 'object'
+          ? JSON.stringify(b.templateVars)
+          : null,
         ctx.userId ?? null,
       ]
     );
@@ -838,13 +842,16 @@ communicationOpsRouter.post(
       await auditComms(c, ctx, 'EMAIL_SEND_FAILED', 'email', id, { error: 'No recipients' });
       throw badRequest('Email has no recipients');
     }
-    const subject = String(email.subject ?? 'HOPE DESIGN ERP');
-    const body = String(email.body ?? '');
+    // Render {{VAR}} placeholders server-side before dispatch so recipients
+    // never see raw template tokens (template_vars + linked entity + company).
+    const rendered = await renderEmailForSend(c, email);
+    const subject = rendered.subject;
+    const body = rendered.body;
     const result = await sendEmail({ to: toAddresses, subject, html: body, text: body });
     if (result.ok) {
       await c.query(
-        `UPDATE emails SET status = 'SENT', sent_at = now(), updated_at = now() WHERE id = $1`,
-        [id]
+        `UPDATE emails SET status = 'SENT', sent_at = now(), subject = $2, body = $3, updated_at = now() WHERE id = $1`,
+        [id, subject, body]
       );
       await c.query(
         `UPDATE email_recipients
@@ -853,18 +860,18 @@ communicationOpsRouter.post(
         [result.providerMessageId ?? null, id]
       );
       await auditComms(c, ctx, 'EMAIL_SENT', 'email', id, { providerMessageId: result.providerMessageId ?? null });
-      return toCamelRow({ ...email, status: 'SENT', sentAt: new Date().toISOString() } as Record<string, unknown>);
+      return toCamelRow({ ...email, status: 'SENT', subject, body, sentAt: new Date().toISOString() } as Record<string, unknown>);
     }
     await c.query(
-      `UPDATE emails SET status = 'FAILED', sent_at = now(), updated_at = now() WHERE id = $1`,
-      [id]
+      `UPDATE emails SET status = 'FAILED', sent_at = now(), subject = $2, body = $3, updated_at = now() WHERE id = $1`,
+      [id, subject, body]
     );
     await c.query(
       `UPDATE email_recipients SET status = 'FAILED', error = $1 WHERE email_id = $2 AND status = 'QUEUED'`,
       [result.error ?? 'Sending failed', id]
     );
     await auditComms(c, ctx, 'EMAIL_SEND_FAILED', 'email', id, { error: result.error ?? null });
-    return toCamelRow({ ...email, status: 'FAILED', error: result.error ?? null } as Record<string, unknown>);
+    return toCamelRow({ ...email, status: 'FAILED', subject, body, error: result.error ?? null } as Record<string, unknown>);
   })
 );
 
@@ -1124,6 +1131,10 @@ communicationOpsRouter.post(
     if (!to) throw badRequest('to is required (email address or E.164 phone number)');
     const subject = String(b.subject ?? 'HOPE DESIGN ERP test email');
     const body = String(b.body ?? 'This is a test message from the HOPE DESIGN communication center.');
+    const provider = String(b.provider ?? 'auto').toLowerCase();
+    if (!['auto', 'bird', 'africastalking', 'resend'].includes(provider)) {
+      throw badRequest('provider must be auto, bird, africastalking or resend');
+    }
     const result =
       channel === 'EMAIL'
         ? await sendEmail({
@@ -1131,12 +1142,12 @@ communicationOpsRouter.post(
             subject,
             html: '<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;padding:24px;color:#0F172A;line-height:1.5"><h2 style="margin:0 0 8px">HOPE DESIGN ERP</h2><p>' + body.replace(/</g, '&lt;') + '</p></div>',
             text: body,
-          })
+          }, provider as ProviderOverride)
         : channel === 'SMS'
-          ? await sendSms({ to, text: body, category: 'service' })
-          : await sendWhatsApp({ to, text: { body } });
+          ? await sendSms({ to, text: body, category: 'service' }, provider as ProviderOverride)
+          : await sendWhatsApp({ to, text: { body } }, provider as ProviderOverride);
     await auditComms(c, ctx, 'PROVIDER_TEST_SENT', 'communication_provider', null, {
-      channel, to, ok: result.ok, providerMessageId: result.providerMessageId ?? null, error: result.error ?? null,
+      channel, to, provider, ok: result.ok, providerMessageId: result.providerMessageId ?? null, error: result.error ?? null,
     });
     return { channel, to, ...result };
   })

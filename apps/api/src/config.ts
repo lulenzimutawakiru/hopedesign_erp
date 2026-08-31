@@ -41,6 +41,17 @@ export const config = {
     smsFrom: process.env.BIRD_SMS_FROM ?? '',
     whatsappFrom: process.env.BIRD_WHATSAPP_FROM ?? '',
   },
+  africastalking: {
+    username: process.env.AT_USERNAME ?? '',
+    apiKey: process.env.AT_API_KEY ?? '',
+    senderId: process.env.AT_SENDER_ID ?? '',
+    whatsappNumber: process.env.AT_WHATSAPP_NUMBER ?? '',
+  },
+  resend: {
+    apiKey: process.env.RESEND_API_KEY ?? '',
+    fromEmail: process.env.RESEND_FROM_EMAIL ?? '',
+    fromName: process.env.RESEND_FROM_NAME ?? 'HOPE DESIGN ERP',
+  },
 };
 
 export const isProd = config.env === 'production';

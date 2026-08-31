@@ -3280,6 +3280,8 @@ html[data-theme='dark'] .com-bell-tabs .tab.active { background: #123237; border
 .com-mail-related-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
 .com-mail-related-card { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-2); padding: 10px 12px; }
 .com-mail-related-type { font-weight: 600; font-size: 13px; flex: 1; }
+.com-var-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-2); }
+.com-preview { background: var(--sheet); }
 
 @media (max-width: 1200px) {
   .com-msg-layout { grid-template-columns: 280px minmax(0, 1fr); }

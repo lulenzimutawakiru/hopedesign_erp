@@ -1052,6 +1052,8 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [scheduledAt, setScheduledAt] = useState('');
   const [entityType, setEntityType] = useState('');
   const [entityId, setEntityId] = useState('');
+  const [varList, setVarList] = useState<string[]>([]);
+  const [vars, setVars] = useState<Record<string, string>>({});
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -1065,8 +1067,23 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
     if (t) {
       setSubject(String(pick(t, 'subject') ?? ''));
       setBody(String(pick(t, 'body') ?? ''));
+      const list = Array.isArray(pick(t, 'variables'))
+        ? (pick(t, 'variables') as unknown[]).map((v) => String(v))
+        : [];
+      setVarList(list);
+      setVars({});
+    } else {
+      setVarList([]);
+      setVars({});
     }
   };
+  const renderPreview = (text: string) =>
+    text.replace(/{{(\w+)}}/g, (_m: string, key: string) => {
+      const v = vars[key];
+      return v ? String(v) : `{{${key}}}`;
+    });
+  const humanVar = (v: string) =>
+    v.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const split = (s: string) => s.split(/[,\n;]/).map((x) => x.trim()).filter(Boolean);
   const save = async (send: boolean) => {
     if (busy) return;
@@ -1083,6 +1100,7 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
         templateCode: templateCode || undefined,
         entityType: entityType.trim() || undefined,
         entityId: entityId.trim() || undefined,
+        templateVars: Object.keys(vars).length ? vars : undefined,
       };
       if (scheduledAt) payload.scheduledAt = scheduledAt;
       const r = await api<{ data: Rec }>('/api/ops/communication/emails', {
@@ -1140,7 +1158,13 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
         </div>
         <div className="field">
           <label>Related record type</label>
-          <input value={entityType} onChange={(e) => setEntityType(e.target.value)} placeholder="e.g. sales.orders, procurement.orders" />
+          <input value={entityType} onChange={(e) => setEntityType(e.target.value)} list="com-entity-types" placeholder="employee, leave_request, customer, supplier" />
+          <datalist id="com-entity-types">
+            <option value="employee" />
+            <option value="leave_request" />
+            <option value="customer" />
+            <option value="supplier" />
+          </datalist>
         </div>
         <div className="field">
           <label>Related record ID</label>
@@ -1163,8 +1187,33 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
             }}>Open</button>
           </div>
         </div>
+      ) : null}      {varList.length > 0 ? (
+        <div className="field" style={{ gridColumn: '1 / -1' }}>
+          <label>Template variables</label>
+          <div className="com-var-grid">
+            {varList.map((v) => (
+              <div className="field" key={v}>
+                <label>{humanVar(v)}</label>
+                <input
+                  value={vars[v] ?? ''}
+                  onChange={(e) => setVars((prev) => ({ ...prev, [v]: e.target.value }))}
+                  placeholder={v}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
       ) : null}
-      <div className="field">
+      {varList.length > 0 ? (
+        <div className="field" style={{ gridColumn: '1 / -1' }}>
+          <label>Preview</label>
+          <div className="com-mail-body com-preview">
+            <div style={{ fontWeight: 600 }}>{renderPreview(subject) || '(no subject)'}</div>
+            <div style={{ marginTop: 8 }}>{renderPreview(body)}</div>
+          </div>
+        </div>
+      ) : null}
+      <div className="field" style={{ gridColumn: '1 / -1' }}>
         <label>Message</label>
         <textarea rows={7} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write your message…" />
       </div>

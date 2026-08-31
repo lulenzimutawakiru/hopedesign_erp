@@ -336,6 +336,106 @@ export function renderTemplate(
     });
   return { subject: fill(subject), body: fill(body) };
 }
+
+/** Format a date-ish value as YYYY-MM-DD for template variables. */
+function fmtTemplateDate(v: unknown): string {
+  if (v == null) return '';
+  if (v instanceof Date) {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())}`;
+  }
+  const s = String(v);
+  return s.length >= 10 ? s.slice(0, 10) : s;
+}
+
+/**
+ * Render an email row's subject/body with template variables before sending.
+ * Variable sources, in priority order:
+ *   1. template_vars stored on the email (from the composer / callers)
+ *   2. vars auto-resolved from the linked entity (entity_type + entity_id)
+ *   3. global defaults (COMPANY_NAME from the company row)
+ * Unresolved {{VAR}} tokens are left in place so senders can spot gaps.
+ */
+export async function renderEmailForSend(
+  client: pg.PoolClient,
+  email: Record<string, unknown>
+): Promise<{ subject: string; body: string }> {
+  const vars: Record<string, unknown> = {};
+  const stored = email.template_vars;
+  if (stored && typeof stored === 'object') {
+    Object.assign(vars, stored as Record<string, unknown>);
+  }
+  const entityType = String(email.entity_type ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  const entityId = Number(email.entity_id ?? 0);
+  if (Number.isFinite(entityId) && entityId > 0) {
+    const setName = (name: string) => {
+      if (name) {
+        vars.EMPLOYEE_NAME = name;
+        vars.RECIPIENT_NAME = name;
+      }
+    };
+    if (entityType.includes('employee')) {
+      const { rows } = await client.query(
+        `SELECT first_name, last_name FROM employees WHERE id = $1`,
+        [entityId]
+      );
+      if (rows[0]) setName([rows[0].first_name, rows[0].last_name].filter(Boolean).join(' ').trim());
+    } else if (entityType.includes('leave')) {
+      const { rows } = await client.query(
+        `SELECT l.leave_type, l.start_date::text AS start_date, l.end_date::text AS end_date,
+               l.days, e.first_name, e.last_name
+           FROM leave_requests l
+           JOIN employees e ON e.id = l.employee_id
+          WHERE l.id = $1`,
+        [entityId]
+      );
+      if (rows[0]) {
+        const r = rows[0];
+        setName([r.first_name, r.last_name].filter(Boolean).join(' ').trim());
+        if (r.leave_type != null) vars.LEAVE_TYPE = String(r.leave_type);
+        if (r.start_date != null) vars.START_DATE = fmtTemplateDate(r.start_date);
+        if (r.end_date != null) vars.END_DATE = fmtTemplateDate(r.end_date);
+        if (r.days != null) vars.DAYS = String(Number(r.days));
+      }
+    } else if (entityType.includes('customer')) {
+      const { rows } = await client.query(
+        `SELECT name FROM customers WHERE id = $1`,
+        [entityId]
+      );
+      if (rows[0]?.name) {
+        vars.CUSTOMER_NAME = String(rows[0].name);
+        vars.RECIPIENT_NAME = String(rows[0].name);
+      }
+    } else if (entityType.includes('supplier')) {
+      const { rows } = await client.query(
+        `SELECT name FROM suppliers WHERE id = $1`,
+        [entityId]
+      );
+      if (rows[0]?.name) {
+        vars.SUPPLIER_NAME = String(rows[0].name);
+        vars.RECIPIENT_NAME = String(rows[0].name);
+      }
+    }
+  }
+  if (vars.COMPANY_NAME == null) {
+    const companyId = Number(email.company_id ?? 0);
+    if (Number.isFinite(companyId) && companyId > 0) {
+      const { rows } = await client.query(
+        `SELECT name, legal_name FROM companies WHERE id = $1`,
+        [companyId]
+      );
+      if (rows[0]) vars.COMPANY_NAME = String(rows[0].legal_name || rows[0].name || '').trim();
+    }
+    if (!vars.COMPANY_NAME) vars.COMPANY_NAME = 'HOPE DESIGN GROUP LTD';
+  }
+  return renderTemplate(
+    String(email.subject ?? 'HOPE DESIGN ERP'),
+    String(email.body ?? ''),
+    vars
+  );
+}
 // ---------------------------------------------------------------------------
 // Delivery dispatcher (Bird email / SMS / WhatsApp)
 // ---------------------------------------------------------------------------
@@ -355,7 +455,7 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
   deliveryLoopRunning = true;
   try {
     const res = await query(
-      `SELECT d.id, d.user_id, d.channel, d.recipient, d.retry_count,
+      `SELECT d.id, d.tenant_id, d.user_id, d.channel, d.recipient, d.retry_count,
               n.title, n.body, u.email, u.phone
          FROM notification_deliveries d
          JOIN notifications n ON n.id = d.notification_id
@@ -375,17 +475,25 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
       const email = String(row.email ?? '').trim();
       const phone = String(row.phone ?? '').trim();
       const to = channel === 'EMAIL' ? recipient || email : recipient || phone;
+      const body = String(row.body ?? '');
       const result = await dispatchBird(channel, to, {
         title: String(row.title ?? ''),
-        body: String(row.body ?? ''),
+        body,
       });
       if (result.ok) {
         await query(
           `UPDATE notification_deliveries
-              SET status = 'SENT', provider = 'bird', provider_message_id = $1, sent_at = now(), error = NULL
-            WHERE id = $2`,
-          [result.providerMessageId ?? null, deliveryId]
+              SET status = 'SENT', provider = $1, provider_message_id = $2, sent_at = now(), error = NULL
+            WHERE id = $3`,
+          [result.provider ?? 'bird', result.providerMessageId ?? null, deliveryId]
         );
+        if (channel === 'SMS') {
+          await query(
+            `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, provider_message_id, sent_at)
+             VALUES ($1,$2,$3,$4,$5,'SENT',$6,now())`,
+            [row.tenant_id, row.user_id, to, body, result.provider ?? 'bird', result.providerMessageId ?? null]
+          );
+        }
         ok += 1;
       } else {
         const attempts = Number(row.retry_count ?? 0) + 1;
@@ -399,6 +507,13 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
               WHERE id = $4`,
             [attempts, result.error ?? 'unknown', delaySeconds, deliveryId]
           );
+          if (channel === 'SMS') {
+            await query(
+              `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, error, retry_count)
+               VALUES ($1,$2,$3,$4,$5,'RETRYING',$6,$7)`,
+              [row.tenant_id, row.user_id, to, body, result.provider ?? 'bird', result.error ?? 'unknown', attempts]
+            );
+          }
         } else {
           await query(
             `UPDATE notification_deliveries
@@ -406,6 +521,13 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
               WHERE id = $3`,
             [attempts, result.error ?? 'unknown', deliveryId]
           );
+          if (channel === 'SMS') {
+            await query(
+              `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, error, retry_count)
+               VALUES ($1,$2,$3,$4,$5,'FAILED',$6,$7)`,
+              [row.tenant_id, row.user_id, to, body, result.provider ?? 'bird', result.error ?? 'unknown', attempts]
+            );
+          }
         }
         failed += 1;
       }

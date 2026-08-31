@@ -1,12 +1,21 @@
 import { BirdClient, type SmsSendParams, type WhatsappSendParams } from '@messagebird/sdk';
 import { config } from '../config.js';
+import {
+  isAfricasTalkingConfigured,
+  sendSmsViaAfricastalking,
+  sendWhatsAppViaAfricastalking,
+} from './africastalking.js';
+import { isResendConfigured, sendEmailViaResend } from './resend.js';
 
 export interface BirdSendResult {
   ok: boolean;
+  provider?: string;
   providerMessageId?: string;
   status?: string;
   error?: string;
 }
+
+export type ProviderOverride = 'auto' | 'bird' | 'africastalking' | 'resend';
 
 export interface BirdEmailInput {
   to: string[];
@@ -31,6 +40,7 @@ function getClient(): BirdClient | null {
 function okResult(msg: { id?: unknown; status?: unknown }): BirdSendResult {
   return {
     ok: true,
+    provider: 'bird',
     providerMessageId: msg?.id != null ? String(msg.id) : undefined,
     status: msg?.status != null ? String(msg.status) : undefined,
   };
@@ -40,8 +50,20 @@ function errResult(err: unknown): BirdSendResult {
   return { ok: false, error: err instanceof Error ? err.message : String(err) };
 }
 
-/** Send an SMS via Bird (free-text or template). */
-export async function sendSms(params: SmsSendParams): Promise<BirdSendResult> {
+/**
+ * Send an SMS. Routes through Africa's Talking when its credentials are
+ * configured (AT_USERNAME / AT_API_KEY), otherwise falls back to Bird.
+ * Pass providerOverride = 'bird' to force Bird or 'africastalking' to force
+ * Africa's Talking (e.g. from the provider test screen).
+ */
+export async function sendSms(
+  params: SmsSendParams,
+  providerOverride?: ProviderOverride
+): Promise<BirdSendResult> {
+  const wantAt =
+    providerOverride === 'africastalking' ||
+    (providerOverride !== 'bird' && isAfricasTalkingConfigured());
+  if (wantAt) return sendSmsViaAfricastalking(params.to, params.text ?? '');
   const c = getClient();
   if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
   try {
@@ -52,8 +74,28 @@ export async function sendSms(params: SmsSendParams): Promise<BirdSendResult> {
   }
 }
 
-/** Send a WhatsApp message via Bird (template preferred; free-text only inside a service window). */
-export async function sendWhatsApp(params: WhatsappSendParams): Promise<BirdSendResult> {
+/**
+ * Send a WhatsApp message. Routes through Africa's Talking when its WhatsApp
+ * virtual number is configured (AT_WHATSAPP_NUMBER), otherwise falls back to
+ * Bird. Pass providerOverride = 'bird' to force Bird or 'africastalking' to
+ * force Africa's Talking (e.g. from the provider test screen).
+ */
+export async function sendWhatsApp(
+  params: WhatsappSendParams,
+  providerOverride?: ProviderOverride
+): Promise<BirdSendResult> {
+  const wantAt =
+    providerOverride === 'africastalking' ||
+    (providerOverride !== 'bird' &&
+      isAfricasTalkingConfigured() &&
+      Boolean(config.africastalking.whatsappNumber.trim()));
+  if (wantAt) {
+    const body = params.text?.body ?? '';
+    if (!body.trim()) {
+      return { ok: false, error: 'WhatsApp message body is empty' };
+    }
+    return sendWhatsAppViaAfricastalking(params.to, body);
+  }
   const c = getClient();
   if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
   try {
@@ -64,8 +106,19 @@ export async function sendWhatsApp(params: WhatsappSendParams): Promise<BirdSend
   }
 }
 
-/** Send an email via Bird using the configured HOPE DESIGN sender address. */
-export async function sendEmail(input: BirdEmailInput): Promise<BirdSendResult> {
+/**
+ * Send an email. Routes through Resend when its credentials are configured
+ * (RESEND_API_KEY / RESEND_FROM_EMAIL), otherwise falls back to Bird.
+ * Pass providerOverride = 'bird' to force Bird or 'resend' to force Resend
+ * (e.g. from the provider test screen).
+ */
+export async function sendEmail(
+  input: BirdEmailInput,
+  providerOverride?: ProviderOverride
+): Promise<BirdSendResult> {
+  const wantResend =
+    providerOverride === 'resend' || (providerOverride !== 'bird' && isResendConfigured());
+  if (wantResend) return sendEmailViaResend(input);
   const c = getClient();
   if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
   if (!input.to?.length) return { ok: false, error: 'Email recipients missing' };

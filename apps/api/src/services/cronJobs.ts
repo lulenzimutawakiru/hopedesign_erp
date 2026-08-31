@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { Ctx, query, tx } from '../db.js';
 import { logAudit } from './audit.js';
-import { notifyUsers, resolveRecipients } from './communication.js';
+import { notifyUsers, renderEmailForSend, resolveRecipients } from './communication.js';
 import { sendEmail } from './bird.js';
 import { computeNextRun } from './reportScheduler.js';
 
@@ -790,7 +790,8 @@ async function passwordExpiryCheck(client: pg.PoolClient, ctx: Ctx, job: CronJob
 
 async function emailQueueFlush(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
   const { rows } = await client.query(
-    `SELECT e.id, e.subject, e.body, e.to, e.entity_type, e.entity_id
+    `SELECT e.id, e.subject, e.body, e.to, e.entity_type, e.entity_id,
+              e.template_vars, e.company_id
        FROM emails e
       WHERE e.tenant_id = $1
         AND e.status IN ('QUEUED','SCHEDULED')
@@ -821,16 +822,20 @@ async function emailQueueFlush(client: pg.PoolClient, ctx: Ctx, job: CronJobRow)
       failed += 1;
       continue;
     }
-    const subject = String(r.subject ?? 'HOPE DESIGN ERP');
-    const body = String(r.body ?? '');
+    const rendered = await renderEmailForSend(client, r);
+    const subject = rendered.subject;
+    const body = rendered.body;
     const result = await sendEmail({ to: toAddresses, subject, html: body, text: body });
     if (result.ok) {
-      await client.query(`UPDATE emails SET status = 'SENT', sent_at = now() WHERE id = $1`, [id]);
+      await client.query(
+        `UPDATE emails SET status = 'SENT', sent_at = now(), subject = $2, body = $3 WHERE id = $1`,
+        [id, subject, body]
+      );
       sent += 1;
     } else {
       await client.query(
-        `UPDATE emails SET status = 'FAILED', sent_at = now(), body = body WHERE id = $1`,
-        [id]
+        `UPDATE emails SET status = 'FAILED', sent_at = now(), subject = $2, body = $3 WHERE id = $1`,
+        [id, subject, body]
       );
       failed += 1;
     }
