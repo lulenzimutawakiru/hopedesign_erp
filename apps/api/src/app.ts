@@ -140,4 +140,4 @@ setInterval(() => {
   processNotificationDeliveries().catch((err: unknown) => {
     console.error('[notificationDispatch]', err instanceof Error ? err.message : err);
   });
-}, 60_000);
+}, 15_000);

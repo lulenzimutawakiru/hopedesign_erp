@@ -5,7 +5,7 @@ import { startWorkflow } from './workflow.js';
 import * as finance from './finance.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
-import { createNotification, notifyRole } from './notifications.js';
+import { notifyUserAdvanced, notifyRoleAdvanced } from './communication.js';
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 const num0 = (v: unknown) => {
@@ -401,8 +401,8 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
   );
   await logAudit(client, ctx, { action: 'pay', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), newValues: { payNo, status: 'PAID', paymentStatus: 'PAID' } });
   await emitEvent(client, ctx, { eventType: 'expense.paid', entityType: 'ops.expenses', entityId: id, entityCode: String(cur.expNo), payload: { payNo, amount: num0(cur.amount) } });
-  await createNotification(client, ctx, {
-    userId: cur.createdBy != null ? Number(cur.createdBy) : 0, type: 'PAYMENT_CONFIRMED',
+  await notifyUserAdvanced(client, ctx, cur.createdBy != null ? Number(cur.createdBy) : 0, {
+    type: 'PAYMENT_CONFIRMED',
     title: `Payment recorded ${cur.expNo}`, body: `${cur.expNo} paid ${num0(cur.amount).toLocaleString()}`,
     entityType: 'ops.expenses', entityId: id, actionRequired: false, severity: 'SUCCESS',
   });
@@ -1220,7 +1220,7 @@ export async function submitDailyClose(client: pg.PoolClient, ctx: Ctx, id: numb
     [companyId(ctx), ctx.tenantId, id, String(cur.closeNo), ctx.userId ?? null,
      JSON.stringify({ closeDate: String(cur.closeDate), variance: num0(cur.variance), instanceId })]
   );
-  await notifyRole(client, ctx, ['finance_manager'], {
+  await notifyRoleAdvanced(client, ctx, ['finance_manager'], {
     type: 'ops.daily_close', title: `Daily close ${cur.closeNo} awaiting approval`,
     body: `Daily close for ${String(cur.closeDate)} (variance ${num0(cur.variance).toLocaleString()}) is pending finance approval.`,
     link: '/spend/expenses', entityType: 'ops.daily_closings', entityId: id, severity: 'INFO', actionRequired: true,

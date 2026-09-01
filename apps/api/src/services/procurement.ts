@@ -8,7 +8,7 @@ import { startWorkflow } from './workflow.js';
 import { postMove, productStock } from './inventory.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
-import { createNotification } from './notifications.js';
+import { notifyUserAdvanced } from './communication.js';
 import * as finance from './finance.js';
 import { config } from '../config.js';
 
@@ -2909,8 +2909,7 @@ export async function commentOnRequisition(
   });
   for (const uid of mentions) {
     if (uid === ctx.userId) continue;
-    await createNotification(client, ctx, {
-      userId: uid,
+    await notifyUserAdvanced(client, ctx, uid, {
       type: 'PR_COMMENT',
       title: `Mentioned on ${String(pr.rows[0].pr_no)}`,
       body: body.slice(0, 200),
@@ -3129,8 +3128,7 @@ export async function assignRequisition(
     newValues: { officerUserId: officer },
     metadata: { notes: input.notes ?? null },
   });
-  await createNotification(client, ctx, {
-    userId: officer,
+  await notifyUserAdvanced(client, ctx, officer, {
     type: 'PR_ASSIGNMENT',
     title: `Assigned to ${String(pr.rows[0].pr_no)}`,
     body: `You are the procurement officer for ${String(pr.rows[0].pr_no)}`,

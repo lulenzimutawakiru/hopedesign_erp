@@ -8,7 +8,6 @@ import * as proc from './procurement.js';
 import * as finance from './finance.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
-import { createNotification, notifyRole } from './notifications.js';
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 const num0 = (v: unknown) => {

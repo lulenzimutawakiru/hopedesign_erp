@@ -6,7 +6,7 @@ import {
   sendWhatsAppViaAfricastalking,
 } from './africastalking.js';
 import { isResendConfigured, sendEmailViaResend } from './resend.js';
-import { brandEmailContent } from './emailBranding.js';
+import { brandEmailContent, type EmailActionButton } from './emailBranding.js';
 
 export interface BirdSendResult {
   ok: boolean;
@@ -23,6 +23,8 @@ export interface BirdEmailInput {
   subject: string;
   html?: string;
   text?: string;
+  button?: EmailActionButton | null;
+  preheader?: string | null;
 }
 
 let client: BirdClient | null = null;
@@ -121,6 +123,8 @@ export async function sendEmail(
     subject: input.subject,
     html: input.html,
     text: input.text,
+    button: input.button ?? undefined,
+    preheader: input.preheader ?? undefined,
   });
   const payload = { ...input, html: branded.html, text: branded.text };
   const wantResend =
@@ -150,7 +154,7 @@ export async function sendEmail(
 export async function dispatchBird(
   channel: string,
   to: string,
-  payload: { title?: string; body?: string }
+  payload: { title?: string; body?: string; button?: EmailActionButton | null }
 ): Promise<BirdSendResult> {
   if (!to) return { ok: false, error: 'No recipient for ' + channel + ' delivery' };
   const ch = channel.toUpperCase();
@@ -160,6 +164,7 @@ export async function dispatchBird(
       to: [to],
       subject: payload.title ?? 'HOPE DESIGN ERP',
       text: body,
+      button: payload.button ?? undefined,
     });
   }
   if (ch === 'SMS') {
@@ -179,4 +184,3 @@ export async function dispatchBird(
   }
   return { ok: false, error: 'Unsupported channel ' + channel };
 }
-

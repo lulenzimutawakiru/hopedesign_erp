@@ -5,7 +5,7 @@ import { badRequest, notFound, conflict, forbidden, toCamelRow, toCamelRows, toI
 import { startWorkflow, decideTask } from './workflow.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
-import { createNotification } from './notifications.js';
+import { notifyUserAdvanced } from './communication.js';
 
 type Row = Record<string, unknown>;
 
@@ -1835,8 +1835,7 @@ export async function requestSignature(
 
   const employeeUserId = row.employee_user_id ? Number(row.employee_user_id) : null;
   if (employeeUserId && (signerType === 'ALL' || signerType === 'EMPLOYEE')) {
-    await createNotification(client, ctx, {
-      userId: employeeUserId,
+    await notifyUserAdvanced(client, ctx, employeeUserId, {
       type: 'SIGNATURE_REQUEST',
       title: 'Contract ready to sign',
       body: `Contract ${String(row.contract_no ?? '')} is ready for your signature.`,
@@ -2048,8 +2047,7 @@ export async function signContract(
 
   const employeeUserId = row.employee_user_id ? Number(row.employee_user_id) : null;
   if (employeeUserId) {
-    await createNotification(client, ctx, {
-      userId: employeeUserId,
+    await notifyUserAdvanced(client, ctx, employeeUserId, {
       type: 'CONTRACT_EXECUTED',
       title: 'Contract executed',
       body: `Contract ${String(row.contract_no ?? '')} has been fully signed and executed.`,

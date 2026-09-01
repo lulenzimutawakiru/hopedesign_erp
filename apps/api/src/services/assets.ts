@@ -9,7 +9,7 @@ import { logAudit } from './audit.js';
 import { emitEvent } from './events.js';
 import { generateQr, voidQr, findQrByCode } from './qr.js';
 import { startWorkflow } from './workflow.js';
-import { createNotification, notifyRole } from './notifications.js';
+import { notifyRoleAdvanced, notifyUserAdvanced } from './communication.js';
 import * as inv from './inventory.js';
 import * as finance from './finance.js';
 import { loadCompanyProfile } from './branding.js';
@@ -478,7 +478,7 @@ export async function capitalizeAsset(client: pg.PoolClient, ctx: Ctx, id: numbe
   );
   await timeline(client, ctx, id, { eventType: 'CAPITALIZED', title: 'Asset capitalized', newValue: capDate, metadata: { glJournalId: n(b.glJournalId) } });
   await logAudit(client, ctx, { action: 'capitalize', resource: 'assets', recordId: id, recordCode: asset.asset_no, newValues: { capitalization_date: capDate } });
-  await notifyRole(client, ctx, ['asset_finance'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_finance'], {
     type: 'ASSET_CAPITALIZED', title: 'Asset capitalized', body: `${asset.asset_no} was capitalized`,
     entityType: 'assets.register', entityId: id, severity: 'INFO',
   });
@@ -633,7 +633,7 @@ export async function replaceTag(client: pg.PoolClient, ctx: Ctx, assetId: numbe
   );
   await timeline(client, ctx, assetId, { eventType: 'TAG_REPLACED', title: 'Asset tag replaced', reason, metadata: { oldTagId: oldTag ? oldTag.id : null, newTagId: tagId } });
   await logAudit(client, ctx, { action: 'replace_tag', resource: 'assets.tags', recordId: tagId, recordCode: asset.asset_no, metadata: { oldTagId: oldTag ? oldTag.id : null, reason } });
-  await notifyRole(client, ctx, ['asset_manager', 'asset_officer'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager', 'asset_officer'], {
     type: 'TAG_REPLACED', title: 'Tag replaced', body: `${asset.asset_no} received a replacement tag`,
     entityType: 'assets.register', entityId: assetId, severity: 'INFO',
   });
@@ -933,7 +933,7 @@ export async function approveTransfer(client: pg.PoolClient, ctx: Ctx, transferI
     entityId: transferId, entityCode: String(t.transfer_no),
     payload: { status: 'PENDING_HANDOVER' },
   });
-  await notifyRole(client, ctx, ['asset_storekeeper', 'asset_manager'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_storekeeper', 'asset_manager'], {
     type: 'TRANSFER_APPROVED', title: 'Transfer approved',
     body: `Transfer ${t.transfer_no} is approved and awaiting handover`,
     entityType: 'assets.transfers', entityId: transferId, severity: 'INFO',
@@ -1327,8 +1327,8 @@ export async function assignAsset(client: pg.PoolClient, ctx: Ctx, assetId: numb
     entityCode: asset.asset_no, payload: { assignmentId, custodianUserId, locationId },
   });
   if (custodianUserId) {
-    await createNotification(client, ctx, {
-      userId: custodianUserId, type: 'ASSET_ASSIGNED', title: 'Asset assigned to you',
+    await notifyUserAdvanced(client, ctx, custodianUserId, {
+      type: 'ASSET_ASSIGNED', title: 'Asset assigned to you',
       body: `${asset.asset_no} (${asset.name}) has been assigned to you`,
       entityType: 'assets.register', entityId: assetId, severity: 'INFO', actionRequired: requireAcknowledgement,
     });
@@ -1401,7 +1401,7 @@ export async function returnAsset(client: pg.PoolClient, ctx: Ctx, assetId: numb
     eventType: 'assets.returned', entityType: 'assets.register', entityId: assetId,
     entityCode: asset.asset_no, payload: { custodyId, status: newStatus },
   });
-  await notifyRole(client, ctx, ['asset_storekeeper'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_storekeeper'], {
     type: 'ASSET_RETURNED', title: 'Asset returned', body: `${asset.asset_no} (${asset.name}) returned to store`,
     entityType: 'assets.register', entityId: assetId, severity: 'INFO',
   });
@@ -1517,7 +1517,7 @@ export async function requestTransfer(client: pg.PoolClient, ctx: Ctx, b: Record
     eventType: 'assets.transfer_requested', entityType: 'assets.transfers',
     entityId: transferId, entityCode: transferNo, payload: { assetIds, totalValue, requiresDualControl },
   });
-  await notifyRole(client, ctx, ['asset_manager'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager'], {
     type: 'TRANSFER_REQUEST', title: 'Transfer requires approval',
     body: `Transfer ${transferNo} for ${assetIds.length} asset(s) (${totalValue.toLocaleString()} ${s(b.currency) ?? 'UGX'})`,
     entityType: 'assets.transfers', entityId: transferId, severity: requiresDualControl ? 'WARN' : 'INFO',
@@ -1674,7 +1674,7 @@ export async function completeTransfer(client: pg.PoolClient, ctx: Ctx, transfer
     eventType: 'assets.transfer_completed', entityType: 'assets.transfers',
     entityId: transferId, entityCode: String(t.transfer_no), payload: { assetIds: items.rows.map((it) => Number(it.asset_id)) },
   });
-  await notifyRole(client, ctx, ['asset_storekeeper', 'asset_manager'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_storekeeper', 'asset_manager'], {
     type: 'TRANSFER_COMPLETED', title: 'Transfer completed',
     body: `Transfer ${t.transfer_no} completed (${items.rows.length} asset(s))`,
     entityType: 'assets.transfers', entityId: transferId, severity: 'INFO',
@@ -1711,7 +1711,7 @@ export async function reportMissing(client: pg.PoolClient, ctx: Ctx, assetId: nu
     eventType: 'assets.reported_missing', entityType: 'assets.register', entityId: assetId,
     entityCode: asset.asset_no, payload: { locationId, lastCustodianUserId: asset.custodian_user_id },
   });
-  await notifyRole(client, ctx, ['asset_manager', 'security_administrator', 'asset_auditor'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager', 'security_administrator', 'asset_auditor'], {
     type: 'ASSET_MISSING', title: 'Asset reported missing',
     body: `${asset.asset_no} (${asset.name}) reported missing. Last custodian: ${asset.custodian_user_id ?? 'unknown'}`,
     entityType: 'assets.register', entityId: assetId, severity: 'ERROR', actionRequired: true,
@@ -1739,7 +1739,7 @@ export async function escalateMissing(client: pg.PoolClient, ctx: Ctx, assetId: 
     action: 'escalate_missing', resource: 'assets', recordId: assetId, recordCode: asset.asset_no,
     newValues: { status: toStatus, reason: s(b.reason) },
   });
-  await notifyRole(client, ctx, ['asset_manager', 'asset_finance'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager', 'asset_finance'], {
     type: 'ASSET_LOST', title: `Asset ${toStatus}`,
     body: `${asset.asset_no} (${asset.name}) declared ${toStatus} after investigation`,
     entityType: 'assets.register', entityId: assetId, severity: 'ERROR', actionRequired: true,
@@ -1789,7 +1789,7 @@ export async function recoverMissing(client: pg.PoolClient, ctx: Ctx, assetId: n
     action: 'recover_missing', resource: 'assets', recordId: assetId, recordCode: asset.asset_no,
     newValues: { status: newStatus, custodianUserId, locationId },
   });
-  await notifyRole(client, ctx, ['asset_manager'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager'], {
     type: 'ASSET_RECOVERED', title: 'Asset recovered',
     body: `${asset.asset_no} (${asset.name}) recovered`,
     entityType: 'assets.register', entityId: assetId, severity: 'SUCCESS',
@@ -2006,7 +2006,7 @@ export async function submitMaintenanceWorkOrder(client: pg.PoolClient, ctx: Ctx
     eventType: 'assets.maintenance_submitted', entityType: 'assets.maintenance',
     entityId: workOrderId, entityCode: String(wo.wo_no), payload: { status: 'SUBMITTED' },
   });
-  await notifyRole(client, ctx, ['asset_manager'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager'], {
     type: 'MAINTENANCE_REQUEST', title: 'Maintenance work order requires approval',
     body: `Work order ${wo.wo_no} for asset ${wo.asset_id} submitted for approval`,
     entityType: 'assets.maintenance', entityId: workOrderId, severity: 'INFO',
@@ -2095,7 +2095,7 @@ export async function completeMaintenanceWorkOrder(client: pg.PoolClient, ctx: C
     entityId: workOrderId, entityCode: String(wo.wo_no),
     payload: { status: 'COMPLETED', assetId: asset.id, totalCost, glJournalId },
   });
-  await notifyRole(client, ctx, ['asset_manager', 'asset_custodian'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager', 'asset_custodian'], {
     type: 'MAINTENANCE_COMPLETED', title: 'Maintenance completed',
     body: `Work order ${wo.wo_no} completed for ${asset.asset_no} (${totalCost.toLocaleString()} ${asset.currency ?? 'UGX'})`,
     entityType: 'assets.maintenance', entityId: workOrderId, severity: 'SUCCESS',
@@ -2375,7 +2375,7 @@ export async function startAudit(client: pg.PoolClient, ctx: Ctx, auditId: numbe
     entityId: auditId, entityCode: String(au.audit_no),
     payload: { status: 'IN_PROGRESS', expectedCount: countRes.rows[0].total },
   });
-  await notifyRole(client, ctx, ['asset_manager', 'asset_auditor'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager', 'asset_auditor'], {
     type: 'AUDIT_STARTED', title: 'Asset audit started',
     body: `Audit ${au.audit_no} started with ${countRes.rows[0].total} expected asset(s)`,
     entityType: 'assets.audits', entityId: auditId, severity: 'INFO',
@@ -2948,7 +2948,7 @@ export async function submitDisposal(client: pg.PoolClient, ctx: Ctx, disposalId
     action: 'submit', resource: 'assets.disposals', recordId: disposalId, recordCode: String(d.disposal_no),
     newValues: { status: 'SUBMITTED', amount },
   });
-  await notifyRole(client, ctx, ['asset_manager', 'asset_finance'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager', 'asset_finance'], {
     type: 'DISPOSAL_REQUEST', title: 'Disposal requires approval',
     body: `Disposal ${d.disposal_no} for ${asset.asset_no} (${amount.toLocaleString()} UGX)`,
     entityType: 'assets.disposals', entityId: disposalId, severity: d.requires_dual_control ? 'WARN' : 'INFO',
@@ -3424,7 +3424,7 @@ export async function submitImpairment(client: pg.PoolClient, ctx: Ctx, impairme
     action: 'submit', resource: 'assets.impairments', recordId: impairmentId, recordCode: String(imp.impairment_no),
     newValues: { status: 'SUBMITTED', delta },
   });
-  await notifyRole(client, ctx, ['asset_manager', 'asset_finance'], {
+  await notifyRoleAdvanced(client, ctx, ['asset_manager', 'asset_finance'], {
     type: 'IMPAIRMENT_REQUEST', title: 'Impairment requires approval',
     body: `${imp.impairment_type} ${imp.impairment_no} for ${asset.asset_no} (${delta.toLocaleString()} UGX)`,
     entityType: 'assets.impairments', entityId: impairmentId, severity: 'INFO',
@@ -3511,19 +3511,19 @@ async function warrantyExpiryAlert(client: pg.PoolClient, ctx: Ctx, asset: Recor
   const today = new Date().toISOString().slice(0, 10);
   const days = Math.floor((new Date(`${String(endDate).slice(0, 10)}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000);
   if (days < 0) {
-    await notifyRole(client, ctx, ['asset_manager'], {
+    await notifyRoleAdvanced(client, ctx, ['asset_manager'], {
       type: 'WARRANTY_EXPIRED', title: 'Warranty expired',
       body: `Warranty for ${asset.asset_no} (${asset.name}) expired on ${String(endDate).slice(0, 10)}`,
       entityType: 'assets.register', entityId: Number(asset.id), severity: 'WARN',
     });
   } else if (days <= 30) {
-    await notifyRole(client, ctx, ['asset_manager'], {
+    await notifyRoleAdvanced(client, ctx, ['asset_manager'], {
       type: 'WARRANTY_EXPIRING', title: 'Warranty expires soon',
       body: `Warranty for ${asset.asset_no} (${asset.name}) expires in ${days} day(s)`,
       entityType: 'assets.register', entityId: Number(asset.id), severity: 'INFO',
     });
   } else if (days <= 90) {
-    await notifyRole(client, ctx, ['asset_manager'], {
+    await notifyRoleAdvanced(client, ctx, ['asset_manager'], {
       type: 'WARRANTY_EXPIRING', title: 'Warranty expiring in 90 days',
       body: `Warranty for ${asset.asset_no} (${asset.name}) expires on ${String(endDate).slice(0, 10)}`,
       entityType: 'assets.register', entityId: Number(asset.id), severity: 'INFO',
@@ -3536,19 +3536,19 @@ async function insuranceExpiryAlert(client: pg.PoolClient, ctx: Ctx, asset: Reco
   const today = new Date().toISOString().slice(0, 10);
   const days = Math.floor((new Date(`${String(endDate).slice(0, 10)}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000);
   if (days < 0) {
-    await notifyRole(client, ctx, ['asset_manager', 'asset_finance'], {
+    await notifyRoleAdvanced(client, ctx, ['asset_manager', 'asset_finance'], {
       type: 'INSURANCE_EXPIRED', title: 'Insurance expired',
       body: `Insurance for ${asset.asset_no} (${asset.name}) expired on ${String(endDate).slice(0, 10)}`,
       entityType: 'assets.register', entityId: Number(asset.id), severity: 'WARN',
     });
   } else if (days <= 30) {
-    await notifyRole(client, ctx, ['asset_manager', 'asset_finance'], {
+    await notifyRoleAdvanced(client, ctx, ['asset_manager', 'asset_finance'], {
       type: 'INSURANCE_EXPIRING', title: 'Insurance expires soon',
       body: `Insurance for ${asset.asset_no} (${asset.name}) expires in ${days} day(s)`,
       entityType: 'assets.register', entityId: Number(asset.id), severity: 'INFO',
     });
   } else if (days <= 90) {
-    await notifyRole(client, ctx, ['asset_manager', 'asset_finance'], {
+    await notifyRoleAdvanced(client, ctx, ['asset_manager', 'asset_finance'], {
       type: 'INSURANCE_EXPIRING', title: 'Insurance expiring in 90 days',
       body: `Insurance for ${asset.asset_no} (${asset.name}) expires on ${String(endDate).slice(0, 10)}`,
       entityType: 'assets.register', entityId: Number(asset.id), severity: 'INFO',

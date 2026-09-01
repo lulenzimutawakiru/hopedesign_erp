@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { Ctx } from '../db.js';
+import { notifyFromEvent } from './eventNotifications.js';
 
 export interface EventPayload {
   eventType: string;
@@ -29,4 +30,7 @@ export async function emitEvent(client: pg.PoolClient, ctx: Ctx, e: EventPayload
       e.severity ?? 'INFO',
     ]
   );
+  // Fire-and-forget: mirror the event into the instant-notification pipeline.
+  // Never blocks or breaks the caller's transaction.
+  void notifyFromEvent(client, ctx, e);
 }

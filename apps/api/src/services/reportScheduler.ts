@@ -1,6 +1,6 @@
 import { Ctx, query, tx } from '../db.js';
 import { logAudit } from './audit.js';
-import { createNotification } from './notifications.js';
+import { notifyUserAdvanced } from './communication.js';
 import { buildCountSql, columnsOf, reportDef } from './reportCore.js';
 
 /** Next occurrence of a schedule after `from` (strictly in the future).
@@ -178,8 +178,7 @@ export async function runScheduleRecord(sched: ScheduleRow, baseCtx: Ctx): Promi
         ]
       );
       for (const r of recipients) {
-        await createNotification(client, ctx, {
-          userId: r.userId,
+        await notifyUserAdvanced(client, ctx, r.userId, {
           type: 'report.delivery',
           title: `Report ready: ${def.label}`,
           body: `${total.toLocaleString()} row${total === 1 ? '' : 's'} delivered`,
@@ -212,8 +211,7 @@ export async function runScheduleRecord(sched: ScheduleRow, baseCtx: Ctx): Promi
         [next.toISOString(), sched.id]
       );
       for (const r of recipients) {
-        await createNotification(client, ctx, {
-          userId: r.userId,
+        await notifyUserAdvanced(client, ctx, r.userId, {
           type: 'report.delivery',
           title: `Report delivery failed: ${def.label}`,
           body: msg,

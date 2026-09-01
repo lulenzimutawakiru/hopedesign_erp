@@ -4,7 +4,7 @@ import { ApprovalStep } from '../types.js';
 import { badRequest, forbidden, notFound } from '../utils.js';
 import { ENTITIES } from './entities.js';
 import { emitEvent } from './events.js';
-import { createNotification, notifyRole } from './notifications.js';
+import { notifyUserAdvanced, notifyRoleAdvanced } from './communication.js';
 import { logAudit } from './audit.js';
 
 interface StartWorkflowInput {
@@ -148,7 +148,7 @@ export async function startWorkflow(client: pg.PoolClient, ctx: Ctx, input: Star
 
   const approverRoles = applicable.map((s) => s.approver_role).filter(Boolean) as string[];
   if (approverRoles.length) {
-    await notifyRole(client, ctx, approverRoles, {
+    await notifyRoleAdvanced(client, ctx, approverRoles, {
       type: 'APPROVAL_REQUEST',
       title: `Approval required: ${wf.name}`,
       body: `${input.entityCode ?? `#${input.entityId}`} is awaiting ${applicable[0].name}`,
@@ -194,7 +194,7 @@ export async function completeWorkflow(client: pg.PoolClient, ctx: Ctx, instance
     entityCode: inst.entity_code,
     payload: { instanceId, workflow: inst.workflow_code },
   });
-  await notifyRole(client, ctx, ['system_administrator'], {
+  await notifyRoleAdvanced(client, ctx, ['system_administrator'], {
     type: 'APPROVAL_RESULT',
     title: 'Workflow approved',
     body: `${inst.entity_code ?? `#${inst.entity_id}`} was approved`,
@@ -305,8 +305,7 @@ export async function decideTask(
        VALUES ($1,$2,$3,NULL,$4,'PENDING', now() + interval '48 hours', $5)`,
       [task.instance_id, task.step_seq, task.step_name, delegateToUserId, user]
     );
-    await createNotification(client, ctx, {
-      userId: delegateToUserId,
+    await notifyUserAdvanced(client, ctx, delegateToUserId, {
       type: 'APPROVAL_REQUEST',
       title: `Delegated approval: ${task.step_name}`,
       body: `Task delegated to you for ${task.entity_code ?? `#${task.entity_id}`}`,
@@ -341,7 +340,7 @@ export async function decideTask(
 
   if (decision === 'REJECTED' || decision === 'RETURNED') {
     await rejectWorkflow(client, ctx, task.instance_id, comment);
-    await notifyRole(client, ctx, ['system_administrator'], {
+    await notifyRoleAdvanced(client, ctx, ['system_administrator'], {
       type: 'APPROVAL_RESULT',
       title: `Workflow ${decision.toLowerCase()}`,
       body: `${task.entity_code ?? `#${task.entity_id}`} was ${decision.toLowerCase()}${comment ? `: ${comment}` : ''}`,

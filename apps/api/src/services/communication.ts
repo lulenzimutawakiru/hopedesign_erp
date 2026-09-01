@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { Ctx, query } from '../db.js';
 import { dispatchBird } from './bird.js';
+import { config } from '../config.js';
 
 export type NotificationPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT' | 'CRITICAL';
 export type NotificationSeverity = 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR';
@@ -20,6 +21,7 @@ export interface NotifyInput {
   actionTarget?: string;
   data?: Record<string, unknown>;
   channels?: string[];
+  actionRequired?: boolean;
 }
 
 /** Resolve recipient user ids from explicit ids and/or role codes within the tenant. */
@@ -203,7 +205,7 @@ export async function notifyUsers(
   const rule = await getRulesForEvent(client, ctx, eventTypes);
   const ruleRecipients = await resolveRecipients(client, ctx, {
     userIds: rule.userIds,
-    roleCodes: rule.roleCodes,
+    roleCodes: [...(rule.roleCodes ?? []), ...(input.roleCodes ?? [])],
   });
   const recipients = new Set<number>(userIds.map(Number).filter((n) => Number.isFinite(n) && n > 0));
   for (const id of ruleRecipients) recipients.add(id);
@@ -245,7 +247,7 @@ export async function notifyUsers(
         input.entityType ?? null,
         input.entityId ?? null,
         input.severity ?? 'INFO',
-        input.actionLabel != null,
+        input.actionLabel != null || input.actionRequired === true,
         input.priority ?? 'NORMAL',
         channels[0],
         input.actionLabel ?? null,
@@ -270,6 +272,26 @@ export async function notifyUsers(
     }
   }
   return created;
+}
+
+/** Advanced-pipeline wrapper matching the legacy `notifyRole` shape. */
+export async function notifyRoleAdvanced(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  roleCodes: string[],
+  n: Omit<NotifyInput, 'userIds' | 'roleCodes'> & { actionRequired?: boolean }
+): Promise<number[]> {
+  return notifyUsers(client, ctx, { ...n, roleCodes }, []);
+}
+
+/** Advanced-pipeline wrapper matching the legacy `createNotification` shape. */
+export async function notifyUserAdvanced(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  userId: number,
+  n: Omit<NotifyInput, 'userIds' | 'roleCodes'> & { actionRequired?: boolean }
+): Promise<number[]> {
+  return notifyUsers(client, ctx, { ...n }, [Number(userId)]);
 }
 
 /** Append an event to the communication event stream. */
@@ -456,7 +478,7 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
   try {
     const res = await query(
       `SELECT d.id, d.tenant_id, d.user_id, d.channel, d.recipient, d.retry_count,
-              n.title, n.body, u.email, u.phone
+              n.title, n.body, n.action_label, n.action_target, u.email, u.phone
          FROM notification_deliveries d
          JOIN notifications n ON n.id = d.notification_id
          JOIN users u ON u.id = d.user_id
@@ -476,9 +498,16 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
       const phone = String(row.phone ?? '').trim();
       const to = channel === 'EMAIL' ? recipient || email : recipient || phone;
       const body = String(row.body ?? '');
+      const actionLabel = String(row.action_label ?? '').trim();
+      const actionTarget = String(row.action_target ?? '').trim();
+      const button =
+        channel === 'EMAIL' && actionLabel && actionTarget
+          ? { label: actionLabel, url: `${config.webPublicUrl}${actionTarget.startsWith('/') ? '' : '/'}${actionTarget}` }
+          : undefined;
       const result = await dispatchBird(channel, to, {
         title: String(row.title ?? ''),
         body,
+        button,
       });
       if (result.ok) {
         await query(
