@@ -796,6 +796,12 @@ communicationOpsRouter.post(
         }
       }
     };
+    // A re-send of a previously FAILED email must reactivate its recipients;
+    // otherwise the post-send update below would have no QUEUED rows to update.
+    await c.query(
+      `UPDATE email_recipients SET status = 'QUEUED', error = NULL WHERE email_id = $1 AND kind = 'TO'`,
+      [id]
+    );
     // email_recipients is the authoritative recipient store; fall back to the
     // emails."to" JSON column when no recipient rows exist yet.
     const { rows: recRows } = await c.query(
