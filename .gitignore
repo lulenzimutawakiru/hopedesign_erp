@@ -11,3 +11,9 @@ apps/web/dist/
 .codex-patches/
 /prod-probe.cjs
 SECURITY_ASSESSMENT_2026.md
+
+# Scratch / agent working files – never commit these
+tmp-hr/
+.login-resp.json
+*.token.txt
+*.probe.cjs

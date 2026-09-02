@@ -1,6 +1,0 @@
-﻿*** Begin Patch
-*** Update File: apps/web/src/views/ContractFlow.tsx
-@@
--        {[['overview', 'Overview'], ['terms', 'Terms & clauses'], ['compensation', 'Compensation'], ['signatures', 'Signatures'], ['approvals', 'Approvals'], ['compliance', 'Compliance'], ['variations', 'Variations'], ['audit', 'Audit']].map(([k, label]) => (
-+        {[['overview', 'Overview'], ['terms', 'Terms & clauses'], ['compensation', 'Compensation'], ['documents', 'Documents'], ['approvals', 'Approvals'], ['signatures', 'Signatures'], ['compliance', 'Compliance'], ['variations', 'Variations'], ['history', 'History'], ['audit', 'Audit']].map(([k, label]) => (
-*** End Patch
