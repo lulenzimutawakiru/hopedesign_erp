@@ -1,7 +1,11 @@
 import 'dotenv/config';
+import { injectSpeedInsights } from '@vercel/speed-insights';
 import { app } from './app.js';
 import { config } from './config.js';
 import { pingDb } from './db.js';
+
+// Initialize Vercel Speed Insights
+injectSpeedInsights();
 
 async function main() {
   await pingDb();
