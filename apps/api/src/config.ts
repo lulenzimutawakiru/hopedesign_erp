@@ -54,6 +54,15 @@ const postgresUser = envStr('POSTGRES_USER') ?? urlDb?.user ?? 'hopedesign';
 const postgresPassword = envStr('POSTGRES_PASSWORD') ?? urlDb?.password ?? 'hopedesign_dev';
 const postgresDatabase = envStr('POSTGRES_DB') ?? urlDb?.database ?? 'hopedesign_erp';
 
+// TLS: managed providers such as Supabase/Neon require SSL on TCP connections.
+// Default to SSL for any remote host, disable on loopback, and allow an
+// explicit POSTGRES_SSL=true/false override (e.g. a private VPS Postgres that
+// has TLS disabled).
+const postgresSslRaw = envStr('POSTGRES_SSL');
+const postgresSsl = postgresSslRaw
+  ? !['0', 'false', 'disable'].includes(postgresSslRaw.toLowerCase())
+  : !isLoopbackHost(postgresHost);
+
 export const config = {
   env: process.env.NODE_ENV ?? 'development',
   port: num(process.env.PORT, 4000),
@@ -70,6 +79,7 @@ export const config = {
     // behaviour so dev/tests run unchanged unless explicitly switched.
     appUser: envStr('POSTGRES_APP_USER') ?? postgresUser,
     appPassword: envStr('POSTGRES_APP_PASSWORD') ?? postgresPassword,
+    ssl: postgresSsl,
   },
   jwtSecret: process.env.JWT_SECRET ?? 'change-me-in-production',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '8h',
