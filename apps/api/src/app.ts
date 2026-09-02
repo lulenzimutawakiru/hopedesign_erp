@@ -195,3 +195,5 @@ setInterval(() => {
     console.error('[notificationDispatch]', err instanceof Error ? err.message : err);
   });
 }, 15_000);
+
+export default app;
