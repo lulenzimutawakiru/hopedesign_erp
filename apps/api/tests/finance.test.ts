@@ -686,6 +686,9 @@ describe('Finance budget gate and posting rules', () => {
     let budget: { id: number; tenantId: number; companyId: number } | undefined;
     let expenseId: number | null = null;
     let journalId: number | null = null;
+    const _now = new Date();
+    const monthStart = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-01`;
+    const monthEnd = new Date(Date.UTC(_now.getFullYear(), _now.getMonth() + 1, 0)).toISOString().slice(0, 10);
     try {
       const acct = await api.post('/api/ops/finance/accounts').set(auth(token)).send({
         code: `BG${suffix}`,
@@ -698,8 +701,8 @@ describe('Finance budget gate and posting rules', () => {
       account = acct.body.data;
 
       const created = await api.post('/api/ops/finance/budgets').set(auth(token)).send({
-        periodStart: '2026-08-01',
-        periodEnd: '2026-08-31',
+        periodStart: monthStart,
+        periodEnd: monthEnd,
         status: 'DRAFT',
         lines: [{ accountId: account.id, amount: 50000 }],
       });
@@ -715,7 +718,7 @@ describe('Finance budget gate and posting rules', () => {
       expect(Number(check.body.data.available)).toBe(50000);
 
       const blocked = await api.post('/api/ops/finance/expenses').set(auth(token)).send({
-        expenseDate: '2026-08-20',
+        expenseDate: monthStart,
         accountId: account.id,
         amount: 80000,
         method: 'CASH',
@@ -725,7 +728,7 @@ describe('Finance budget gate and posting rules', () => {
       expect(String(blocked.body.error.message)).toMatch(/Budget exceeded/i);
 
       const ok = await api.post('/api/ops/finance/expenses').set(auth(token)).send({
-        expenseDate: '2026-08-20',
+        expenseDate: monthStart,
         accountId: account.id,
         amount: 12000,
         method: 'CASH',

@@ -1,5 +1,5 @@
 UPDATE policies
-SET subject_attributes = '{"policy_exempt_finance_hours": {"missing": true}}'::jsonb
+SET subject_attributes = '{"policy_exempt_finance_hours": {"$missing": true}}'::jsonb
 WHERE code = 'ABAC-FIN-HOURS';
 
 UPDATE users

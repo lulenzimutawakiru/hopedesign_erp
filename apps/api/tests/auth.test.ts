@@ -9,13 +9,16 @@ describe('Authentication', () => {
     expect(res.body.service).toBe('hopedesign-erp-api');
   });
 
-  it('logs in as admin and returns access + refresh tokens', async () => {
+  it('logs in as admin (MFA step) and completes to a session token', async () => {
+    // Privileged users must complete MFA before a session is issued, so the
+    // first step of login only returns an MFA challenge.
     const res = await api.post('/api/auth/login').send({ identifier: 'admin', password: PASSWORD });
     expect(res.status).toBe(200);
-    expect(typeof res.body.accessToken).toBe('string');
-    expect(typeof res.body.refreshToken).toBe('string');
-    expect(Number(res.body.user.id)).toBe(1);
-    expect(res.body.user.username).toBe('admin');
+    expect(res.body.mfaRequired).toBe(true);
+    expect(typeof res.body.loginToken).toBe('string');
+    const { token } = await loginAs('admin');
+    expect(typeof token).toBe('string');
+    expect(token.length).toBeGreaterThan(10);
   });
 
   it('rejects a wrong password with 401 UNAUTHORIZED', async () => {
@@ -41,7 +44,7 @@ describe('Authentication', () => {
   it('records a successful login in the audit log', async () => {
     const count = async () => {
       const r = await db(
-        `SELECT count(*)::int AS n FROM audit_logs WHERE resource='auth' AND action='login' AND record_id=1`
+        `SELECT count(*)::int AS n FROM audit_logs WHERE resource='auth' AND action IN ('login','login_mfa') AND record_id=1`
       );
       return Number(r.rows[0].n);
     };
@@ -62,7 +65,9 @@ describe('Administration users', () => {
     expect(Array.isArray(all.body.data.data)).toBe(true);
     expect(all.body.data.data.length).toBeGreaterThan(0);
     expect(Number(all.body.data.pagination.total)).toBeGreaterThanOrEqual(all.body.data.data.length);
-    const adminRow = all.body.data.data.find((u: { username?: string }) => u.username === 'admin');
+    const searched = await api.get('/api/admin/users?search=admin&pageSize=50').set(auth(token));
+    expect(searched.status).toBe(200);
+    const adminRow = searched.body.data.data.find((u: { username?: string }) => u.username === 'admin');
     expect(adminRow).toBeTruthy();
 
     const active = await api.get('/api/admin/users?status=ACTIVE&pageSize=50').set(auth(token));

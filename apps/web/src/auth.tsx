@@ -77,18 +77,41 @@ export interface MeUser {
   default_fiscal_year_name?: string | null;
 }
 
+export type LoginOutcome =
+  | { status: 'ok' }
+  | {
+      status: 'mfa';
+      enrollmentRequired: boolean;
+      loginToken: string;
+      user: Partial<MeUser>;
+    };
+
+export interface PendingLogin {
+  loginToken: string;
+  enrollmentRequired: boolean;
+  user: Partial<MeUser>;
+  enrollmentSecret?: string;
+  enrollmentUrl?: string;
+}
+
 interface AuthState {
   user: MeUser | null;
   loading: boolean;
-  login: (identifier: string, password: string) => Promise<void>;
+  pending: PendingLogin | null;
+  login: (identifier: string, password: string) => Promise<LoginOutcome>;
+  completeMfa: (code: string) => Promise<void>;
+  startEnrollment: () => Promise<{ secret: string; otpauthUrl: string }>;
+  completeEnrollment: (code: string, secret?: string) => Promise<void>;
   logout: () => void;
 }
+
 
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<MeUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState<PendingLogin | null>(null);
 
   const loadMe = useCallback(async () => {
     const r = await api<{ user: MeUser }>('/api/auth/me');
@@ -109,12 +132,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, [loadMe]);
 
-  const login = async (identifier: string, password: string) => {
-    const r = await api<{ accessToken: string; refreshToken: string; user: Partial<MeUser> }>('/api/auth/login', {
+  const login = async (identifier: string, password: string): Promise<LoginOutcome> => {
+    const r = await api<
+      | { accessToken: string; refreshToken: string; user: Partial<MeUser> }
+      | {
+          mfaRequired: boolean;
+          enrollmentRequired: boolean;
+          loginToken: string;
+          user: Partial<MeUser>;
+        }
+    >('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ identifier, password }),
     });
+    if ('accessToken' in r && r.accessToken) {
+      setToken(r.accessToken);
+      await loadMe();
+      return { status: 'ok' };
+    }
+    if ('loginToken' in r && r.loginToken) {
+      const pl: PendingLogin = {
+        loginToken: r.loginToken,
+        enrollmentRequired: !!r.enrollmentRequired,
+        user: r.user,
+      };
+      setPending(pl);
+      return { status: 'mfa', enrollmentRequired: pl.enrollmentRequired, loginToken: pl.loginToken, user: pl.user };
+    }
+    throw new Error('Unexpected login response');
+  };
+
+  const completeMfa = async (code: string) => {
+    if (!pending) throw new Error('No pending login');
+    const r = await api<{ accessToken: string; user: MeUser }>('/api/auth/mfa/verify', {
+      method: 'POST',
+      body: JSON.stringify({ loginToken: pending.loginToken, code }),
+    });
     setToken(r.accessToken);
+    setPending(null);
+    await loadMe();
+  };
+
+  const startEnrollment = async () => {
+    if (!pending) throw new Error('No pending login');
+    const r = await api<{ secret: string; otpauthUrl: string }>('/api/auth/mfa/enroll-start', {
+      method: 'POST',
+      body: JSON.stringify({ loginToken: pending.loginToken }),
+    });
+    setPending({ ...pending, enrollmentSecret: r.secret, enrollmentUrl: r.otpauthUrl });
+    return r;
+  };
+
+  const completeEnrollment = async (code: string, secret?: string) => {
+    if (!pending) throw new Error('No pending login');
+    const r = await api<{ accessToken: string; user: MeUser }>('/api/auth/mfa/enroll-verify', {
+      method: 'POST',
+      body: JSON.stringify({ loginToken: pending.loginToken, code, secret }),
+    });
+    setToken(r.accessToken);
+    setPending(null);
     await loadMe();
   };
 
@@ -124,7 +200,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     location.hash = '#/login';
   };
 
-  return <AuthContext.Provider value={{ user, loading, login, logout }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ user, loading, pending, login, completeMfa, startEnrollment, completeEnrollment, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {

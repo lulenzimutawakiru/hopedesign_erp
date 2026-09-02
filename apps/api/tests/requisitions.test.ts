@@ -112,6 +112,6 @@ describe('Ops requisition centre', () => {
     expect(taskId).not.toBeNull();
     const decide = await api.post(`/api/approvals/${taskId}/decide`).set(auth(opsToken)).send({ decision: 'APPROVED' });
     expect(decide.status).toBe(403);
-    expect(decide.body.error.message).toMatch(/Segregation of duties/i);
+    expect(decide.body.error.message).toMatch(/Segregation of duties|ABAC-NO-SELF-APPROVE/i);
   });
 });

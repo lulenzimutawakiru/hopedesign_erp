@@ -17,25 +17,33 @@ const LOGO_MIME_EXT: Record<string, string> = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
   'image/webp': '.webp',
-  'image/svg+xml': '.svg',
 };
 
-const LOGO_EXTS = ['.png', '.jpg', '.webp', '.svg'];
+const LOGO_EXTS = ['.png', '.jpg', '.webp'];
 
 function logoStorageKey(tenantId: number | null | undefined, companyId: number | null | undefined, ext: string) {
   return path.join('branding', String(tenantId ?? 0), String(companyId ?? 0), `logo${ext}`);
 }
 
+/** Reject files whose magic bytes do not match the declared image type. */
+function assertImageMagic(buf: Buffer, ext: string) {
+  const hex = buf.subarray(0, 16).toString('hex');
+  const ok =
+    (ext === '.png' && hex.startsWith('89504e47')) ||
+    (ext === '.jpg' && hex.startsWith('ffd8ff')) ||
+    (ext === '.webp' && hex.startsWith('52494646') && hex.slice(8, 16) === '57454250') ||
+    (ext === '.ico' && hex.startsWith('00000100'));
+  if (!ok) throw badRequest('File content does not match the declared image type');
+}
 const faviconUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const FAVICON_MIME_EXT: Record<string, string> = {
-  'image/svg+xml': '.svg',
   'image/png': '.png',
   'image/x-icon': '.ico',
   'image/vnd.microsoft.icon': '.ico',
 };
 
-const FAVICON_EXTS = ['.svg', '.png', '.ico'];
+const FAVICON_EXTS = ['.png', '.ico'];
 
 function faviconStorageKey(tenantId: number | null | undefined, companyId: number | null | undefined, ext: string) {
   return path.join('branding', String(tenantId ?? 0), String(companyId ?? 0), `favicon${ext}`);
@@ -96,7 +104,7 @@ export const SETTINGS: Record<string, Record<string, SettingDef>> = {
     industry: { label: 'Industry', help: 'Primary industry used for report grouping and compliance defaults.', type: 'select', options: ['Manufacturing', 'Paper & Packaging', 'Security Printing', 'FMCG', 'Pharmaceuticals', 'Agriculture', 'Logistics', 'Retail', 'Other'], default: 'Manufacturing', group: 'Company identity' },
     website: { label: 'Website', help: 'Public company website, linked from branded exports.', type: 'url', group: 'Company identity' },
     logo_url: { label: 'Logo URL', help: 'Public URL of the company logo used in branded document exports.', type: 'url', group: 'Company identity' },
-    favicon_url: { label: 'Favicon URL', help: 'Public URL of the browser tab icon (SVG, PNG or ICO).', type: 'url', group: 'Company identity' },
+    favicon_url: { label: 'Favicon URL', help: 'Public URL of the browser tab icon (PNG or ICO).', type: 'url', group: 'Company identity' },
     signature_url: { label: 'Signature image URL', help: 'Public URL of the uploaded signature image used on auto-signed documents.', type: 'url', group: 'Company identity' },
     footer_logo_url: { label: 'Footer logo URL', help: 'Public URL of the separate footer logo shown at the bottom of branded documents and exports.', type: 'url', group: 'Company identity' },
     brand_color: { label: 'Primary brand colour', help: 'Accent colour used on branded documents and exports.', type: 'color', default: '#1261A0', group: 'Company identity' },
@@ -382,7 +390,8 @@ settingsRouter.post(
     const file = req.file;
     if (!file) throw badRequest('A logo file is required (field "file")');
     const ext = LOGO_MIME_EXT[file.mimetype];
-    if (!ext) throw badRequest('Unsupported image type. Use PNG, JPG, WebP or SVG.');
+    if (!ext) throw badRequest('Unsupported image type. Use PNG, JPG or WebP.');
+    assertImageMagic(file.buffer, ext);
 
     const tenantId = req.ctx.tenantId;
     const companyId = req.ctx.companyId ?? null;
@@ -449,7 +458,8 @@ settingsRouter.post(
     const file = req.file;
     if (!file) throw badRequest('A favicon file is required (field "file")');
     const ext = FAVICON_MIME_EXT[file.mimetype];
-    if (!ext) throw badRequest('Unsupported favicon type. Use SVG, PNG or ICO.');
+    if (!ext) throw badRequest('Unsupported favicon type. Use PNG or ICO.');
+    assertImageMagic(file.buffer, ext);
 
     const tenantId = req.ctx.tenantId;
     const companyId = req.ctx.companyId ?? null;

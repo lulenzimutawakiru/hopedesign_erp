@@ -15,7 +15,7 @@ async function createEmployee(hrToken: string, firstName: string, lastName: stri
   return employeeId;
 }
 
-/** Create an employee self-service user (role 97) for contract signing. */
+/** Create an employee self-service user for contract signing. */
 async function createSigningUser(email: string) {
   const { hashPassword } = await import('../src/auth.js');
   const passwordHash = await hashPassword(PASSWORD);
@@ -25,7 +25,14 @@ async function createSigningUser(email: string) {
     [email, `kato.contract.${Date.now()}`, passwordHash]
   );
   const userId = Number(ins.rows[0].id);
-  await db(`INSERT INTO user_roles (user_id, role_id, company_id) VALUES ($1, 97, 2)`, [userId]);
+  // Resolve the self-service role from the tenant's RBAC catalogue instead of
+  // a hard-coded id: role ids differ across fresh and legacy seeds.
+  const role = await db(`SELECT id FROM roles WHERE code = 'employee_self_service' AND tenant_id = 2`);
+  if (!role.rows.length) throw new Error('employee_self_service role not found for tenant 2');
+  await db(`INSERT INTO user_roles (user_id, role_id, company_id) VALUES ($1, $2, 2)`, [
+    userId,
+    Number(role.rows[0].id),
+  ]);
   return userId;
 }
 
@@ -36,7 +43,7 @@ describe('Uganda HR Contract Builder', () => {
       const { token: hrToken } = await loginAs('hr.hannah');
       const employeeId = await createEmployee(hrToken, 'Kato', 'Contract', 'Finance Assistant', 2500000);
 
-      // Employee self-service signer (tenant 2 / company 2 / role 97).
+      // Employee self-service signer (tenant 2 / company 2 / employee_self_service).
       const email = `kato.contract.${Date.now()}@hopedesign.test`;
       const userId = await createSigningUser(email);
       await db(`UPDATE employees SET user_id = $1 WHERE id = $2`, [userId, employeeId]);
@@ -136,7 +143,7 @@ describe('Uganda HR Contract Builder', () => {
       expect(verify.body.data.valid).toBe(true);
       expect(verify.body.data.document_no).toBe(contractNo);
 
-      // 9. Employee self-service can view the executed contract (role 97).
+      // 9. Employee self-service can view the executed contract.
       const detail = await api.get(`/api/ops/hr/contracts/${contractId}`).set(auth(empToken));
       expect(detail.status).toBe(200);
       expect(detail.body.data.contract.status).toBe('EXECUTED');
@@ -299,7 +306,10 @@ describe('Uganda HR Contract Builder', () => {
         expect(printed.text).toContain('Anti-Fraud');
         expect(printed.text).toContain('Governing Law');
         expect(printed.text).toContain('Appointment');
-        expect(printed.text).toContain('window.print()');
+        expect(printed.text).toContain('src="/assets/print.js"');
+        const printJs = await api.get('/assets/print.js');
+        expect(printJs.status).toBe(200);
+        expect(printJs.text).toContain('window.print()');
 
         const pdf = await api.get(`/api/documents/employment-contract/${contractId}?format=pdf`).set(auth(hrToken));
         expect(pdf.status).toBe(200);

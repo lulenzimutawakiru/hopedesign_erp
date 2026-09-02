@@ -79,8 +79,8 @@ export async function findQrByCode(client: pg.PoolClient, ctx: Ctx, code: string
      LEFT JOIN product_batches pb ON pb.id = q.batch_id
      LEFT JOIN inventory i ON i.product_id = q.product_id AND i.batch_id IS NOT DISTINCT FROM q.batch_id
      LEFT JOIN warehouses w ON w.id = i.warehouse_id
-     WHERE q.code = $1 AND q.tenant_id = $2`,
-    [code, ctx.tenantId]
+     WHERE q.code = $1 AND q.tenant_id = $2 AND ($3::bigint IS NULL OR q.company_id = $3)`,
+    [code, ctx.tenantId, ctx.companyId ?? null]
   );
   return res.rows[0] ?? null;
 }
@@ -149,8 +149,10 @@ export async function verifyQrPublic(payload: string, ip?: string, userAgent?: s
 
 export async function voidQr(client: pg.PoolClient, ctx: Ctx, qrId: number, reason: string) {
   const res = await client.query(
-    `UPDATE qr_codes SET status = 'VOID', status_reason = $2 WHERE id = $1 AND tenant_id = $3 RETURNING code`,
-    [qrId, reason, ctx.tenantId]
+    `UPDATE qr_codes SET status = 'VOID', status_reason = $2
+     WHERE id = $1 AND tenant_id = $3 AND ($4::bigint IS NULL OR company_id = $4)
+     RETURNING code`,
+    [qrId, reason, ctx.tenantId, ctx.companyId ?? null]
   );
   if (res.rows.length === 0) throw notFound('QR code not found');
   await emitEvent(client, ctx, {

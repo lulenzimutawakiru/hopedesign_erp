@@ -46,4 +46,5 @@ SELECT 2,
        now() - interval '16 minutes'
 FROM backup_records bk
 WHERE bk.backup_id = 'BK-20260824-0001'
-  AND NOT EXISTS (SELECT 1 FROM restore_requests rr WHERE rr.backup_id = bk.id);
+  AND NOT EXISTS (SELECT 1 FROM restore_requests rr WHERE rr.backup_id = bk.id)
+  AND EXISTS (SELECT 1 FROM users u WHERE u.email = 'admin@hopedesign.co.ug' AND u.tenant_id = 2);

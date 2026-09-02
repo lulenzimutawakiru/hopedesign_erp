@@ -1,4 +1,4 @@
-import pg from 'pg';
+﻿import pg from 'pg';
 import { config } from './config.js';
 import { correlationId } from './utils.js';
 
@@ -7,8 +7,8 @@ const { Pool } = pg;
 export const pool = new Pool({
   host: config.postgres.host,
   port: config.postgres.port,
-  user: config.postgres.user,
-  password: config.postgres.password,
+  user: config.postgres.appUser,
+  password: config.postgres.appPassword,
   database: config.postgres.database,
   max: 10,
   idleTimeoutMillis: 30_000,
@@ -76,6 +76,31 @@ export async function tx<T>(
     return result;
   } catch (err) {
     await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Run a callback on a fresh pooled connection in its own transaction with
+ *  app context applied. Use for fire-and-forget background work such as event
+ *  notification mirroring: the caller's pooled client is never shared, so the
+ *  work cannot run on a connection whose transaction-local context was reset
+ *  by the caller's COMMIT, and a failure cannot abort the caller's transaction
+ *  or poison a pooled connection for the next request. */
+export async function detach<T>(
+  fn: (client: pg.PoolClient, ctx: Ctx) => Promise<T>,
+  ctx: Ctx = {}
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await applyContext(client, ctx);
+    const result = await fn(client, ctx);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
     throw err;
   } finally {
     client.release();

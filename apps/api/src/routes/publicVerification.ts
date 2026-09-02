@@ -1,4 +1,4 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { query, tx } from '../db.js';
 import { verifyQrPublic } from '../services/qr.js';
@@ -16,7 +16,6 @@ const LOGO_MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
 };
 
 const LOGO_EXTS = Object.keys(LOGO_MIME_BY_EXT);
@@ -50,7 +49,6 @@ publicVerificationRouter.get(
 );
 
 const FAVICON_MIME_BY_EXT: Record<string, string> = {
-  '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
 };

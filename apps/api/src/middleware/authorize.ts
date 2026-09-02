@@ -43,7 +43,8 @@ export function requirePermission(permission: string | string[]) {
              JOIN permissions p ON p.id = rp.permission_id
              WHERE ur.user_id = $3 AND p.code = primary_permission
            )`,
-        [user.tenant_id, matched, user.id]
+        [user.tenant_id, matched, user.id],
+        req.ctx
       );
       if (sod.rows.length > 0 && sod.rows[0].enforcement === 'hard') {
         return next(forbidden(`Segregation of duties conflict: ${sod.rows[0].name}`));
@@ -55,7 +56,8 @@ export function requirePermission(permission: string | string[]) {
         `SELECT code, effect, subject_attributes, resource_attributes, environment_attributes
          FROM policies WHERE tenant_id = $1 AND is_active = true
          ORDER BY priority, id`,
-        [user.tenant_id]
+        [user.tenant_id],
+        req.ctx
       );
       const parts = matched.split('.');
       const subjectSource: Record<string, unknown> = {
@@ -171,7 +173,8 @@ export function requirePermission(permission: string | string[]) {
         `SELECT 1 FROM user_roles ur
          WHERE ur.user_id = $1 AND ur.company_id IS NOT NULL AND ur.company_id <> $2
          LIMIT 1`,
-        [user.id, req.ctx.companyId ?? user.company_id]
+        [user.id, req.ctx.companyId ?? user.company_id],
+        req.ctx
       );
       if (scopeOk.rows.length > 0) {
         return next(forbidden('Role scope does not cover this company'));

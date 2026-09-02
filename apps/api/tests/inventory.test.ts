@@ -8,7 +8,8 @@ describe('Inventory warehouse workspace', () => {
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.data.rows)).toBe(true);
     expect(res.body.data.total).toBeGreaterThan(0);
-    const line = res.body.data.rows[0];
+    const line = res.body.data.rows.find((r: { quantity: number }) => Number(r.quantity) > 0);
+    expect(line).toBeTruthy();
     expect(line.productCode).toBeTruthy();
     expect(line.warehouseCode).toBeTruthy();
     expect(Number(line.quantity)).toBeGreaterThan(0);

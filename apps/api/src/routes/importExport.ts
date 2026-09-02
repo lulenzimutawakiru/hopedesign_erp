@@ -7,6 +7,7 @@ import { query, tx, type Ctx } from '../db.js';
 import { requirePermission } from '../middleware/authorize.js';
 import { ENTITIES, entityForTable } from './registry.js';
 import { asyncHandler, badRequest, notFound } from '../utils.js';
+import { exportLimiter } from '../middleware/rateLimits.js';
 import { logAudit } from '../services/audit.js';
 import {
   documentVerifyUrl,
@@ -36,7 +37,27 @@ const DOMAIN_TABLES: { table: string; label: string }[] = [
 ];
 
 /** Sensitive columns that must never appear in exports (QR secrets, hashes, credentials). */
-const SENSITIVE_EXCLUDED = new Set(['secret', 'secret_hash', 'password_hash', 'mfa_secret']);
+const SENSITIVE_EXCLUDED = new Set([
+  'secret', 'secret_hash', 'password_hash', 'mfa_secret', 'token_hash',
+]);
+
+/** Columns that must never be settable via bulk import (account state, linkage). */
+const IMMUTABLE_BY_TABLE: Record<string, string[]> = {
+  users: [
+    'mfa_enabled', 'mfa_method', 'must_change_password', 'failed_attempts',
+    'locked_until', 'password_changed_at', 'last_login_at', 'employee_id',
+    'attributes', 'settings',
+  ],
+  employees: ['user_id'],
+};
+
+/** Columns a caller is allowed to supply for a table during import. */
+function importableColumns(allCols: string[], table: string): string[] {
+  const immutable = IMMUTABLE_BY_TABLE[table] ?? [];
+  return allCols.filter(
+    (c) => !BASE_EXCLUDED.has(c) && !SENSITIVE_EXCLUDED.has(c) && !immutable.includes(c)
+  );
+}
 
 const columnCache = new Map<string, string[]>();
 
@@ -99,7 +120,8 @@ async function tenantInfo(ctx: Ctx): Promise<Record<string, string | null>> {
      LEFT JOIN companies c ON c.id = $2
      LEFT JOIN branches b ON b.id = $3
      WHERE t.id = $1`,
-    [ctx.tenantId ?? 0, ctx.companyId ?? null, ctx.branchId ?? null]
+    [ctx.tenantId ?? 0, ctx.companyId ?? null, ctx.branchId ?? null],
+    ctx
   );
   const row = res.rows[0] as Record<string, unknown> | undefined;
   return {
@@ -124,7 +146,7 @@ importExportRouter.get(
   requirePermission('admin.imports.download_template'),
   asyncHandler(async (req, res) => {
     const table = requireTable(req.params.table);
-    const cols = (await columnsOf(table)).filter((c) => !BASE_EXCLUDED.has(c));
+    const cols = importableColumns(await columnsOf(table), table);
     const csv = stringify([cols], { header: false });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${table}_template.csv"`);
@@ -146,7 +168,7 @@ importExportRouter.post(
     } catch {
       throw badRequest('Could not parse CSV file');
     }
-    const cols = (await columnsOf(table)).filter((c) => !BASE_EXCLUDED.has(c));
+    const cols = importableColumns(await columnsOf(table), table);
     const unknownCols = Object.keys(records[0] ?? {}).filter((k) => !cols.includes(k));
     if (unknownCols.length > 0) throw badRequest(`Unknown columns: ${unknownCols.join(', ')}`);
     res.json({
@@ -163,27 +185,46 @@ importExportRouter.post(
 
 importExportRouter.post(
   '/imports/confirm',
-  requirePermission('admin.imports.run'),
+  exportLimiter,
+requirePermission('admin.imports.run'),
   asyncHandler(async (req, res) => {
     const table = requireTable(String(req.body?.table ?? ''));
     const records = Array.isArray(req.body?.rows) ? req.body.rows : [];
     if (records.length === 0) throw badRequest('rows is required');
     if (records.length > 5000) throw badRequest('Maximum 5000 rows per import');
-    const cols = (await columnsOf(table)).filter((c) => !BASE_EXCLUDED.has(c));
+    const allCols = await columnsOf(table);
+    const cols = importableColumns(allCols, table);
     const ctx = req.ctx;
     const inserted: number[] = [];
     let errors: { row: number; message: string }[] = [];
     await tx(async (client) => {
       for (let i = 0; i < records.length; i++) {
         const rec = records[i] as Record<string, unknown>;
+        const blocked = Object.keys(rec).filter(
+          (k) => SENSITIVE_EXCLUDED.has(k) || (IMMUTABLE_BY_TABLE[table] ?? []).includes(k)
+        );
+        if (blocked.length > 0) {
+          errors.push({ row: i + 1, message: `Column not importable: ${blocked.join(', ')}` });
+          continue;
+        }
         const keys = Object.keys(rec).filter((k) => cols.includes(k));
         if (keys.length === 0) {
           errors.push({ row: i + 1, message: 'No usable columns' });
           continue;
         }
-        const values = keys.map((k) => (rec[k] === '' ? null : rec[k]));
-        const placeholders = keys.map((_, j) => `$${j + 1}`).join(', ');
-        const sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders}) RETURNING id`;
+        // Force organisational scope from the authenticated principal - the client
+        // can never supply tenant/company/branch for imported rows.
+        const scoped: Record<string, unknown> = {};
+        if (allCols.includes('tenant_id')) scoped.tenant_id = ctx.tenantId;
+        if (allCols.includes('company_id')) scoped.company_id = ctx.companyId;
+        if (allCols.includes('branch_id')) scoped.branch_id = ctx.branchId;
+        const insertKeys = [...keys, ...Object.keys(scoped)];
+        const values = [
+          ...keys.map((k) => (rec[k] === '' ? null : rec[k])),
+          ...Object.values(scoped),
+        ];
+        const placeholders = insertKeys.map((_, j) => `$${j + 1}`).join(', ');
+        const sql = `INSERT INTO ${table} (${insertKeys.join(', ')}) VALUES (${placeholders}) RETURNING id`;
         try {
           const ins = await client.query(sql, values);
           const id = Number(ins.rows[0].id);
@@ -265,7 +306,8 @@ importExportRouter.get(
 
 importExportRouter.get(
   '/exports/:table',
-  requirePermission('admin.exports.run'),
+  exportLimiter,
+requirePermission('admin.exports.run'),
   asyncHandler(async (req, res) => {
     const table = requireTable(req.params.table);
     const format = String(req.query.format ?? 'csv').toLowerCase();
@@ -281,9 +323,17 @@ importExportRouter.get(
 
     const params: unknown[] = [];
     const where: string[] = [];
-    if (req.auth!.company_id && allCols.includes('company_id')) {
-      params.push(req.auth!.company_id);
+    if (allCols.includes('tenant_id') && req.ctx.tenantId) {
+      params.push(req.ctx.tenantId);
+      where.push(`tenant_id = $${params.length}`);
+    }
+    if (allCols.includes('company_id') && req.ctx.companyId) {
+      params.push(req.ctx.companyId);
       where.push(`company_id = $${params.length}`);
+    }
+    if (allCols.includes('branch_id') && req.ctx.branchId) {
+      params.push(req.ctx.branchId);
+      where.push(`branch_id = $${params.length}`);
     }
     const scope = where.length ? `WHERE ${where.join(' AND ')}` : '';
     params.push(limit);

@@ -1,4 +1,4 @@
-import { config as loadEnv } from 'dotenv';
+﻿import { config as loadEnv } from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -22,6 +22,13 @@ export const config = {
     user: process.env.POSTGRES_USER ?? 'hopedesign',
     password: process.env.POSTGRES_PASSWORD ?? 'hopedesign_dev',
     database: process.env.POSTGRES_DB ?? 'hopedesign_erp',
+    // DB-001: the runtime pool should connect as the least-privilege
+    // `hopedesign_app` role (non-superuser, non-BYPASSRLS) in production.
+    // POSTGRES_USER/POSTGRES_PASSWORD remain the migration/bootstrap role.
+    // When the app-role variables are unset the pool keeps historical
+    // behaviour so dev/tests run unchanged unless explicitly switched.
+    appUser: process.env.POSTGRES_APP_USER ?? process.env.POSTGRES_USER ?? 'hopedesign',
+    appPassword: process.env.POSTGRES_APP_PASSWORD ?? process.env.POSTGRES_PASSWORD ?? 'hopedesign_dev',
   },
   jwtSecret: process.env.JWT_SECRET ?? 'change-me-in-production',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '8h',
@@ -55,3 +62,30 @@ export const config = {
 };
 
 export const isProd = config.env === 'production';
+
+// Fail fast in production: never boot with known fallback or missing secrets.
+// A misconfigured deployment must crash loudly instead of silently using
+// predictable signing keys that would allow token forgery.
+if (isProd) {
+  const weakSecrets: Array<[string, string]> = [
+    ['JWT_SECRET', config.jwtSecret],
+    ['REFRESH_SECRET', config.refreshSecret],
+    ['DOC_SIGNING_SECRET', config.docSigningSecret],
+    ['POSTGRES_PASSWORD', config.postgres.password],
+    ['POSTGRES_APP_USER', config.postgres.appUser],
+    ['POSTGRES_APP_PASSWORD', config.postgres.appPassword],
+  ];
+  const knownFallbacks = new Set([
+    'change-me-in-production',
+    'change-me-too',
+    'change-me-doc-signing-v1',
+    'hopedesign_dev',
+    'hopedesign_app_dev',
+    '',
+  ]);
+  for (const [name, value] of weakSecrets) {
+    if (!value || knownFallbacks.has(value)) {
+      throw new Error(`[config] ${name} must be set to a strong, unique value in production`);
+    }
+  }
+}

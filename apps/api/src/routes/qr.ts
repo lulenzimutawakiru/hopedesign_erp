@@ -22,6 +22,7 @@ import {
   archiveLabelTemplate,
 } from '../services/labelTemplates.js';
 import { asyncHandler, badRequest, notFound, toCamelRow, toCamelRows } from '../utils.js';
+import { qrScanLimiter } from '../middleware/rateLimits.js';
 
 export const qrRouter = Router();
 
@@ -48,7 +49,8 @@ qrRouter.post(
 
 qrRouter.post(
   '/scan',
-  requirePermission('qr.scans.perform'),
+  qrScanLimiter,
+requirePermission('qr.scans.perform'),
   asyncHandler(async (req, res) => {
     const code = String(req.body?.code ?? '').trim();
     if (!code) throw badRequest('code is required');
@@ -195,7 +197,8 @@ qrRouter.get(
 
 qrRouter.post(
   '/packing/scan',
-  requirePermission('qr.packing.scan'),
+  qrScanLimiter,
+requirePermission('qr.packing.scan'),
   asyncHandler(async (req, res) => {
     const code = String(req.body?.code ?? '').trim();
     if (!code) throw badRequest('code is required');

@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { Ctx } from '../db.js';
+import { Ctx, detach } from '../db.js';
 import { notifyFromEvent } from './eventNotifications.js';
 
 export interface EventPayload {
@@ -30,7 +30,12 @@ export async function emitEvent(client: pg.PoolClient, ctx: Ctx, e: EventPayload
       e.severity ?? 'INFO',
     ]
   );
-  // Fire-and-forget: mirror the event into the instant-notification pipeline.
-  // Never blocks or breaks the caller's transaction.
-  void notifyFromEvent(client, ctx, e);
+  // Fire-and-forget: mirror the event into the instant-notification pipeline on
+  // a fresh pooled connection in its own transaction (detach). The caller's
+  // client is never shared, so this work cannot run on a connection whose
+  // transaction-local context the caller may COMMIT or ROLLBACK, and a failure
+  // cannot abort the caller's transaction or poison a pooled connection.
+  void detach((dclient, dctx) => notifyFromEvent(dclient, dctx, e), ctx).catch((err) => {
+    console.error('[events] notification mirror failed', err instanceof Error ? err.message : err);
+  });
 }

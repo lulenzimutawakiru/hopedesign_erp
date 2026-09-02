@@ -160,12 +160,6 @@ async function reconcileRbac(client, tenantId) {
 
 /** Opening warehouse balances so the dashboard and sales allocate path have stock. */
 async function ensureOpeningStock(client, tenantId) {
-  const { rows: existing } = await client.query(
-    "SELECT count(*)::int AS n FROM inventory WHERE tenant_id = $1",
-    [tenantId]
-  );
-  if (Number(existing[0].n) > 0) return { inserted: 0 };
-
   const company = await client.query(
     "SELECT id FROM companies WHERE tenant_id = $1 ORDER BY id LIMIT 1",
     [tenantId]
@@ -198,24 +192,115 @@ async function ensureOpeningStock(client, tenantId) {
       "SELECT id FROM warehouse_bins WHERE warehouse_id = $1 ORDER BY code LIMIT 1",
       [w.rows[0].id]
     );
-    await client.query(
-      `INSERT INTO inventory
-         (company_id, tenant_id, product_id, warehouse_id, bin_id, quantity, reserved_qty, avg_cost, valuation_method)
-       VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8)`,
-      [
-        companyId,
-        tenantId,
-        p.rows[0].id,
-        w.rows[0].id,
-        bin.rows[0] ? bin.rows[0].id : null,
-        qty,
-        p.rows[0].standard_cost,
-        p.rows[0].valuation_method,
-      ]
+    const existing = await client.query(
+      `SELECT id FROM inventory
+       WHERE tenant_id = $1 AND product_id = $2 AND warehouse_id = $3
+         AND batch_id IS NULL AND bin_id IS NOT DISTINCT FROM $4
+       ORDER BY id LIMIT 1`,
+      [tenantId, p.rows[0].id, w.rows[0].id, bin.rows[0] ? bin.rows[0].id : null]
     );
+    if (existing.rows.length) {
+      await client.query(
+        "UPDATE inventory SET quantity = $1, avg_cost = $2, valuation_method = $3, reserved_qty = 0 WHERE id = $4",
+        [qty, p.rows[0].standard_cost, p.rows[0].valuation_method, existing.rows[0].id]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO inventory
+           (company_id, tenant_id, product_id, warehouse_id, bin_id, quantity, reserved_qty, avg_cost, valuation_method)
+         VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8)`,
+        [
+          companyId,
+          tenantId,
+          p.rows[0].id,
+          w.rows[0].id,
+          bin.rows[0] ? bin.rows[0].id : null,
+          qty,
+          p.rows[0].standard_cost,
+          p.rows[0].valuation_method,
+        ]
+      );
+    }
     inserted += 1;
   }
   return { inserted };
+}
+
+/** CRM/procurement master rows with fixed ids (customer 1 / supplier 1) so
+ *  documents, sales, workflow, security-printing and SoD flows have stable
+ *  counter and supplier fixtures across fresh and re-seeded databases.
+ *  Idempotent: adopts rows that already exist for the HDG company and only
+ *  inserts when the fixed ids are free, advancing each sequence afterwards so
+ *  API-created rows never collide with the fixtures. */
+async function ensureCrmProcurementMasters(client, tenantId) {
+  const company = await client.query(
+    "SELECT id FROM companies WHERE tenant_id = $1 AND code = 'HDG' ORDER BY id LIMIT 1",
+    [tenantId]
+  );
+  if (!company.rows.length) return { customers: 0, suppliers: 0 };
+  const companyId = company.rows[0].id;
+  const branch = await client.query(
+    "SELECT id FROM branches WHERE company_id = $1 AND code = 'KAMPALA-HQ' ORDER BY id LIMIT 1",
+    [companyId]
+  );
+  const branchId = branch.rows.length ? branch.rows[0].id : null;
+
+  let customers = 0;
+  const existingCustomer = await client.query(
+    "SELECT id, company_id FROM customers WHERE id = 1"
+  );
+  if (existingCustomer.rowCount === 0) {
+    await client.query(
+      `INSERT INTO customers (id, company_id, tenant_id, branch_id, code, name,
+         customer_type, phone, email, address, credit_limit, payment_terms_days,
+         currency, status, security_classification)
+       VALUES (1, $1, $2, $3, 'HDG-WALK-IN', 'Walk-In Counter Customer',
+         'COMPANY', '+256700000001', 'walkin@hopedesign.co.ug',
+         'Plot 12, Namanve Industrial Park, Kampala, Uganda', 0, 0, 'UGX',
+         'ACTIVE', 'NONE')
+       ON CONFLICT (id) DO NOTHING`,
+      [companyId, tenantId, branchId]
+    );
+    const seq = await client.query(
+      "SELECT pg_get_serial_sequence('customers', 'id') AS s"
+    );
+    if (seq.rows[0]?.s) {
+      await client.query(
+        `SELECT setval($1, (SELECT COALESCE(MAX(id), 1) FROM customers), true)`,
+        [seq.rows[0].s]
+      );
+    }
+    customers = 1;
+  }
+
+  let suppliers = 0;
+  const existingSupplier = await client.query(
+    "SELECT id, company_id FROM suppliers WHERE id = 1"
+  );
+  if (existingSupplier.rowCount === 0) {
+    await client.query(
+      `INSERT INTO suppliers (id, company_id, tenant_id, branch_id, code, name,
+         supplier_type, phone, email, address, payment_terms_days, currency,
+         default_lead_time_days, rating, status, security_cleared)
+       VALUES (1, $1, $2, $3, 'HDG-RAW-001', 'National Paper Merchants Ltd',
+         'RAW_MATERIAL', '+256700000002', 'supply@npaper.co.ug',
+         'Plot 7, Bweyogerere Industrial Area, Kampala, Uganda', 30, 'UGX',
+         7, 4.5, 'ACTIVE', true)
+       ON CONFLICT (id) DO NOTHING`,
+      [companyId, tenantId, branchId]
+    );
+    const seq = await client.query(
+      "SELECT pg_get_serial_sequence('suppliers', 'id') AS s"
+    );
+    if (seq.rows[0]?.s) {
+      await client.query(
+        `SELECT setval($1, (SELECT COALESCE(MAX(id), 1) FROM suppliers), true)`,
+        [seq.rows[0].s]
+      );
+    }
+    suppliers = 1;
+  }
+  return { customers, suppliers };
 }
 
 /** Uganda statutory payroll defaults as versioned DB rows (PAYE, NSSF, LST).
@@ -257,10 +342,10 @@ async function ensureStatutoryConfigs(client, tenantId) {
       effective_to: null,
       version: 2,
       rates: [
-        { min: 0, max: 235000, rate: 0 },
-        { min: 235000, max: 335000, rate: 10 },
+        { min: 0, max: 335000, rate: 0 },
         { min: 335000, max: 410000, rate: 20 },
-        { min: 410000, max: 10000000, rate: 30 },
+        { min: 410000, max: 485000, rate: 25 },
+        { min: 485000, max: 10000000, rate: 30 },
         { min: 10000000, max: null, rate: 40 },
       ],
       limits: {},
@@ -307,6 +392,55 @@ async function ensureStatutoryConfigs(client, tenantId) {
   return { inserted };
 }
 
+
+/** Company-level statutory overrides for the HDG org. The tenant-wide LST
+ *  default is deliberately disabled (least privilege); Kampala entities that
+ *  actually owe Local Service Tax declare a company-specific KCCA override,
+ *  which the payroll engine resolves ahead of tenant-wide rows. Idempotent. */
+async function ensureCompanyStatutoryOverrides(client, tenantId, companyId = null) {
+  if (!companyId) {
+    const { rows } = await client.query(
+      "SELECT id FROM companies WHERE tenant_id = $1 AND code = 'HDG'",
+      [tenantId]
+    );
+    if (rows.length === 0) return { inserted: 0 };
+    companyId = rows[0].id;
+  }
+  const exists = await client.query(
+    `SELECT id FROM statutory_configs
+     WHERE company_id = $1 AND tenant_id = $2 AND code = 'UG-LST-KCCA'`,
+    [companyId, tenantId]
+  );
+  if (exists.rowCount > 0) return { inserted: 0 };
+  await client.query(
+    `INSERT INTO statutory_configs
+       (company_id, tenant_id, country, category, code, name, description,
+        effective_from, effective_to, rates, thresholds, limits, formula, version, status)
+     VALUES ($1,$2,'UG','LST','UG-LST-KCCA',
+        'Uganda Local Service Tax - KCCA Kampala (monthly)',
+        'KCCA graduated monthly LST collected Jul-Oct for Kampala employees.',
+        '2023-07-01', NULL, '{}'::jsonb, '[]'::jsonb,
+        $3, NULL, 1, 'ACTIVE')`,
+    [
+      companyId,
+      tenantId,
+      JSON.stringify({
+        apply_to_payroll: true,
+        months: [7, 8, 9, 10],
+        min_gross: 100000,
+        bands: [
+          { max: 200000, monthly_amount: 1250 },
+          { max: 300000, monthly_amount: 2500 },
+          { max: 400000, monthly_amount: 5000 },
+          { max: 600000, monthly_amount: 10000 },
+          { max: 1000000, monthly_amount: 20000 },
+          { max: null, monthly_amount: 25000 },
+        ],
+      }),
+    ]
+  );
+  return { inserted: 1 };
+}
 
 // Uganda-flavoured HCM baseline for the HDG tenant. Idempotent per table and
 // safe on the early "already seeded" path: it resolves existing org rows
@@ -2045,8 +2179,20 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
     );
     if (rows.length) {
       await client.query(
-        "UPDATE work_orders SET start_date = $1, due_date = $1 WHERE company_id = $2 AND wo_no = $3",
-        [todayStr, companyId, woNo]
+        `UPDATE work_orders SET
+           start_date = $1, due_date = $1, quantity = $4, status = $5,
+           produced_qty = $6, scrapped_qty = $7, rework_qty = $8, waste_qty = $9,
+           started_at = $10, completed_at = $11, quality_started_at = $12,
+           materials_issued_at = $13, machine_id = $14, operator_id = $15,
+           standard_cost = $16, released_qty = $17, released_at = $18,
+           priority = $19, notes = $20
+         WHERE company_id = $2 AND wo_no = $3`,
+        [todayStr, companyId, woNo, qty, status,
+         extra.produced ?? 0, extra.scrapped ?? 0, extra.rework ?? 0, extra.waste ?? 0,
+         extra.startedAt ?? null, extra.completedAt ?? null, extra.qualityStartedAt ?? null,
+         extra.materialsIssuedAt ?? null, extra.machineId ?? null, extra.operatorId ?? null,
+         extra.standardCost ?? 12000, extra.releasedQty ?? 0, extra.releasedAt ?? null,
+         extra.priority ?? "HIGH", extra.notes ?? null]
       );
       return rows[0].id;
     }
@@ -2114,6 +2260,18 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
 
   // 7. Work order material requirements (guarded by work_order + product)
   const wom = async (woId, pid, req, issued, uid, cost, consumable) => {
+    const { rows } = await client.query(
+      "SELECT id FROM work_order_materials WHERE work_order_id = $1 AND product_id = $2",
+      [woId, pid]
+    );
+    if (rows.length) {
+      await client.query(
+        `UPDATE work_order_materials SET required_qty = $1, issued_qty = $2, returned_qty = 0,
+           unit_id = $3, unit_cost = $4, is_consumable = $5 WHERE id = $6`,
+        [req, issued, uid, cost, !!consumable, rows[0].id]
+      );
+      return rows[0].id;
+    }
     return guarded("work_order_materials", "work_order_id = $1 AND product_id = $2", [woId, pid], {
       work_order_id: woId, product_id: pid, required_qty: req, issued_qty: issued,
       returned_qty: 0, unit_id: uid, unit_cost: cost, is_consumable: !!consumable,
@@ -2134,6 +2292,25 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
 
   // 8. Production batches (MES batch records)
   const pb = async (batchNo, woId, pid, qty, good, rejected, status, extra) => {
+    const { rows } = await client.query(
+      "SELECT id FROM production_batches WHERE company_id = $1 AND batch_no = $2",
+      [companyId, batchNo]
+    );
+    if (rows.length) {
+      await client.query(
+        `UPDATE production_batches SET
+           work_order_id = $2, product_id = $3, machine_id = $4, work_centre_id = $5,
+           quantity = $6, good_qty = $7, rejected_qty = $8, scrap_qty = $9, rework_qty = 0,
+           status = $10, batch_date = $11, shift_code = 'A',
+           started_at = $12, ended_at = $13, quality_result = $14
+         WHERE id = $1`,
+        [rows[0].id, woId, pid, extra.machineId ?? null, extra.wcId ?? null,
+         qty, good, rejected, extra.scrap ?? 0, status,
+         todayStr, extra.startedAt ?? null, extra.endedAt ?? null,
+         extra.qualityResult ?? null]
+      );
+      return rows[0].id;
+    }
     return guarded("production_batches", "company_id = $1 AND batch_no = $2", [companyId, batchNo], {
       company_id: companyId, tenant_id: tenantId, branch_id: branchId,
       batch_no: batchNo, work_order_id: woId, product_id: pid,
@@ -2209,7 +2386,7 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
 
   // 12. Scrap and waste
   await client.query(
-    "DELETE FROM scrap_records WHERE company_id = $1 AND tenant_id = $2 AND recorded_at::date < CURRENT_DATE",
+    "DELETE FROM scrap_records WHERE company_id = $1 AND tenant_id = $2",
     [companyId, tenantId]
   );
   if ((await count("scrap_records")) === 0) {
@@ -2223,7 +2400,7 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
     bump("scrap_records");
   }
   await client.query(
-    "DELETE FROM waste_records WHERE company_id = $1 AND tenant_id = $2 AND recorded_at::date < CURRENT_DATE",
+    "DELETE FROM waste_records WHERE company_id = $1 AND tenant_id = $2",
     [companyId, tenantId]
   );
   if ((await count("waste_records")) === 0) {
@@ -2248,7 +2425,7 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
 
   // 13. Downtime events (252 minutes = 4.2 hours today)
   await client.query(
-    "DELETE FROM downtime_events WHERE company_id = $1 AND tenant_id = $2 AND started_at::date < CURRENT_DATE",
+    "DELETE FROM downtime_events WHERE company_id = $1 AND tenant_id = $2",
     [companyId, tenantId]
   );
   if ((await count("downtime_events")) === 0) {
@@ -2285,13 +2462,17 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
     status: "DRAFT", material_required: { jumbo: 0.2, carton: 2, label: 50 },
     rework_cost: 1200000, notes: "Rework of mis-counted reams from FSS104",
   });
-  await guarded("subcontract_orders", "company_id = $1 AND subcon_no = $2", [companyId, "SUB-2026-001"], {
-    company_id: companyId, tenant_id: tenantId, branch_id: branchId,
-    subcon_no: "SUB-2026-001", work_order_id: wo1260, operation_id: opSec10,
-    supplier_id: supplierId, product_id: prodSec, quantity: 500,
-    status: "DRAFT", vendor_cost: 150000,
-    notes: "Outsourced sheeting of security watermark reams",
-  });
+  // Subcontract demo needs an existing supplier; on a fresh rebuild none may
+  // exist yet (no test depends on SUB-2026-001), so skip it in that case.
+  if (supplierId) {
+    await guarded("subcontract_orders", "company_id = $1 AND subcon_no = $2", [companyId, "SUB-2026-001"], {
+      company_id: companyId, tenant_id: tenantId, branch_id: branchId,
+      subcon_no: "SUB-2026-001", work_order_id: wo1260, operation_id: opSec10,
+      supplier_id: supplierId, product_id: prodSec, quantity: 500,
+      status: "DRAFT", vendor_cost: 150000,
+      notes: "Outsourced sheeting of security watermark reams",
+    });
+  }
 
   // 15. Changeover log + machine event logs
   if ((await count("changeover_logs")) === 0) {
@@ -2644,7 +2825,7 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
   };
   const mwc = (code) => (machine[code] ? machine[code].work_centre_id : null);
   await client.query(
-    "DELETE FROM machine_capacity WHERE company_id = $1 AND tenant_id = $2 AND capacity_date < CURRENT_DATE",
+    "DELETE FROM machine_capacity WHERE company_id = $1 AND tenant_id = $2",
     [companyId, tenantId]
   );
   await cap(m1, mwc("FSS104"), 0.4, 7.35961);
@@ -2692,14 +2873,16 @@ async function seedAll(pool) {
         const counts = await reconcileRbac(client, tenantId);
         const stock = await ensureOpeningStock(client, tenantId);
         const stat = await ensureStatutoryConfigs(client, tenantId);
+        const lst = await ensureCompanyStatutoryOverrides(client, tenantId);
         const hcm = await ensureHcmSeed(client, tenantId);
         const cb = await ensureContractBuilderSeed(client, tenantId);
         const assetSeed = await ensureAssetModuleSeed(client, tenantId);
         const analyticsSeed = await ensureAnalyticsSeed(client, tenantId);
         const mesSeed = await ensureMesSeed(client, tenantId);
+        const masters = await ensureCrmProcurementMasters(client, tenantId);
         await client.query("COMMIT");
-        console.log("Seed already completed for tenant HDG; reconciled RBAC from catalogue.", counts, stock, stat, hcm, cb, assetSeed, analyticsSeed, mesSeed);
-        return { skipped: true, reconciled: counts, stock, statutory: stat, hcm, contractBuilder: cb, assetModule: assetSeed, analytics: analyticsSeed, mes: mesSeed };
+        console.log("Seed already completed for tenant HDG; reconciled RBAC from catalogue.", counts, stock, stat, lst, masters, hcm, cb, assetSeed, analyticsSeed, mesSeed);
+        return { skipped: true, reconciled: counts, stock, statutory: stat, lstOverride: lst, masters, hcm, contractBuilder: cb, assetModule: assetSeed, analytics: analyticsSeed, mes: mesSeed };
       }
     }
 
@@ -2716,33 +2899,48 @@ async function seedAll(pool) {
     }
     bump("tenants");
 
-    const companyId = await insertOne(client, "companies", {
-      tenant_id: tenantId,
-      code: "HDG",
-      name: "Hope Design Group Ltd",
-      legal_name: "Hope Design Group Ltd",
-      tin: "1012345678",
-      vrn: "VAT-UG-1020304",
-      currency: "UGX",
-      address: "Plot 12, Namanve Industrial Park, Kampala, Uganda",
-      phone: "+256 414 000 000",
-      email: "info@hopedesign.co.ug",
-      website: "https://hopedesign.co.ug",
-      fiscal_year_start: "07-01",
-      status: "ACTIVE",
-    });
+    // Adopt pre-existing HDG org rows: bootstrap-org.sql / migrations keep
+    // tenant/company/branch at id 2, and several migrations hard-code that id.
+    // Falls back to inserting when absent so fresh seeds work identically.
+    const companyRow = await client.query(
+      "SELECT id FROM companies WHERE tenant_id = $1 AND code = 'HDG'",
+      [tenantId]
+    );
+    const companyId = companyRow.rowCount
+      ? companyRow.rows[0].id
+      : await insertOne(client, "companies", {
+          tenant_id: tenantId,
+          code: "HDG",
+          name: "Hope Design Group Ltd",
+          legal_name: "Hope Design Group Ltd",
+          tin: "1012345678",
+          vrn: "VAT-UG-1020304",
+          currency: "UGX",
+          address: "Plot 12, Namanve Industrial Park, Kampala, Uganda",
+          phone: "+256 414 000 000",
+          email: "info@hopedesign.co.ug",
+          website: "https://hopedesign.co.ug",
+          fiscal_year_start: "07-01",
+          status: "ACTIVE",
+        });
     bump("companies");
 
-    const branchId = await insertOne(client, "branches", {
-      company_id: companyId,
-      tenant_id: tenantId,
-      code: "KAMPALA-HQ",
-      name: "Kampala Headquarters",
-      address: "Plot 12, Namanve Industrial Park, Kampala, Uganda",
-      phone: "+256 414 000 000",
-      email: "info@hopedesign.co.ug",
-      status: "ACTIVE",
-    });
+    const branchRow = await client.query(
+      "SELECT id FROM branches WHERE company_id = $1 AND tenant_id = $2 AND code = 'KAMPALA-HQ'",
+      [companyId, tenantId]
+    );
+    const branchId = branchRow.rowCount
+      ? branchRow.rows[0].id
+      : await insertOne(client, "branches", {
+          company_id: companyId,
+          tenant_id: tenantId,
+          code: "KAMPALA-HQ",
+          name: "Kampala Headquarters",
+          address: "Plot 12, Namanve Industrial Park, Kampala, Uganda",
+          phone: "+256 414 000 000",
+          email: "info@hopedesign.co.ug",
+          status: "ACTIVE",
+        });
     bump("branches");
 
     const departments = [
@@ -2814,6 +3012,10 @@ async function seedAll(pool) {
       bump("profit_centres");
     }
 
+    // CRM/procurement master rows with fixed ids (customer 1 / supplier 1).
+    const masters = await ensureCrmProcurementMasters(client, tenantId);
+    bump("masters", (masters.customers || 0) + (masters.suppliers || 0));
+
     // ============================================================
     // 2. Warehouses, zones, racks, shelves, bins
     // ============================================================
@@ -2831,6 +3033,16 @@ async function seedAll(pool) {
     ];
     const whId = {};
     for (const [code, name, type, isSecure, capacity] of warehouses) {
+      // Adopt migration-created warehouses (e.g. PACK-WH from 0113) with their
+      // full zone/rack/shelf/bin hierarchy; only fresh seeds insert everything.
+      const existingWh = await client.query(
+        "SELECT id FROM warehouses WHERE company_id = $1 AND code = $2",
+        [companyId, code]
+      );
+      if (existingWh.rowCount) {
+        whId[code] = existingWh.rows[0].id;
+        continue;
+      }
       whId[code] = await insertOne(client, "warehouses", {
         company_id: companyId,
         tenant_id: tenantId,
@@ -3013,11 +3225,19 @@ async function seedAll(pool) {
       description: p.description,
       is_system: false,
     }));
+    // Migrations also seed catalogue permissions (0072+, 0115+, ...), so only
+    // insert codes that are not present yet. Idempotent against a partially
+    // bootstrapped schema; safe on a fully fresh seed too.
+    const { rows: existingPermRows } = await client.query(
+      "SELECT code FROM permissions"
+    );
+    const existingPermCodes = new Set(existingPermRows.map((r) => r.code));
+    const freshPermRows = permRows.filter((p) => !existingPermCodes.has(p.code));
     // insert in batches of 200 to stay well under statement size limits
-    for (let i = 0; i < permRows.length; i += 200) {
-      await bulkInsert(client, "permissions", permRows.slice(i, i + 200));
+    for (let i = 0; i < freshPermRows.length; i += 200) {
+      await bulkInsert(client, "permissions", freshPermRows.slice(i, i + 200));
     }
-    bump("permissions", permRows.length);
+    bump("permissions", freshPermRows.length);
 
     const { rows: permLookupRows } = await client.query(
       "SELECT id, code FROM permissions"
@@ -3176,7 +3396,7 @@ async function seedAll(pool) {
         description: "Users without a security clearance attribute cannot touch security printing resources.",
         effect: "deny",
         priority: 200,
-        subject_attributes: { security_clearance: { missing: true } },
+        subject_attributes: { security_clearance: { $missing: true } },
         resource_attributes: { module: "security_printing" },
         environment_attributes: {},
       },
@@ -3196,7 +3416,7 @@ async function seedAll(pool) {
         description: "Finance post/release actions are denied outside 08:00-18:00.",
         effect: "deny",
         priority: 120,
-        subject_attributes: { policy_exempt_finance_hours: { missing: true } },
+        subject_attributes: { policy_exempt_finance_hours: { $missing: true } },
         resource_attributes: { module: "finance", action: { $in: ["post", "release"] } },
         environment_attributes: { time_of_day: { $outside: ["08:00", "18:00"] } },
       },
@@ -3891,6 +4111,21 @@ async function seedAll(pool) {
         ],
       },
       {
+        code: "WF-REQOPS",
+        name: "Ops Requisition Approval",
+        entity_type: "ops.requisitions",
+        desc: "Tiered ops requisition approval by value: department manager up to 500k; department head plus finance 500k-5M; finance manager plus MD 5M-20M; CFO plus executive above 20M.",
+        steps: [
+          { seq: 1, name: "Department Manager Approval", approver_role: "finance_manager", amount_min: 0, amount_max: 500000, sla_hours: 24 },
+          { seq: 1, name: "Department Head Approval", approver_role: "operations_director", amount_min: 500000, amount_max: 5000000, sla_hours: 24 },
+          { seq: 2, name: "Finance Approval", approver_role: "finance_manager", amount_min: 500000, amount_max: 5000000, sla_hours: 24 },
+          { seq: 1, name: "Finance Manager Approval", approver_role: "finance_manager", amount_min: 5000000, amount_max: 20000000, sla_hours: 24 },
+          { seq: 2, name: "Managing Director Approval", approver_role: "managing_director", amount_min: 5000000, amount_max: 20000000, sla_hours: 48 },
+          { seq: 1, name: "CFO Approval", approver_role: "cfo", amount_min: 20000000, amount_max: 1000000000, sla_hours: 24 },
+          { seq: 2, name: "Executive Approval", approver_role: "executive_director", amount_min: 20000000, amount_max: 1000000000, sla_hours: 48 },
+        ],
+      },
+      {
         code: "WF-WFP",
         name: "Workforce Plan Approval",
         entity_type: "hr.workforce_plans",
@@ -3901,16 +4136,20 @@ async function seedAll(pool) {
       },
     ];
     for (const w of workflowDefs) {
-      await insertOne(client, "workflows", {
-        company_id: companyId,
-        tenant_id: tenantId,
-        code: w.code,
-        name: w.name,
-        entity_type: w.entity_type,
-        description: w.desc,
-        config: w.steps,
-        is_active: true,
-      });
+      // Upsert: migrations seed a subset of workflow definitions (WF-PR,
+      // WF-DNM, WF-REQ, ...), so reconcile on (company_id, code) instead of
+      // plain inserting. Safe for fresh seeds too.
+      await client.query(
+        `INSERT INTO workflows (company_id, tenant_id, code, name, entity_type, description, config, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+         ON CONFLICT (company_id, code) DO UPDATE SET
+           name = EXCLUDED.name,
+           entity_type = EXCLUDED.entity_type,
+           description = EXCLUDED.description,
+           config = EXCLUDED.config,
+           is_active = true`,
+        [companyId, tenantId, w.code, w.name, w.entity_type, w.desc, JSON.stringify(w.steps)]
+      );
       bump("workflows");
     }
 
@@ -4111,6 +4350,9 @@ async function seedAll(pool) {
 
     const stat = await ensureStatutoryConfigs(client, tenantId);
     bump("statutory_configs", stat.inserted);
+
+    const lst = await ensureCompanyStatutoryOverrides(client, tenantId, companyId);
+    bump("statutory_configs", lst.inserted);
 
     const hcm = await ensureHcmSeed(client, tenantId, companyId);
     for (const [k, v] of Object.entries(hcm.inserted)) bump(k, v);

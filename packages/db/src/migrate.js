@@ -19,7 +19,7 @@ async function main() {
     const applied = new Set(rows.map((r) => r.name));
     for (const file of files) {
       if (applied.has(file)) continue;
-      const sql = fs.readFileSync(path.join(dir, file), "utf8");
+      const sql = fs.readFileSync(path.join(dir, file), "utf8").replace(/^\uFEFF/, "");
       console.log(`Applying ${file} ...`);
       await client.query("BEGIN");
       try {

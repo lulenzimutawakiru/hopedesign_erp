@@ -10,3 +10,4 @@ apps/web/dist/
 
 .codex-patches/
 /prod-probe.cjs
+SECURITY_ASSESSMENT_2026.md

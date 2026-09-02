@@ -10,7 +10,9 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "niimbot:bridge": "tsx scripts/niimbot-bridge.ts"
+    "niimbot:bridge": "tsx scripts/niimbot-bridge.ts",
+    "dev:login": "node dev-login.mjs",
+    "dev:login:super": "node dev-login.mjs --user superadmin"
   },
   "dependencies": {
     "@hopedesign/db": "*",

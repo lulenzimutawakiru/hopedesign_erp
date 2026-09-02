@@ -1,4 +1,4 @@
-﻿import pg from 'pg';
+import pg from 'pg';
 import { createHash, createHmac } from 'node:crypto';
 import { Ctx } from '../db.js';
 import { config } from '../config.js';
@@ -813,7 +813,7 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
     <div class="r">${esc(footRight)}</div>
   </footer>
 </div>
-<script>window.print();</script>
+<script src="/assets/print.js"></script>
 </body>
 </html>`;
 }

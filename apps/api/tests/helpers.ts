@@ -1,6 +1,7 @@
-import request from 'supertest';
+﻿import request from 'supertest';
 import pg from 'pg';
 import { app } from '../src/app.js';
+import { authenticator } from 'otplib';
 
 export const api = request(app);
 export const PASSWORD = 'ChangeMe!2026';
@@ -14,9 +15,58 @@ export async function loginAs(username: string) {
   if (res.status !== 200) {
     throw new Error(`login ${username} failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
-  return { token: res.body.accessToken as string, user: res.body.user as Record<string, unknown> };
+  if (res.body.accessToken) {
+    return { token: res.body.accessToken as string, user: res.body.user as Record<string, unknown> };
+  }
+  const loginBody = res.body as {
+    mfaRequired?: boolean;
+    enrollmentRequired?: boolean;
+    loginToken?: string;
+    user?: Record<string, unknown>;
+  };
+  if (!loginBody.loginToken || !loginBody.mfaRequired) {
+    throw new Error(`login ${username} unexpected response: ${JSON.stringify(res.body)}`);
+  }
+  const verifySecret = async (secret: string) => {
+    const attempt = async () =>
+      api.post('/api/auth/mfa/verify').send({ loginToken: loginBody.loginToken, code: authenticator.generate(secret) });
+    let v = await attempt();
+    // TOTP is time-based: under slow/parallel CI the 30s window can roll over
+    // between code generation and verification. Retry once with a fresh code
+    // before failing so a boundary rollover is not reported as an auth bug.
+    if (v.status !== 200) {
+      await new Promise((r) => setTimeout(r, 1100));
+      v = await attempt();
+    }
+    if (v.status !== 200) {
+      throw new Error(`mfa verify ${username} failed: ${v.status} ${JSON.stringify(v.body)}`);
+    }
+    if (!v.body.accessToken) throw new Error(`mfa verify ${username} returned no accessToken`);
+    return { token: v.body.accessToken as string, user: (v.body.user ?? loginBody.user) as Record<string, unknown> };
+  };
+  if (loginBody.enrollmentRequired) {
+    const es = await api.post('/api/auth/mfa/enroll-start').send({ loginToken: loginBody.loginToken });
+    if (es.status !== 200) {
+      throw new Error(`mfa enroll-start ${username} failed: ${es.status} ${JSON.stringify(es.body)}`);
+    }
+    const secret = String(es.body?.secret ?? '');
+    if (!secret) throw new Error(`mfa enroll-start ${username} returned no secret`);
+    const code = authenticator.generate(secret);
+    const ev = await api.post('/api/auth/mfa/enroll-verify').send({ loginToken: loginBody.loginToken, code, secret });
+    if (ev.status !== 200) {
+      throw new Error(`mfa enroll-verify ${username} failed: ${ev.status} ${JSON.stringify(ev.body)}`);
+    }
+    if (!ev.body.accessToken) throw new Error(`mfa enroll-verify ${username} returned no accessToken`);
+    return { token: ev.body.accessToken as string, user: (ev.body.user ?? loginBody.user) as Record<string, unknown> };
+  }
+  const secretRes = await pool.query<{ mfa_secret: string | null }>(
+    `SELECT mfa_secret FROM users WHERE email = $1 OR username = $1`
+    , [username]
+  );
+  const secret = secretRes.rows[0]?.mfa_secret ?? '';
+  if (!secret) throw new Error(`mfa verify ${username}: no mfa_secret found in database`);
+  return verifySecret(secret);
 }
-
 const num = (v: string | undefined, d: number) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : d;
@@ -35,7 +85,7 @@ export async function db(sql: string, params: unknown[] = []) {
 }
 
 /** Tables whose FK to employees has no ON DELETE action. Cleared before the
- * employee row is removed so cleanup never trips a constraint — this matters
+ * employee row is removed so cleanup never trips a constraint â€” this matters
  * when test files share one database (parallel root-level vitest runs, where
  * a group-scoped payroll run's validation flags employees from other files). */
 const EMPLOYEE_CHILD_TABLES = [
@@ -118,3 +168,4 @@ export async function findPendingTask(token: string, entityType: string, entityI
   );
   return row ? Number(row.task_id) : null;
 }
+

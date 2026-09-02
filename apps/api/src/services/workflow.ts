@@ -256,8 +256,9 @@ export async function decideTask(
      FROM approval_tasks t
      JOIN workflow_instances i ON i.id = t.instance_id
      LEFT JOIN roles r ON r.id = t.approver_role_id
-     WHERE t.id = $1 FOR UPDATE OF t`,
-    [taskId]
+     WHERE t.id = $1 AND i.tenant_id = $2 AND ($3::bigint IS NULL OR i.company_id = $3)
+     FOR UPDATE OF t`,
+    [taskId, ctx.tenantId, ctx.companyId ?? null]
   );
   const task = taskRes.rows[0];
   if (!task) throw notFound('Approval task not found');

@@ -2,7 +2,7 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
-import { config } from './config.js';
+import { config, isProd } from './config.js';
 import { contextMiddleware } from './middleware/context.js';
 import { requireModule } from './middleware/moduleAccess.js';
 import { authenticate } from './middleware/auth.js';
@@ -53,8 +53,62 @@ export const app = express();
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: config.webPublicUrl, credentials: true }));
+
+const PRINT_JS = `(function () {
+  var done = false;
+  function autoPrint() {
+    if (done) return;
+    done = true;
+    window.print();
+  }
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(autoPrint, 250);
+  } else {
+    window.addEventListener('load', function () { setTimeout(autoPrint, 250); });
+  }
+})();
+`;
+app.get('/assets/print.js', (_req, res) => {
+  res
+    .type('application/javascript')
+    .set('Cache-Control', 'public, max-age=31536000, immutable')
+    .send(PRINT_JS);
+});
+const allowedOrigins = isProd
+  ? [config.webPublicUrl]
+  : [config.webPublicUrl, 'http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://localhost:5174'];
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:'],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        frameAncestors: ["'none'"],
+        formAction: ["'self'"],
+        upgradeInsecureRequests: null,
+      },
+    },
+    strictTransportSecurity: isProd ? { maxAge: 15552000, includeSubDomains: true, preload: true } : { maxAge: 15552000 },
+    crossOriginResourcePolicy: { policy: 'same-site' },
+    referrerPolicy: { policy: 'no-referrer' },
+  })
+);
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // Allow same-origin (no Origin header) plus the explicit allow-list.
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(null, false);
+    },
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 app.use(contextMiddleware);
@@ -62,7 +116,7 @@ app.use(contextMiddleware);
 // Global API rate limiting (login brute-force protection included).
 const apiLimiter = rateLimit({
   windowMs: config.rateLimitWindowMs,
-  max: config.rateLimitMax,
+  max: config.env === 'test' ? 1_000_000 : config.rateLimitMax,
   standardHeaders: true,
   legacyHeaders: false,
 });

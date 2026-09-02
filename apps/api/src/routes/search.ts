@@ -2,21 +2,26 @@ import { Router } from 'express';
 import { query } from '../db.js';
 import { Ctx } from '../db.js';
 import { asyncHandler, badRequest } from '../utils.js';
+import { searchLimiter } from '../middleware/rateLimits.js';
 
 export const searchRouter = Router();
+
+searchRouter.use(searchLimiter);
 
 interface SearchTarget {
   table: string;
   label: string;
   columns: string[];
   permission: string;
+  /** Explicit allow-list of columns returned to the client. Omit for t.* (no sensitive columns). */
+  projection?: string[];
 }
 
 const TARGETS: SearchTarget[] = [
   { table: 'customers', label: 'Customer', columns: ['name', 'email', 'phone', 'tin', 'code'], permission: 'crm.customers.view' },
   { table: 'suppliers', label: 'Supplier', columns: ['name', 'email', 'phone', 'tin', 'code'], permission: 'procurement.suppliers.view' },
   { table: 'products', label: 'Product', columns: ['code', 'name', 'description'], permission: 'inventory.items.view' },
-  { table: 'employees', label: 'Employee', columns: ['employee_no', 'first_name', 'last_name', 'email'], permission: 'hr.employees.view' },
+  { table: 'employees', label: 'Employee', columns: ['employee_no', 'first_name', 'last_name', 'email'], permission: 'hr.employees.view', projection: ['employee_no', 'first_name', 'last_name', 'email', 'phone', 'position', 'status'] },
   { table: 'sales_quotations', label: 'Quotation', columns: ['quotation_no'], permission: 'sales.quotations.view' },
   { table: 'sales_orders', label: 'Sales Order', columns: ['order_no', 'customer_po_no'], permission: 'sales.orders.view' },
   { table: 'delivery_notes', label: 'Delivery Note', columns: ['delivery_no'], permission: 'sales.delivery_notes.view' },
@@ -38,7 +43,7 @@ const TARGETS: SearchTarget[] = [
   { table: 'qr_codes', label: 'QR Code', columns: ['code'], permission: 'qr.codes.view' },
   { table: 'documents', label: 'Document', columns: ['doc_no', 'title'], permission: 'documents.documents.view' },
   { table: 'security_jobs', label: 'Security Job', columns: ['job_no'], permission: 'security_printing.jobs.view' },
-  { table: 'payrolls', label: 'Payroll', columns: ['payroll_no'], permission: 'hr.payrolls.view' },
+  { table: 'payrolls', label: 'Payroll', columns: ['payroll_no'], permission: 'hr.payrolls.view', projection: ['payroll_no', 'period_start', 'period_end', 'status'] },
 ];
 
 function hasPermission(userPerms: string[], required: string): boolean {
@@ -74,12 +79,17 @@ function getColumns(table: string, ctx: Ctx): Promise<Set<string>> {
 }
 
 /** Build a tenant-safe scope predicate using only columns that exist on the table. */
-async function dynamicScope(table: string, ctx: Ctx): Promise<string> {
+async function dynamicScope(table: string, ctx: Ctx, userPerms: string[]): Promise<string> {
   const cols = await getColumns(table, ctx);
   const conds: string[] = [];
+  if (cols.has('tenant_id') && ctx.tenantId) conds.push(`t.tenant_id = ${ctx.tenantId}`);
   if (cols.has('company_id') && ctx.companyId) conds.push(`t.company_id = ${ctx.companyId}`);
   if (cols.has('branch_id') && ctx.branchId) conds.push(`t.branch_id = ${ctx.branchId}`);
-  return conds.length ? conds.join(' AND ') : '1=1';
+  if (conds.length) return conds.join(' AND ');
+  // Fail closed: a table without any scope columns is only searchable by a
+  // global administrator. Everyone else receives no rows.
+  if (userPerms.includes('system.admin.all') || userPerms.includes('*')) return '1=1';
+  return '1=0';
 }
 
 searchRouter.get(
@@ -93,9 +103,10 @@ searchRouter.get(
 
     for (const target of TARGETS) {
       if (!hasPermission(perms, target.permission)) continue;
-      const scope = await dynamicScope(target.table, req.ctx);
+      const scope = await dynamicScope(target.table, req.ctx, perms);
       const ors = target.columns.map((c) => `t.${c}::text ILIKE $1`);
-      const sql = `SELECT t.* FROM ${target.table} t WHERE (${ors.join(' OR ')}) AND ${scope} ORDER BY t.id DESC LIMIT $2`;
+      const proj = target.projection ? target.projection.map((c) => `t.${c}`).join(', ') : 't.*';
+      const sql = `SELECT ${proj} FROM ${target.table} t WHERE (${ors.join(' OR ')}) AND ${scope} ORDER BY t.id DESC LIMIT $2`;
       const res2 = await query(sql, [`%${q}%`, limit], req.ctx);
       if (res2.rows.length > 0) {
         out.push({ label: target.label, table: target.table, matches: res2.rows as unknown as Record<string, unknown>[] });

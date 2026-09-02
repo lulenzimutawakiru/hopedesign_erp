@@ -9,9 +9,9 @@ export class ApiError extends Error {
 }
 
 const TOKEN_KEY = 'hdg_token';
-export const getToken = () => localStorage.getItem(TOKEN_KEY);
-export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
-export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+export const getToken = () => sessionStorage.getItem(TOKEN_KEY);
+export const setToken = (t: string) => sessionStorage.setItem(TOKEN_KEY, t);
+export const clearToken = () => sessionStorage.removeItem(TOKEN_KEY);
 
 interface ApiResponse<T = unknown> {
   data: T;

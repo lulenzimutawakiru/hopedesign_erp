@@ -1,4 +1,4 @@
-﻿import pg from 'pg';
+import pg from 'pg';
 import ExcelJS from 'exceljs';
 import { stringify } from 'csv-stringify/sync';
 import { Ctx } from '../db.js';
@@ -3846,7 +3846,7 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
     </div>
   </div>
   <p class="no-print muted">Issued by ${htmlEsc(opts.issuedBy)} on ${htmlEsc(formatDocDateTime(opts.issuedAt))}</p>
-  <script>window.addEventListener('load',function(){setTimeout(function(){window.print();},250);});</script>
+  <script src="/assets/print.js"></script>
 </body></html>`;
 }
 

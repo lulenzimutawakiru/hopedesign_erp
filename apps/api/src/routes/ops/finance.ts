@@ -39,13 +39,35 @@ financeOpsRouter.get('/journals', ...runGet('finance.journals.view', (c, ctx, q)
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
 })));
 financeOpsRouter.get('/journals/:id', ...runGet('finance.journals.view', (c, ctx, _q, p) => fin.getJournal(c, ctx, Number(p.id))));
-financeOpsRouter.post('/journals', ...run('finance.journals.create', (c, ctx, b) => fin.createManualJournal(c, ctx, {
-  entryDate: String(b.entryDate),
-  description: String(b.description),
-  journalType: b.journalType != null ? String(b.journalType) : 'MANUAL',
-  lines: b.lines ?? [],
-  post: Boolean(b.post),
-})));
+financeOpsRouter.post('/journals', async (req, res, next) => {
+  try {
+    // Create requires the create grant (RBAC + ABAC + SoD).
+    await new Promise<void>((resolve, reject) =>
+      requirePermission('finance.journals.create')(req, res, (err?: unknown) => (err ? reject(err) : resolve()))
+    );
+    // Immediate posting is a post action: enforce the same control as the
+    // dedicated /post endpoint (e.g. ABAC-FIN-HOURS after-hours gate).
+    if (req.body?.post) {
+      await new Promise<void>((resolve, reject) =>
+        requirePermission('finance.journals.post')(req, res, (err?: unknown) => (err ? reject(err) : resolve()))
+      );
+    }
+  } catch (err) {
+    return next(err);
+  }
+  try {
+    const out = await tx((client) => fin.createManualJournal(client, req.ctx, {
+      entryDate: String(req.body.entryDate),
+      description: String(req.body.description),
+      journalType: req.body.journalType != null ? String(req.body.journalType) : 'MANUAL',
+      lines: req.body.lines ?? [],
+      post: Boolean(req.body.post),
+    }), req.ctx);
+    res.json({ data: out });
+  } catch (err) {
+    next(err);
+  }
+});
 financeOpsRouter.post('/journals/:id/post', ...run('finance.journals.post', (c, ctx, _b, p) => fin.postDraftJournal(c, ctx, Number(p.id))));
 financeOpsRouter.post('/journals/:id/void', ...run('finance.journals.void', (c, ctx, b, p) => fin.voidJournal(c, ctx, Number(p.id), String(b.reason ?? 'Voided'))));
 

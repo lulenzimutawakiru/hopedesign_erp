@@ -1,0 +1,4 @@
+﻿INSERT INTO tenants (id, code, name, status, settings) VALUES (2, 'HDG', 'Hope Design Group Ltd', 'ACTIVE', '{"timezone":"Africa/Kampala","locale":"en-UG"}') ON CONFLICT (id) DO NOTHING;
+INSERT INTO companies (id, tenant_id, code, name, legal_name, tin, vrn, currency, address, phone, email, website, fiscal_year_start, status) VALUES (2, 2, 'HDG', 'Hope Design Group Ltd', 'Hope Design Group Ltd', '1012345678', 'VAT-UG-1020304', 'UGX', 'Plot 12, Namanve Industrial Park, Kampala, Uganda', '+256 414 000 000', 'info@hopedesign.co.ug', 'https://hopedesign.co.ug', '07-01', 'ACTIVE') ON CONFLICT (id) DO NOTHING;
+INSERT INTO branches (id, company_id, tenant_id, code, name, status) VALUES (2, 2, 2, 'KAMPALA-HQ', 'Kampala Headquarters', 'ACTIVE') ON CONFLICT (id) DO NOTHING;
+SELECT setval('tenants_id_seq', 2, true), setval('companies_id_seq', 2, true), setval('branches_id_seq', 2, true);

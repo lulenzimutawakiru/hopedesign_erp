@@ -2,7 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { api, auth, loginAs, db } from './helpers.js';
 
 async function sku(): Promise<number> {
-  const res = await db(`SELECT id FROM products WHERE code = 'A4-80' UNION ALL SELECT id FROM products LIMIT 1`);
+  // Deterministic: prefer the seed A4-80 REAM product, else the lowest-id REAM
+  // product in the test tenant's company. REAM maps to the FG-WH warehouse the
+  // dispatch fixtures stock, so dispatch never fails on warehouse mismatch.
+  const res = await db(
+    `SELECT id FROM products WHERE code = 'A4-80' AND type = 'REAM'
+     UNION ALL
+     SELECT id FROM products WHERE type = 'REAM' AND company_id = 2
+     ORDER BY id LIMIT 1`
+  );
   return Number(res.rows[0].id);
 }
 

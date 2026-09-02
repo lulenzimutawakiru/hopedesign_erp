@@ -297,6 +297,24 @@ describe('HR and payroll', () => {
 
   it('flags employees without a salary and blocks submission until resolved', async () => {
     const { token } = await loginAs('hr.hannah');
+    // Self-clean: an interrupted earlier run can leave a zero-salary employee
+    // in this company, and group-wide payroll validation flags every eligible
+    // zero-salary employee as a blocking ERROR. Seed staff carry salaries, so
+    // any eligible zero-salary row here is test debris from a prior run.
+    const hq = await db(`SELECT tenant_id, company_id FROM users WHERE username = $1`, ['hr.hannah']);
+    const tenantId = Number(hq.rows[0].tenant_id);
+    const companyId = Number(hq.rows[0].company_id);
+    const debris = await db(
+      `SELECT id FROM employees
+       WHERE tenant_id = $1 AND company_id = $2
+         AND status IN ('ACTIVE', 'ON_LEAVE', 'PROBATION')
+         AND (termination_date IS NULL OR termination_date >= CURRENT_DATE)
+         AND (base_salary IS NULL OR base_salary <= 0)`,
+      [tenantId, companyId]
+    );
+    if (debris.rows.length > 0) {
+      await deleteEmployees(debris.rows.map((r) => Number(r.id)));
+    }
     const emp = await api.post('/api/ops/hr/employees').set(auth(token)).send({
       firstName: 'NoSal',
       lastName: 'Salary',

@@ -400,8 +400,8 @@ export async function renderEmailForSend(
     };
     if (entityType.includes('employee')) {
       const { rows } = await client.query(
-        `SELECT first_name, last_name FROM employees WHERE id = $1`,
-        [entityId]
+        `SELECT first_name, last_name FROM employees WHERE id = $1 AND tenant_id = $2 AND (company_id = $3 OR $3 IS NULL)`,
+        [entityId, email.tenant_id, email.company_id]
       );
       if (rows[0]) setName([rows[0].first_name, rows[0].last_name].filter(Boolean).join(' ').trim());
     } else if (entityType.includes('leave')) {
@@ -410,8 +410,9 @@ export async function renderEmailForSend(
                l.days, e.first_name, e.last_name
            FROM leave_requests l
            JOIN employees e ON e.id = l.employee_id
-          WHERE l.id = $1`,
-        [entityId]
+          WHERE l.id = $1
+            AND e.tenant_id = $2 AND (e.company_id = $3 OR $3 IS NULL)`,
+        [entityId, email.tenant_id, email.company_id]
       );
       if (rows[0]) {
         const r = rows[0];
@@ -423,8 +424,8 @@ export async function renderEmailForSend(
       }
     } else if (entityType.includes('customer')) {
       const { rows } = await client.query(
-        `SELECT name FROM customers WHERE id = $1`,
-        [entityId]
+        `SELECT name FROM customers WHERE id = $1 AND tenant_id = $2 AND (company_id = $3 OR $3 IS NULL)`,
+        [entityId, email.tenant_id, email.company_id]
       );
       if (rows[0]?.name) {
         vars.CUSTOMER_NAME = String(rows[0].name);
@@ -432,8 +433,8 @@ export async function renderEmailForSend(
       }
     } else if (entityType.includes('supplier')) {
       const { rows } = await client.query(
-        `SELECT name FROM suppliers WHERE id = $1`,
-        [entityId]
+        `SELECT name FROM suppliers WHERE id = $1 AND tenant_id = $2 AND (company_id = $3 OR $3 IS NULL)`,
+        [entityId, email.tenant_id, email.company_id]
       );
       if (rows[0]?.name) {
         vars.SUPPLIER_NAME = String(rows[0].name);
@@ -445,8 +446,8 @@ export async function renderEmailForSend(
     const companyId = Number(email.company_id ?? 0);
     if (Number.isFinite(companyId) && companyId > 0) {
       const { rows } = await client.query(
-        `SELECT name, legal_name FROM companies WHERE id = $1`,
-        [companyId]
+        `SELECT name, legal_name FROM companies WHERE id = $1 AND tenant_id = $2`,
+        [companyId, email.tenant_id]
       );
       if (rows[0]) vars.COMPANY_NAME = String(rows[0].legal_name || rows[0].name || '').trim();
     }

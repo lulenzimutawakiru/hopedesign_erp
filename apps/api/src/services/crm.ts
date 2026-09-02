@@ -127,6 +127,7 @@ export async function createCustomer(
     name: string;
     customerType?: string;
     tin?: string | null;
+    nin?: string | null;
     vrn?: string | null;
     phone?: string | null;
     email?: string | null;
@@ -143,12 +144,12 @@ export async function createCustomer(
   const status = input.status && ['ACTIVE', 'PROSPECT'].includes(input.status) ? input.status : 'ACTIVE';
   const ins = await client.query(
     `INSERT INTO customers
-       (company_id, tenant_id, branch_id, code, name, customer_type, tin, vrn, phone, email, address,
+       (company_id, tenant_id, branch_id, code, name, customer_type, tin, nin, vrn, phone, email, address,
         credit_limit, payment_terms_days, status, owner_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, code, input.name.trim(),
-      input.customerType ?? 'COMPANY', input.tin ?? null, input.vrn ?? null,
+      input.customerType ?? 'COMPANY', input.tin ?? null, input.nin ?? null, input.vrn ?? null,
       input.phone ?? null, input.email ?? null, input.address ?? null,
       Number(input.creditLimit ?? 0), Number(input.paymentTermsDays ?? 30),
       status, ctx.userId ?? null,
@@ -571,7 +572,7 @@ export async function listCustomers(
   }
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
-    `SELECT c.id, c.code, c.name, c.customer_type, c.status, c.phone, c.email, c.credit_limit, c.payment_terms_days,
+    `SELECT c.id, c.code, c.name, c.customer_type, c.tin, c.nin, c.vrn, c.status, c.phone, c.email, c.credit_limit, c.payment_terms_days,
             c.owner_user_id,
             TRIM(BOTH FROM COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS owner_name,
             COALESCE((

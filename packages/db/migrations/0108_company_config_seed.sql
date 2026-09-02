@@ -36,7 +36,8 @@ ON CONFLICT (tenant_id, company_id) DO UPDATE SET timezone = EXCLUDED.timezone, 
 
 -- ---------- 4. Financial & tax app settings ----------
 INSERT INTO app_settings (tenant_id, company_id, category, key, value, updated_by)
-SELECT 2, id, x.category, x.key, x.value, 1
+SELECT 2, id, x.category, x.key, x.value,
+       (SELECT u.id FROM users u WHERE u.tenant_id = 2 AND u.email = 'admin@hopedesign.co.ug' LIMIT 1)
 FROM companies CROSS JOIN (VALUES
   ('general','currency','"UGX"'::jsonb),
   ('general','currency_symbol','"UGX"'::jsonb),
@@ -144,6 +145,7 @@ ON CONFLICT (tenant_id, company_id, code) DO NOTHING;
 
 -- ---------- 10. Initial configuration version ----------
 INSERT INTO company_config_versions (tenant_id, company_id, version, category, label, snapshot, status, notes, created_by)
-SELECT 2, id, 1, 'all', 'Initial company configuration', '{"branding":true,"localization":true,"numbering":true}'::jsonb, 'PUBLISHED', 'Baseline configuration captured at setup', 1
+SELECT 2, id, 1, 'all', 'Initial company configuration', '{"branding":true,"localization":true,"numbering":true}'::jsonb, 'PUBLISHED', 'Baseline configuration captured at setup',
+       (SELECT u.id FROM users u WHERE u.tenant_id = 2 AND u.email = 'admin@hopedesign.co.ug' LIMIT 1)
 FROM companies WHERE tenant_id = 2 AND id = 2
 ON CONFLICT (tenant_id, company_id, version, category) DO NOTHING;

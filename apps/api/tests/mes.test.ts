@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { api, auth, loginAs, db } from './helpers.js';
 
 // Reset mutable seed rows after each test so the suite is repeatable in isolation.
@@ -11,6 +11,22 @@ afterEach(async () => {
   for (const sql of RESET_SQL) {
     await db(sql);
   }
+});
+
+// Deterministic BOB-80 opening balance for the material-shortage scenario:
+// exactly 40 in RAW-MAT, nothing anywhere else (residue rows from other runs
+// would otherwise inflate on-hand and flip the check to PASS).
+beforeAll(async () => {
+  await db(
+    `UPDATE inventory SET quantity = 0, reserved_qty = 0
+       WHERE product_id = (SELECT id FROM products WHERE code = 'BOB-80')
+         AND NOT (warehouse_id = (SELECT id FROM warehouses WHERE code = 'RAW-MAT') AND batch_id IS NULL)`
+  );
+  await db(
+    `UPDATE inventory SET quantity = 40, reserved_qty = 0
+       WHERE product_id = (SELECT id FROM products WHERE code = 'BOB-80')
+         AND warehouse_id = (SELECT id FROM warehouses WHERE code = 'RAW-MAT') AND batch_id IS NULL`
+  );
 });
 
 const asNum = (v: unknown): number => {
@@ -262,8 +278,9 @@ describe('Manufacturing Execution System (MES) API', () => {
     const { token } = await loginAs('admin');
     const costing = await api.get('/api/ops/manufacturing/costing').set(auth(token));
     expect(costing.status).toBe(200);
-    expect(Array.isArray(costing.body.data)).toBe(true);
-    expect(costing.body.data.length).toBeGreaterThanOrEqual(1);
+    expect(costing.body.data).toBeDefined();
+    expect(Array.isArray(costing.body.data.rows)).toBe(true);
+    expect(costing.body.data.rows.length).toBeGreaterThanOrEqual(1);
 
     const woCost = await api.get('/api/ops/manufacturing/costing/1180').set(auth(token));
     expect(woCost.status).toBe(200);

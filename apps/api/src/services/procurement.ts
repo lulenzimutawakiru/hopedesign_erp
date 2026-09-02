@@ -197,6 +197,7 @@ export async function createSupplier(
     name: string;
     supplierType?: string;
     tin?: string | null;
+    nin?: string | null;
     vrn?: string | null;
     phone?: string | null;
     email?: string | null;
@@ -213,14 +214,14 @@ export async function createSupplier(
   const code = await nextDoc(client, ctx, 'SUP');
   const ins = await client.query(
     `INSERT INTO suppliers
-       (company_id, tenant_id, branch_id, code, name, supplier_type, tin, vrn, phone, email, address,
+       (company_id, tenant_id, branch_id, code, name, supplier_type, tin, nin, vrn, phone, email, address,
         payment_terms_days, default_lead_time_days, status, security_cleared, website, currency)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'PENDING',$14,$15,$16) RETURNING id`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'PENDING',$15,$16,$17) RETURNING id`,
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, code, input.name,
-      input.supplierType ?? 'RAW_MATERIAL', input.tin ?? null, input.vrn ?? null, input.phone ?? null,
-      input.email ?? null, input.address ?? null, input.paymentTermsDays ?? 30,
-      input.defaultLeadTimeDays ?? 7, input.securityCleared ?? false, input.website ?? null, input.currency ?? 'UGX',
+      input.supplierType ?? 'RAW_MATERIAL', input.tin ?? null, input.nin ?? null, input.vrn ?? null, input.phone ?? null,
+      input.email ?? null, input.address ?? null, input.paymentTermsDays ?? 30, input.defaultLeadTimeDays ?? 7,
+      input.securityCleared ?? false, input.website ?? null, input.currency ?? 'UGX',
     ]
   );
   const supplierId = Number(ins.rows[0].id);

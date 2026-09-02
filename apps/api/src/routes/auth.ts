@@ -4,6 +4,7 @@ import { query, tx } from '../db.js';
 import { authenticate, loadAuthUser } from '../middleware/auth.js';
 import { asyncHandler, badRequest, unauthorized } from '../utils.js';
 import { logAudit } from '../services/audit.js';
+import { loginLimiter, mfaLimiter, inviteLimiter } from '../middleware/rateLimits.js';
 import { ApiError } from '../utils.js';
 
 const LOCKOUT_THRESHOLD = 5;
@@ -32,14 +33,44 @@ async function createSession(userId: number, tenantId: number, ip: string, ua: s
 }
 
 async function userByLogin(identifier: string) {
-  const res = await query(`SELECT * FROM users WHERE email = $1 OR username = $1`, [identifier]);
+  // DB-001 (Phase 2B): identity is resolved before a tenant context exists, so
+  // pre-login lookups run through a SECURITY DEFINER helper (0128); under the
+  // least-privilege app role a raw table query would be RLS fail-closed.
+  const res = await query(`SELECT * FROM auth_resolve_user_by_identifier($1)`, [identifier]);
   return res.rows[0] as Record<string, unknown> | undefined;
+}
+
+/**
+ * True when the user holds any permission that warrants mandatory MFA.
+ * Privileged families: administration, finance, security printing, HR payroll.
+ */
+async function userHoldsPrivilegedPermission(userId: number, tenantId: number): Promise<boolean> {
+  const permsRes = await query(
+    `SELECT DISTINCT p.code
+     FROM role_permissions rp
+     JOIN permissions p ON p.id = rp.permission_id
+     JOIN user_roles ur ON ur.role_id = rp.role_id
+     WHERE ur.user_id = $1`,
+    [userId],
+    { tenantId, userId }
+  );
+  const perms = (permsRes.rows as { code: string }[]).map((r) => r.code);
+  return perms.some((code) => {
+    if (code === 'system.admin.all' || code === '*') return true;
+    return (
+      code.startsWith('admin.') ||
+      code.startsWith('finance.') ||
+      code.startsWith('security_printing.') ||
+      code.startsWith('hr.payrolls.')
+    );
+  });
 }
 
 export const authRouter = Router();
 
 authRouter.post(
   '/login',
+  loginLimiter,
   asyncHandler(async (req, res) => {
     const identifier = String(req.body?.identifier ?? '').trim().toLowerCase();
     const password = String(req.body?.password ?? '');
@@ -82,6 +113,14 @@ authRouter.post(
     await query(`UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now() WHERE id=$1`, [userId], { tenantId, userId });
     await recordAttempt(identifier, ipOf(req), true);
 
+    // AUTH-001: privileged roles must complete (or enroll in) MFA before a
+    // session is issued. The login token lets the client walk the user through
+    // enrollment when no second factor is configured yet.
+    if (!Boolean(user.mfa_enabled) && (await userHoldsPrivilegedPermission(userId, tenantId))) {
+      const loginToken = signLoginToken(userId, tenantId);
+      return res.json({ mfaRequired: true, enrollmentRequired: true, loginToken, user: redactUser(user) });
+    }
+
     if (Boolean(user.mfa_enabled)) {
       if (!mfaCode) {
         const loginToken = signLoginToken(userId, tenantId);
@@ -108,13 +147,14 @@ authRouter.post(
 // ---------------------------------------------------------------- accept invitation
 authRouter.post(
   '/accept-invite',
+  inviteLimiter,
   asyncHandler(async (req, res) => {
     const token = String(req.body?.token ?? '').trim();
     const password = String(req.body?.password ?? '');
     if (!token) throw badRequest('Invitation token is required');
     if (password.length < 8) throw badRequest('Password must be at least 8 characters');
     const inv = (
-      await query('SELECT * FROM user_invitations WHERE token_hash = $1', [hashToken(token)])
+      await query('SELECT * FROM auth_invitation_by_token_hash($1)', [hashToken(token)])
     ).rows[0] as Record<string, unknown> | undefined;
     if (!inv) throw unauthorized('Invalid or expired invitation');
     if (String(inv.status) !== 'PENDING' || inv.revoked_at) throw unauthorized('Invitation has already been used or revoked');
@@ -122,7 +162,7 @@ authRouter.post(
     if (expiresAt.getTime() < Date.now()) throw unauthorized('Invitation has expired');
     const userId = Number(inv.user_id);
     const tenantId = Number(inv.tenant_id);
-    const userRes = await query('SELECT * FROM users WHERE id = $1 AND tenant_id = $2', [userId, tenantId]);
+    const userRes = await query('SELECT * FROM users WHERE id = $1 AND tenant_id = $2', [userId, tenantId], { tenantId, userId });
     const user = userRes.rows[0] as Record<string, unknown> | undefined;
     if (!user) throw unauthorized('User not found');
     if (!['INVITED', 'PENDING_ACTIVATION', 'PENDING'].includes(String(user.status))) {
@@ -143,10 +183,11 @@ authRouter.post(
     await query(
       `INSERT INTO user_status_history (tenant_id, user_id, from_status, to_status, reason, changed_by)
        VALUES ($1,$2,$3,'ACTIVE','Invitation accepted',NULL)`,
-      [tenantId, userId, String(user.status)]
+      [tenantId, userId, String(user.status)],
+      { tenantId, userId }
     );
     const fresh = (
-      await query('SELECT * FROM users WHERE id = $1 AND tenant_id = $2', [userId, tenantId])
+      await query('SELECT * FROM users WHERE id = $1 AND tenant_id = $2', [userId, tenantId], { tenantId, userId })
     ).rows[0] as Record<string, unknown>;
     const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, true);
     const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
@@ -159,6 +200,7 @@ authRouter.post(
 // ---------------------------------------------------------------- MFA verify (login token flow)
 authRouter.post(
   '/mfa/verify',
+  mfaLimiter,
   asyncHandler(async (req, res) => {
     const token = String(req.body?.loginToken ?? '');
     const code = String(req.body?.code ?? '').trim();
@@ -169,7 +211,7 @@ authRouter.post(
     } catch {
       throw unauthorized('Invalid login token');
     }
-    const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid]);
+    const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid], { tenantId: payload.tid, userId: payload.sub });
     const user = userRes.rows[0] as Record<string, unknown> | undefined;
     if (!user) throw unauthorized('User not found');
     if (!Boolean(user.mfa_enabled)) throw badRequest('MFA is not enabled for this account');
@@ -184,6 +226,62 @@ authRouter.post(
       await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, { action: 'login_mfa', resource: 'auth', recordId: userId });
     }, { tenantId, userId });
     res.json({ accessToken, refreshToken, user: redactUser(user) });
+  })
+);
+
+// ---------------------------------------------------------------- MFA enrollment (login token flow)
+authRouter.post(
+  '/mfa/enroll-start',
+  mfaLimiter,
+  asyncHandler(async (req, res) => {
+    const token = String(req.body?.loginToken ?? '');
+    if (!token) throw badRequest('loginToken is required');
+    let payload;
+    try {
+      payload = verifyLoginToken(token);
+    } catch {
+      throw unauthorized('Invalid login token');
+    }
+    const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid], { tenantId: payload.tid, userId: payload.sub });
+    const user = userRes.rows[0] as Record<string, unknown> | undefined;
+    if (!user) throw unauthorized('User not found');
+    if (Boolean(user.mfa_enabled)) throw badRequest('MFA is already enabled');
+    const secret = generateTotpSecret();
+    await query(`UPDATE users SET mfa_secret=$1, mfa_method='TOTP' WHERE id=$2`, [secret, Number(user.id)], { tenantId: payload.tid, userId: Number(user.id) });
+    res.json({ secret, otpauthUrl: generateTotpQrData(String(user.email), secret) });
+  })
+);
+
+authRouter.post(
+  '/mfa/enroll-verify',
+  mfaLimiter,
+  asyncHandler(async (req, res) => {
+    const token = String(req.body?.loginToken ?? '');
+    const code = String(req.body?.code ?? '').trim();
+    const secret = String(req.body?.secret ?? '');
+    if (!token || !code) throw badRequest('loginToken and code are required');
+    let payload;
+    try {
+      payload = verifyLoginToken(token);
+    } catch {
+      throw unauthorized('Invalid login token');
+    }
+    const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid], { tenantId: payload.tid, userId: payload.sub });
+    const user = userRes.rows[0] as Record<string, unknown> | undefined;
+    if (!user) throw unauthorized('User not found');
+    if (Boolean(user.mfa_enabled)) throw badRequest('MFA is already enabled');
+    const stored = secret || String(user.mfa_secret ?? '');
+    if (!stored || !verifyTotp(stored, code)) throw badRequest('Invalid MFA code');
+    const userId = Number(user.id);
+    const tenantId = Number(user.tenant_id);
+    await query(`UPDATE users SET mfa_enabled=true, mfa_secret=$1 WHERE id=$2`, [stored, userId], { tenantId, userId });
+    const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, true);
+    const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
+    await tx(async (client) => {
+      await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, { action: 'mfa_enrolled', resource: 'auth', recordId: userId });
+    }, { tenantId, userId });
+    const freshRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [userId, tenantId], { tenantId, userId });
+    res.json({ accessToken, refreshToken, user: redactUser(freshRes.rows[0] as Record<string, unknown>) });
   })
 );
 
@@ -224,12 +322,12 @@ authRouter.post(
     const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     const refresh = req.body?.refreshToken ? String(req.body.refreshToken) : null;
     if (refresh) {
-      await query(`UPDATE sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL`, [hashToken(refresh)]);
+      await query('SELECT auth_revoke_session_by_token_hash($1)', [hashToken(refresh)]);
     } else if (bearer) {
       try {
         const { verifyAccessToken } = await import('../auth.js');
         const payload = verifyAccessToken(bearer);
-        if (payload.sid) await query(`UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`, [payload.sid]);
+        if (payload.sid) await query('SELECT auth_revoke_session_by_id($1)', [payload.sid]);
       } catch { /* token already invalid */ }
     }
     res.json({ ok: true });

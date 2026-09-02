@@ -106,7 +106,14 @@ adminRouter.get('/dashboard', ...runGet(['admin.dashboard.view', 'admin.users.vi
     [tenantId]
   );
   const failed = await c.query(
-    `SELECT COUNT(*)::int AS failed_24h FROM login_attempts WHERE success = false AND created_at > now() - interval '24 hours'`
+    `SELECT COUNT(*)::int AS failed_24h
+     FROM login_attempts la
+     WHERE la.success = false AND la.created_at > now() - interval '24 hours'
+       AND EXISTS (
+         SELECT 1 FROM users u
+         WHERE u.tenant_id = $1 AND (u.email = la.identifier OR u.username = la.identifier)
+       )`,
+    [tenantId]
   );
   const roles = await c.query('SELECT COUNT(*)::int AS total FROM roles WHERE tenant_id = $1', [tenantId]);
   const policies = await c.query('SELECT COUNT(*)::int AS active FROM policies WHERE tenant_id = $1 AND is_active = true', [tenantId]);

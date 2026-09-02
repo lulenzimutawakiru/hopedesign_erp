@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { tx } from '../db.js';
+import { query, tx } from '../db.js';
 import { requirePermission } from '../middleware/authorize.js';
+import { ENTITIES } from '../services/entities.js';
 import { decideTask, getApprovalsQueue } from '../services/workflow.js';
 import { asyncHandler, badRequest } from '../utils.js';
 
@@ -49,6 +50,30 @@ approvalsRouter.post(
     const delegateToUserId = req.body?.delegateToUserId != null ? Number(req.body.delegateToUserId) : undefined;
     const permission = DECISION_PERMISSION[decision];
     if (!permission) throw badRequest('Invalid decision; expected APPROVED, REJECTED, RETURNED or DELEGATED');
+
+    // Resolve the task scoped to the caller's tenant + company so the ABAC
+    // engine can evaluate resource attributes (e.g. owner_user_id) before
+    // authorizing the decision. Never trust a bare task id.
+    const taskRes = await query(
+      `SELECT t.id, i.entity_type, i.entity_id
+       FROM approval_tasks t
+       JOIN workflow_instances i ON i.id = t.instance_id
+       WHERE t.id = $1 AND i.tenant_id = $2 AND i.company_id = $3`,
+      [taskId, req.ctx.tenantId, req.ctx.companyId],
+      req.ctx
+    );
+    const task = taskRes.rows[0];
+    if (!task) throw badRequest('Approval task not found in your workspace');
+    const entity = ENTITIES[String(task.entity_type)];
+    if (entity?.ownerColumn) {
+      const ownerRes = await query(
+        `SELECT ${entity.ownerColumn} AS owner_user_id FROM ${entity.table} WHERE id = $1`,
+        [Number(task.entity_id)],
+        req.ctx
+      );
+      req.ctx.resourceAttributes = { owner_user_id: ownerRes.rows[0]?.owner_user_id ?? null };
+    }
+
     await authorizeDecision(req, permission);
     const out = await tx(
       (client) => decideTask(client, req.ctx, taskId, decision as 'APPROVED' | 'REJECTED' | 'RETURNED' | 'DELEGATED', comment, delegateToUserId),

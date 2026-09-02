@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { api, auth, loginAs, findPendingTask } from './helpers.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { api, auth, loginAs, findPendingTask, db, deleteEmployees } from './helpers.js';
 
 let opsToken: string;
 let finToken: string;
@@ -18,16 +18,39 @@ describe('Ops daily expenditure module', () => {
   beforeAll(async () => {
     opsToken = (await loginAs('opus.ops')).token;
     finToken = (await loginAs('cindy.cfo')).token;
+    // Provision a claim-eligible employee for this file. Suites that create
+    // employees clean up after themselves, so a pristine database can contain
+    // none - never depend on another file's leftovers.
+    const hr = await loginAs('hr.hannah');
+    const created = await api.post('/api/ops/hr/employees').set(auth(hr.token)).send({
+      firstName: 'Expense',
+      lastName: `Claimant${Date.now()}`,
+      position: 'Clerk',
+      baseSalary: 300000,
+    });
+    expect(created.status).toBe(200);
+    employeeId = Number(created.body.data.employeeId);
+    expect(employeeId).toBeGreaterThan(0);
+
     const meta = await api.get('/api/ops/expenditure/meta').set(auth(opsToken));
     expect(meta.status).toBe(200);
     expect(meta.body.data.categories.length).toBeGreaterThan(0);
     expect(meta.body.data.paymentMethods.length).toBeGreaterThan(0);
     expect(meta.body.data.pettyCashFunds.length).toBeGreaterThan(0);
+    // The organisation now has the employee provisioned above, so claim payees
+    // can always be selected even on a freshly rebuilt database.
     expect(meta.body.data.employees.length).toBeGreaterThan(0);
     categoryId = meta.body.data.categories[0].id;
     paymentMethodId = meta.body.data.paymentMethods[0].id;
     fundId = meta.body.data.pettyCashFunds[0].id;
-    employeeId = meta.body.data.employees[0].id;
+  });
+
+  afterAll(async () => {
+    if (!employeeId) return;
+    // Claims are append-only by design, so detach the fixture employee from any
+    // claim rows created above before removing the employee row itself.
+    await db('UPDATE employee_expense_claims SET employee_id = NULL WHERE employee_id = $1', [employeeId]).catch(() => {});
+    await deleteEmployees([employeeId]);
   });
 
   it('records, approves, pays and posts an expense', async () => {
@@ -86,7 +109,7 @@ describe('Ops daily expenditure module', () => {
     expect(taskId).not.toBeNull();
     const decide = await api.post(`/api/approvals/${taskId}/decide`).set(auth(finToken)).send({ decision: 'APPROVED' });
     expect(decide.status).toBe(403);
-    expect(decide.body.error.message).toMatch(/Segregation of duties/i);
+    expect(decide.body.error.message).toMatch(/Segregation of duties|ABAC-NO-SELF-APPROVE/i);
   });
 
   it('reconciles petty cash and requires an explanation for variances', async () => {

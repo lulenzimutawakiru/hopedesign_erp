@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: hopedesign_dev
       POSTGRES_DB: hopedesign_erp
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +22,11 @@ services:
     container_name: hopedesign_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+    # Redis is unused by the current codebase; localhost-only binding + optional
+    # password (set REDIS_PASSWORD) so the service is not an unauthenticated
+    # network listener if it is ever activated.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-}"]
     volumes:
       - redisdata:/data
 

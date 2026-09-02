@@ -17,6 +17,7 @@ import {
   renderTemplate,
 } from '../../services/communication.js';
 import { sendEmail, sendSms, sendWhatsApp, type ProviderOverride } from '../../services/bird.js';
+import { messagingLimiter } from '../../middleware/rateLimits.js';
 
 export const communicationOpsRouter = Router();
 
@@ -174,7 +175,8 @@ communicationOpsRouter.get(
 
 communicationOpsRouter.post(
   '/channels',
-  ...run('communication.messages.manage', async (c, ctx, b) => {
+  messagingLimiter,
+...run('communication.messages.manage', async (c, ctx, b) => {
     const code = String(b.code ?? '').trim().toUpperCase();
     const name = String(b.name ?? '').trim();
     if (!code || !name) throw badRequest('code and name are required');
@@ -266,7 +268,8 @@ communicationOpsRouter.get(
 
 communicationOpsRouter.post(
   '/conversations',
-  ...run('communication.messages.send', async (c, ctx, b) => {
+  messagingLimiter,
+...run('communication.messages.send', async (c, ctx, b) => {
     const tenantId = ctx.tenantId ?? 0;
     const kind = String(b.kind ?? 'DIRECT').toUpperCase();
     if (!['DIRECT', 'GROUP', 'CHANNEL', 'RECORD'].includes(kind)) throw badRequest('Invalid conversation kind');
@@ -364,7 +367,8 @@ communicationOpsRouter.get(
 
 communicationOpsRouter.post(
   '/conversations/:id/messages',
-  ...run('communication.messages.send', async (c, ctx, b, p) => {
+  messagingLimiter,
+...run('communication.messages.send', async (c, ctx, b, p) => {
     const convId = Number(p.id);
     const uid = ctx.userId ?? 0;
     const tenantId = ctx.tenantId ?? 0;
@@ -702,7 +706,8 @@ communicationOpsRouter.get(
 
 communicationOpsRouter.post(
   '/emails',
-  ...run('communication.emails.send', async (c, ctx, b) => {
+  messagingLimiter,
+...run('communication.emails.send', async (c, ctx, b) => {
     const tenantId = ctx.tenantId ?? 0;
     const subject = String(b.subject ?? '').trim();
     if (!subject) throw badRequest('subject is required');
@@ -765,7 +770,8 @@ communicationOpsRouter.post(
 
 communicationOpsRouter.post(
   '/emails/:id/send',
-  ...run('communication.emails.send', async (c, ctx, _b, p) => {
+  messagingLimiter,
+...run('communication.emails.send', async (c, ctx, _b, p) => {
     const id = Number(p.id);
     const tenantId = ctx.tenantId ?? 0;
     const { rows } = await c.query(
