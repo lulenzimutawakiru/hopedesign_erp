@@ -17,3 +17,16 @@ tmp-hr/
 .login-resp.json
 *.token.txt
 *.probe.cjs
+
+# Generated production env / secrets – never commit
+.prod-gen.env
+env/
+
+# Vercel/Supabase diagnostic scratch
+hv-*.json
+hv-*.jsonl
+hv-*.txt
+/tmp-*.cjs
+/vercel-sync-env.cjs
+/dba-probe.cjs
+/prod-env-gen.cjs
