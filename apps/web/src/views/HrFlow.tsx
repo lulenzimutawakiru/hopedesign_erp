@@ -4,6 +4,7 @@ import { useAuth, can } from '../auth';
 import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, PageLoader, StaffPhoto } from '../components/ui';
+import { HrKpi, HrKpiGrid, HrPageHeader, HrTableEmpty, HrToolbar } from '../components/hrUi';
 import RecruitmentFlow from './RecruitmentFlow';
 import OnboardingFlow from './OnboardingFlow';
 import WorkforcePlanning from './WorkforcePlanning';
@@ -1690,35 +1691,147 @@ function AttendanceDesk() {
 function PayrollList() {
   const [rows, setRows] = useState<Rec[]>([]);
   const [error, setError] = useState('');
+  const [q, setQ] = useState('');
+  const [type, setType] = useState('');
+  const [openOnly, setOpenOnly] = useState(false);
   useEffect(() => {
-    api<{ data: Rec[] }>('/api/ops/hr/payrolls').then((r) => setRows(r.data ?? [])).catch((e) => setError(e instanceof Error ? e.message : 'Payrolls failed'));
+    api<{ data: Rec[] }>('/api/ops/hr/payrolls')
+      .then((r) => setRows(r.data ?? []))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Payrolls failed'));
   }, []);
+
+  const money = (v: unknown) => {
+    const n = Number(v ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const monthPrefix = new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
+  const runTypeLabel = (v: unknown) => {
+    const labels: Record<string, string> = {
+      NORMAL: 'Normal',
+      OFF_CYCLE: 'Off-cycle',
+      FINAL: 'Final',
+      ADJUSTMENT: 'Adjustment',
+      REVERSAL: 'Reversal',
+      ARREARS: 'Arrears',
+    };
+    const s = String(v ?? 'NORMAL');
+    return labels[s] ?? s.replace(/_/g, ' ');
+  };
+  const runTypeTone = (v: unknown) => {
+    const s = String(v ?? 'NORMAL');
+    const tones: Record<string, { fg: string; bg: string; bd: string }> = {
+      NORMAL: { fg: '#0F4A32', bg: '#E3F3EB', bd: '#B8DCCB' },
+      OFF_CYCLE: { fg: '#1261A0', bg: '#E4F0FA', bd: '#B8D5EA' },
+      FINAL: { fg: '#6D28D9', bg: '#EDE9FE', bd: '#C7B8EF' },
+      ADJUSTMENT: { fg: '#B45309', bg: '#FDF3E0', bd: '#EFD9AE' },
+      REVERSAL: { fg: '#8B1E1E', bg: '#FDECEC', bd: '#F1C2C2' },
+      ARREARS: { fg: '#0F766E', bg: '#E3F4F2', bd: '#B4DCD7' },
+    };
+    return tones[s] ?? { fg: 'var(--muted)', bg: 'var(--paper-2)', bd: 'var(--line)' };
+  };
+  const isOpenStatus = (s: string) => ['DRAFT', 'SUBMITTED', 'APPROVED', 'RELEASED'].includes(s);
+
+  const visible = rows.filter((r) => {
+    const status = String(r.status ?? '');
+    if (openOnly && !isOpenStatus(status)) return false;
+    if (type && String(r.runType ?? 'NORMAL') !== type) return false;
+    if (!q.trim()) return true;
+    const hay = [r.payrollNo, r.reason, r.offCycleType, r.periodStart, r.periodEnd, r.paymentDate, status, runTypeLabel(r.runType)]
+      .map((x) => String(x ?? ''))
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(q.trim().toLowerCase());
+  });
+
+  const openCount = rows.filter((r) => isOpenStatus(String(r.status ?? ''))).length;
+  const paidCount = rows.filter((r) => String(r.status ?? '') === 'PAID').length;
+  const queueCount = rows.filter((r) => ['SUBMITTED', 'APPROVED'].includes(String(r.status ?? ''))).length;
+  const netThisMonth = rows
+    .filter((r) => String(r.periodStart ?? '').startsWith(monthPrefix) && ['APPROVED', 'RELEASED', 'PAID'].includes(String(r.status ?? '')))
+    .reduce((sum, r) => sum + money(r.netTotal), 0);
+  const latestScored = rows.find((r) => r.validationScore !== null && r.validationScore !== undefined);
+
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="hr">Payroll</p>
-          <h1>Runs</h1>
-        </div>
-        <button className="btn btn-primary" onClick={() => navigate('/people/payrolls/new')}>New payroll</button>
-      </header>
+      <HrPageHeader
+        kicker="Payroll"
+        title="Runs"
+        subtitle="Payroll runs by period - calculate, validate, approve, post and release net pay."
+        actions={
+          <>
+            <button className="btn" onClick={() => navigate('/people/payments')}>Pay batches</button>
+            <button className="btn btn-primary" onClick={() => navigate('/people/payrolls/new')}>New payroll</button>
+          </>
+        }
+      />
       {error && <ErrorBanner error={error} />}
+      <HrKpiGrid>
+        <HrKpi label="Payroll runs" value={fmtNum(rows.length)} sub={fmtNum(openCount) + ' open - ' + fmtNum(paidCount) + ' paid'} />
+        <HrKpi label="Net this month" value={fmtMoney(netThisMonth)} sub="Approved, released or paid this period" accent="#168A5B" tint="rgba(22, 138, 91, 0.12)" />
+        <HrKpi label="Approval queue" value={fmtNum(queueCount)} sub="Submitted or approved, not yet released" accent="#D99A00" tint="rgba(217, 154, 0, 0.12)" />
+        <HrKpi label="Latest validation" value={latestScored ? String(latestScored.validationScore) + '%' : '-'} sub={latestScored ? 'Run ' + String(latestScored.payrollNo ?? '') : 'Validate a run to score readiness'} accent="#1261A0" tint="rgba(18, 97, 160, 0.12)" />
+      </HrKpiGrid>
+      <HrToolbar>
+        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search run number, reason, period..." aria-label="Search payroll runs" />
+        <select value={type} onChange={(e) => setType(e.target.value)} aria-label="Filter by run type">
+          <option value="">All run types</option>
+          <option value="NORMAL">Normal</option>
+          <option value="OFF_CYCLE">Off-cycle</option>
+          <option value="FINAL">Final</option>
+          <option value="ADJUSTMENT">Adjustment</option>
+          <option value="REVERSAL">Reversal</option>
+          <option value="ARREARS">Arrears</option>
+        </select>
+        <button type="button" className={'btn btn-sm' + (openOnly ? ' btn-primary' : '')} onClick={() => setOpenOnly((v) => !v)} title="Only show runs that have not been paid or voided">
+          {openOnly ? 'All runs' : 'Open runs only'}
+        </button>
+        {rows.length > 0 && <span className="muted" style={{ marginLeft: 'auto' }}>{fmtNum(visible.length)} of {fmtNum(rows.length)} runs</span>}
+      </HrToolbar>
       <div className="table-wrap card">
         <table className="data">
-          <thead><tr><th>Run</th><th>Period</th><th>Status</th><th className="cell-num">Ready</th><th className="cell-num">Gross</th><th className="cell-num">Deductions</th><th className="cell-num">Net</th></tr></thead>
+          <thead><tr><th>Run</th><th>Period</th><th>Type</th><th className="cell-num">People</th><th className="cell-num">Net</th><th>Status</th></tr></thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/people/payrolls/${r.id}`)}>
-                <td className="cell-mono">{String(r.payrollNo)}</td>
-                <td>{String(r.periodStart).slice(0, 10)} – {String(r.periodEnd).slice(0, 10)}</td>
-                <td><Badge value={r.status} /></td>
-                <td className="cell-num">{r.validationScore == null ? '-' : `${String(r.validationScore)}%`}</td>
-                <td className="cell-num">{fmtMoney(r.grossTotal)}</td>
-                <td className="cell-num">{fmtMoney(r.deductionTotal)}</td>
-                <td className="cell-num">{fmtMoney(r.netTotal)}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={7} className="muted" style={{ textAlign: 'center', padding: 24 }}>No payrolls.</td></tr>}
+            {visible.map((r) => {
+              const tone = runTypeTone(r.runType);
+              const status = String(r.status ?? '');
+              const glLabel = r.glPosted ? 'Posted to GL' : 'GL open';
+              const scoreLabel = r.validationScore === null || r.validationScore === undefined ? '' : ' - ' + String(r.validationScore) + '% ready';
+              return (
+                <tr key={String(r.id)} className="row-click" onClick={() => navigate('/people/payrolls/' + String(r.id))}>
+                  <td>
+                    <span className="cell-mono" style={{ fontSize: 13, fontWeight: 650, color: 'var(--ink)' }}>{String(r.payrollNo ?? '-')}</span>
+                    {r.payrollGroupId !== null && r.payrollGroupId !== undefined && <span className="cell-sub">Group {String(r.payrollGroupId)}</span>}
+                  </td>
+                  <td>
+                    {String(r.periodStart ?? '').slice(0, 10) || '-'} - {String(r.periodEnd ?? '').slice(0, 10) || '-'}
+                    {r.paymentDate ? <span className="cell-sub">Pays {String(r.paymentDate).slice(0, 10)}</span> : <span className="cell-sub">No pay date</span>}
+                  </td>
+                  <td>
+                    <span className="chip" style={{ gap: 6, padding: '3px 10px', fontSize: 11, fontWeight: 700, letterSpacing: '0.02em', color: tone.fg, background: tone.bg, borderColor: tone.bd }}>{runTypeLabel(r.runType)}</span>
+                    {r.offCycleType ? <span className="cell-sub">{String(r.offCycleType).replace(/_/g, ' ')}</span> : r.reason ? <span className="cell-sub">{String(r.reason)}</span> : null}
+                  </td>
+                  <td className="cell-num">
+                    {r.employeeCount !== null && r.employeeCount !== undefined ? fmtNum(r.employeeCount) : '-'}
+                    <span className="cell-sub" style={{ textAlign: 'right' }}>employees</span>
+                  </td>
+                  <td className="cell-num">
+                    <span className="td-strong">{fmtMoney(r.netTotal)}</span>
+                    <span className="cell-sub" style={{ textAlign: 'right' }}>gross {fmtMoney(r.grossTotal)} - ded {fmtMoney(r.deductionTotal)}</span>
+                  </td>
+                  <td>
+                    <Badge value={status} />
+                    <span className="cell-sub">{glLabel}{scoreLabel}</span>
+                  </td>
+                </tr>
+              );
+            })}
+            {visible.length === 0 && (
+              <HrTableEmpty
+                colSpan={6}
+                title={rows.length === 0 ? 'No payroll runs yet' : 'No runs match your filters'}
+                hint={rows.length === 0 ? 'Create a payroll to calculate statutory deductions and release net pay.' : 'Try a different search, run type or clear the open-only toggle.'}
+              />
+            )}
           </tbody>
         </table>
       </div>
