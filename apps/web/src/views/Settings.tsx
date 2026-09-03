@@ -48,6 +48,32 @@ const CATEGORY_META: Record<string, { icon: string; cls: string }> = {
 
 const isValidHexColor = (v: string) => /^#[0-9a-fA-F]{6}$/.test(v);
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const URL_RE = /^https?:\/\/\S+$/i;
+const PHONE_RE = /^\+?[0-9\s().-]{6,}$/;
+const EMAIL_KEY_RE = /_email$/i;
+
+/** Branding file URLs are owned by the upload cards, never typed or sent on PATCH. */
+const UPLOAD_MANAGED_KEYS = new Set(['logo_url', 'favicon_url', 'signature_url', 'footer_logo_url']);
+
+const errId = (cat: string, key: string) => `${cat}:${key}`;
+
+/** Inline validation for a field the user has edited; returns a message or null when the value is fine. */
+function valueProblem(key: string, s: SettingValue, draft: Draft | undefined): string | null {
+  if (UPLOAD_MANAGED_KEYS.has(key)) return null;
+  const raw = draft === undefined || draft === null ? '' : String(draft);
+  if (s.type === 'color') {
+    if (!raw) return 'Pick or enter a hex colour, e.g. #1261A0.';
+    if (!isValidHexColor(raw)) return 'Use a hex colour code, e.g. #1261A0.';
+    return null;
+  }
+  if (!raw) return null; // Optional text fields may be left blank.
+  if (EMAIL_KEY_RE.test(key) && !EMAIL_RE.test(raw)) return 'Enter a valid email address.';
+  if (s.type === 'url' && !URL_RE.test(raw)) return 'Enter a full URL starting with http:// or https://.';
+  if (s.type === 'tel' && !PHONE_RE.test(raw)) return 'Enter a valid phone number, e.g. +256 700 123 456.';
+  return null;
+}
+
 const toDraft = (v: unknown): Draft => (v === null || v === undefined ? '' : (v as Draft));
 
 const sameValue = (a: Draft, b: unknown) => {
@@ -216,7 +242,7 @@ function LogoUploadCard({
         <div>
           <h3>Company logo</h3>
           <span className="muted" style={{ fontSize: 12 }}>
-            Upload a PNG, JPG, WebP or SVG logo. Used on branded exports and letterheads.
+            Upload a PNG, JPG or WebP logo (ideally with transparency). Used on branded exports and letterheads.
           </span>
         </div>
       </div>
@@ -234,7 +260,7 @@ function LogoUploadCard({
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
                 hidden
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -406,7 +432,7 @@ function FaviconUploadCard({
         <div>
           <h3>Browser tab icon (favicon)</h3>
           <span className="muted" style={{ fontSize: 12 }}>
-            Upload an SVG, PNG or ICO icon shown in the browser tab. Applies app-wide after reload.
+            Upload a PNG or ICO icon shown in the browser tab. Applies app-wide after reload.
           </span>
         </div>
       </div>
@@ -424,7 +450,7 @@ function FaviconUploadCard({
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/svg+xml,image/png,image/x-icon,.ico"
+                accept="image/png,image/x-icon,image/vnd.microsoft.icon,.png,.ico"
                 hidden
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -558,6 +584,7 @@ export default function Settings() {
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState('');
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [auditOpen, setAuditOpen] = useState(false);
   const [resetTarget, setResetTarget] = useState<{ category: string | null; all: boolean } | null>(null);
@@ -569,6 +596,15 @@ export default function Settings() {
     toastTimer.current = window.setTimeout(() => setToast(null), 4200);
   }, []);
 
+  const clearCatErrors = (cat: string) => {
+    setErrors((prev) => {
+      const prefix = cat + ':';
+      const next: Record<string, string> = {};
+      for (const [id, msg] of Object.entries(prev)) if (!id.startsWith(prefix)) next[id] = msg;
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+  };
+
   const load = useCallback(async () => {
     const r = await api<{ data: SettingCategory[] }>('/api/settings');
     setCats(r.data);
@@ -579,6 +615,7 @@ export default function Settings() {
       d[cat.category] = row;
     }
     setDrafts(d);
+    setErrors({});
   }, []);
 
   useEffect(() => {
@@ -623,6 +660,13 @@ export default function Settings() {
 
   const setValue = (cat: string, key: string, v: Draft) => {
     setDrafts((prev) => ({ ...prev, [cat]: { ...(prev[cat] ?? {}), [key]: v } }));
+    setErrors((prev) => {
+      const id = errId(cat, key);
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const resetDraft = (cat: string) => {
@@ -630,6 +674,7 @@ export default function Settings() {
     const row: Record<string, Draft> = {};
     for (const [key, s] of Object.entries(cats.find((c) => c.category === cat)!.settings)) row[key] = toDraft(s.value);
     setDrafts((prev) => ({ ...prev, [cat]: row }));
+    clearCatErrors(cat);
   };
 
   const discardAll = () => {
@@ -641,10 +686,10 @@ export default function Settings() {
       d[cat.category] = row;
     }
     setDrafts(d);
+    setErrors({});
     showToast('ok', 'Discarded all unsaved changes');
   };
 
-  const UPLOAD_MANAGED_KEYS = new Set(['logo_url', 'favicon_url', 'signature_url', 'footer_logo_url']);
   const buildValues = (cat: SettingCategory) => {
     const d = drafts[cat.category] ?? {};
     const values: Record<string, string | number | boolean> = {};
@@ -667,6 +712,7 @@ export default function Settings() {
       const row: Record<string, Draft> = {};
       for (const [key, s] of Object.entries(r.data.settings)) row[key] = toDraft(s.value);
       setDrafts((prev) => ({ ...prev, [cat.category]: row }));
+      clearCatErrors(cat.category);
       return true;
     },
     [drafts, cats]
@@ -686,6 +732,10 @@ export default function Settings() {
 
   const save = async (cat: SettingCategory) => {
     setError('');
+    if (!validateCategory(cat)) {
+      showToast('err', 'Fix the highlighted fields in ' + cat.label + ' before saving');
+      return;
+    }
     setBusy((b) => ({ ...b, [cat.category]: true }));
     try {
       await patchCategory(cat);
@@ -703,19 +753,38 @@ export default function Settings() {
     setError('');
     setSavingAll(true);
     let saved = 0;
-    let failed = 0;
+    const problems: string[] = [];
+    let skippedInvalid = 0;
+    let firstInvalid: SettingCategory | null = null;
     for (const cat of cats) {
       if (!dirtyCats.has(cat.category)) continue;
+      if (!validateCategory(cat)) {
+        skippedInvalid += 1;
+        if (!firstInvalid) firstInvalid = cat;
+        continue;
+      }
       try {
         await patchCategory(cat);
         saved += 1;
-      } catch {
-        failed += 1;
+      } catch (e) {
+        problems.push(cat.label + ': ' + (e instanceof Error ? e.message : 'request failed'));
       }
     }
     setSavingAll(false);
-    if (failed === 0) showToast('ok', `Saved ${saved} categor${saved === 1 ? 'y' : 'ies'}`);
-    else showToast('err', `Saved ${saved}, failed ${failed}`);
+    if (skippedInvalid === 0 && problems.length === 0) {
+      showToast('ok', `Saved ${saved} categor${saved === 1 ? 'y' : 'ies'}`);
+    } else {
+      const bits: string[] = [];
+      if (saved > 0) bits.push(`saved ${saved}`);
+      if (skippedInvalid > 0) bits.push(`skipped ${skippedInvalid} categor${skippedInvalid === 1 ? 'y' : 'ies'} with invalid values`);
+      if (problems.length > 0) bits.push(`${problems.length} categor${problems.length === 1 ? 'y' : 'ies'} failed`);
+      showToast('err', bits.join(', ') + '. Check highlighted fields and try again.');
+      if (problems.length > 0) setError('Could not save: ' + problems.join('; '));
+      if (firstInvalid) {
+        setActive(firstInvalid.category);
+        setQuery('');
+      }
+    }
   };
 
   const doReset = async () => {
@@ -745,6 +814,25 @@ export default function Settings() {
     setAuditOpen(true);
   };
 
+  const validateCategory = (cat: SettingCategory): boolean => {
+    const d = drafts[cat.category] ?? {};
+    const next = { ...errors };
+    let valid = true;
+    for (const [key, s] of Object.entries(cat.settings)) {
+      if (UPLOAD_MANAGED_KEYS.has(key)) continue;
+      const id = errId(cat.category, key);
+      const draft = d[key];
+      if (!sameValue(draft, s.value)) {
+        const msg = valueProblem(key, s, draft);
+        if (msg) { next[id] = msg; valid = false; } else delete next[id];
+      } else {
+        delete next[id];
+      }
+    }
+    setErrors(next);
+    return valid;
+  };
+
   if (!cats) return <PageLoader label="Loading settings..." />;
 
   const activeCat = cats.find((c) => c.category === active) ?? cats[0];
@@ -754,6 +842,27 @@ export default function Settings() {
     const isDirty = !sameValue(draft, s.value);
     const offDefault = !sameValue(draft, s.default);
     const isSecret = s.secret && !revealed[key];
+    if (UPLOAD_MANAGED_KEYS.has(key)) {
+      const isSet = Boolean(s.value);
+      return (
+        <div className="setting-row" key={key}>
+          <div className="setting-info">
+            <div className="setting-label">
+              <span>{s.label}</span>
+              {isSet ? <span className="badge badge-green">Uploaded</span> : <span className="badge badge-neutral">Not set</span>}
+            </div>
+            {s.help && <small className="muted">{s.help}</small>}
+          </div>
+          <div className="setting-control">
+            <span className="setting-managed-note">
+              {isSet ? "Managed by the upload cards above" : "Use an upload card above to add a file"}
+            </span>
+          </div>
+        </div>
+      );
+    }
+    const id = errId(cat.category, key);
+    const err = errors[id];
     return (
       <div className={isDirty ? 'setting-row dirty' : 'setting-row'} key={key}>
         <div className="setting-info">
@@ -764,7 +873,7 @@ export default function Settings() {
           </div>
           {s.help && <small className="muted">{s.help}</small>}
         </div>
-        <div className="setting-control">
+        <div className={err ? 'setting-control setting-err' : 'setting-control'}>
           {s.type === 'boolean' ? (
             <label className="check">
               <input
@@ -848,6 +957,7 @@ export default function Settings() {
               ↺ Default
             </button>
           )}
+          {err && <p className="field-error setting-row-error" role="alert">{err}</p>}
         </div>
       </div>
     );

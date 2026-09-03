@@ -129,7 +129,12 @@ export async function sendEmail(
   const payload = { ...input, html: branded.html, text: branded.text };
   const wantResend =
     providerOverride === 'resend' || (providerOverride !== 'bird' && isResendConfigured());
-  if (wantResend) return sendEmailViaResend(payload);
+  if (wantResend) {
+    const resendResult = await sendEmailViaResend(payload);
+    if (resendResult.ok) return resendResult;
+    const quota = /quota|rate limit/i.test(resendResult.error ?? '');
+    if (providerOverride === 'resend' || !quota) return resendResult;
+  }
   const c = getClient();
   if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
   if (!payload.to?.length) return { ok: false, error: 'Email recipients missing' };

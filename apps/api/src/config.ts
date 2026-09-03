@@ -3,9 +3,12 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 // Load the repo-root .env so dev servers and tests share one configuration
-// regardless of the process working directory.
+// regardless of the process working directory. `.env.local` wins so a machine
+// can keep remote credentials in `.env` and still boot against Docker Postgres.
 const here = path.dirname(fileURLToPath(import.meta.url));
-loadEnv({ path: path.resolve(here, '../../../.env') });
+const root = path.resolve(here, '../../..');
+loadEnv({ path: path.join(root, '.env') });
+loadEnv({ path: path.join(root, '.env.local'), override: true });
 loadEnv(); // fall back to CWD .env if the repo root file is absent
 
 const num = (v: string | undefined, d: number) => {
@@ -66,6 +69,7 @@ const postgresSsl = postgresSslRaw
 export const config = {
   env: process.env.NODE_ENV ?? 'development',
   port: num(process.env.PORT, 4000),
+  host: envStr('HOST') ?? '0.0.0.0',
   postgres: {
     host: postgresHost,
     port: num(postgresPort, 5432),
@@ -94,7 +98,7 @@ export const config = {
   storageRoot: process.env.STORAGE_ROOT ?? './data/uploads',
   bird: {
     apiKey: process.env.BIRD_API_KEY ?? '',
-    fromEmail: process.env.BIRD_FROM_EMAIL ?? 'notifications@hopedesign.ug',
+    fromEmail: process.env.BIRD_FROM_EMAIL ?? 'notifications@hopedesign.jorlentech.com',
     fromName: process.env.BIRD_FROM_NAME ?? 'HOPE DESIGN ERP',
     smsFrom: process.env.BIRD_SMS_FROM ?? '',
     whatsappFrom: process.env.BIRD_WHATSAPP_FROM ?? '',

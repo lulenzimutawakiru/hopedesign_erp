@@ -203,6 +203,17 @@ export async function completeWorkflow(client: pg.PoolClient, ctx: Ctx, instance
     entityId: inst.entity_id,
     severity: 'SUCCESS',
   });
+  const submitterId = Number(inst.created_by);
+  if (submitterId > 0) {
+    await notifyUserAdvanced(client, ctx, submitterId, {
+      type: 'APPROVAL_RESULT',
+      title: 'Your request was approved',
+      body: `${inst.entity_code ?? `#${inst.entity_id}`} was approved`,
+      entityType: inst.entity_type,
+      entityId: inst.entity_id,
+      severity: 'SUCCESS',
+    });
+  }
 }
 
 export async function rejectWorkflow(client: pg.PoolClient, ctx: Ctx, instanceId: number, comment?: string) {
@@ -237,6 +248,17 @@ export async function rejectWorkflow(client: pg.PoolClient, ctx: Ctx, instanceId
     payload: { instanceId, comment },
     severity: 'WARN',
   });
+  const submitterId = Number(inst.created_by);
+  if (submitterId > 0) {
+    await notifyUserAdvanced(client, ctx, submitterId, {
+      type: 'APPROVAL_RESULT',
+      title: 'Your request was rejected',
+      body: `${inst.entity_code ?? `#${inst.entity_id}`} was rejected${comment ? `: ${comment}` : ''}`,
+      entityType: inst.entity_type,
+      entityId: inst.entity_id,
+      severity: 'ERROR',
+    });
+  }
 }
 
 /** Decide on a single approval task. */
@@ -366,6 +388,32 @@ export async function decideTask(
     `UPDATE workflow_instances SET current_step = current_step + 1 WHERE id = $1`,
     [task.instance_id]
   );
+  const next = await client.query(
+    `SELECT t.approver_user_id, r.code AS role_code, t.step_name
+       FROM approval_tasks t
+       LEFT JOIN roles r ON r.id = t.approver_role_id
+      WHERE t.instance_id = $1 AND t.status = 'PENDING'
+      ORDER BY t.step_seq
+      LIMIT 1`,
+    [task.instance_id]
+  );
+  if (next.rows[0]) {
+    const n = next.rows[0];
+    const payload = {
+      type: 'APPROVAL_REQUEST' as const,
+      title: `Approval required: ${n.step_name}`,
+      body: `${task.entity_code ?? `#${task.entity_id}`} is awaiting ${n.step_name}`,
+      entityType: String(task.entity_type),
+      entityId: Number(task.entity_id),
+      actionRequired: true,
+      severity: 'WARN' as const,
+    };
+    if (n.approver_user_id) {
+      await notifyUserAdvanced(client, ctx, Number(n.approver_user_id), payload);
+    } else if (n.role_code) {
+      await notifyRoleAdvanced(client, ctx, [String(n.role_code)], payload);
+    }
+  }
   return { status: 'APPROVED', completed: false };
 }
 

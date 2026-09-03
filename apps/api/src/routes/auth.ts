@@ -356,7 +356,14 @@ authRouter.post(
     const user = req.auth!;
     const current = String(req.body?.currentPassword ?? '');
     const next = String(req.body?.newPassword ?? '');
-    if (next.length < 8) throw badRequest('New password must be at least 8 characters');
+    if (next.length < 12) throw badRequest('New password must be at least 12 characters');
+    if (next === current) throw badRequest('New password must be different from the current password');
+    if (/changeme/i.test(next) || next === 'ChangeMe!2026') {
+      throw badRequest('Choose a password that is not the seeded default');
+    }
+    if (!/[A-Za-z]/.test(next) || !/[0-9]/.test(next)) {
+      throw badRequest('New password must include letters and numbers');
+    }
     const row = (await query(`SELECT password_hash FROM users WHERE id=$1`, [user.id], { tenantId: user.tenant_id, userId: user.id })).rows[0] as { password_hash: string };
     const ok = await verifyPassword(current, row.password_hash);
     if (!ok) throw badRequest('Current password is incorrect');

@@ -118,7 +118,7 @@ function PeopleBoard() {
     { label: 'Active contracts', value: kpis.activeContracts, sub: fmtNum(kpis.pendingSignature) + ' awaiting signature', href: '/people/contracts', icon: '📄', accent: '#1261A0', tint: 'rgba(18,97,160,0.12)' },
     { label: 'Expiring (30d)', value: kpis.expiringContracts, sub: 'Fixed-term ending soon', href: '/people/contracts/expiring', icon: '⏳', accent: '#D97706', tint: 'rgba(217,119,6,0.12)' },
     { label: 'Recent net pay', value: fmtMoney(kpis.lastNet), sub: 'Last 45 days released', href: '/people/payrolls', icon: '₴', accent: '#168A5B', tint: 'rgba(22,138,91,0.12)' },
-    { label: 'Staff loans', value: fmtMoney(kpis.loanBook), sub: 'Outstanding book', href: '/people/payrolls', icon: '▣', accent: '#0891B2', tint: 'rgba(8,145,178,0.12)' },
+    { label: 'Staff loans', value: fmtMoney(kpis.loanBook), sub: 'Outstanding book', href: '/people/loans', icon: '▣', accent: '#0891B2', tint: 'rgba(8,145,178,0.12)' },
   ];
   const actions: Array<{ href: string; title: string; hint: string; icon: string; show: boolean }> = [
     { href: '/people/employees', title: 'Employees', hint: 'Hire, file and terminate', icon: '👤', show: true },

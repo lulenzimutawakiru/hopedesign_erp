@@ -66,7 +66,7 @@ function LeaveRequests() {
       <div className="toolbar">
         <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by status">
           <option value="">All statuses</option>
-          {REQUEST_STATUSES.map((s) => <option key={s} value={s}>{s.toLowerCase()}</option>)}
+          {REQUEST_STATUSES.map((s) => <option key={s} value={s}>{s.charAt(0) + s.slice(1).toLowerCase()}</option>)}
         </select>
       </div>
       <div className="table-wrap card">

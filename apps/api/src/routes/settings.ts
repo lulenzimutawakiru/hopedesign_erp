@@ -159,7 +159,7 @@ export const SETTINGS: Record<string, Record<string, SettingDef>> = {
   },
   qr: {
     qr_prefix: { label: 'QR code prefix', help: 'Leading letters on generated codes (e.g. HDG).', type: 'text', default: 'HDG' },
-    qr_verify_url: { label: 'Public verification URL', type: 'text', default: 'https://verify.hopedesign.co.ug/verify' },
+    qr_verify_url: { label: 'Public verification URL', type: 'text', default: 'https://hopedesign.jorlentech.com/verify' },
     qr_serial_length: { label: 'Serial number length', help: 'Digits after the prefix/date on generated codes.', type: 'number', default: 8 },
     qr_expiry_days: { label: 'Code expiry (days)', help: '0 = codes never expire.', type: 'number', default: 0 },
     qr_auto_suspend_on_anomaly: { label: 'Auto-suspend codes on anomaly', type: 'boolean', default: true },

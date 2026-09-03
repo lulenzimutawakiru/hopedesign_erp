@@ -117,6 +117,14 @@ export async function terminateEmployee(client: pg.PoolClient, ctx: Ctx, employe
     `UPDATE employment_contracts SET status = 'TERMINATED' WHERE employee_id = $1 AND status = 'ACTIVE'`,
     [employeeId]
   );
+  await emitEvent(client, ctx, {
+    eventType: 'hr.employee_terminated',
+    entityType: 'employees',
+    entityId: employeeId,
+    entityCode: String(res.rows[0].employee_no),
+    payload: { employeeId },
+    severity: 'WARN',
+  });
   return { employeeId, employeeNo: res.rows[0].employee_no, status: 'TERMINATED' };
 }
 
@@ -457,7 +465,15 @@ export async function createLeave(
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SUBMITTED') RETURNING id`,
     [input.employeeId, leaveType, leaveTypeId, balanceId, policyId, input.startDate, input.endDate, days, input.reason ?? null]
   );
-  return { leaveId: Number(ins.rows[0].id), days, leaveTypeId, balanceId, policyId };
+  const leaveId = Number(ins.rows[0].id);
+  await emitEvent(client, ctx, {
+    eventType: 'hr.leave.requested',
+    entityType: 'leave_requests',
+    entityId: leaveId,
+    entityCode: `${leaveType}-${leaveId}`,
+    payload: { employeeId: input.employeeId, leaveType, startDate: input.startDate, endDate: input.endDate, days },
+  });
+  return { leaveId, days, leaveTypeId, balanceId, policyId };
 }
 
 export async function decideLeave(client: pg.PoolClient, ctx: Ctx, leaveId: number, decision: 'APPROVED' | 'REJECTED') {
@@ -500,6 +516,14 @@ export async function decideLeave(client: pg.PoolClient, ctx: Ctx, leaveId: numb
       );
     }
   }
+  await emitEvent(client, ctx, {
+    eventType: decision === 'APPROVED' ? 'hr.leave.approved' : 'hr.leave.rejected',
+    entityType: 'leave_requests',
+    entityId: leaveId,
+    entityCode: `${res.rows[0].leave_type}-${leaveId}`,
+    payload: { employeeId: Number(res.rows[0].employee_id), decision },
+    severity: decision === 'REJECTED' ? 'WARN' : 'INFO',
+  });
   return { leaveId, status: decision };
 }
 
@@ -874,6 +898,13 @@ export async function submitPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: 
     entityCode: String(res.rows[0].payroll_no),
     amount: Number(res.rows[0].net_total),
   });
+  await emitEvent(client, ctx, {
+    eventType: 'hr.payroll.submitted',
+    entityType: 'hr.payrolls',
+    entityId: payrollId,
+    entityCode: String(res.rows[0].payroll_no),
+    payload: { netTotal: Number(res.rows[0].net_total) },
+  });
   return { payrollId, payrollNo: res.rows[0].payroll_no };
 }
 
@@ -955,6 +986,13 @@ export async function postPayrollRun(client: pg.PoolClient, ctx: Ctx, payrollId:
     recordId: payrollId,
     recordCode: String(run.rows[0].payroll_no),
     newValues: { journalId, status: 'RELEASED' },
+  });
+  await emitEvent(client, ctx, {
+    eventType: 'hr.payroll.posted',
+    entityType: 'hr.payrolls',
+    entityId: payrollId,
+    entityCode: String(run.rows[0].payroll_no),
+    payload: { journalId, netTotal: Number(run.rows[0].net_total) },
   });
   return { payrollId, journalId, netTotal: Number(run.rows[0].net_total) };
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtDate } from '../api';
 import { navigate } from '../router';
-import { pick } from '../helpers';
+import { eventLabel, pick } from '../helpers';
 
 type Rec = Record<string, unknown>;
 
@@ -13,14 +13,8 @@ function prioBadge(p: unknown) {
     : raw === 'HIGH' ? 'badge-amber'
     : raw === 'NORMAL' ? 'badge-blue'
     : 'badge-neutral';
-  const icon = raw === 'CRITICAL' ? '\u2715' : raw === 'URGENT' || raw === 'HIGH' ? '!' : '\u25CF';
   if (!raw) return null;
-  return (
-    <span className={`badge ${tone}`}>
-      <span className="badge-icon" aria-hidden>{icon}</span>
-      {raw}
-    </span>
-  );
+  return <span className={`badge ${tone}`}>{raw}</span>;
 }
 
 function goTarget(t: unknown) {
@@ -29,6 +23,17 @@ function goTarget(t: unknown) {
   if (s.startsWith('#/')) return s.slice(1);
   if (s.startsWith('#')) return s.slice(1);
   return s.startsWith('/') ? s : `/${s}`;
+}
+
+function relativeTime(v: unknown): string {
+  const d = new Date(String(v ?? ''));
+  if (Number.isNaN(d.getTime())) return fmtDate(v);
+  const sec = Math.round((Date.now() - d.getTime()) / 1000);
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  if (sec < 86400 * 7) return `${Math.floor(sec / 86400)}d ago`;
+  return d.toLocaleDateString('en-UG');
 }
 
 const SNOOZE: { label: string; until: () => string }[] = [
@@ -45,6 +50,15 @@ const SNOOZE: { label: string; until: () => string }[] = [
   },
 ];
 
+function inboxRows(body: { data?: unknown }): Rec[] {
+  const data = body?.data;
+  if (Array.isArray(data)) return data as Rec[];
+  if (data && typeof data === 'object' && Array.isArray((data as { rows?: Rec[] }).rows)) {
+    return (data as { rows: Rec[] }).rows;
+  }
+  return [];
+}
+
 export default function NotificationsBell() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'all' | 'unread' | 'urgent'>('unread');
@@ -52,7 +66,7 @@ export default function NotificationsBell() {
   const [count, setCount] = useState(0);
   const [items, setItems] = useState<Rec[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [snoozeFor, setSnoozeFor] = useState<number | null>(null);
+  const [menuFor, setMenuFor] = useState<number | null>(null);
   const [error, setError] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -72,11 +86,12 @@ export default function NotificationsBell() {
     if (tab === 'urgent') qs.set('urgent', 'true');
     if (q.trim()) qs.set('q', q.trim());
     try {
-      const r = await api<{ data: { rows: Rec[] } }>(`/api/ops/communication/notifications?${qs.toString()}`);
-      setItems(r.data.rows ?? []);
+      const r = await api<{ data: unknown }>(`/api/notifications?${qs.toString()}`);
+      setItems(inboxRows(r));
       setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load notifications');
+      setItems([]);
     }
   }, [tab, q]);
 
@@ -91,7 +106,12 @@ export default function NotificationsBell() {
   }, [open, load]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        setMenuFor(null);
+      }
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
@@ -100,18 +120,19 @@ export default function NotificationsBell() {
     if (busyId === id) return;
     setBusyId(id);
     try {
-      await api(`/api/ops/communication${path}`, { method, body: body ? JSON.stringify(body) : undefined });
+      await api(`/api/notifications${path}`, { method, body: body ? JSON.stringify(body) : undefined });
       await Promise.all([load(), refreshCount()]);
       setError('');
     } catch {
       setError('Action failed — please try again.');
     } finally {
       setBusyId(null);
+      setMenuFor(null);
     }
   };
 
   const act = (n: Rec) => {
-    if (!pick(n, 'readAt', 'read_at')) void run(Number(n.id), `/notifications/${String(n.id)}/read`, 'PATCH');
+    if (!pick(n, 'readAt', 'read_at')) void run(Number(n.id), `/${String(n.id)}/read`, 'PATCH');
     const target = goTarget(pick(n, 'actionTarget', 'action_target', 'link'));
     if (target) {
       setOpen(false);
@@ -124,14 +145,17 @@ export default function NotificationsBell() {
     navigate('/communication/notifications');
   };
 
+  const badge = count > 99 ? '99+' : String(count);
+
   return (
     <div className="topbar-item" ref={rootRef}>
       <button className="icon-btn" onClick={() => setOpen((o) => !o)} title="Notifications" aria-label="Notifications">
-        {count > 0 && <span className="count-badge">{count}</span>}
+        <span aria-hidden>🔔</span>
+        {count > 0 && <span className="count-badge">{badge}</span>}
       </button>
       {open ? (
         <>
-          <div className="com-bell-backdrop" onClick={() => setOpen(false)} aria-hidden />
+          <div className="com-bell-backdrop" onClick={() => { setOpen(false); setMenuFor(null); }} aria-hidden />
           <aside className="com-bell-drawer" role="dialog" aria-label="Notifications">
             <div className="com-bell-head">
               <div>
@@ -151,8 +175,8 @@ export default function NotificationsBell() {
               <input className="search-input" placeholder="Search notifications…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search notifications" />
             </div>
             <div className="com-bell-body">
-              {error ? <p className="muted com-bell-error">{error}</p> : null}
-              {items.length === 0 ? (
+              {error ? <p className="com-bell-error">{error}</p> : null}
+              {items.length === 0 && !error ? (
                 <div className="empty-state">
                   <h3>You're all caught up</h3>
                   <p>No notifications in this view right now.</p>
@@ -163,48 +187,53 @@ export default function NotificationsBell() {
                   const unread = !pick(n, 'readAt', 'read_at');
                   const actionLabel = pick<string>(n, 'actionLabel', 'action_label');
                   const actionTarget = pick(n, 'actionTarget', 'action_target', 'link');
+                  const body = pick(n, 'body');
                   return (
-                    <div key={String(n.id)} className={'com-notif com-bell-row' + (unread ? ' com-notif-unread' : '')}>
+                    <article
+                      key={String(n.id)}
+                      className={'com-notif com-bell-row' + (unread ? ' com-notif-unread' : '')}
+                      onClick={() => act(n)}
+                    >
                       <div className="com-notif-top">
                         <span className="com-notif-title">{String(pick(n, 'title') ?? 'Notification')}</span>
                         {prioBadge(pick(n, 'priority'))}
                       </div>
-                      {pick(n, 'body') ? <p className="com-notif-body">{String(pick(n, 'body'))}</p> : null}
+                      {body ? <p className="com-notif-body">{String(body)}</p> : null}
                       <div className="com-notif-meta">
-                        <span>{fmtDate(pick(n, 'createdAt', 'created_at'))}</span>
-                        {pick(n, 'type') ? <span>{String(pick(n, 'type'))}</span> : null}
+                        <span>{relativeTime(pick(n, 'createdAt', 'created_at'))}</span>
+                        {pick(n, 'type') ? <span>{eventLabel(pick(n, 'type'))}</span> : null}
                       </div>
-                      <div className="com-bell-row-actions">
+                      <div className="com-bell-row-actions" onClick={(e) => e.stopPropagation()}>
                         {actionLabel || actionTarget ? (
-                          <button className="btn btn-sm" type="button" onClick={() => act(n)}>{actionLabel || 'Open'}</button>
+                          <button className="btn btn-sm btn-primary" type="button" onClick={() => act(n)}>{actionLabel || 'Open'}</button>
+                        ) : unread ? (
+                          <button className="btn btn-sm" type="button" disabled={busyId === id} onClick={() => void run(id, `/${id}/read`, 'PATCH')}>Mark read</button>
                         ) : null}
-                        {unread ? (
-                          <button className="btn btn-sm btn-ghost" type="button" disabled={busyId === id} onClick={() => void run(id, `/notifications/${String(n.id)}/read`, 'PATCH')}>Read</button>
-                        ) : (
-                          <button className="btn btn-sm btn-ghost" type="button" disabled={busyId === id} onClick={() => void run(id, `/notifications/${String(n.id)}/unread`, 'PATCH')}>Unread</button>
-                        )}
-                        <button className="btn btn-sm btn-ghost" type="button" disabled={busyId === id} onClick={() => void run(id, `/notifications/${String(n.id)}/archive`, 'PATCH')}>Archive</button>
                         <div className="com-bell-snooze">
-                          <button className="btn btn-sm btn-ghost" type="button" onClick={() => setSnoozeFor(snoozeFor === id ? null : id)}>Snooze</button>
-                          {snoozeFor === id ? (
+                          <button className="btn btn-sm btn-ghost" type="button" onClick={() => setMenuFor(menuFor === id ? null : id)} aria-label="More">⋯</button>
+                          {menuFor === id ? (
                             <div className="com-bell-snooze-menu">
+                              {unread
+                                ? <button type="button" onClick={() => void run(id, `/${id}/read`, 'PATCH')}>Mark read</button>
+                                : <button type="button" onClick={() => void run(id, `/${id}/unread`, 'PATCH')}>Mark unread</button>}
+                              <button type="button" onClick={() => void run(id, `/${id}/archive`, 'PATCH')}>Archive</button>
                               {SNOOZE.map((s) => (
-                                <button key={s.label} type="button" onClick={() => { void run(id, `/notifications/${String(n.id)}/snooze`, 'PATCH', { until: s.until() }); setSnoozeFor(null); }}>
-                                  {s.label}
+                                <button key={s.label} type="button" onClick={() => void run(id, `/${id}/snooze`, 'PATCH', { until: s.until() })}>
+                                  Snooze {s.label}
                                 </button>
                               ))}
                             </div>
                           ) : null}
                         </div>
                       </div>
-                    </div>
+                    </article>
                   );
                 })
               )}
             </div>
             <div className="com-bell-foot">
               <button className="btn btn-ghost" type="button" onClick={() => {
-                void api('/api/ops/communication/notifications/read-all', { method: 'POST' })
+                void api('/api/notifications/read-all', { method: 'POST' })
                   .then(() => Promise.all([load(), refreshCount()]))
                   .catch(() => undefined);
               }}>Mark all read</button>

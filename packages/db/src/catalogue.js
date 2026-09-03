@@ -3,10 +3,20 @@
 // Permission codes: {module}.{resource}.{action}
 // ============================================================
 
-const ACTIONS = ["view","create","update","delete","submit","approve","reject","cancel","void","archive","restore","print","export","import","scan","transfer","assign","release","convert","verify","post","generate","complete","admit","discharge","dispense","settle","terminate","delete_draft","manage_templates","manage_clauses","manage_versions","manage_legal_rules","view_audit","validate","sign","download","renew","vary","issue","manage","dispose","audit","depreciate","impair","capitalize","maintain","inspect","checkin","checkout","replace","activate","investigate","resolve","comment","reprint","perform","close","return"];
+const ACTIONS = ["view","create","update","delete","submit","approve","reject","cancel","void","archive","restore","print","export","import","scan","transfer","assign","release","convert","verify","post","generate","complete","admit","discharge","dispense","settle","terminate","delete_draft","manage_templates","manage_clauses","manage_versions","manage_legal_rules","view_audit","validate","sign","download","renew","vary","issue","manage","dispose","audit","depreciate","impair","capitalize","maintain","inspect","checkin","checkout","replace","activate","investigate","resolve","comment","reprint","perform","close","return","send"];
 
 const MODULES = {
   dashboard: { overview: ["view"], kpis: ["view"] },
+  communication: {
+    command: ["view"],
+    messages: ["view", "send", "manage"],
+    notifications: ["view", "read", "manage"],
+    emails: ["view", "send", "manage"],
+    announcements: ["view", "create", "manage"],
+    templates: ["view", "manage"],
+    delivery_logs: ["view"],
+    settings: ["manage"],
+  },
   crm: {
     leads: ["view","create","update","delete","submit","convert","assign","export","import"],
     customers: ["view","create","update","delete","submit","approve","block","export","import"],
@@ -16,7 +26,7 @@ const MODULES = {
     complaints: ["view","create","update","delete","resolve","escalate"],
   },
   sales: {
-    quotations: ["view","create","update","delete","submit","approve","reject","convert","revise","print","export","import"],
+    quotations: ["view","create","update","delete","submit","approve","reject","convert","revise","print","export","import","send"],
     orders: ["view","create","update","delete","submit","approve","reject","cancel","allocate","dispatch","print","export","import"],
     delivery_notes: ["view","create","update","submit","dispatch","deliver","confirm","print","export"],
     invoices: ["view","create","update","submit","approve","post","void","print","export"],
@@ -412,7 +422,7 @@ function buildPermissions() {
 const ROLES = [
   // Administration
   { code: "super_administrator", name: "Super Administrator", grants: ["*"] },
-  { code: "system_administrator", name: "System Administrator", grants: ["admin.*", "database.*", "settings", "workflows.*", "reports.*", "expenditure.*"] },
+  { code: "system_administrator", name: "System Administrator", grants: ["admin.*", "database.*", "settings", "workflows.*", "reports.*", "expenditure.*", "communication.*"] },
   { code: "security_administrator", name: "Security Administrator", grants: ["admin.users.*", "admin.roles.*", "admin.permissions.*", "admin.policies.*", "admin.sod.*", "admin.audit.*", "qr.*", "security_printing.audit.*"] },
   { code: "it_support_administrator", name: "IT Support Administrator", grants: ["admin.users.view", "admin.settings.*", "documents.*"] },
   { code: "integration_administrator", name: "Integration Administrator", grants: ["admin.imports.*", "admin.exports.*", "admin.events.*", "admin.integrations.*", "admin.settings.view"] },
@@ -423,10 +433,10 @@ const ROLES = [
   { code: "managing_director", name: "Managing Director", grants: ["*", "!admin.users.*", "!admin.roles.*", "!admin.permissions.*", "!admin.policies.*", "!admin.sod.*", "!admin.security.*", "!admin.sessions.*"] },
   { code: "executive_director", name: "Executive Director", grants: ["*", "!admin.users.*", "!admin.roles.*", "!admin.permissions.*", "!admin.policies.*", "!admin.sod.*", "!admin.security.*", "!admin.sessions.*"] },
   { code: "general_manager", name: "General Manager", grants: ["*", "!admin.users.*", "!admin.roles.*", "!admin.permissions.*", "!admin.policies.*", "!admin.sod.*", "!admin.security.*", "!admin.sessions.*"] },
-  { code: "operations_director", name: "Operations Director", grants: ["production.*", "quality.*", "maintenance.*", "inventory.*", "procurement.*", "expenditure.*", "workflows.instances.*", "reports.*"] },
-  { code: "cfo", name: "CFO", grants: ["finance.*", "expenditure.*", "procurement.payments.*", "workflows.instances.*", "reports.finance.*", "reports.executive.*", "hr.final_settlements.view", "hr.final_settlements.approve", "hr.final_settlements.pay", "hr.final_settlements.export"] },
-  { code: "commercial_director", name: "Commercial Director", grants: ["crm.*", "sales.*", "expenditure.*", "reports.sales.*", "reports.executive.*"] },
-  { code: "hr_director", name: "HR Director", grants: ["hr.*", "reports.hr.*", "reports.dashboards.view"] },
+  { code: "operations_director", name: "Operations Director", grants: ["production.*", "quality.*", "maintenance.*", "inventory.*", "procurement.*", "expenditure.*", "workflows.instances.*", "reports.*", "communication.command.view", "communication.notifications.*", "communication.delivery_logs.view"] },
+  { code: "cfo", name: "CFO", grants: ["finance.*", "expenditure.*", "procurement.payments.*", "workflows.instances.*", "reports.finance.*", "reports.executive.*", "hr.final_settlements.view", "hr.final_settlements.approve", "hr.final_settlements.pay", "hr.final_settlements.export", "communication.command.view", "communication.notifications.*", "communication.delivery_logs.view"] },
+  { code: "commercial_director", name: "Commercial Director", grants: ["crm.*", "sales.*", "expenditure.*", "reports.sales.*", "reports.executive.*", "communication.*"] },
+  { code: "hr_director", name: "HR Director", grants: ["hr.*", "reports.hr.*", "reports.dashboards.view", "communication.*"] },
   // Finance
   { code: "finance_manager", name: "Finance Manager", grants: ["finance.*", "expenditure.*", "procurement.supplier_invoices.*", "procurement.payments.*", "workflows.instances.*", "reports.finance.*", "hr.final_settlements.view", "hr.final_settlements.approve", "hr.final_settlements.pay"] },
   { code: "chief_accountant", name: "Chief Accountant", grants: ["finance.*", "expenditure.*", "workflows.instances.*", "reports.finance.*"] },
@@ -442,8 +452,8 @@ const ROLES = [
   { code: "internal_auditor", name: "Internal Auditor", grants: ["admin.audit.*", "finance.reports.*", "inventory.stock.view", "procurement.orders.view", "sales.invoices.view", "reports.*", "finance.audit.view", "finance.journals.view", "finance.efris.view", "finance.tax_transactions.view", "finance.production_costs.view", "finance.close_tasks.view", "finance.consolidation.view"] },
   // Sales / CRM
   { code: "sales_director", name: "Sales Director", grants: ["crm.*", "sales.*", "reports.sales.*"] },
-  { code: "sales_manager", name: "Sales Manager", grants: ["crm.*", "sales.quotations.*", "sales.orders.*", "sales.delivery_notes.*", "sales.returns.*", "workflows.instances.*", "reports.sales.view"] },
-  { code: "sales_executive", name: "Sales Executive", grants: ["crm.leads.*", "crm.customers.*", "crm.contacts.*", "crm.opportunities.*", "crm.activities.*", "sales.quotations.view", "sales.quotations.create", "sales.quotations.submit", "sales.quotations.print", "sales.orders.view"] },
+  { code: "sales_manager", name: "Sales Manager", grants: ["crm.*", "sales.quotations.*", "sales.orders.*", "sales.delivery_notes.*", "sales.returns.*", "workflows.instances.*", "reports.sales.view", "communication.command.view", "communication.emails.*", "communication.notifications.*", "communication.delivery_logs.view"] },
+  { code: "sales_executive", name: "Sales Executive", grants: ["crm.leads.*", "crm.customers.*", "crm.contacts.*", "crm.opportunities.*", "crm.activities.*", "sales.quotations.view", "sales.quotations.create", "sales.quotations.submit", "sales.quotations.print", "sales.quotations.send", "sales.orders.view"] },
   { code: "sales_representative", name: "Sales Representative", grants: ["crm.leads.view", "crm.leads.create", "crm.leads.update", "crm.activities.*", "crm.customers.view"] },
   { code: "crm_manager", name: "CRM Manager", grants: ["crm.*", "reports.sales.view"] },
   { code: "crm_officer", name: "CRM Officer", grants: ["crm.leads.*", "crm.customers.view", "crm.contacts.*", "crm.activities.*"] },
@@ -508,7 +518,7 @@ const ROLES = [
   { code: "security_printing_auditor", name: "Security Printing Auditor", grants: ["security_printing.audit.*", "security_printing.custody.view", "security_printing.jobs.view", "admin.audit.view", "reports.security.view"] },
   { code: "secure_job_approver", name: "Secure Job Approver", grants: ["security_printing.jobs.view", "security_printing.jobs.approve", "security_printing.jobs.reject", "security_printing.jobs.authorize_materials", "security_printing.jobs.reconcile", "workflows.instances.view", "workflows.instances.approve", "workflows.instances.reject", "workflows.instances.return", "dashboard.*", "reports.executive.view", "notifications.notifications.*"] },
   // HR
-  { code: "hr_manager", name: "HR Manager", grants: ["hr.*", "workflows.instances.*"] },
+  { code: "hr_manager", name: "HR Manager", grants: ["hr.*", "workflows.instances.*", "communication.command.view", "communication.notifications.*", "communication.delivery_logs.view", "communication.announcements.view"] },
   { code: "hr_officer", name: "HR Officer", grants: ["hr.employees.*", "hr.contracts.*", "hr.certificates.*", "hr.legal_rules.view", "hr.attendance.*", "hr.leave.*", "hr.loans.*", "hr.divisions.*", "hr.locations.*", "hr.org_units.*", "hr.teams.*", "hr.job_families.*", "hr.job_grades.*", "hr.positions.*", "hr.position_assignments.*", "hr.workforce_plans.*", "hr.shifts.*", "hr.shift_assignments.*", "hr.timesheets.*", "hr.overtime.*", "hr.leave_types.*", "hr.leave_policies.*", "hr.leave_accruals.*", "hr.leave_balances.*", "hr.holidays.*", "hr.benefit_plans.*", "hr.benefit_enrollments.*", "hr.benefit_claims.*", "hr.grievances.*", "hr.investigations.*", "hr.disciplinary.*", "hr.warnings.*", "hr.asset_assignments.*", "hr.employee_requests.*", "hr.projects.*", "hr.onboarding.*", "hr.offboardings.*", "hr.alumni.view", "hr.payroll_components.view", "hr.employee_salaries.view", "hr.employee_earnings.view", "hr.employee_deductions.view", "hr.employee_benefits.view", "hr.overtime_records.view", "hr.bonus_records.view", "hr.commission_records.view", "hr.final_settlements.view", "hr.final_settlements.create", "hr.final_settlements.update", "hr.final_settlements.submit"] },
   { code: "hr_assistant", name: "HR Assistant", grants: ["hr.employees.view", "hr.employees.create", "hr.attendance.*", "hr.leave.view", "hr.positions.view", "hr.onboarding.*", "hr.offboardings.view", "hr.alumni.view", "hr.employee_requests.*", "hr.leave_types.view", "hr.holidays.view", "hr.asset_assignments.view", "hr.employee_identity.view", "hr.employee_card.view", "hr.employee_qr.view", "hr.employee_assignments.view"] },
   { code: "recruitment_officer", name: "Recruitment Officer", grants: ["hr.requisitions.*", "hr.vacancies.*", "hr.vacancy_channels.*", "hr.candidates.*", "hr.applications.*", "hr.interviews.*", "hr.assessments.*", "hr.offers.*", "hr.onboarding.view", "hr.positions.view", "hr.workforce_plans.view", "hr.employees.view"] },

@@ -1,11 +1,13 @@
 import pg from 'pg';
-import { Ctx } from '../db.js';
+import { Ctx, detach } from '../db.js';
 import { badRequest, notFound, toCamelRow, toCamelRows } from '../utils.js';
 import { startWorkflow } from './workflow.js';
 import { consume, postMove, reserve } from './inventory.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import * as finance from './finance.js';
+import { notifyCustomer } from './communication.js';
+import { config } from '../config.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -203,6 +205,111 @@ export async function submitQuotation(client: pg.PoolClient, ctx: Ctx, quotation
   await startWorkflow(client, ctx, { entityType: 'sales.quotations', entityId: quotationId, entityCode: String(q.quotation_no), amount: Number(q.total) });
   await logAudit(client, ctx, { action: 'submit', resource: 'sales_quotations', recordId: quotationId, recordCode: String(q.quotation_no) });
   return { quotationId, quotationNo: String(q.quotation_no) };
+}
+
+function money(n: unknown, currency = 'UGX'): string {
+  const v = Number(n ?? 0);
+  return `${currency} ${Number.isFinite(v) ? v.toLocaleString('en-UG', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : '0'}`;
+}
+
+/** Email and/or SMS a quotation to the customer (and primary contact). */
+export async function sendQuotationToCustomer(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  quotationId: number,
+  opts?: { channels?: Array<'EMAIL' | 'SMS'>; message?: string | null }
+) {
+  const doc = await getQuotation(client, ctx, quotationId);
+  const q = doc.quotation as Record<string, unknown>;
+  const status = String(q.status ?? '');
+  if (['REJECTED', 'EXPIRED', 'CANCELLED'].includes(status)) {
+    throw badRequest(`Quotation is ${status} and cannot be sent`);
+  }
+  const customerEmail = String(q.customerEmail ?? '').trim();
+  const customerPhone = String(q.customerPhone ?? '').trim();
+  let contactEmail = '';
+  let contactPhone = '';
+  const pickContact = (row?: { email?: unknown; phone?: unknown; mobile?: unknown }) => {
+    if (!row) return;
+    if (!contactEmail) contactEmail = String(row.email ?? '').trim();
+    if (!contactPhone) contactPhone = String(row.phone ?? '').trim() || String(row.mobile ?? '').trim();
+  };
+  if (q.contactId) {
+    const c = await client.query(
+      `SELECT email, phone, mobile FROM contacts WHERE id = $1 AND customer_id = $2`,
+      [q.contactId, q.customerId]
+    );
+    pickContact(c.rows[0]);
+  }
+  if (!contactEmail || !contactPhone) {
+    const primary = await client.query(
+      `SELECT email, phone, mobile FROM contacts
+        WHERE customer_id = $1 AND status = 'ACTIVE'
+        ORDER BY is_primary DESC, id
+        LIMIT 1`,
+      [q.customerId]
+    );
+    pickContact(primary.rows[0]);
+  }
+  const email = contactEmail || customerEmail;
+  const phone = contactPhone || customerPhone;
+  if (!email && !phone) throw badRequest('Customer has no email or phone number on file');
+
+  const quoteNo = String(q.quotationNo ?? '');
+  const customerName = String(q.customerName ?? 'Customer');
+  const currency = String(q.currency ?? 'UGX');
+  const validUntil = q.validUntil ? String(q.validUntil).slice(0, 10) : 'see quotation';
+  const lines = (doc.items as Record<string, unknown>[])
+    .map((it) => {
+      const desc = String(it.description ?? it.productName ?? 'Item');
+      return `• ${desc} × ${it.quantity} @ ${money(it.unitPrice, currency)} = ${money(it.lineTotal, currency)}`;
+    })
+    .join('\n');
+  const extra = opts?.message ? `\n\n${opts.message.trim()}\n` : '';
+  const title = `Quotation ${quoteNo} from Hope Design`;
+  const body =
+    `Dear ${customerName},\n\nPlease find quotation ${quoteNo}.\nValid until: ${validUntil}\nTotal: ${money(q.total, currency)}\n\n${lines}${extra}\n\nReply to this message or call us to proceed.`;
+
+  const channels = opts?.channels?.length ? opts.channels : (['EMAIL', 'SMS'] as Array<'EMAIL' | 'SMS'>);
+  // Delivery logs commit independently so a later throw cannot roll back the traffic record.
+  const result = await detach(
+    (dclient, dctx) =>
+      notifyCustomer(dclient, dctx, {
+        email,
+        phone,
+        name: customerName,
+        title,
+        body,
+        entityType: 'sales_quotations',
+        entityId: quotationId,
+        channels,
+        button: { label: 'View quotation', url: `${config.webPublicUrl}/#/sales/quotations/${quotationId}` },
+      }),
+    ctx
+  );
+  const sent = [result.email?.ok && 'email', result.sms?.ok && 'sms'].filter(Boolean);
+  if (sent.length === 0) {
+    const err =
+      [result.email?.error && `email: ${result.email.error}`, result.sms?.error && `SMS: ${result.sms.error}`]
+        .filter(Boolean)
+        .join(' · ') || 'Delivery failed';
+    throw badRequest(err);
+  }
+  await emitEvent(client, ctx, {
+    eventType: 'sales.quotation_sent',
+    entityType: 'sales_quotations',
+    entityId: quotationId,
+    entityCode: quoteNo,
+    payload: { customerName, email, phone, channels: sent },
+  });
+  await logAudit(client, ctx, {
+    action: 'send',
+    resource: 'sales_quotations',
+    recordId: quotationId,
+    recordCode: quoteNo,
+    newValues: { email, phone, channels: sent },
+  });
+  return { quotationId, quotationNo: quoteNo, sent, email: result.email, sms: result.sms };
 }
 
 /** Create a sales order (DRAFT). When quotationId is given, copies the approved quotation lines. */

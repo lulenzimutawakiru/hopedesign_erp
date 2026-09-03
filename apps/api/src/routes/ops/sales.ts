@@ -46,6 +46,10 @@ salesOpsRouter.get('/quotations/:id', ...runGet('sales.quotations.view', (c, ctx
 salesOpsRouter.post('/quotations', ...run('sales.quotations.create', (c, ctx, b) => sales.createQuotation(c, ctx, b)));
 salesOpsRouter.post('/quotations/:id/submit', ...run('sales.quotations.submit', (c, ctx, _b, p) => sales.submitQuotation(c, ctx, Number(p.id))));
 salesOpsRouter.post('/quotations/:id/convert', ...run('sales.quotations.convert', (c, ctx, _b, p) => sales.convertQuotation(c, ctx, Number(p.id))));
+salesOpsRouter.post('/quotations/:id/send', ...run('sales.quotations.send', (c, ctx, b, p) => sales.sendQuotationToCustomer(c, ctx, Number(p.id), {
+  channels: Array.isArray(b?.channels) ? (b.channels as Array<'EMAIL' | 'SMS'>) : undefined,
+  message: b?.message != null ? String(b.message) : null,
+})));
 
 salesOpsRouter.get('/orders', ...runGet('sales.orders.view', (c, ctx, q) => sales.listOrders(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,

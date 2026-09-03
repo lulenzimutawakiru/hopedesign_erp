@@ -2,6 +2,7 @@ import pg from 'pg';
 import { Ctx, query } from '../db.js';
 import { dispatchBird } from './bird.js';
 import { config } from '../config.js';
+import { normalizeE164 } from './africastalking.js';
 
 export type NotificationPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT' | 'CRITICAL';
 export type NotificationSeverity = 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR';
@@ -65,7 +66,7 @@ const DEFAULT_CHANNEL_PREFS: UserChannelPrefs = {
   inApp: true,
   email: true,
   push: true,
-  sms: false,
+  sms: true,
   whatsapp: false,
   digest: 'INSTANT',
   criticalBypass: true,
@@ -105,7 +106,7 @@ function mergePrefs(rows: Record<string, unknown>[]): UserChannelPrefs {
     prefs.inApp = r.in_app !== false;
     prefs.email = r.email !== false;
     prefs.push = r.push !== false;
-    prefs.sms = r.sms === true;
+    prefs.sms = r.sms !== false;
     prefs.whatsapp = r.whatsapp === true;
     prefs.criticalBypass = r.critical_bypass !== false;
     const d = String(r.digest ?? 'INSTANT');
@@ -218,7 +219,7 @@ export async function notifyUsers(
   for (const uid of recipients) {
     const prefs = await getUserPrefs(client, tenantId, uid, eventTypes);
     let channels = explicitChannels.length > 0 ? [...explicitChannels] : [...rule.channels];
-    if (channels.length === 0) channels = ['IN_APP'];
+    if (channels.length === 0) channels = ['IN_APP', 'EMAIL'];
     channels = [...new Set(filterChannelsByPrefs(channels, prefs))];
     // The in-app copy is always created when the user has not disabled it.
     if (!channels.includes('IN_APP') && prefs.inApp) channels.unshift('IN_APP');
@@ -497,7 +498,8 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
       const recipient = String(row.recipient ?? '').trim();
       const email = String(row.email ?? '').trim();
       const phone = String(row.phone ?? '').trim();
-      const to = channel === 'EMAIL' ? recipient || email : recipient || phone;
+      const rawTo = channel === 'EMAIL' ? recipient || email : recipient || phone;
+      const to = channel === 'EMAIL' ? rawTo : normalizeE164(rawTo);
       const body = String(row.body ?? '');
       const actionLabel = String(row.action_label ?? '').trim();
       const actionTarget = String(row.action_target ?? '').trim();
@@ -505,11 +507,16 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
         channel === 'EMAIL' && actionLabel && actionTarget
           ? { label: actionLabel, url: `${config.webPublicUrl}${actionTarget.startsWith('/') ? '' : '/'}${actionTarget}` }
           : undefined;
-      const result = await dispatchBird(channel, to, {
-        title: String(row.title ?? ''),
-        body,
-        button,
-      });
+      const result = !to
+        ? { ok: false as const, error: 'No recipient for ' + channel + ' delivery' }
+        : await dispatchBird(channel, to, {
+            title: String(row.title ?? ''),
+            body,
+            button,
+          });
+      const terminal =
+        !to ||
+        /quota|rate limit|not configured|missing|invalid|no recipient/i.test(result.error ?? '');
       if (result.ok) {
         await query(
           `UPDATE notification_deliveries
@@ -527,7 +534,7 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
         ok += 1;
       } else {
         const attempts = Number(row.retry_count ?? 0) + 1;
-        if (attempts <= MAX_DELIVERY_RETRIES) {
+        if (!terminal && attempts <= MAX_DELIVERY_RETRIES) {
           const delaySeconds =
             RETRY_DELAYS_SECONDS[attempts - 1] ?? RETRY_DELAYS_SECONDS[RETRY_DELAYS_SECONDS.length - 1];
           await query(
@@ -566,4 +573,103 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
   } finally {
     deliveryLoopRunning = false;
   }
+}
+
+export interface CustomerNotifyInput {
+  email?: string | null;
+  phone?: string | null;
+  name?: string | null;
+  title: string;
+  body: string;
+  entityType?: string | null;
+  entityId?: number | null;
+  channels?: Array<'EMAIL' | 'SMS'>;
+  button?: { label: string; url: string } | null;
+}
+
+/** Send EMAIL/SMS to an external customer (not an ERP user) and record the traffic. */
+export async function notifyCustomer(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  input: CustomerNotifyInput
+): Promise<{ email?: { ok: boolean; error?: string }; sms?: { ok: boolean; error?: string } }> {
+  const channels = input.channels?.length ? input.channels : ['EMAIL', 'SMS'];
+  const emailAddr = String(input.email ?? '').trim();
+  const phone = normalizeE164(String(input.phone ?? '').trim());
+  const out: { email?: { ok: boolean; error?: string }; sms?: { ok: boolean; error?: string } } = {};
+  const tenantId = ctx.tenantId ?? 0;
+
+  if (channels.includes('EMAIL')) {
+    if (!emailAddr) {
+      out.email = { ok: false, error: 'Customer has no email address' };
+    } else {
+      const result = await dispatchBird('EMAIL', emailAddr, {
+        title: input.title,
+        body: input.body,
+        button: input.button ?? undefined,
+      });
+      out.email = { ok: result.ok, error: result.error };
+      const { rows } = await client.query(
+        `INSERT INTO emails
+           (tenant_id, company_id, branch_id, direction, subject, body, "to", status, sent_at,
+            entity_type, entity_id, created_by)
+         VALUES ($1,$2,$3,'OUT',$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+        [
+          tenantId,
+          ctx.companyId ?? null,
+          ctx.branchId ?? null,
+          input.title,
+          input.body,
+          JSON.stringify([emailAddr]),
+          result.ok ? 'SENT' : 'FAILED',
+          result.ok ? new Date() : null,
+          input.entityType ?? null,
+          input.entityId ?? null,
+          ctx.userId ?? null,
+        ]
+      );
+      const emailId = Number(rows[0]?.id);
+      if (emailId) {
+        await client.query(
+          `INSERT INTO email_recipients (tenant_id, email_id, kind, email, status, provider_message_id, error, sent_at)
+           VALUES ($1,$2,'TO',$3,$4,$5,$6,$7)`,
+          [
+            tenantId,
+            emailId,
+            emailAddr,
+            result.ok ? 'SENT' : 'FAILED',
+            result.providerMessageId ?? null,
+            result.error ?? null,
+            result.ok ? new Date() : null,
+          ]
+        );
+      }
+    }
+  }
+
+  if (channels.includes('SMS')) {
+    if (!phone) {
+      out.sms = { ok: false, error: 'Customer has no phone number' };
+    } else {
+      const smsBody = `${input.title}. ${input.body}`.replace(/\s+/g, ' ').slice(0, 480);
+      const result = await dispatchBird('SMS', phone, { title: input.title, body: smsBody });
+      out.sms = { ok: result.ok, error: result.error };
+      await client.query(
+        `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, provider_message_id, error, sent_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          tenantId,
+          ctx.userId ?? null,
+          phone,
+          smsBody,
+          result.provider ?? null,
+          result.ok ? 'SENT' : 'FAILED',
+          result.providerMessageId ?? null,
+          result.error ?? null,
+          result.ok ? new Date() : null,
+        ]
+      );
+    }
+  }
+  return out;
 }

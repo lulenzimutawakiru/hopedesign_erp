@@ -56,13 +56,18 @@ function invokeExpress(app: ExpressApp, req: IncomingMessage, res: ServerRespons
 }
 
 export default async function vercelHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const prod = process.env.NODE_ENV === 'production';
   try {
     const app = await loadApp();
-    console.log(`[api] handling ${req.method ?? ''} ${req.url ?? ''}`);
+    if (!prod) console.log(`[api] handling ${req.method ?? ''} ${req.url ?? ''}`);
     await invokeExpress(app, req, res);
   } catch (err) {
     console.error('[api] request/boot error', err);
-    const detail = err instanceof Error ? err.stack ?? err.message : String(err);
+    const detail = prod
+      ? (err instanceof Error ? err.message : 'boot failed')
+      : err instanceof Error
+        ? err.stack ?? err.message
+        : String(err);
     try {
       if (!res.headersSent) {
         res.statusCode = 500;
@@ -84,8 +89,8 @@ async function main(): Promise<void> {
     loadApp(),
   ]);
   await pingDb();
-  const server = (app as unknown as import('express').Express).listen(config.port, () => {
-    console.log(`[api] Hope Design ERP API listening on http://localhost:${config.port}`);
+  const server = (app as unknown as import('express').Express).listen(config.port, config.host, () => {
+    console.log(`[api] Hope Design ERP API listening on http://${config.host}:${config.port}`);
   });
 
   const shutdown = (signal: string) => {

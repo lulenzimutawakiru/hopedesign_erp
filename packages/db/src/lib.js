@@ -4,13 +4,8 @@ const { Pool } = require("pg");
 
 function loadEnv() {
   const root = path.resolve(__dirname, "..", "..", "..");
-  for (const f of [".env", ".env.local"]) {
-    const p = path.join(root, f);
-    if (fs.existsSync(p)) {
-      require("dotenv").config({ path: p });
-      break;
-    }
-  }
+  require("dotenv").config({ path: path.join(root, ".env") });
+  require("dotenv").config({ path: path.join(root, ".env.local"), override: true });
 }
 
 function createPool() {

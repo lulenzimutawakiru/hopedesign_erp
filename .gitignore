@@ -3,6 +3,7 @@ dist/
 coverage/
 .env
 .env.local
+.env.production
 *.log
 .DS_Store
 data/
@@ -13,6 +14,7 @@ apps/web/dist/
 SECURITY_ASSESSMENT_2026.md
 
 # Scratch / agent working files – never commit these
+tmp-ux/
 tmp-hr/
 .login-resp.json
 *.token.txt
@@ -21,6 +23,7 @@ tmp-hr/
 # Generated production env / secrets – never commit
 .prod-gen.env
 env/
+backups/
 
 # Vercel/Supabase diagnostic scratch
 hv-*.json

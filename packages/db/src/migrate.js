@@ -2,6 +2,17 @@ const fs = require("fs");
 const path = require("path");
 const { createPool } = require("./lib");
 
+async function ensureBootstrapOrg(client) {
+  const { rows } = await client.query(`
+    SELECT to_regclass('public.tenants') AS tenants,
+           to_regclass('public.companies') AS companies,
+           to_regclass('public.branches') AS branches
+  `);
+  if (!rows[0].tenants || !rows[0].companies || !rows[0].branches) return;
+  const sql = fs.readFileSync(path.join(__dirname, "bootstrap-org.sql"), "utf8").replace(/^\uFEFF/, "");
+  await client.query(sql);
+}
+
 async function main() {
   const pool = createPool();
   const client = await pool.connect();
@@ -17,6 +28,7 @@ async function main() {
     const files = fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
     const { rows } = await client.query("SELECT name FROM schema_migrations");
     const applied = new Set(rows.map((r) => r.name));
+    await ensureBootstrapOrg(client);
     for (const file of files) {
       if (applied.has(file)) continue;
       const sql = fs.readFileSync(path.join(dir, file), "utf8").replace(/^\uFEFF/, "");
@@ -31,6 +43,7 @@ async function main() {
         await client.query("ROLLBACK");
         throw new Error(`Migration ${file} failed: ${err.message}`);
       }
+      await ensureBootstrapOrg(client);
     }
     console.log("Migrations up to date.");
   } finally {

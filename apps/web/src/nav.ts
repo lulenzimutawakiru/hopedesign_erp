@@ -59,15 +59,15 @@ export const NAV_GROUPS: NavGroup[] = [
         id: 'crm', label: 'CRM', href: '/crm', perm: 'crm.customers.view', module: 'crm', accent: 'crm',
         keywords: 'customer account lead pipeline complaint',
         children: [
-          { id: 'overview', label: 'Board', href: '/crm', perm: 'crm.customers.view' },
-          { id: 'mine', label: 'My desk', href: '/crm/mine', perm: 'crm.activities.view' },
+          { id: 'overview', label: 'Sales hub', href: '/crm', perm: 'crm.customers.view' },
+          { id: 'mine', label: 'My work', href: '/crm/mine', perm: 'crm.activities.view' },
           { id: 'leads', label: 'Leads', href: '/crm/leads', perm: 'crm.leads.view' },
           { id: 'pipeline', label: 'Pipeline', href: '/crm/pipeline', perm: 'crm.opportunities.view' },
-          { id: 'customers', label: 'Customers', href: '/crm/customers', perm: 'crm.customers.view' },
+          { id: 'customers', label: 'Accounts', href: '/crm/customers', perm: 'crm.customers.view' },
           { id: 'contacts', label: 'Contacts', href: '/crm/contacts', perm: 'crm.contacts.view' },
           { id: 'activities', label: 'Activities', href: '/crm/activities', perm: 'crm.activities.view' },
-          { id: 'complaints', label: 'Complaints', href: '/crm/complaints', perm: 'crm.complaints.view' },
-          { id: 'analytics', label: 'Analytics', href: '/crm/analytics', perm: 'crm.customers.view' },
+          { id: 'complaints', label: 'Cases', href: '/crm/complaints', perm: 'crm.complaints.view' },
+          { id: 'analytics', label: 'Dashboards', href: '/crm/analytics', perm: 'crm.customers.view' },
         ],
       },
       {
@@ -373,9 +373,10 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       {
         id: 'communication_center', label: 'Comm Center', href: '/communication', perm: 'communication.command.view', module: 'communication', accent: 'com',
-        keywords: 'inbox messages notifications email announcements templates delivery logs chat comms communication',
+        keywords: 'inbox messages notifications email announcements templates delivery logs chat comms communication health sms test',
         children: [
           { id: 'com_center', label: 'Command Center', href: '/communication', perm: 'communication.command.view' },
+          { id: 'com_health', label: 'Health', href: '/communication/admin', perm: 'communication.command.view' },
           { id: 'com_messages', label: 'Messages', href: '/communication/messages', perm: 'communication.messages.view' },
           { id: 'com_notifications', label: 'Notifications', href: '/communication/notifications', perm: 'communication.notifications.view' },
           { id: 'com_email', label: 'Email', href: '/communication/email', perm: 'communication.emails.view' },

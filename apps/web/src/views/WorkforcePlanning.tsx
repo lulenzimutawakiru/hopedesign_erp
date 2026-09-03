@@ -65,12 +65,237 @@ const ORG_LEGEND: { tone: string; label: string }[] = [
   { tone: 'position', label: 'Position' },
 ];
 
+// ---------- Org chart export (CSV / JSON / printable HTML snapshot) ----------
+
+const ORG_KIND_LABEL: Record<OrgNodeData['kind'], string> = {
+  company: 'Company',
+  division: 'Division',
+  dept: 'Department',
+  unit: 'Org unit',
+  team: 'Team',
+  position: 'Position',
+  employee: 'Employee',
+};
+
+const ORG_TONE_HEX: Record<string, string> = {
+  company: '#8B5CF6',
+  division: '#1261A0',
+  dept: '#2878D0',
+  unit: '#00A6A6',
+  team: '#168A5B',
+  position: '#D99A00',
+  employee: '#5F6B76',
+};
+
+function orgExportStamp(company: Rec): string {
+  const raw = String(company.code ?? '') || String(company.name ?? '');
+  const safe = raw.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'company';
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return safe + '-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes());
+}
+
+function saveOrgDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function orgCsvCell(value: unknown): string {
+  const s = value == null ? '' : String(value);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function orgCsvText(tree: OrgNodeData): string {
+  const header = ['Level', 'Type', 'Name', 'Code', 'Path', 'People', 'Approved seats', 'Filled seats', 'Vacant', 'Position status', 'Employee no', 'Status'];
+  const rows: string[][] = [header];
+  const walk = (node: OrgNodeData, parents: string[]) => {
+    const seg = node.code && node.code !== '-' ? node.name + ' (' + node.code + ')' : node.name;
+    const path = parents.length ? [...parents, seg].join(' / ') : seg;
+    const isEmp = node.kind === 'employee';
+    const seats = sumOrgSeats(node);
+    const pos = (node.pos ?? {}) as Rec;
+    const emp = (node.emp ?? {}) as Rec;
+    rows.push([
+      String(node.depth),
+      ORG_KIND_LABEL[node.kind] ?? node.kind,
+      node.name,
+      node.code ?? '',
+      path,
+      String(node.headcount),
+      isEmp ? '' : String(seats.approved),
+      isEmp ? '' : String(seats.occupied),
+      isEmp ? '' : String(node.vacancyCount),
+      node.kind === 'position' ? String(pos.status ?? '') : '',
+      isEmp ? employeeIdOf(emp) : '',
+      isEmp ? String(emp.status ?? '') : '',
+    ]);
+    for (const c of node.children) walk(c, [...parents, seg]);
+  };
+  walk(tree, []);
+  return '\uFEFF' + rows.map((r) => r.map(orgCsvCell).join(',')).join('\r\n');
+}
+
+function orgHtmlDoc(tree: OrgNodeData, company: Rec, doc: Rec): string {
+  const esc = (s: string) =>
+    String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const summary = (doc.summary ?? {}) as Rec;
+  const branches = (doc.branches as Rec[]) ?? [];
+  const seats = sumOrgSeats(tree);
+  const companyName = String(company.name ?? 'Organisation');
+  const companyCode = String(company.code ?? '');
+  const headcount = Number(summary.headcount ?? tree.headcount);
+  const openPositions = Number(summary.activePositions ?? 0);
+  const vacant = Number(summary.vacantPositions ?? 0);
+  const fillPct = seats.approved > 0 ? Math.min(100, Math.round((seats.occupied / seats.approved) * 100)) : 0;
+  const now = new Date();
+  const dateLine = now.toISOString().slice(0, 10) + ' ' + now.toTimeString().slice(0, 5);
+  const stats: Array<[string, string]> = [
+    ['Headcount', String(headcount)],
+    ['Open positions', String(openPositions)],
+    ['Filled', fillPct + '%'],
+    ['Vacant seats', String(vacant)],
+    ['Branches', String(branches.length)],
+  ];
+  const chip = (value: string, label: string) =>
+    '<span class="c-chip"><b>' + esc(value) + '</b><span>' + esc(label) + '</span></span>';
+  const pill = (text: string, cls: string) => '<span class="c-pill ' + cls + '">' + esc(text) + '</span>';
+  const muted = (text: string) => '<span class="c-muted">' + esc(text) + '</span>';
+  const codeChip = (code: string) => '<code>' + esc(code) + '</code>';
+
+  const nodeMeta = (node: OrgNodeData): string => {
+    const out: string[] = [];
+    if (node.kind === 'employee') return '';
+    out.push(chip(String(node.headcount), node.headcount === 1 ? 'person' : 'people'));
+    if (node.kind === 'company') {
+      out.push(muted(fmtNum(node.divisionCount ?? 0) + ' division' + (node.divisionCount === 1 ? '' : 's')));
+    } else if (node.kind === 'division') {
+      out.push(muted(fmtNum(node.deptCount ?? 0) + ' department' + (node.deptCount === 1 ? '' : 's')));
+    } else if (node.kind === 'dept') {
+      out.push(muted(fmtNum(node.posCount ?? 0) + ' position' + (node.posCount === 1 ? '' : 's')));
+    } else if (node.kind === 'unit') {
+      out.push(muted(fmtNum(node.teamCount ?? 0) + ' team' + (node.teamCount === 1 ? '' : 's')));
+    } else if (node.kind === 'team') {
+      out.push(muted('team'));
+    } else if (node.kind === 'position') {
+      const p = node.pos ?? {};
+      const approved = Number(p.approvedHeadcount ?? 0);
+      const occupied = Number(p.occupied ?? 0);
+      const pct = approved > 0 ? Math.min(100, Math.round((occupied / approved) * 100)) : 0;
+      if (p.status) out.push(pill(String(p.status), 'c-badge'));
+      out.push('<span class="c-fill" title="' + occupied + ' of ' + approved + ' filled"><i style="width:' + pct + '%"></i></span>');
+      out.push(muted(fmtNum(occupied) + '/' + fmtNum(approved) + ' filled'));
+    }
+    if (node.vacancyCount > 0) out.push(pill(fmtNum(node.vacancyCount) + ' vacant', 'c-vacant'));
+    return out.join('');
+  };
+
+  const leafMeta = (emp: Rec): string => {
+    const out: string[] = [];
+    const no = employeeIdOf(emp);
+    if (no) out.push(codeChip(no));
+    if (emp.position) out.push(muted(String(emp.position)));
+    if (emp.status) out.push(pill(String(emp.status), 'c-badge'));
+    return out.join('');
+  };
+
+  const nodeHtml = (node: OrgNodeData): string => {
+    const isEmp = node.kind === 'employee';
+    const tone = ORG_TONE_HEX[node.kind] ?? '#5F6B76';
+    const row =
+      '<div class="row" data-tone="' + node.kind + '" style="--t:' + tone + '">' +
+      '<i class="dot" aria-hidden="true"></i>' +
+      '<span class="nm">' + esc(node.name) + (node.code && node.code !== '-' ? codeChip(node.code) : '') + '</span>' +
+      (isEmp ? leafMeta(node.emp ?? {}) : nodeMeta(node)) +
+      '</div>';
+    const kids = node.children.length ? '<ul>' + node.children.map((c) => nodeHtml(c)).join('') + '</ul>' : '';
+    return '<li class="' + (isEmp ? 'leaf' : 'node') + '">' + row + kids + '</li>';
+  };
+
+  const css = [
+    '*{box-sizing:border-box}',
+    'body{margin:0;padding:30px 36px 48px;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#172B3A;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
+    'header{max-width:960px}',
+    '.kicker{margin:0;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8B5CF6}',
+    'h1{margin:4px 0 0;font-size:26px;letter-spacing:-.01em}',
+    '.sub{margin:6px 0 0;color:#5F6B76;max-width:720px}',
+    '.actions{margin:14px 0 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap}',
+    '.hint{color:#8A97A3;font-size:12px}',
+    '.stats{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0 6px}',
+    '.stat{border:1px solid #D9E1E8;border-radius:12px;padding:7px 14px;min-width:110px;display:flex;flex-direction:column;gap:1px}',
+    '.stat span{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#5F6B76}',
+    '.stat b{font-size:19px;color:#172B3A}',
+    '.tree{list-style:none;margin:16px 0 0;padding:0;max-width:960px}',
+    '.tree ul{list-style:none;margin:3px 0 3px 22px;padding:2px 0 2px 16px;border-left:1.5px dashed #C5D0D9}',
+    '.row{display:flex;align-items:center;gap:8px;padding:6px 10px;margin:2px 0;border:1px solid transparent;border-left:3px solid var(--t,#5F6B76);border-radius:10px;background:#fff}',
+    '.row:hover{background:#F5F7FA;border-color:#D9E1E8}',
+    'li.leaf>.row{margin:1px 0;border-left-color:transparent;background:#FAFBFD}',
+    '.dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--t,#5F6B76);box-shadow:0 0 0 3px rgba(23,43,58,.06)}',
+    '.nm{flex:1 1 auto;min-width:0;font-weight:650;color:#172B3A;display:inline-flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    'code{font:11px/1 ui-monospace,SFMono-Regular,Consolas,monospace;background:#EEF2F6;border:1px solid #D9E1E8;color:#172B3A;padding:1px 7px;border-radius:999px;white-space:nowrap}',
+    '.c-muted{color:#5F6B76;font-size:12px;white-space:nowrap}',
+    '.c-chip{display:inline-flex;align-items:baseline;gap:3px;white-space:nowrap;font-size:12px;color:#5F6B76}',
+    '.c-chip b{font-size:13px;color:#172B3A;font-weight:700}',
+    '.c-pill{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:650;white-space:nowrap}',
+    '.c-badge{background:#EAF1FB;color:#1261A0}',
+    '.c-vacant{background:#FDF1E2;color:#D97706}',
+    '.c-fill{display:inline-block;width:46px;height:6px;border-radius:999px;background:#EEF2F6;overflow:hidden}',
+    '.c-fill i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#168A5B,#35B77A)}',
+    'footer{margin:28px 0 0;color:#8A97A3;font-size:12px}',
+    'button.btn{border:1px solid #C5D0D9;background:#fff;color:#172B3A;border-radius:10px;padding:7px 14px;font:600 13px inherit;cursor:pointer}',
+    'button.btn:hover{background:#F5F7FA}',
+    '@media print{.actions{display:none}body{padding:12px}.row:hover{background:#fff}.tree ul{border-left-style:solid}}',
+  ];
+
+  return [
+    '<!doctype html>',
+    '<html lang="en">',
+    '<head>',
+    '<meta charset="utf-8" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+    '<title>Org chart - ' + esc(companyName) + '</title>',
+    '<style>' + css.join('') + '</style>',
+    '</head>',
+    '<body>',
+    '<header>',
+    '<p class="kicker">Organization management</p>',
+    '<h1>Org chart' + (companyCode ? ' &middot; ' + esc(companyCode) : '') + '</h1>',
+    '<p class="sub">Full live snapshot for ' + esc(companyName) + ' - divisions, departments, org units, teams, positions and assigned employees. Exported ' + esc(dateLine) + '.</p>',
+    '<div class="actions"><button class="btn" type="button" onclick="window.print()">Print / save as PDF</button><span class="hint">The whole tree is expanded. Use browser print for a paper or PDF copy.</span></div>',
+    '<div class="stats">' + stats.map((c) => '<div class="stat"><span>' + esc(c[0]) + '</span><b>' + esc(c[1]) + '</b></div>').join('') + '</div>',
+    '</header>',
+    '<ul class="tree">' + nodeHtml(tree) + '</ul>',
+    '<footer>Exported ' + esc(orgExportStamp(company)) + ' &middot; generated by Hope Design OS org chart</footer>',
+    '</body>',
+    '</html>',
+  ].join('\n');
+}
+
 function sumHeadcount(children: OrgNodeData[]): number {
   return children.reduce((s, c) => s + c.headcount, 0);
 }
 
 function sumVacancies(children: OrgNodeData[]): number {
   return children.reduce((s, c) => s + c.vacancyCount, 0);
+}
+
+function sumOrgSeats(node: OrgNodeData): { approved: number; occupied: number } {
+  let approved = 0;
+  let occupied = 0;
+  const walk = (n: OrgNodeData) => {
+    if (n.kind === 'position') {
+      approved += Number(n.pos?.approvedHeadcount ?? 0);
+      occupied += Number(n.pos?.occupied ?? 0);
+    }
+    for (const c of n.children) walk(c);
+  };
+  walk(node);
+  return { approved, occupied };
 }
 
 function buildOrgTree(doc: Rec): OrgNodeData {
@@ -243,7 +468,8 @@ function OrgTree() {
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
   const [vacantOnly, setVacantOnly] = useState(false);
-  const [legend, setLegend] = useState(false);
+  const [legend, setLegend] = useState(true);
+  const [exportOpen, setExportOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['company']));
 
   useEffect(() => {
@@ -323,7 +549,16 @@ function OrgTree() {
   const headcount = Number(summary.headcount ?? tree.headcount);
   const openPositions = Number(summary.activePositions ?? 0);
   const vacant = Number(summary.vacantPositions ?? 0);
-  const fillPct = openPositions > 0 ? Math.round(((openPositions - vacant) / openPositions) * 100) : 0;
+  const seats = sumOrgSeats(tree);
+  const fillPct = seats.approved > 0 ? Math.min(100, Math.round((seats.occupied / seats.approved) * 100)) : 0;
+
+  const exportStamp = orgExportStamp(company);
+  const exportCsv = () =>
+    saveOrgDownload(new Blob([orgCsvText(tree)], { type: 'text/csv;charset=utf-8;' }), 'org-chart-' + exportStamp + '.csv');
+  const exportJson = () =>
+    saveOrgDownload(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json;charset=utf-8;' }), 'org-chart-' + exportStamp + '.json');
+  const exportHtml = () =>
+    saveOrgDownload(new Blob([orgHtmlDoc(tree, company, doc)], { type: 'text/html;charset=utf-8;' }), 'org-chart-' + exportStamp + '.html');
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -363,7 +598,7 @@ function OrgTree() {
           <h3>Organisation tree</h3>
           <span className="org-head-meta">
             <CodeChip>{companyCode || `#${companyId}`}</CodeChip>
-            <span className="muted">{String(company.name ?? '-')} {'\u00b7'} #{companyId} {'\u00b7'} {fmtNum(branches.length)} branches</span>
+            <span className="muted">{String(company.name ?? '-')} {'\u00b7'} #{companyId} {'\u00b7'} {fmtNum(branches.length)} branches {'\u00b7'} {fmtNum(flat.nodes.length)} nodes</span>
           </span>
         </div>
         <div className="org-tools">
@@ -379,6 +614,23 @@ function OrgTree() {
             <button type="button" className="btn btn-sm" onClick={expandAll}>Expand all</button>
             <button type="button" className="btn btn-sm" onClick={collapseAll}>Collapse all</button>
             <button type="button" className={'btn btn-sm btn-ghost' + (legend ? ' btn-ghost-on' : '')} onClick={() => setLegend((v) => !v)}>Legend</button>
+            <div className="org-export" style={{ position: 'relative' }}>
+              <button type="button" className="btn btn-sm btn-primary" aria-expanded={exportOpen} title="Download the org chart" onClick={() => setExportOpen((v) => !v)}>Download</button>
+              {exportOpen && (
+                <div className="topbar-dropdown" style={{ top: 'calc(100% + 6px)', right: 0, minWidth: 210 }}>
+                  <div className="dropdown-head">Export full chart</div>
+                  <button type="button" className="search-item" onClick={() => { exportCsv(); setExportOpen(false); }}>
+                    <span className="search-item-title">CSV - spreadsheet (.csv)</span>
+                  </button>
+                  <button type="button" className="search-item" onClick={() => { exportJson(); setExportOpen(false); }}>
+                    <span className="search-item-title">JSON - raw data (.json)</span>
+                  </button>
+                  <button type="button" className="search-item" onClick={() => { exportHtml(); setExportOpen(false); }}>
+                    <span className="search-item-title">HTML - printable chart (.html)</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         {query && (
@@ -512,6 +764,7 @@ function OrgNodeMeta({ node }: { node: OrgNodeData }) {
   const pct = approved > 0 ? Math.min(100, Math.round((occupied / approved) * 100)) : 0;
   return (
     <>
+      {p.status ? <Badge value={String(p.status)} /> : null}
       <span className="org-fill" title={`${fmtNum(occupied)} of ${fmtNum(approved)} filled`}><span style={{ width: `${pct}%` }} /></span>
       <span className="muted">{fmtNum(occupied)}/{fmtNum(approved)} filled</span>
       {node.vacancyCount > 0 && <span className="org-vacant">{fmtNum(node.vacancyCount)} vacant</span>}

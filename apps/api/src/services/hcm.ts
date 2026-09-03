@@ -1053,6 +1053,13 @@ export async function sendOffer(
     `UPDATE candidate_applications SET status = 'OFFER', stage_seq = $2 WHERE id = $1`,
     [Number(row.application_id), stageSeq('OFFER')]
   );
+  await emitEvent(client, ctx, {
+    eventType: 'hr.offer_sent',
+    entityType: 'job_offers',
+    entityId: offerId,
+    entityCode: String(row.offer_no),
+    payload: { applicationId: Number(row.application_id) },
+  });
   return { offerId, offerNo: row.offer_no, status: 'SENT' };
 }
 
@@ -1887,6 +1894,14 @@ export async function registerGrievance(
   );
   const grievanceId = Number(ins.rows[0].id);
   await logAudit(client, ctx, { action: 'create', resource: 'grievances', recordId: grievanceId });
+  await emitEvent(client, ctx, {
+    eventType: 'hr.grievance.opened',
+    entityType: 'grievances',
+    entityId: grievanceId,
+    entityCode: `GRV-${grievanceId}`,
+    payload: { employeeId: Number(input.employeeId), category: input.category },
+    severity: input.priority === 'URGENT' || input.priority === 'HIGH' ? 'WARN' : 'INFO',
+  });
   return { grievanceId, status: 'OPEN' };
 }
 
@@ -1898,10 +1913,17 @@ export async function resolveGrievance(
 ) {
   const res = await client.query(
     `UPDATE grievances SET status = 'RESOLVED', resolution = $3, resolved_by = COALESCE($4, resolved_by), resolved_at = now()
-     WHERE id = $1 AND tenant_id = $2 AND status = 'OPEN' RETURNING id`,
+     WHERE id = $1 AND tenant_id = $2 AND status = 'OPEN' RETURNING id, employee_id`,
     [grievanceId, ctx.tenantId, String(input.resolution), input.resolvedBy ?? ctx.userId ?? null]
   );
   if (res.rows.length === 0) throw badRequest('Grievance not found or not OPEN');
+  await emitEvent(client, ctx, {
+    eventType: 'hr.grievance.resolved',
+    entityType: 'grievances',
+    entityId: grievanceId,
+    entityCode: `GRV-${grievanceId}`,
+    payload: { employeeId: Number(res.rows[0].employee_id) },
+  });
   return { grievanceId, status: 'RESOLVED' };
 }
 
@@ -2040,7 +2062,16 @@ export async function issueWarning(
       str(input.issuedAt) ?? new Date().toISOString().slice(0, 10), str(input.expiresAt),
     ]
   );
-  return { warningId: Number(ins.rows[0].id), status: 'ACTIVE' };
+  const warningId = Number(ins.rows[0].id);
+  await emitEvent(client, ctx, {
+    eventType: 'hr.warning.issued',
+    entityType: 'warnings',
+    entityId: warningId,
+    entityCode: `WRN-${warningId}`,
+    payload: { employeeId: Number(input.employeeId), warningType: input.warningType ?? 'VERBAL' },
+    severity: 'WARN',
+  });
+  return { warningId, status: 'ACTIVE' };
 }
 
 // ============================================================
@@ -2058,7 +2089,15 @@ export async function requestTraining(
      VALUES ($1,$2,$3,$4,$5,'SUBMITTED') RETURNING id`,
     [ctx.companyId, ctx.tenantId, Number(input.employeeId), Number(input.trainingId), str(input.reason)]
   );
-  return { requestId: Number(ins.rows[0].id), status: 'SUBMITTED' };
+  const requestId = Number(ins.rows[0].id);
+  await emitEvent(client, ctx, {
+    eventType: 'hr.training.requested',
+    entityType: 'training_requests',
+    entityId: requestId,
+    entityCode: `TRN-${requestId}`,
+    payload: { employeeId: Number(input.employeeId), trainingId: Number(input.trainingId) },
+  });
+  return { requestId, status: 'SUBMITTED' };
 }
 
 export async function approveTrainingRequest(client: pg.PoolClient, ctx: Ctx, requestId: number) {
@@ -2068,6 +2107,13 @@ export async function approveTrainingRequest(client: pg.PoolClient, ctx: Ctx, re
     [requestId, ctx.tenantId, ctx.userId ?? null]
   );
   if (res.rows.length === 0) throw badRequest('Training request not found or not SUBMITTED');
+  await emitEvent(client, ctx, {
+    eventType: 'hr.training.approved',
+    entityType: 'training_requests',
+    entityId: requestId,
+    entityCode: `TRN-${requestId}`,
+    payload: { employeeId: Number(res.rows[0].employee_id), trainingId: Number(res.rows[0].training_id) },
+  });
   return { requestId, status: 'APPROVED' };
 }
 
@@ -2407,20 +2453,34 @@ export async function assignShift(
 export async function submitTimesheet(client: pg.PoolClient, ctx: Ctx, timesheetId: number, totalHours?: number | null) {
   const res = await client.query(
     `UPDATE timesheets SET status = 'SUBMITTED', total_hours = COALESCE($3, total_hours)
-     WHERE id = $1 AND tenant_id = $2 AND status = 'DRAFT' RETURNING id`,
+     WHERE id = $1 AND tenant_id = $2 AND status = 'DRAFT' RETURNING id, employee_id`,
     [timesheetId, ctx.tenantId, totalHours ?? null]
   );
   if (res.rows.length === 0) throw badRequest('Timesheet not found or not DRAFT');
+  await emitEvent(client, ctx, {
+    eventType: 'hr.timesheet.submitted',
+    entityType: 'timesheets',
+    entityId: timesheetId,
+    entityCode: `TS-${timesheetId}`,
+    payload: { employeeId: Number(res.rows[0].employee_id) },
+  });
   return { timesheetId, status: 'SUBMITTED' };
 }
 
 export async function approveTimesheet(client: pg.PoolClient, ctx: Ctx, timesheetId: number) {
   const res = await client.query(
     `UPDATE timesheets SET status = 'APPROVED', approved_by = $3, approved_at = now()
-     WHERE id = $1 AND tenant_id = $2 AND status = 'SUBMITTED' RETURNING id`,
+     WHERE id = $1 AND tenant_id = $2 AND status = 'SUBMITTED' RETURNING id, employee_id`,
     [timesheetId, ctx.tenantId, ctx.userId ?? null]
   );
   if (res.rows.length === 0) throw badRequest('Timesheet not found or not SUBMITTED');
+  await emitEvent(client, ctx, {
+    eventType: 'hr.timesheet.approved',
+    entityType: 'timesheets',
+    entityId: timesheetId,
+    entityCode: `TS-${timesheetId}`,
+    payload: { employeeId: Number(res.rows[0].employee_id) },
+  });
   return { timesheetId, status: 'APPROVED' };
 }
 

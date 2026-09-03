@@ -2918,8 +2918,8 @@ async function seedAll(pool) {
           currency: "UGX",
           address: "Plot 12, Namanve Industrial Park, Kampala, Uganda",
           phone: "+256 414 000 000",
-          email: "info@hopedesign.co.ug",
-          website: "https://hopedesign.co.ug",
+          email: "info@hopedesign.jorlentech.com",
+          website: "https://hopedesign.jorlentech.com",
           fiscal_year_start: "07-01",
           status: "ACTIVE",
         });
@@ -2938,7 +2938,7 @@ async function seedAll(pool) {
           name: "Kampala Headquarters",
           address: "Plot 12, Namanve Industrial Park, Kampala, Uganda",
           phone: "+256 414 000 000",
-          email: "info@hopedesign.co.ug",
+          email: "info@hopedesign.jorlentech.com",
           status: "ACTIVE",
         });
     bump("branches");
@@ -3300,7 +3300,9 @@ async function seedAll(pool) {
     const passwordHash = bcrypt.hashSync("ChangeMe!2026", 10);
     const userIdByKey = {};
     const userRoleRows = [];
+    let phoneSeq = 700000000;
     for (const u of userDefs) {
+      phoneSeq += 1;
       const userId = await insertOne(client, "users", {
         tenant_id: tenantId,
         company_id: companyId,
@@ -3312,6 +3314,7 @@ async function seedAll(pool) {
         first_name: u.first,
         last_name: u.last,
         job_title: u.job,
+        phone: `+256${phoneSeq}`,
         status: "ACTIVE",
         must_change_password: true,
         mfa_enabled: false,

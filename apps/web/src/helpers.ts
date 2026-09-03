@@ -25,6 +25,14 @@ export function titleCase(s: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Turn `sales.order_created` / `APPROVAL_REQUEST` into a short label. */
+export function eventLabel(type: unknown): string {
+  const raw = String(type ?? '').trim();
+  if (!raw) return '';
+  const cleaned = raw.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return titleCase(cleaned.toLowerCase());
+}
+
 export function moduleLabel(module: string): string {
   const map: Record<string, string> = {
     crm: 'CRM',

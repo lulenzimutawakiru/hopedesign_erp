@@ -102,6 +102,7 @@ interface AuthState {
   completeMfa: (code: string) => Promise<void>;
   startEnrollment: () => Promise<{ secret: string; otpauthUrl: string }>;
   completeEnrollment: (code: string, secret?: string) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -194,6 +195,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await loadMe();
   };
 
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    await api('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    await loadMe();
+  };
+
   const logout = () => {
     clearToken();
     setUser(null);
@@ -201,7 +210,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, pending, login, completeMfa, startEnrollment, completeEnrollment, logout }}>
+    <AuthContext.Provider value={{ user, loading, pending, login, completeMfa, startEnrollment, completeEnrollment, changePassword, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -85,7 +85,7 @@ export const COMMANDS: CommandAction[] = [
   { id: 'scan', label: 'Scan QR', hint: 'Trace or verify', href: '/qr/scan', keywords: 'qr barcode scan verify' },
   { id: 'secure', label: 'Secure jobs', hint: 'Dual control', href: '/security-jobs', keywords: 'security print custody', perm: 'security_printing.jobs.view' },
   { id: 'wo', label: 'Work orders', hint: 'Plant', href: '/records/production/work_orders', keywords: 'manufacture wo machine', perm: 'production.work_orders.view' },
-  { id: 'customers', label: 'Customers', hint: 'CRM', href: '/crm/customers', keywords: 'customer account', perm: 'crm.customers.view' },
+  { id: 'customers', label: 'Accounts', hint: 'CRM', href: '/crm/customers', keywords: 'customer account', perm: 'crm.customers.view' },
   { id: 'crm-board', label: 'CRM board', hint: 'Leads and pipeline', href: '/crm', keywords: 'crm lead pipeline account complaint', perm: 'crm.customers.view' },
   { id: 'crm-mine', label: 'My CRM desk', hint: 'Assigned work', href: '/crm/mine', keywords: 'my leads follow up assigned', perm: 'crm.activities.view' },
   { id: 'crm-analytics', label: 'CRM analytics', hint: 'Forecast and win rate', href: '/crm/analytics', keywords: 'forecast conversion win rate aging', perm: 'crm.customers.view' },
@@ -109,6 +109,9 @@ export const COMMANDS: CommandAction[] = [
   { id: 'op', label: 'Operator floor', hint: 'Start job', href: '/operator', keywords: 'start pause output waste', perm: 'production.work_orders.start' },
   { id: 'people-board', label: 'People board', hint: 'HR and payroll', href: '/people', keywords: 'hr employee leave payroll nssf paye', perm: 'hr.employees.view' },
   { id: 'payroll', label: 'Payroll runs', hint: 'Calculate and post', href: '/people/payrolls', keywords: 'payroll paye nssf payslip', perm: 'hr.payrolls.view' },
+  { id: 'comms', label: 'Communication', hint: 'Health and inbox', href: '/communication', keywords: 'email sms notify comms inbox', perm: 'communication.command.view' },
+  { id: 'comms-health', label: 'Comms health', hint: 'Test email and SMS', href: '/communication/admin', keywords: 'provider test resend bird africastalking', perm: 'communication.command.view' },
+  { id: 'comms-deliv', label: 'Delivery logs', hint: 'Failed email and SMS', href: '/communication/deliveries', keywords: 'retry failed sms email delivery', perm: 'communication.delivery_logs.view' },
 ];
 
 export function pathForEntity(entityType: string, id: number): string {

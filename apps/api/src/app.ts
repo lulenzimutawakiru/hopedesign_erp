@@ -91,7 +91,7 @@ app.use(
         baseUri: ["'self'"],
         frameAncestors: ["'none'"],
         formAction: ["'self'"],
-        upgradeInsecureRequests: null,
+        upgradeInsecureRequests: isProd ? [] : null,
       },
     },
     strictTransportSecurity: isProd ? { maxAge: 15552000, includeSubDomains: true, preload: true } : { maxAge: 15552000 },

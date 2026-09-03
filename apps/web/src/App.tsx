@@ -3,6 +3,7 @@ import { useAuth } from './auth';
 import { shortCompanyName, useCompanyProfile } from './company';
 import { useHashRoute } from './router';
 import Login from './views/Login';
+import ChangePassword from './views/ChangePassword';
 import { BrandMark } from './components/BrandMark';
 import { PageLoader } from './components/ui';
 
@@ -68,11 +69,14 @@ export default function App() {
   }
 
   if (!user) {
-    return path === '/login' ? <Login /> : <Login />;
+    return <Login />;
+  }
+
+  if (user.must_change_password) {
+    return <ChangePassword />;
   }
 
   if (path === '/login') {
-    // Already authenticated; treat as dashboard.
     window.location.hash = '/dashboard';
     return null;
   }

@@ -1263,13 +1263,13 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
     load().catch((e) => setError(e instanceof Error ? e.message : 'Failed to load document'));
   }, [load]);
 
-  const act = async (label: string, fn: () => Promise<void>) => {
+  const act = async (label: string, fn: () => Promise<void | string>) => {
     setBusy(true);
     setError('');
     setNotice('');
     try {
-      await fn();
-      setNotice(label);
+      const custom = await fn();
+      setNotice(custom || label);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1293,6 +1293,8 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
     : pick(doc, 'returnNo', 'return_no')
   ) ?? id);
   const customerName = String(pick(doc, 'customerName', 'customer_name') ?? pick(doc, 'customerId', 'customer_id') ?? '');
+  const customerEmail = String(pick(doc, 'customerEmail', 'customer_email') ?? '').trim();
+  const customerPhone = String(pick(doc, 'customerPhone', 'customer_phone') ?? '').trim();
   const docType =
     resource === 'quotations' ? 'sales-quotation'
     : resource === 'orders' ? 'sales-order'
@@ -1316,6 +1318,19 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
           const r = await api<{ data: { orderId: number } }>(`/api/ops/sales/quotations/${id}/convert`, { method: 'POST', body: '{}' });
           navigate(`/sales/orders/${r.data.orderId}`);
         })}>Convert to sales order</button>
+      )}
+      {['DRAFT', 'SUBMITTED', 'APPROVED'].includes(status) && can(user, 'sales.quotations.send') && (
+        <button className="btn btn-block" disabled={busy} onClick={() => act('Quotation sent to customer', async () => {
+          const r = await api<{ data: { sent: string[]; email?: { ok: boolean; error?: string }; sms?: { ok: boolean; error?: string } } }>(
+            `/api/ops/sales/quotations/${id}/send`,
+            { method: 'POST', body: '{}' }
+          );
+          const bits = [
+            r.data.email?.ok ? 'email delivered' : r.data.email?.error ? `email: ${r.data.email.error}` : null,
+            r.data.sms?.ok ? 'SMS delivered' : r.data.sms?.error ? `SMS: ${r.data.sms.error}` : null,
+          ].filter(Boolean);
+          return bits.length ? `Quotation sent to customer · ${bits.join(' · ')}` : undefined;
+        })}>Send to customer</button>
       )}
     </>
   );
@@ -1371,7 +1386,10 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
           <h1>
             {RESOURCES.find((r) => r.resource === resource)?.label ?? resource} <span className="cell-mono">{code}</span>
           </h1>
-          <p className="muted">{customerName} · {fmtMoney(pick(doc, 'total', 'amount'))}</p>
+          <p className="muted">
+            {customerName} · {fmtMoney(pick(doc, 'total', 'amount'))}
+            {(customerEmail || customerPhone) ? ` · ${[customerEmail, customerPhone].filter(Boolean).join(' · ')}` : ''}
+          </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {docType && <DownloadMenu type={docType} id={id} code={code} />}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
@@ -14,22 +14,156 @@ function parseCrm(path: string): { view: string; id: string | null } {
 
 export default function CrmFlow({ path }: { path: string }) {
   const { view, id } = parseCrm(path);
-  if (view === 'customers' && id === 'new') return <CustomerComposer />;
-  if (view === 'customers' && id) return <CustomerDesk id={Number(id)} />;
-  if (view === 'customers') return <CustomerList />;
-  if (view === 'leads' && id === 'new') return <LeadComposer />;
-  if (view === 'leads' && id) return <LeadDesk id={Number(id)} />;
-  if (view === 'leads') return <LeadList />;
-  if (view === 'opportunities' && id === 'new') return <OppComposer />;
-  if (view === 'opportunities' && id) return <OppDesk id={Number(id)} />;
-  if (view === 'pipeline') return <Pipeline />;
-  if (view === 'activities') return <ActivityList />;
-  if (view === 'complaints' && id) return <ComplaintDesk id={Number(id)} />;
-  if (view === 'complaints') return <ComplaintList />;
-  if (view === 'contacts') return <ContactList />;
-  if (view === 'analytics') return <CrmAnalytics />;
-  if (view === 'mine') return <MyDesk />;
-  return <CrmBoard />;
+  let body: ReactNode;
+  if (view === 'customers' && id === 'new') body = <CustomerComposer />;
+  else if (view === 'customers' && id) body = <CustomerDesk id={Number(id)} />;
+  else if (view === 'customers') body = <CustomerList />;
+  else if (view === 'leads' && id === 'new') body = <LeadComposer />;
+  else if (view === 'leads' && id) body = <LeadDesk id={Number(id)} />;
+  else if (view === 'leads') body = <LeadList />;
+  else if (view === 'opportunities' && id === 'new') body = <OppComposer />;
+  else if (view === 'opportunities' && id) body = <OppDesk id={Number(id)} />;
+  else if (view === 'pipeline') body = <Pipeline />;
+  else if (view === 'activities') body = <ActivityList />;
+  else if (view === 'complaints' && id) body = <ComplaintDesk id={Number(id)} />;
+  else if (view === 'complaints') body = <ComplaintList />;
+  else if (view === 'contacts') body = <ContactList />;
+  else if (view === 'analytics') body = <CrmAnalytics />;
+  else if (view === 'mine') body = <MyDesk />;
+  else body = <CrmBoard />;
+  return <div className="crm-shell">{body}</div>;
+}
+
+type CmdAction = { label: string; onClick: () => void; primary?: boolean; danger?: boolean; success?: boolean; disabled?: boolean };
+
+function stageLabel(s: string) {
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function CrmCommandBar({ entity, actions, extra }: { entity: string; actions: CmdAction[]; extra?: ReactNode }) {
+  return (
+    <div className="crm-cmd" role="toolbar" aria-label={`${entity} commands`}>
+      <span className="crm-cmd-entity">{entity}</span>
+      {actions.map((a) => (
+        <button
+          key={a.label}
+          type="button"
+          className={'crm-cmd-btn' + (a.primary ? ' is-primary' : '') + (a.danger ? ' is-danger' : '') + (a.success ? ' is-success' : '')}
+          disabled={a.disabled}
+          onClick={a.onClick}
+        >{a.label}</button>
+      ))}
+      {extra ? <div className="crm-cmd-extra">{extra}</div> : null}
+    </div>
+  );
+}
+
+function CrmHighlights({ items }: { items: { label: string; value: ReactNode }[] }) {
+  return (
+    <dl className="crm-highlights">
+      {items.map((it) => (
+        <div className="crm-hl" key={it.label}>
+          <dt>{it.label}</dt>
+          <dd>{it.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function CrmBpf({
+  stages,
+  current,
+  onSelect,
+  busy,
+}: {
+  stages: { id: string; label: string }[];
+  current: string;
+  onSelect?: (id: string) => void;
+  busy?: boolean;
+}) {
+  const idx = Math.max(0, stages.findIndex((s) => s.id === current));
+  return (
+    <div className="crm-bpf" role="list" aria-label="Business process">
+      {stages.map((s, i) => (
+        <button
+          key={s.id}
+          type="button"
+          role="listitem"
+          className={'crm-bpf-step' + (s.id === current ? ' is-active' : i < idx ? ' is-done' : '')}
+          disabled={busy || !onSelect || s.id === current}
+          onClick={() => onSelect?.(s.id)}
+        >
+          <small>Stage {i + 1}</small>
+          {s.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CrmTabs({ tabs, active, onChange }: { tabs: string[]; active: string; onChange: (t: string) => void }) {
+  return (
+    <div className="crm-tabs" role="tablist">
+      {tabs.map((t) => (
+        <button key={t} type="button" role="tab" aria-selected={t === active} className={'crm-tab' + (t === active ? ' is-active' : '')} onClick={() => onChange(t)}>{t}</button>
+      ))}
+    </div>
+  );
+}
+
+function CrmViewBar({ title, view, count, onNew, newLabel, search, onSearch, placeholder }: {
+  title: string; view: string; count?: number; onNew?: () => void; newLabel?: string; search?: string; onSearch?: (v: string) => void; placeholder?: string;
+}) {
+  return (
+    <div className="crm-viewbar">
+      <div>
+        <div className="crm-view-meta">{view}</div>
+        <h1>{title}{count != null ? <span className="muted"> · {count}</span> : null}</h1>
+      </div>
+      <div className="head-actions">
+        {onSearch && (
+          <input className="search-input" value={search ?? ''} onChange={(e) => onSearch(e.target.value)} placeholder={placeholder ?? 'Filter'} />
+        )}
+        {onNew && <button className="btn btn-primary" onClick={onNew}>{newLabel ?? 'New'}</button>}
+      </div>
+    </div>
+  );
+}
+
+function CrmTimeline({ items }: { items: { at?: unknown; kind?: unknown; label?: unknown; status?: unknown; id?: unknown; activityType?: unknown; subject?: unknown; createdAt?: unknown; done?: unknown }[] }) {
+  if (!items.length) return <p className="muted">No timeline posts yet.</p>;
+  return (
+    <ul className="crm-timeline">
+      {items.map((e, i) => (
+        <li key={String(e.id ?? `${e.kind}-${i}`)}>
+          <span className="muted">{String(e.at ?? e.createdAt ?? '').slice(0, 10) || '—'}</span>
+          <span><strong>{String(e.kind ?? e.activityType ?? '')}</strong> {String(e.label ?? e.subject ?? '')}</span>
+          {e.status != null || e.done != null ? <Badge value={e.status ?? (e.done ? 'DONE' : 'OPEN')} /> : <span />}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CrmComposerHead({ entity, title, onCancel, onSave, busy, saveLabel }: {
+  entity: string; title: string; onCancel: () => void; onSave: () => void; busy?: boolean; saveLabel?: string;
+}) {
+  return (
+    <>
+      <CrmCommandBar
+        entity={entity}
+        actions={[
+          { label: saveLabel ?? 'Save & close', onClick: onSave, primary: true, disabled: busy },
+          { label: 'Cancel', onClick: onCancel, disabled: busy },
+        ]}
+      />
+      <div className="crm-form-head">
+        <div className="crm-entity-type">New {entity.toLowerCase()}</div>
+        <div className="crm-form-title"><h1>{title}</h1></div>
+      </div>
+    </>
+  );
 }
 
 function OwnerPicker({ value, onChange, owners }: { value: string; onChange: (v: string) => void; owners: Rec[] }) {
@@ -98,48 +232,43 @@ function CrmBoard() {
   const holds = (data.holds as Rec[]) ?? [];
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="crm">CRM</p>
-          <h1>Accounts</h1>
-          <p className="muted">Lead → qualify → convert → pipeline → quote. Credit is checked before a quote leaves the desk. Sales, AR, and plant sit on the same account 360.</p>
-        </div>
-        <div className="head-actions">
-          {can(user, 'crm.activities.view') && <button className="btn" onClick={() => navigate('/crm/mine')}>My desk</button>}
-          {can(user, 'crm.leads.create') && <button className="btn" onClick={() => navigate('/crm/leads/new')}>New lead</button>}
-          {can(user, 'crm.customers.create') && <button className="btn btn-primary" onClick={() => navigate('/crm/customers/new')}>New account</button>}
-        </div>
-      </header>
-      <div className="kpi-grid">
-        <button className="kpi-card" onClick={() => navigate('/crm/leads')}>
-          <span className="kpi-label">Open leads</span>
-          <span className="kpi-value">{fmtNum(kpis.openLeads)}</span>
+      <CrmCommandBar
+        entity="Sales hub"
+        actions={[
+          ...(can(user, 'crm.leads.create') ? [{ label: 'New lead', onClick: () => navigate('/crm/leads/new') }] : []),
+          ...(can(user, 'crm.customers.create') ? [{ label: 'New account', onClick: () => navigate('/crm/customers/new'), primary: true }] : []),
+          ...(can(user, 'crm.activities.view') ? [{ label: 'My work', onClick: () => navigate('/crm/mine') }] : []),
+          { label: 'Pipeline', onClick: () => navigate('/crm/pipeline') },
+          { label: 'Dashboards', onClick: () => navigate('/crm/analytics') },
+        ]}
+      />
+      <CrmViewBar title="Sales hub" view="Home" />
+      <div className="crm-insight">
+        <button className="crm-insight-card" onClick={() => navigate('/crm/leads')}>
+          <span className="k">Open leads</span>
+          <span className="v">{fmtNum(kpis.openLeads)}</span>
+          <span className="s">Qualify and convert</span>
         </button>
-        <button className="kpi-card" onClick={() => navigate('/crm/pipeline')}>
-          <span className="kpi-label">Pipeline</span>
-          <span className="kpi-value">{fmtMoney(kpis.pipeline)}</span>
-          <span className="kpi-sub">{fmtNum(kpis.openOpps)} open · weighted {fmtMoney(kpis.weighted)}</span>
+        <button className="crm-insight-card" onClick={() => navigate('/crm/pipeline')}>
+          <span className="k">Open pipeline</span>
+          <span className="v">{fmtMoney(kpis.pipeline)}</span>
+          <span className="s">{fmtNum(kpis.openOpps)} deals · weighted {fmtMoney(kpis.weighted)}</span>
         </button>
-        <button className="kpi-card" onClick={() => navigate('/crm/analytics')}>
-          <span className="kpi-label">Open AR</span>
-          <span className="kpi-value">{fmtMoney(kpis.openAr)}</span>
-          <span className="kpi-sub">{fmtNum(kpis.blockedAccounts)} blocked · {fmtNum(kpis.heldOpps)} on hold</span>
+        <button className="crm-insight-card" onClick={() => navigate('/crm/analytics')}>
+          <span className="k">Open AR</span>
+          <span className="v">{fmtMoney(kpis.openAr)}</span>
+          <span className="s">{fmtNum(kpis.blockedAccounts)} blocked · {fmtNum(kpis.heldOpps)} on hold</span>
         </button>
-        <button className="kpi-card" onClick={() => navigate('/crm/activities')}>
-          <span className="kpi-label">Overdue follow-ups</span>
-          <span className="kpi-value">{fmtNum(kpis.overdue)}</span>
+        <button className="crm-insight-card" onClick={() => navigate('/crm/activities')}>
+          <span className="k">Overdue activities</span>
+          <span className="v">{fmtNum(kpis.overdue)}</span>
+          <span className="s">Follow-ups due</span>
         </button>
-        <button className="kpi-card" onClick={() => navigate('/crm/complaints')}>
-          <span className="kpi-label">Open complaints</span>
-          <span className="kpi-value">{fmtNum(kpis.openComplaints)}</span>
+        <button className="crm-insight-card" onClick={() => navigate('/crm/complaints')}>
+          <span className="k">Active cases</span>
+          <span className="v">{fmtNum(kpis.openComplaints)}</span>
+          <span className="s">Customer service</span>
         </button>
-      </div>
-      <div className="do-now">
-        <button onClick={() => navigate('/crm/mine')}><strong>My desk</strong><span>Assigned work</span></button>
-        <button onClick={() => navigate('/crm/leads')}><strong>Leads</strong><span>Qualify and convert</span></button>
-        <button onClick={() => navigate('/crm/pipeline')}><strong>Pipeline</strong><span>Move stages, quote</span></button>
-        <button onClick={() => navigate('/crm/customers')}><strong>Accounts</strong><span>360, credit, health</span></button>
-        <button onClick={() => navigate('/sales/quotations')}><strong>Quotations</strong><span>Order to cash</span></button>
       </div>
       <section className="card">
         <div className="card-head"><h3>Hot opportunities</h3></div>
@@ -234,17 +363,9 @@ function CustomerList() {
   useEffect(() => { load(); }, [load]);
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="crm">Accounts</p>
-          <h1>Customers</h1>
-        </div>
-        <button className="btn btn-primary" onClick={() => navigate('/crm/customers/new')}>New account</button>
-      </header>
+      <CrmCommandBar entity="Account" actions={[{ label: 'New', onClick: () => navigate('/crm/customers/new'), primary: true }]} />
+      <CrmViewBar title="Accounts" view="All accounts" count={rows.length} search={q} onSearch={setQ} placeholder="Filter accounts" onNew={() => navigate('/crm/customers/new')} newLabel="New" />
       {error && <ErrorBanner error={error} />}
-      <div className="toolbar">
-        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, code, phone…" />
-      </div>
       <div className="table-wrap card">
         <table className="data">
           <thead><tr><th>Code</th><th>Name</th><th>Status</th><th className="cell-num">Open AR</th><th className="cell-num">Limit</th><th className="cell-num">Opps</th></tr></thead>
@@ -280,6 +401,7 @@ function CustomerDesk({ id }: { id: number }) {
   const [owners, setOwners] = useState<Rec[]>([]);
   const [ownerId, setOwnerId] = useState('');
   const [blockReason, setBlockReason] = useState('');
+  const [tab, setTab] = useState('Summary');
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/crm/customers/${id}`)
       .then((r) => setDoc(r.data))
@@ -309,194 +431,237 @@ function CustomerDesk({ id }: { id: number }) {
   };
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <button className="btn btn-sm" onClick={() => navigate('/crm/customers')}>Back</button>
-          <h1>{String(c.name)} <span className="cell-mono">{String(c.code)}</span></h1>
-          <p className="muted">{String(c.customerType)} · {String(c.email ?? c.phone ?? 'No contact yet')} · owner {String(c.ownerName || 'unassigned')}</p>
+      <CrmCommandBar
+        entity="Account"
+        actions={[
+          { label: 'Save', onClick: () => setNotice('No pending edits'), disabled: busy },
+          ...(can(user, 'crm.opportunities.create') && String(c.status) !== 'BLOCKED' ? [{ label: 'New opportunity', onClick: () => navigate(`/crm/opportunities/new?customer=${id}`), primary: true }] : []),
+          ...(Boolean(credit.ok) ? [{ label: 'New quote', onClick: () => navigate(`/sales/quotations/new?customer=${id}`) }] : []),
+          { label: 'AR ledger', onClick: () => navigate('/finance/ar') },
+          ...(can(user, 'crm.customers.block') && String(c.status) !== 'BLOCKED' ? [{ label: 'Deactivate', onClick: () => act(`/api/ops/crm/customers/${id}/status`, { status: 'BLOCKED', reason: blockReason || 'Credit / compliance hold' }, 'Account blocked'), danger: true, disabled: busy }] : []),
+          ...(can(user, 'crm.customers.block') && String(c.status) === 'BLOCKED' ? [{ label: 'Activate', onClick: () => act(`/api/ops/crm/customers/${id}/status`, { status: 'ACTIVE', reason: 'Released from hold' }, 'Account released'), disabled: busy }] : []),
+        ]}
+        extra={(
+          <>
+            {can(user, 'crm.customers.update') && (
+              <>
+                <OwnerPicker value={ownerId} onChange={setOwnerId} owners={owners} />
+                <button className="crm-cmd-btn" disabled={busy || !ownerId} onClick={() => act(`/api/ops/crm/customers/${id}/assign`, { userId: Number(ownerId) }, 'Owner assigned')}>Assign</button>
+              </>
+            )}
+            {can(user, 'crm.customers.block') && String(c.status) !== 'BLOCKED' && (
+              <input className="cell-input" placeholder="Deactivate reason" value={blockReason} onChange={(e) => setBlockReason(e.target.value)} />
+            )}
+          </>
+        )}
+      />
+      <div className="crm-form-head">
+        <div className="crm-entity-type">Account</div>
+        <div className="crm-form-title">
+          <h1>{String(c.name)} <span className="cell-mono muted">{String(c.code)}</span></h1>
+          <Badge value={c.status} />
         </div>
-        <Badge value={c.status} />
-      </header>
+        <CrmHighlights items={[
+          { label: 'Owner', value: String(c.ownerName || 'Unassigned') },
+          { label: 'Status', value: String(c.status) },
+          { label: 'Credit', value: credit.ok ? 'OK' : String(credit.reason ?? 'Hold') },
+          { label: 'Open AR', value: fmtMoney(credit.openAr) },
+          { label: 'Payment terms', value: `${fmtNum(c.paymentTermsDays)} days` },
+          { label: 'Health', value: <HealthMeter health={health} /> },
+        ]} />
+      </div>
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <ErrorBanner error={error} />}
       {!credit.ok && <div className="alert alert-error">Credit hold: {String(credit.reason)}. Quoting and new orders are blocked.</div>}
-      <div className="kpi-grid">
-        <div className={`kpi-card ${String(health.band) === 'healthy' ? '' : 'card-warn'}`}>
-          <span className="kpi-label">Health</span>
-          <HealthMeter health={health} />
-          <span className="kpi-sub">{((health.reasons as string[]) ?? []).join(' · ') || 'No flags'}</span>
-        </div>
-        <div className={`kpi-card ${credit.ok ? '' : 'card-warn'}`}>
-          <span className="kpi-label">Credit</span>
-          <span className="kpi-value">{credit.ok ? 'OK' : 'Hold'}</span>
-          <span className="kpi-sub">{credit.reason ? String(credit.reason) : `AR ${fmtMoney(credit.openAr)} · limit ${Number(credit.creditLimit) > 0 ? fmtMoney(credit.creditLimit) : 'open'}`}</span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Open AR</span>
-          <span className="kpi-value">{fmtMoney(credit.openAr)}</span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Terms</span>
-          <span className="kpi-value">{fmtNum(c.paymentTermsDays)}d</span>
-        </div>
-      </div>
-      <div className="aging-row" style={{ marginBottom: 16 }}>
-        {([
-          ['Current', aging.current],
-          ['1–30', aging.days130],
-          ['31–60', aging.days3160],
-          ['61–90', aging.days6190],
-          ['90+', aging.days90Plus],
-        ] as [string, unknown][]).map(([label, val]) => (
-          <div key={label} className="aging-cell">
-            <span className="muted">{label}</span>
-            <strong>{fmtMoney(val)}</strong>
+      <CrmTabs tabs={['Summary', 'Contacts', 'Sales', 'Timeline']} active={tab} onChange={setTab} />
+      {tab === 'Summary' && (
+        <div className="crm-split">
+          <div>
+            <div className="aging-row" style={{ marginBottom: 16 }}>
+              {([
+                ['Current', aging.current],
+                ['1–30', aging.days130],
+                ['31–60', aging.days3160],
+                ['61–90', aging.days6190],
+                ['90+', aging.days90Plus],
+              ] as [string, unknown][]).map(([label, val]) => (
+                <div key={label} className="aging-cell">
+                  <span className="muted">{label}</span>
+                  <strong>{fmtMoney(val)}</strong>
+                </div>
+              ))}
+            </div>
+            <section className="card">
+              <div className="card-head"><h3>Related opportunities</h3></div>
+              <div className="table-wrap">
+                <table className="data">
+                  <thead><tr><th>Name</th><th>Stage</th><th className="cell-num">Amount</th></tr></thead>
+                  <tbody>
+                    {((doc.opportunities as Rec[]) ?? []).map((o) => (
+                      <tr key={String(o.id)} className="row-click" onClick={() => navigate(`/crm/opportunities/${o.id}`)}>
+                        <td>{String(o.name)}</td>
+                        <td><Badge value={o.stage} /></td>
+                        <td className="cell-num">{fmtMoney(o.amount)}</td>
+                      </tr>
+                    ))}
+                    {((doc.opportunities as Rec[]) ?? []).length === 0 && <tr><td colSpan={3} className="muted" style={{ padding: 16 }}>No opportunities.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+            {plant.length > 0 && (
+              <section className="card">
+                <div className="card-head"><h3>Plant work</h3></div>
+                <div className="table-wrap">
+                  <table className="data">
+                    <thead><tr><th>WO</th><th>Product</th><th>Status</th><th className="cell-num">Qty</th></tr></thead>
+                    <tbody>
+                      {plant.map((w) => (
+                        <tr key={String(w.id)} className="row-click" onClick={() => navigate(`/plant/orders/${w.id}`)}>
+                          <td className="cell-mono">{String(w.woNo)}</td>
+                          <td>{String(w.productCode)} · {String(w.productName)}</td>
+                          <td><Badge value={w.status} /></td>
+                          <td className="cell-num">{fmtNum(w.producedQty)} / {fmtNum(w.quantity)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
           </div>
-        ))}
-      </div>
-      <div className="flow-actions" style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-        {can(user, 'crm.opportunities.create') && String(c.status) !== 'BLOCKED' && (
-          <button className="btn btn-primary" onClick={() => navigate(`/crm/opportunities/new?customer=${id}`)}>New opportunity</button>
-        )}
-        {Boolean(credit.ok) && <button className="btn" onClick={() => navigate(`/sales/quotations/new?customer=${id}`)}>New quotation</button>}
-        <button className="btn" onClick={() => navigate('/finance/ar')}>AR ledger</button>
-        {can(user, 'crm.customers.block') && String(c.status) !== 'BLOCKED' && (
-          <>
-            <input className="cell-input" placeholder="Block reason" value={blockReason} onChange={(e) => setBlockReason(e.target.value)} />
-            <button className="btn btn-warning" disabled={busy} onClick={() => act(`/api/ops/crm/customers/${id}/status`, { status: 'BLOCKED', reason: blockReason || 'Credit / compliance hold' }, 'Account blocked')}>Block</button>
-          </>
-        )}
-        {can(user, 'crm.customers.block') && String(c.status) === 'BLOCKED' && (
-          <button className="btn btn-success" disabled={busy} onClick={() => act(`/api/ops/crm/customers/${id}/status`, { status: 'ACTIVE', reason: 'Released from hold' }, 'Account released')}>Release hold</button>
-        )}
-        {can(user, 'crm.customers.update') && (
-          <>
-            <OwnerPicker value={ownerId} onChange={setOwnerId} owners={owners} />
-            <button className="btn btn-sm" disabled={busy || !ownerId} onClick={() => act(`/api/ops/crm/customers/${id}/assign`, { userId: Number(ownerId) }, 'Owner assigned')}>Assign</button>
-          </>
-        )}
-      </div>
-      <section className="card">
-        <div className="card-head"><h3>Contacts</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Name</th><th>Title</th><th>Phone</th><th>Email</th></tr></thead>
-            <tbody>
-              {((doc.contacts as Rec[]) ?? []).map((p) => (
-                <tr key={String(p.id)}>
-                  <td>{String(p.firstName)} {String(p.lastName)} {p.isPrimary ? '· primary' : ''}</td>
-                  <td>{String(p.title ?? '—')}</td>
-                  <td>{String(p.phone ?? '—')}</td>
-                  <td>{String(p.email ?? '—')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <aside>
+            <section className="card">
+              <div className="card-head"><h3>Recent activity</h3></div>
+              <div className="card-pad">
+                <CrmTimeline items={timeline.slice(0, 8)} />
+              </div>
+            </section>
+            {can(user, 'crm.complaints.create') && (
+              <section className="card card-pad">
+                <h3>Open a case</h3>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                  <input className="cell-input" style={{ flex: 1, minWidth: 140 }} placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
+                  <button className="btn btn-sm" disabled={busy || !subject} onClick={() => act('/api/ops/crm/complaints', { customerId: id, subject }, 'Case opened')}>Log</button>
+                </div>
+              </section>
+            )}
+          </aside>
         </div>
-        {can(user, 'crm.contacts.create') && (
-          <div className="card-pad" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <input className="cell-input" placeholder="First" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
-            <input className="cell-input" placeholder="Last" value={lastName} onChange={(e) => setLastName(e.target.value)} />
-            <input className="cell-input" placeholder="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
-            <button className="btn btn-sm" disabled={busy || !firstName || !lastName} onClick={() => act(`/api/ops/crm/customers/${id}/contacts`, { firstName, lastName, phone, isPrimary: ((doc.contacts as Rec[]) ?? []).length === 0 }, 'Contact saved')}>Add contact</button>
-          </div>
-        )}
-      </section>
-      <section className="card">
-        <div className="card-head"><h3>Opportunities</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Name</th><th>Stage</th><th className="cell-num">Amount</th></tr></thead>
-            <tbody>
-              {((doc.opportunities as Rec[]) ?? []).map((o) => (
-                <tr key={String(o.id)} className="row-click" onClick={() => navigate(`/crm/opportunities/${o.id}`)}>
-                  <td>{String(o.name)}</td>
-                  <td><Badge value={o.stage} /></td>
-                  <td className="cell-num">{fmtMoney(o.amount)}</td>
-                </tr>
-              ))}
-              {((doc.opportunities as Rec[]) ?? []).length === 0 && <tr><td colSpan={3} className="muted" style={{ padding: 16 }}>No opportunities.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section className="card">
-        <div className="card-head"><h3>Sales</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Quote</th><th>Status</th><th className="cell-num">Total</th></tr></thead>
-            <tbody>
-              {((doc.quotations as Rec[]) ?? []).map((q) => (
-                <tr key={String(q.id)} className="row-click" onClick={() => navigate(`/sales/quotations/${q.id}`)}>
-                  <td className="cell-mono">{String(q.quotationNo)}</td>
-                  <td><Badge value={q.status} /></td>
-                  <td className="cell-num">{fmtMoney(q.total)}</td>
-                </tr>
-              ))}
-              {((doc.quotations as Rec[]) ?? []).length === 0 && <tr><td colSpan={3} className="muted" style={{ padding: 16 }}>No quotations.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section className="card">
-        <div className="card-head"><h3>Invoices</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Invoice</th><th>Status</th><th className="cell-num">Total</th><th className="cell-num">Balance</th></tr></thead>
-            <tbody>
-              {((doc.invoices as Rec[]) ?? []).map((inv) => (
-                <tr key={String(inv.id)} className="row-click" onClick={() => navigate(`/sales/invoices/${inv.id}`)}>
-                  <td className="cell-mono">{String(inv.invoiceNo)}</td>
-                  <td><Badge value={inv.status} /></td>
-                  <td className="cell-num">{fmtMoney(inv.total)}</td>
-                  <td className="cell-num">{fmtMoney(inv.balance)}</td>
-                </tr>
-              ))}
-              {((doc.invoices as Rec[]) ?? []).length === 0 && <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>No invoices.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      {plant.length > 0 && (
+      )}
+      {tab === 'Contacts' && (
         <section className="card">
-          <div className="card-head"><h3>Plant work</h3></div>
+          <div className="card-head"><h3>Contacts</h3></div>
           <div className="table-wrap">
             <table className="data">
-              <thead><tr><th>WO</th><th>Product</th><th>Status</th><th className="cell-num">Qty</th></tr></thead>
+              <thead><tr><th>Name</th><th>Title</th><th>Phone</th><th>Email</th></tr></thead>
               <tbody>
-                {plant.map((w) => (
-                  <tr key={String(w.id)} className="row-click" onClick={() => navigate(`/plant/orders/${w.id}`)}>
-                    <td className="cell-mono">{String(w.woNo)}</td>
-                    <td>{String(w.productCode)} · {String(w.productName)}</td>
-                    <td><Badge value={w.status} /></td>
-                    <td className="cell-num">{fmtNum(w.producedQty)} / {fmtNum(w.quantity)}</td>
+                {((doc.contacts as Rec[]) ?? []).map((p) => (
+                  <tr key={String(p.id)}>
+                    <td>{String(p.firstName)} {String(p.lastName)} {p.isPrimary ? '· primary' : ''}</td>
+                    <td>{String(p.title ?? '—')}</td>
+                    <td>{String(p.phone ?? '—')}</td>
+                    <td>{String(p.email ?? '—')}</td>
                   </tr>
                 ))}
+                {((doc.contacts as Rec[]) ?? []).length === 0 && <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>No contacts on this account.</td></tr>}
               </tbody>
             </table>
           </div>
+          {can(user, 'crm.contacts.create') && (
+            <div className="card-pad" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input className="cell-input" placeholder="First" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+              <input className="cell-input" placeholder="Last" value={lastName} onChange={(e) => setLastName(e.target.value)} />
+              <input className="cell-input" placeholder="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              <button className="btn btn-sm" disabled={busy || !firstName || !lastName} onClick={() => act(`/api/ops/crm/customers/${id}/contacts`, { firstName, lastName, phone, isPrimary: ((doc.contacts as Rec[]) ?? []).length === 0 }, 'Contact saved')}>Add contact</button>
+            </div>
+          )}
         </section>
       )}
-      <section className="card">
-        <div className="card-head"><h3>Timeline</h3></div>
-        <ul className="timeline">
-          {timeline.map((e, i) => (
-            <li key={`${e.kind}-${e.ref}-${i}`}>
-              <span className="muted">{e.at ? String(e.at).slice(0, 10) : '—'}</span>
-              <span>{String(e.kind)}</span>
-              <span>{String(e.label)}</span>
-              <Badge value={e.status} />
-            </li>
-          ))}
-          {timeline.length === 0 && <li className="muted">No events yet.</li>}
-        </ul>
-      </section>
-      {can(user, 'crm.complaints.create') && (
-        <section className="card card-pad">
-          <h3>Open a complaint</h3>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <input className="cell-input" style={{ flex: 1 }} placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
-            <button className="btn" disabled={busy || !subject} onClick={() => act('/api/ops/crm/complaints', { customerId: id, subject }, 'Complaint opened')}>Log</button>
+      {tab === 'Sales' && (
+        <>
+          <section className="card">
+            <div className="card-head"><h3>Opportunities</h3></div>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Name</th><th>Stage</th><th className="cell-num">Amount</th></tr></thead>
+                <tbody>
+                  {((doc.opportunities as Rec[]) ?? []).map((o) => (
+                    <tr key={String(o.id)} className="row-click" onClick={() => navigate(`/crm/opportunities/${o.id}`)}>
+                      <td>{String(o.name)}</td>
+                      <td><Badge value={o.stage} /></td>
+                      <td className="cell-num">{fmtMoney(o.amount)}</td>
+                    </tr>
+                  ))}
+                  {((doc.opportunities as Rec[]) ?? []).length === 0 && <tr><td colSpan={3} className="muted" style={{ padding: 16 }}>No opportunities.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section className="card">
+            <div className="card-head"><h3>Quotations</h3></div>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Quote</th><th>Status</th><th className="cell-num">Total</th></tr></thead>
+                <tbody>
+                  {((doc.quotations as Rec[]) ?? []).map((q) => (
+                    <tr key={String(q.id)} className="row-click" onClick={() => navigate(`/sales/quotations/${q.id}`)}>
+                      <td className="cell-mono">{String(q.quotationNo)}</td>
+                      <td><Badge value={q.status} /></td>
+                      <td className="cell-num">{fmtMoney(q.total)}</td>
+                    </tr>
+                  ))}
+                  {((doc.quotations as Rec[]) ?? []).length === 0 && <tr><td colSpan={3} className="muted" style={{ padding: 16 }}>No quotations.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section className="card">
+            <div className="card-head"><h3>Invoices</h3></div>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Invoice</th><th>Status</th><th className="cell-num">Total</th><th className="cell-num">Balance</th></tr></thead>
+                <tbody>
+                  {((doc.invoices as Rec[]) ?? []).map((inv) => (
+                    <tr key={String(inv.id)} className="row-click" onClick={() => navigate(`/sales/invoices/${inv.id}`)}>
+                      <td className="cell-mono">{String(inv.invoiceNo)}</td>
+                      <td><Badge value={inv.status} /></td>
+                      <td className="cell-num">{fmtMoney(inv.total)}</td>
+                      <td className="cell-num">{fmtMoney(inv.balance)}</td>
+                    </tr>
+                  ))}
+                  {((doc.invoices as Rec[]) ?? []).length === 0 && <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>No invoices.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          {plant.length > 0 && (
+            <section className="card">
+              <div className="card-head"><h3>Plant work</h3></div>
+              <div className="table-wrap">
+                <table className="data">
+                  <thead><tr><th>WO</th><th>Product</th><th>Status</th><th className="cell-num">Qty</th></tr></thead>
+                  <tbody>
+                    {plant.map((w) => (
+                      <tr key={String(w.id)} className="row-click" onClick={() => navigate(`/plant/orders/${w.id}`)}>
+                        <td className="cell-mono">{String(w.woNo)}</td>
+                        <td>{String(w.productCode)} · {String(w.productName)}</td>
+                        <td><Badge value={w.status} /></td>
+                        <td className="cell-num">{fmtNum(w.producedQty)} / {fmtNum(w.quantity)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+        </>
+      )}
+      {tab === 'Timeline' && (
+        <section className="card">
+          <div className="card-head"><h3>Timeline</h3></div>
+          <div className="card-pad">
+            <CrmTimeline items={timeline} />
           </div>
         </section>
       )}
@@ -526,21 +691,15 @@ function CustomerComposer() {
   };
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <button className="btn btn-sm" onClick={() => navigate('/crm/customers')}>Back</button>
-          <h1>New account</h1>
-        </div>
-      </header>
+      <CrmComposerHead entity="Account" title="New account" onCancel={() => navigate('/crm/customers')} onSave={save} busy={busy} saveLabel="Save & close" />
       {error && <ErrorBanner error={error} />}
-      <section className="card card-pad">
+      <section className="crm-quick-create">
         <div className="form-grid">
-          <div className="field field-required" style={{ gridColumn: '1 / -1' }}><label>Name</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
+          <div className="field field-required" style={{ gridColumn: '1 / -1' }}><label>Account name</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
           <div className="field"><label>Phone</label><input value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
           <div className="field"><label>Email</label><input value={email} onChange={(e) => setEmail(e.target.value)} /></div>
           <div className="field"><label>Credit limit</label><input inputMode="decimal" value={limit} onChange={(e) => setLimit(e.target.value)} /></div>
         </div>
-        <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={busy} onClick={save}>Save account</button>
       </section>
     </div>
   );
@@ -560,17 +719,9 @@ function LeadList() {
   useEffect(() => { load(); }, [load]);
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="crm">Leads</p>
-          <h1>Inbound and prospecting</h1>
-        </div>
-        <button className="btn btn-primary" onClick={() => navigate('/crm/leads/new')}>New lead</button>
-      </header>
+      <CrmCommandBar entity="Lead" actions={[{ label: 'New', onClick: () => navigate('/crm/leads/new'), primary: true }]} />
+      <CrmViewBar title="Leads" view="All leads" count={rows.length} search={q} onSearch={setQ} placeholder="Filter leads" onNew={() => navigate('/crm/leads/new')} newLabel="New" />
       {error && <ErrorBanner error={error} />}
-      <div className="toolbar">
-        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search lead…" />
-      </div>
       <div className="table-wrap card">
         <table className="data">
           <thead><tr><th>Lead</th><th>Company / person</th><th>Source</th><th>Status</th><th className="cell-num">Score</th><th className="cell-num">Value</th></tr></thead>
@@ -602,6 +753,7 @@ function LeadDesk({ id }: { id: number }) {
   const [reason, setReason] = useState('');
   const [owners, setOwners] = useState<Rec[]>([]);
   const [ownerId, setOwnerId] = useState('');
+  const [tab, setTab] = useState('Summary');
   const load = useCallback(() => {
     api<{ data: { lead: Rec; activities: Rec[]; opportunities: Rec[] } }>(`/api/ops/crm/leads/${id}`)
       .then((r) => setDoc(r.data))
@@ -614,7 +766,9 @@ function LeadDesk({ id }: { id: number }) {
   if (error && !doc) return <ErrorBanner error={error} />;
   if (!doc) return <PageLoader label="Opening lead…" />;
   const lead = doc.lead;
-  const score = Number((lead.attributes as Rec | undefined)?.score ?? 0);
+  const score = Number((lead.attributes as Rec | undefined)?.score ?? lead.score ?? 0);
+  const status = String(lead.status);
+  const open = !['CONVERTED', 'DISQUALIFIED', 'LOST'].includes(status);
   const act = async (path: string, body: Rec = {}, ok = 'Done') => {
     setBusy(true); setError(''); setNotice('');
     try {
@@ -626,54 +780,115 @@ function LeadDesk({ id }: { id: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
+  const bpfCurrent = ['NEW', 'CONTACTED', 'QUALIFIED', 'CONVERTED'].includes(status) ? status : 'NEW';
+  const onBpf = open && can(user, 'crm.leads.update') ? (s: string) => {
+    if (s === 'CONTACTED') act(`/api/ops/crm/leads/${id}/contact`, {}, 'Marked contacted');
+    else if (s === 'QUALIFIED') act(`/api/ops/crm/leads/${id}/qualify`, {}, 'Qualified');
+    else if (s === 'CONVERTED' && can(user, 'crm.leads.convert')) act(`/api/ops/crm/leads/${id}/convert`, { createOpportunity: true }, 'Converted');
+  } : undefined;
+  const title = String(lead.companyName || `${lead.firstName ?? ''} ${lead.lastName ?? ''}`.trim() || lead.leadNo);
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <button className="btn btn-sm" onClick={() => navigate('/crm/leads')}>Back</button>
-          <h1>Lead <span className="cell-mono">{String(lead.leadNo)}</span></h1>
-          <p className="muted">{String(lead.companyName || `${lead.firstName ?? ''} ${lead.lastName ?? ''}`.trim())} · {String(lead.source)} · score {fmtNum(score)}</p>
+      <CrmCommandBar
+        entity="Lead"
+        actions={[
+          ...(status === 'NEW' && can(user, 'crm.leads.update') ? [{ label: 'Mark contacted', onClick: () => act(`/api/ops/crm/leads/${id}/contact`, {}, 'Marked contacted'), disabled: busy }] : []),
+          ...(['NEW', 'CONTACTED'].includes(status) && can(user, 'crm.leads.update') ? [{ label: 'Qualify', onClick: () => act(`/api/ops/crm/leads/${id}/qualify`, {}, 'Qualified'), disabled: busy }] : []),
+          ...(open && can(user, 'crm.leads.convert') ? [{ label: 'Qualify & convert', onClick: () => act(`/api/ops/crm/leads/${id}/convert`, { createOpportunity: true }, 'Converted'), primary: true, disabled: busy }] : []),
+          ...(open && can(user, 'crm.leads.update') ? [{ label: 'Disqualify', onClick: () => act(`/api/ops/crm/leads/${id}/disqualify`, { reason: reason || 'Not a fit' }, 'Disqualified'), danger: true, disabled: busy }] : []),
+        ]}
+        extra={(
+          <>
+            {open && can(user, 'crm.leads.update') && (
+              <input className="cell-input" placeholder="Disqualify reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+            )}
+            {can(user, 'crm.leads.assign') && (
+              <>
+                <OwnerPicker value={ownerId} onChange={setOwnerId} owners={owners} />
+                <button className="crm-cmd-btn" disabled={busy || !ownerId} onClick={() => act(`/api/ops/crm/leads/${id}/assign`, { userId: Number(ownerId) }, 'Assigned')}>Assign</button>
+              </>
+            )}
+          </>
+        )}
+      />
+      <div className="crm-form-head">
+        <div className="crm-entity-type">Lead</div>
+        <div className="crm-form-title">
+          <h1>{title} <span className="cell-mono muted">{String(lead.leadNo)}</span></h1>
+          <Badge value={lead.status} />
         </div>
-        <Badge value={lead.status} />
-      </header>
+        <CrmHighlights items={[
+          { label: 'Topic', value: title },
+          { label: 'Source', value: stageLabel(String(lead.source ?? '—')) },
+          { label: 'Rating / score', value: fmtNum(score) },
+          { label: 'Est. value', value: fmtMoney(lead.value) },
+          { label: 'Phone', value: String(lead.phone ?? '—') },
+          { label: 'Owner', value: String(lead.ownerName || 'Unassigned') },
+        ]} />
+      </div>
+      <CrmBpf
+        stages={[
+          { id: 'NEW', label: 'New' },
+          { id: 'CONTACTED', label: 'Contact' },
+          { id: 'QUALIFIED', label: 'Qualify' },
+          { id: 'CONVERTED', label: 'Convert' },
+        ]}
+        current={bpfCurrent}
+        onSelect={onBpf}
+        busy={busy}
+      />
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <ErrorBanner error={error} />}
-      <div className="flow-actions" style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-        {String(lead.status) === 'NEW' && can(user, 'crm.leads.update') && (
-          <button className="btn" disabled={busy} onClick={() => act(`/api/ops/crm/leads/${id}/contact`, {}, 'Marked contacted')}>Mark contacted</button>
-        )}
-        {['NEW', 'CONTACTED'].includes(String(lead.status)) && can(user, 'crm.leads.update') && (
-          <button className="btn" disabled={busy} onClick={() => act(`/api/ops/crm/leads/${id}/qualify`, {}, 'Qualified')}>Qualify</button>
-        )}
-        {!['CONVERTED', 'DISQUALIFIED', 'LOST'].includes(String(lead.status)) && can(user, 'crm.leads.convert') && (
-          <button className="btn btn-primary" disabled={busy} onClick={() => act(`/api/ops/crm/leads/${id}/convert`, { createOpportunity: true }, 'Converted')}>Convert to account</button>
-        )}
-        {['NEW', 'CONTACTED', 'QUALIFIED'].includes(String(lead.status)) && can(user, 'crm.leads.update') && (
-          <>
-            <input className="cell-input" placeholder="Disqualify reason" value={reason} onChange={(e) => setReason(e.target.value)} />
-            <button className="btn btn-warning" disabled={busy} onClick={() => act(`/api/ops/crm/leads/${id}/disqualify`, { reason: reason || 'Not a fit' }, 'Disqualified')}>Disqualify</button>
-          </>
-        )}
-        {can(user, 'crm.leads.assign') && (
-          <>
-            <OwnerPicker value={ownerId} onChange={setOwnerId} owners={owners} />
-            <button className="btn btn-sm" disabled={busy || !ownerId} onClick={() => act(`/api/ops/crm/leads/${id}/assign`, { userId: Number(ownerId) }, 'Assigned')}>Assign</button>
-          </>
-        )}
-      </div>
-      {doc.activities.length > 0 && (
+      {status === 'DISQUALIFIED' && <div className="alert alert-error">This lead was disqualified.</div>}
+      <CrmTabs tabs={['Summary', 'Timeline']} active={tab} onChange={setTab} />
+      {tab === 'Summary' && (
+        <div className="crm-split">
+          <div>
+            <section className="card card-pad">
+              <h3>Lead details</h3>
+              <dl className="crm-highlights" style={{ marginTop: 12 }}>
+                <div className="crm-hl"><dt>Company</dt><dd>{String(lead.companyName ?? '—')}</dd></div>
+                <div className="crm-hl"><dt>Contact</dt><dd>{`${lead.firstName ?? ''} ${lead.lastName ?? ''}`.trim() || '—'}</dd></div>
+                <div className="crm-hl"><dt>Phone</dt><dd>{String(lead.phone ?? '—')}</dd></div>
+                <div className="crm-hl"><dt>Email</dt><dd>{String(lead.email ?? '—')}</dd></div>
+              </dl>
+            </section>
+            {doc.opportunities.length > 0 && (
+              <section className="card">
+                <div className="card-head"><h3>Opportunities</h3></div>
+                <div className="table-wrap">
+                  <table className="data">
+                    <thead><tr><th>Name</th><th>Stage</th><th className="cell-num">Amount</th></tr></thead>
+                    <tbody>
+                      {doc.opportunities.map((o) => (
+                        <tr key={String(o.id)} className="row-click" onClick={() => navigate(`/crm/opportunities/${o.id}`)}>
+                          <td>{String(o.name)}</td>
+                          <td><Badge value={o.stage} /></td>
+                          <td className="cell-num">{fmtMoney(o.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+          </div>
+          <aside>
+            <section className="card">
+              <div className="card-head"><h3>Timeline</h3></div>
+              <div className="card-pad">
+                <CrmTimeline items={doc.activities} />
+              </div>
+            </section>
+          </aside>
+        </div>
+      )}
+      {tab === 'Timeline' && (
         <section className="card">
-          <div className="card-head"><h3>Activity</h3></div>
-          <ul className="timeline">
-            {doc.activities.map((a) => (
-              <li key={String(a.id)}>
-                <span className="muted">{a.createdAt ? String(a.createdAt).slice(0, 10) : '—'}</span>
-                <span>{String(a.activityType)}</span>
-                <span>{String(a.subject)}</span>
-                <Badge value={a.done ? 'DONE' : 'OPEN'} />
-              </li>
-            ))}
-          </ul>
+          <div className="card-head"><h3>Timeline</h3></div>
+          <div className="card-pad">
+            <CrmTimeline items={doc.activities} />
+          </div>
         </section>
       )}
     </div>
@@ -703,28 +918,22 @@ function LeadComposer() {
   };
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <button className="btn btn-sm" onClick={() => navigate('/crm/leads')}>Back</button>
-          <h1>New lead</h1>
-        </div>
-      </header>
+      <CrmComposerHead entity="Lead" title="New lead" onCancel={() => navigate('/crm/leads')} onSave={save} busy={busy} />
       {error && <ErrorBanner error={error} />}
-      <section className="card card-pad">
+      <section className="crm-quick-create">
         <div className="form-grid">
-          <div className="field" style={{ gridColumn: '1 / -1' }}><label>Company</label><input value={companyName} onChange={(e) => setCompanyName(e.target.value)} /></div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}><label>Topic / company</label><input value={companyName} onChange={(e) => setCompanyName(e.target.value)} /></div>
           <div className="field"><label>First name</label><input value={firstName} onChange={(e) => setFirstName(e.target.value)} /></div>
           <div className="field"><label>Last name</label><input value={lastName} onChange={(e) => setLastName(e.target.value)} /></div>
           <div className="field"><label>Phone</label><input value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
-          <div className="field"><label>Expected value</label><input inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} /></div>
+          <div className="field"><label>Est. value</label><input inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} /></div>
           <div className="field">
-            <label>Source</label>
+            <label>Lead source</label>
             <select value={source} onChange={(e) => setSource(e.target.value)}>
-              {['REFERRAL', 'WALK_IN', 'WEBSITE', 'COLD_CALL', 'TRADE_SHOW', 'EXISTING', 'OTHER'].map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+              {['REFERRAL', 'WALK_IN', 'WEBSITE', 'COLD_CALL', 'TRADE_SHOW', 'EXISTING', 'OTHER'].map((s) => <option key={s} value={s}>{stageLabel(s)}</option>)}
             </select>
           </div>
         </div>
-        <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={busy} onClick={save}>Save lead</button>
       </section>
     </div>
   );
@@ -743,19 +952,20 @@ function Pipeline() {
   if (!data) return <PageLoader label="Opening pipeline…" />;
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="crm">Pipeline</p>
-          <h1>Open opportunities</h1>
-          <p className="muted">Weighted {fmtMoney(data.weighted)}. Drag is not used — open a card and move the stage.</p>
-        </div>
-        <button className="btn btn-primary" onClick={() => navigate('/crm/opportunities/new')}>New opportunity</button>
-      </header>
+      <CrmCommandBar
+        entity="Opportunity"
+        actions={[
+          { label: 'New', onClick: () => navigate('/crm/opportunities/new'), primary: true },
+          { label: 'Sales hub', onClick: () => navigate('/crm') },
+        ]}
+      />
+      <CrmViewBar title="Opportunity pipeline" view="Open opportunities" />
+      <p className="muted" style={{ margin: '-4px 0 12px' }}>Weighted forecast {fmtMoney(data.weighted)}. Open a card to move the business process.</p>
       <div className="pipe">
         {data.columns.map((col) => (
           <div key={col.stage} className="pipe-col">
             <header>
-              <strong>{col.stage.replace(/_/g, ' ')}</strong>
+              <strong>{stageLabel(col.stage)} <span className="muted">({col.rows.length})</span></strong>
               <span className="muted">{fmtMoney(col.total)}</span>
             </header>
             {col.rows.map((r) => (
@@ -765,7 +975,7 @@ function Pipeline() {
                 <span className="cell-mono">{fmtMoney(r.amount)} · {fmtNum(r.probability)}%</span>
               </button>
             ))}
-            {col.rows.length === 0 && <p className="muted" style={{ padding: '8px 4px' }}>Empty</p>}
+            {col.rows.length === 0 && <p className="muted" style={{ padding: '8px 4px' }}>No deals</p>}
           </div>
         ))}
       </div>
@@ -783,6 +993,7 @@ function OppDesk({ id }: { id: number }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState('Summary');
   const load = useCallback(() => {
     api<{ data: { opportunity: Rec; quotations: Rec[]; credit: Rec | null } }>(`/api/ops/crm/opportunities/${id}`)
       .then((r) => setDoc(r.data))
@@ -795,6 +1006,8 @@ function OppDesk({ id }: { id: number }) {
   if (error && !doc) return <ErrorBanner error={error} />;
   if (!doc) return <PageLoader label="Opening opportunity…" />;
   const o = doc.opportunity;
+  const status = String(o.status);
+  const open = status === 'OPEN';
   const act = async (path: string, body: Rec = {}, ok = 'Done') => {
     setBusy(true); setError(''); setNotice('');
     try {
@@ -806,85 +1019,145 @@ function OppDesk({ id }: { id: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  const stages = ['PROSPECTING', 'QUALIFICATION', 'NEEDS_ANALYSIS', 'VALUE_PROPOSITION', 'NEGOTIATION'];
+  const stages = [
+    { id: 'PROSPECTING', label: 'Prospect' },
+    { id: 'QUALIFICATION', label: 'Qualify' },
+    { id: 'NEEDS_ANALYSIS', label: 'Analyze' },
+    { id: 'VALUE_PROPOSITION', label: 'Propose' },
+    { id: 'NEGOTIATION', label: 'Negotiate' },
+  ];
+  const bpfCurrent = String(o.stage) === 'WON' || String(o.stage) === 'LOST' ? 'NEGOTIATION' : String(o.stage);
+  const canQuote = can(user, 'sales.quotations.create') && status !== 'LOST' && status !== 'ON_HOLD' && (!doc.credit || Boolean(doc.credit.ok));
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <button className="btn btn-sm" onClick={() => navigate('/crm/pipeline')}>Back</button>
+      <CrmCommandBar
+        entity="Opportunity"
+        actions={[
+          ...(canQuote ? [{ label: 'New quote', onClick: () => setTab('Product line'), primary: true, disabled: busy }] : []),
+          ...(open && can(user, 'crm.opportunities.win') ? [{ label: 'Close as won', onClick: () => act(`/api/ops/crm/opportunities/${id}/win`, {}, 'Won — customer will be notified'), success: true, disabled: busy }] : []),
+          ...(open && can(user, 'crm.opportunities.lose') ? [{ label: 'Close as lost', onClick: () => act(`/api/ops/crm/opportunities/${id}/lose`, { reason: 'Lost on desk' }, 'Lost'), danger: true, disabled: busy }] : []),
+          ...(open && can(user, 'crm.opportunities.update') ? [{ label: 'Hold', onClick: () => act(`/api/ops/crm/opportunities/${id}/hold`, { reason: 'Held on desk' }, 'On hold'), disabled: busy }] : []),
+          ...(status === 'ON_HOLD' && can(user, 'crm.opportunities.update') ? [{ label: 'Resume', onClick: () => act(`/api/ops/crm/opportunities/${id}/resume`, {}, 'Resumed'), primary: true, disabled: busy }] : []),
+          { label: 'Open account', onClick: () => o.customerId && navigate(`/crm/customers/${o.customerId}`), disabled: !o.customerId },
+        ]}
+        extra={can(user, 'crm.opportunities.assign') && ['OPEN', 'ON_HOLD'].includes(status) ? <AssignInline entity="opportunities" id={id} onDone={load} /> : null}
+      />
+      <div className="crm-form-head">
+        <div className="crm-entity-type">Opportunity</div>
+        <div className="crm-form-title">
           <h1>{String(o.name)}</h1>
-          <p className="muted">
-            <button className="linkish" onClick={() => o.customerId && navigate(`/crm/customers/${o.customerId}`)}>{String(o.customerName ?? 'No account')}</button>
-            {' · '}{fmtMoney(o.amount)} · {fmtNum(o.probability)}%
-          </p>
+          <Badge value={o.stage} />
         </div>
-        <Badge value={o.stage} />
-      </header>
+        <CrmHighlights items={[
+          { label: 'Account', value: (
+            <button className="linkish" onClick={() => o.customerId && navigate(`/crm/customers/${o.customerId}`)}>{String(o.customerName ?? 'No account')}</button>
+          ) },
+          { label: 'Est. revenue', value: fmtMoney(o.amount) },
+          { label: 'Probability', value: `${fmtNum(o.probability)}%` },
+          { label: 'Status', value: status },
+          { label: 'Credit', value: doc.credit ? (doc.credit.ok ? 'OK' : String(doc.credit.reason ?? 'Hold')) : '—' },
+          { label: 'Owner', value: String(o.ownerName || 'Unassigned') },
+        ]} />
+      </div>
+      <CrmBpf
+        stages={stages}
+        current={bpfCurrent}
+        onSelect={open ? (s) => act(`/api/ops/crm/opportunities/${id}/move`, { stage: s }, `${stageLabel(s)} — customer will be notified`) : undefined}
+        busy={busy}
+      />
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <ErrorBanner error={error} />}
       {doc.credit && !doc.credit.ok && (
         <div className="alert alert-error">Credit hold: {String(doc.credit.reason)}. Quoting is blocked.</div>
       )}
-      {String(o.status) === 'ON_HOLD' && (
+      {status === 'ON_HOLD' && (
         <div className="alert alert-error">This opportunity is on hold. Resume it before quoting.</div>
       )}
-      {['OPEN', 'ON_HOLD'].includes(String(o.status)) && (
-        <div className="flow-actions" style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-          {String(o.status) === 'OPEN' && stages.map((s) => (
-            <button key={s} className="btn btn-sm" disabled={busy || s === String(o.stage)} onClick={() => act(`/api/ops/crm/opportunities/${id}/move`, { stage: s }, s.replace(/_/g, ' '))}>{s.replace(/_/g, ' ')}</button>
-          ))}
-          {String(o.status) === 'OPEN' && can(user, 'crm.opportunities.win') && <button className="btn btn-success" disabled={busy} onClick={() => act(`/api/ops/crm/opportunities/${id}/win`, {}, 'Won')}>Win</button>}
-          {String(o.status) === 'OPEN' && can(user, 'crm.opportunities.lose') && <button className="btn btn-warning" disabled={busy} onClick={() => act(`/api/ops/crm/opportunities/${id}/lose`, { reason: 'Lost on desk' }, 'Lost')}>Lose</button>}
-          {String(o.status) === 'OPEN' && can(user, 'crm.opportunities.update') && (
-            <button className="btn" disabled={busy} onClick={() => act(`/api/ops/crm/opportunities/${id}/hold`, { reason: 'Held on desk' }, 'On hold')}>Hold</button>
-          )}
-          {String(o.status) === 'ON_HOLD' && can(user, 'crm.opportunities.update') && (
-            <button className="btn btn-primary" disabled={busy} onClick={() => act(`/api/ops/crm/opportunities/${id}/resume`, {}, 'Resumed')}>Resume</button>
-          )}
-          {can(user, 'crm.opportunities.assign') && <AssignInline entity="opportunities" id={id} onDone={load} />}
+      {open && (
+        <p className="muted" style={{ margin: '0 0 10px' }}>Stage changes and wins email and SMS the customer when contact details are on file.</p>
+      )}
+      <CrmTabs tabs={['Summary', 'Product line', 'Quotes']} active={tab} onChange={setTab} />
+      {tab === 'Summary' && (
+        <div className="crm-split">
+          <section className="card card-pad">
+            <h3>Deal summary</h3>
+            <dl className="crm-highlights" style={{ marginTop: 12 }}>
+              <div className="crm-hl"><dt>Topic</dt><dd>{String(o.name)}</dd></div>
+              <div className="crm-hl"><dt>Pipeline stage</dt><dd>{stageLabel(String(o.stage))}</dd></div>
+              <div className="crm-hl"><dt>Est. close</dt><dd>{o.expectedClose ? String(o.expectedClose).slice(0, 10) : '—'}</dd></div>
+              <div className="crm-hl"><dt>Weighted</dt><dd>{fmtMoney(Number(o.amount ?? 0) * Number(o.probability ?? 0) / 100)}</dd></div>
+            </dl>
+          </section>
+          <aside>
+            <section className="card">
+              <div className="card-head"><h3>Quotes</h3></div>
+              <div className="table-wrap">
+                <table className="data">
+                  <thead><tr><th>Quote</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {doc.quotations.slice(0, 5).map((q) => (
+                      <tr key={String(q.id)} className="row-click" onClick={() => navigate(`/sales/quotations/${q.id}`)}>
+                        <td className="cell-mono">{String(q.quotationNo)}</td>
+                        <td><Badge value={q.status} /></td>
+                      </tr>
+                    ))}
+                    {doc.quotations.length === 0 && <tr><td colSpan={2} className="muted" style={{ padding: 16 }}>No quotes yet.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </aside>
         </div>
       )}
-      {can(user, 'sales.quotations.create') && String(o.status) !== 'LOST' && String(o.status) !== 'ON_HOLD' && (!doc.credit || Boolean(doc.credit.ok)) && (
+      {tab === 'Product line' && (
         <section className="card card-pad">
           <h3>Quote this opportunity</h3>
-          <div className="form-grid" style={{ marginTop: 12 }}>
-            <div className="field field-required">
-              <label>Product</label>
-              <select value={productId} onChange={(e) => {
-                setProductId(e.target.value);
-                const p = products.find((x) => String(x.id) === e.target.value);
-                if (p && !price) setPrice(String(p.standardPrice ?? p.standard_price ?? ''));
-              }}>
-                <option value="">Select…</option>
-                {products.map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.code)} · {String(p.name)} · ATP {fmtNum(p.availableQty)}</option>)}
-              </select>
-            </div>
-            <div className="field"><label>Qty</label><input inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} /></div>
-            <div className="field"><label>Unit price</label><input inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} /></div>
-          </div>
-          <button className="btn btn-primary" style={{ marginTop: 12 }} disabled={busy || !productId || !price} onClick={() => act(`/api/ops/crm/opportunities/${id}/quote`, {
-            items: [{ productId: Number(productId), quantity: Number(qty), unitPrice: Number(price) }],
-          })}>Create quotation</button>
+          {canQuote ? (
+            <>
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <div className="field field-required">
+                  <label>Product</label>
+                  <select value={productId} onChange={(e) => {
+                    setProductId(e.target.value);
+                    const p = products.find((x) => String(x.id) === e.target.value);
+                    if (p && !price) setPrice(String(p.standardPrice ?? p.standard_price ?? ''));
+                  }}>
+                    <option value="">Select…</option>
+                    {products.map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.code)} · {String(p.name)} · ATP {fmtNum(p.availableQty)}</option>)}
+                  </select>
+                </div>
+                <div className="field"><label>Qty</label><input inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} /></div>
+                <div className="field"><label>Unit price</label><input inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} /></div>
+              </div>
+              <button className="btn btn-primary" style={{ marginTop: 12 }} disabled={busy || !productId || !price} onClick={() => act(`/api/ops/crm/opportunities/${id}/quote`, {
+                items: [{ productId: Number(productId), quantity: Number(qty), unitPrice: Number(price) }],
+              })}>Create quotation</button>
+            </>
+          ) : (
+            <p className="muted" style={{ marginTop: 12 }}>Quoting is blocked for this opportunity.</p>
+          )}
         </section>
       )}
-      <section className="card">
-        <div className="card-head"><h3>Quotations</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Quote</th><th>Status</th><th className="cell-num">Total</th></tr></thead>
-            <tbody>
-              {doc.quotations.map((q) => (
-                <tr key={String(q.id)} className="row-click" onClick={() => navigate(`/sales/quotations/${q.id}`)}>
-                  <td className="cell-mono">{String(q.quotationNo)}</td>
-                  <td><Badge value={q.status} /></td>
-                  <td className="cell-num">{fmtMoney(q.total)}</td>
-                </tr>
-              ))}
-              {doc.quotations.length === 0 && <tr><td colSpan={3} className="muted" style={{ padding: 16 }}>No quotations yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {tab === 'Quotes' && (
+        <section className="card">
+          <div className="card-head"><h3>Quotations</h3></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Quote</th><th>Status</th><th className="cell-num">Total</th></tr></thead>
+              <tbody>
+                {doc.quotations.map((q) => (
+                  <tr key={String(q.id)} className="row-click" onClick={() => navigate(`/sales/quotations/${q.id}`)}>
+                    <td className="cell-mono">{String(q.quotationNo)}</td>
+                    <td><Badge value={q.status} /></td>
+                    <td className="cell-num">{fmtMoney(q.total)}</td>
+                  </tr>
+                ))}
+                {doc.quotations.length === 0 && <tr><td colSpan={3} className="muted" style={{ padding: 16 }}>No quotations yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -918,14 +1191,9 @@ function OppComposer() {
   };
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <button className="btn btn-sm" onClick={() => navigate('/crm/pipeline')}>Back</button>
-          <h1>New opportunity</h1>
-        </div>
-      </header>
+      <CrmComposerHead entity="Opportunity" title="New opportunity" onCancel={() => navigate('/crm/pipeline')} onSave={save} busy={busy} />
       {error && <ErrorBanner error={error} />}
-      <section className="card card-pad">
+      <section className="crm-quick-create">
         <div className="form-grid">
           <div className="field field-required">
             <label>Account</label>
@@ -934,10 +1202,9 @@ function OppComposer() {
               {customers.map((c) => <option key={String(c.id)} value={String(c.id)}>{String(c.code)} · {String(c.name)}</option>)}
             </select>
           </div>
-          <div className="field field-required"><label>Name</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
-          <div className="field"><label>Amount</label><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+          <div className="field field-required"><label>Topic</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
+          <div className="field"><label>Est. revenue</label><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
         </div>
-        <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={busy} onClick={save}>Save</button>
       </section>
     </div>
   );
@@ -964,12 +1231,8 @@ function ActivityList() {
   };
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="crm">Activities</p>
-          <h1>Open follow-ups</h1>
-        </div>
-      </header>
+      <CrmCommandBar entity="Activity" actions={[{ label: 'My work', onClick: () => navigate('/crm/mine') }]} />
+      <CrmViewBar title="Activities" view="Open follow-ups" count={rows.length} />
       {error && <ErrorBanner error={error} />}
       <div className="table-wrap card">
         <table className="data">
@@ -1000,12 +1263,8 @@ function ComplaintList() {
   }, []);
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="crm">Service</p>
-          <h1>Complaints</h1>
-        </div>
-      </header>
+      <CrmCommandBar entity="Case" actions={[{ label: 'Sales hub', onClick: () => navigate('/crm') }]} />
+      <CrmViewBar title="Cases" view="All cases" count={rows.length} />
       {error && <ErrorBanner error={error} />}
       <div className="table-wrap card">
         <table className="data">
@@ -1032,6 +1291,7 @@ function ComplaintDesk({ id }: { id: number }) {
   const { user } = useAuth();
   const [doc, setDoc] = useState<{ complaint: Rec } | null>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [resolution, setResolution] = useState('');
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => {
@@ -1043,43 +1303,66 @@ function ComplaintDesk({ id }: { id: number }) {
   if (error && !doc) return <ErrorBanner error={error} />;
   if (!doc) return <PageLoader label="Opening complaint…" />;
   const c = doc.complaint;
-  const act = async (path: string, body: Rec = {}) => {
-    setBusy(true); setError('');
+  const act = async (path: string, body: Rec = {}, ok = 'Done') => {
+    setBusy(true); setError(''); setNotice('');
     try {
       await api(path, { method: 'POST', body: JSON.stringify(body) });
+      setNotice(ok);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
+  const status = String(c.status);
+  const open = ['OPEN', 'IN_PROGRESS', 'ESCALATED'].includes(status);
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <button className="btn btn-sm" onClick={() => navigate('/crm/complaints')}>Back</button>
-          <h1>Complaint <span className="cell-mono">{String(c.complaintNo)}</span></h1>
-          <p className="muted">{String(c.customerName)} · {String(c.subject)}</p>
+      <CrmCommandBar
+        entity="Case"
+        actions={[
+          ...(open && can(user, 'crm.complaints.escalate') && status !== 'ESCALATED' ? [{ label: 'Escalate', onClick: () => act(`/api/ops/crm/complaints/${id}/escalate`), danger: true, disabled: busy }] : []),
+          ...(open && can(user, 'crm.complaints.resolve') ? [{ label: 'Resolve', onClick: () => act(`/api/ops/crm/complaints/${id}/resolve`, { resolution }, 'Resolved — customer will be notified'), success: true, disabled: busy || !resolution }] : []),
+          ...(c.customerId != null ? [{ label: 'Open account', onClick: () => navigate(`/crm/customers/${c.customerId}`) }] : []),
+        ]}
+        extra={open && can(user, 'crm.complaints.resolve') ? (
+          <input className="cell-input" placeholder="Resolution" value={resolution} onChange={(e) => setResolution(e.target.value)} />
+        ) : null}
+      />
+      <div className="crm-form-head">
+        <div className="crm-entity-type">Case</div>
+        <div className="crm-form-title">
+          <h1>{String(c.subject)} <span className="cell-mono muted">{String(c.complaintNo)}</span></h1>
+          <Badge value={c.status} />
         </div>
-        <Badge value={c.status} />
-      </header>
+        <CrmHighlights items={[
+          { label: 'Account', value: String(c.customerName ?? '—') },
+          { label: 'Priority', value: String(c.priority ?? '—') },
+          { label: 'Status', value: status },
+          { label: 'Owner', value: String(c.ownerName || 'Unassigned') },
+        ]} />
+      </div>
+      <CrmBpf
+        stages={[
+          { id: 'OPEN', label: 'Identify' },
+          { id: 'IN_PROGRESS', label: 'Research' },
+          { id: 'ESCALATED', label: 'Escalate' },
+          { id: 'RESOLVED', label: 'Resolve' },
+        ]}
+        current={status === 'CLOSED' ? 'RESOLVED' : status}
+      />
+      {notice && <div className="alert alert-success">{notice}</div>}
       {error && <ErrorBanner error={error} />}
-      {['OPEN', 'IN_PROGRESS', 'ESCALATED'].includes(String(c.status)) && (
-        <div className="flow-actions" style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-          {can(user, 'crm.complaints.escalate') && String(c.status) !== 'ESCALATED' && (
-            <button className="btn btn-warning" disabled={busy} onClick={() => act(`/api/ops/crm/complaints/${id}/escalate`)}>Escalate</button>
-          )}
-          {can(user, 'crm.complaints.resolve') && (
-            <>
-              <input className="cell-input" style={{ minWidth: 240 }} placeholder="Resolution" value={resolution} onChange={(e) => setResolution(e.target.value)} />
-              <button className="btn btn-success" disabled={busy || !resolution} onClick={() => act(`/api/ops/crm/complaints/${id}/resolve`, { resolution })}>Resolve</button>
-            </>
-          )}
-        </div>
-      )}
-      {c.resolution != null && <section className="card card-pad"><p>{String(c.resolution)}</p></section>}
-      {c.customerId != null && (
-        <button className="btn" onClick={() => navigate(`/crm/customers/${c.customerId}`)}>Open account 360</button>
-      )}
+      <CrmTabs tabs={['Summary']} active="Summary" onChange={() => undefined} />
+      <section className="card card-pad">
+        <h3>Description</h3>
+        <p style={{ marginTop: 8 }}>{String(c.notes ?? c.subject ?? '—')}</p>
+        {c.resolution != null && (
+          <>
+            <h3 style={{ marginTop: 16 }}>Resolution</h3>
+            <p style={{ marginTop: 8 }}>{String(c.resolution)}</p>
+          </>
+        )}
+      </section>
     </div>
   );
 }
@@ -1101,18 +1384,19 @@ function MyDesk() {
   const complaints = (data.complaints as Rec[]) ?? [];
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="crm">My desk</p>
-          <h1>Assigned work</h1>
-          <p className="muted">Leads, opportunities, follow-ups, and complaints owned by you.</p>
-        </div>
-      </header>
-      <div className="kpi-grid">
-        <div className="kpi-card"><span className="kpi-label">My leads</span><span className="kpi-value">{fmtNum(kpis.myLeads)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">My pipeline</span><span className="kpi-value">{fmtNum(kpis.myOpps)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Follow-ups</span><span className="kpi-value">{fmtNum(kpis.myFollowUps)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Complaints</span><span className="kpi-value">{fmtNum(kpis.myComplaints)}</span></div>
+      <CrmCommandBar
+        entity="My work"
+        actions={[
+          { label: 'New lead', onClick: () => navigate('/crm/leads/new') },
+          { label: 'New opportunity', onClick: () => navigate('/crm/opportunities/new'), primary: true },
+        ]}
+      />
+      <CrmViewBar title="My work" view="Assigned to me" />
+      <div className="crm-insight">
+        <button className="crm-insight-card" onClick={() => navigate('/crm/leads')}><span className="k">My leads</span><span className="v">{fmtNum(kpis.myLeads)}</span></button>
+        <button className="crm-insight-card" onClick={() => navigate('/crm/pipeline')}><span className="k">My pipeline</span><span className="v">{fmtNum(kpis.myOpps)}</span></button>
+        <button className="crm-insight-card" onClick={() => navigate('/crm/activities')}><span className="k">Follow-ups</span><span className="v">{fmtNum(kpis.myFollowUps)}</span></button>
+        <button className="crm-insight-card" onClick={() => navigate('/crm/complaints')}><span className="k">Cases</span><span className="v">{fmtNum(kpis.myComplaints)}</span></button>
       </div>
       <section className="card">
         <div className="card-head"><h3>Leads</h3></div>
@@ -1211,32 +1495,28 @@ function CrmAnalytics() {
   const stages = (data.stages as Rec[]) ?? [];
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="crm">Analytics</p>
-          <h1>Forecast and conversion</h1>
-          <p className="muted">Weighted pipeline, win rate, source mix, and AR aging. Figures come from live CRM, sales, and AR — not a sidecar cube.</p>
+      <CrmCommandBar entity="Dashboard" actions={[{ label: 'Pipeline', onClick: () => navigate('/crm/pipeline') }, { label: 'Sales hub', onClick: () => navigate('/crm') }]} />
+      <CrmViewBar title="Sales dashboards" view="Forecast and conversion" />
+      <p className="muted" style={{ margin: '-4px 0 12px' }}>Weighted pipeline, win rate, source mix, and AR aging from live CRM, sales, and AR.</p>
+      <div className="crm-insight">
+        <div className="crm-insight-card">
+          <span className="k">Conversion</span>
+          <span className="v">{fmtNum(data.conversionRate)}%</span>
+          <span className="s">{fmtNum(funnel.leadsConverted)} of {fmtNum(funnel.leadsTotal)} leads</span>
         </div>
-      </header>
-      <div className="kpi-grid">
-        <div className="kpi-card">
-          <span className="kpi-label">Conversion</span>
-          <span className="kpi-value">{fmtNum(data.conversionRate)}%</span>
-          <span className="kpi-sub">{fmtNum(funnel.leadsConverted)} of {fmtNum(funnel.leadsTotal)} leads</span>
+        <div className="crm-insight-card">
+          <span className="k">Win rate</span>
+          <span className="v">{fmtNum(data.winRate)}%</span>
+          <span className="s">{fmtNum(funnel.oppsWon)} won · {fmtNum(funnel.oppsLost)} lost</span>
         </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Win rate</span>
-          <span className="kpi-value">{fmtNum(data.winRate)}%</span>
-          <span className="kpi-sub">{fmtNum(funnel.oppsWon)} won · {fmtNum(funnel.oppsLost)} lost</span>
+        <div className="crm-insight-card">
+          <span className="k">Weighted forecast</span>
+          <span className="v">{fmtMoney(forecast.weighted)}</span>
+          <span className="s">This month {fmtMoney(forecast.thisMonth)} · next {fmtMoney(forecast.nextMonth)}</span>
         </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Weighted forecast</span>
-          <span className="kpi-value">{fmtMoney(forecast.weighted)}</span>
-          <span className="kpi-sub">This month {fmtMoney(forecast.thisMonth)} · next {fmtMoney(forecast.nextMonth)}</span>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-label">Won value</span>
-          <span className="kpi-value">{fmtMoney(funnel.wonValue)}</span>
+        <div className="crm-insight-card">
+          <span className="k">Won value</span>
+          <span className="v">{fmtMoney(funnel.wonValue)}</span>
         </div>
       </div>
       <div className="aging-row" style={{ marginBottom: 16 }}>
@@ -1324,16 +1604,9 @@ function ContactList() {
   useEffect(() => { load(); }, [load]);
   return (
     <div className="page">
-      <header className="page-head">
-        <div>
-          <p className="mod-kicker" data-mod="crm">Contacts</p>
-          <h1>People on accounts</h1>
-        </div>
-      </header>
+      <CrmCommandBar entity="Contact" actions={[{ label: 'New account', onClick: () => navigate('/crm/customers/new'), primary: true }]} />
+      <CrmViewBar title="Contacts" view="All contacts" count={rows.length} search={q} onSearch={setQ} placeholder="Filter contacts" />
       {error && <ErrorBanner error={error} />}
-      <div className="toolbar">
-        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search contact…" />
-      </div>
       <div className="table-wrap card">
         <table className="data">
           <thead><tr><th>Name</th><th>Account</th><th>Title</th><th>Phone</th><th>Email</th></tr></thead>

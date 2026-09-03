@@ -17,6 +17,9 @@ import {
   renderTemplate,
 } from '../../services/communication.js';
 import { sendEmail, sendSms, sendWhatsApp, type ProviderOverride } from '../../services/bird.js';
+import { isResendConfigured } from '../../services/resend.js';
+import { isAfricasTalkingConfigured } from '../../services/africastalking.js';
+import { config } from '../../config.js';
 import { messagingLimiter } from '../../middleware/rateLimits.js';
 
 export const communicationOpsRouter = Router();
@@ -24,7 +27,7 @@ export const communicationOpsRouter = Router();
 type OpFn = (client: pg.PoolClient, ctx: Ctx, body: any, params: Record<string, string>) => Promise<unknown>;
 type QueryFn = (client: pg.PoolClient, ctx: Ctx, query: Record<string, unknown>, params: Record<string, string>) => Promise<unknown>;
 
-const run = (permission: string, fn: OpFn) => [
+const run = (permission: string | string[], fn: OpFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
     const out = await tx((client) => fn(client, req.ctx, req.body ?? {}, req.params as Record<string, string>), req.ctx);
@@ -32,7 +35,7 @@ const run = (permission: string, fn: OpFn) => [
   }),
 ];
 
-const runGet = (permission: string, fn: QueryFn) => [
+const runGet = (permission: string | string[], fn: QueryFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
     const out = await tx(
@@ -641,18 +644,38 @@ communicationOpsRouter.get(
   ...runGet('communication.command.view', async (c, ctx) => {
     const uid = ctx.userId ?? 0;
     const tenantId = ctx.tenantId ?? 0;
-    const [messages, emails, notifications, deliveries, templates, channels, unread, urgent] = await Promise.all([
+    const [messages, emails, notifications, deliveries, templates, channels, unread, urgent, emailOut, smsOut, lastEmail, lastSms] = await Promise.all([
       c.query(`SELECT count(*)::int AS v FROM conversation_messages WHERE tenant_id = $1`, [tenantId]),
       c.query(`SELECT count(*)::int AS v FROM emails WHERE tenant_id = $1`, [tenantId]),
       c.query(`SELECT count(*)::int AS v FROM notifications WHERE user_id = $1 AND tenant_id = $2`, [uid, tenantId]),
-      c.query(`SELECT status, count(*)::int AS v FROM notification_deliveries WHERE user_id = $1 AND tenant_id = $2 GROUP BY status`, [uid, tenantId]),
+      c.query(`SELECT status, count(*)::int AS v FROM notification_deliveries WHERE tenant_id = $1 GROUP BY status`, [tenantId]),
       c.query(`SELECT count(*)::int AS v FROM email_templates WHERE tenant_id = $1`, [tenantId]),
       c.query(`SELECT count(*)::int AS v FROM communication_channels WHERE tenant_id = $1`, [tenantId]),
       c.query(`SELECT count(*)::int AS v FROM notifications WHERE user_id = $1 AND tenant_id = $2 AND read_at IS NULL AND archived_at IS NULL AND (snoozed_until IS NULL OR snoozed_until <= now())`, [uid, tenantId]),
       c.query(`SELECT count(*)::int AS v FROM notifications WHERE user_id = $1 AND tenant_id = $2 AND read_at IS NULL AND archived_at IS NULL AND priority IN ('URGENT','CRITICAL') AND (snoozed_until IS NULL OR snoozed_until <= now())`, [uid, tenantId]),
+      c.query(`SELECT status, count(*)::int AS v FROM emails WHERE tenant_id = $1 AND direction = 'OUT' GROUP BY status`, [tenantId]),
+      c.query(`SELECT status, count(*)::int AS v FROM sms_messages WHERE tenant_id = $1 GROUP BY status`, [tenantId]),
+      c.query(
+        `SELECT er.error FROM email_recipients er JOIN emails e ON e.id = er.email_id
+          WHERE e.tenant_id = $1 AND er.status = 'FAILED' AND er.error IS NOT NULL
+          ORDER BY er.id DESC LIMIT 1`,
+        [tenantId]
+      ),
+      c.query(
+        `SELECT error FROM sms_messages WHERE tenant_id = $1 AND status = 'FAILED' AND error IS NOT NULL
+          ORDER BY id DESC LIMIT 1`,
+        [tenantId]
+      ),
     ]);
     const deliveryByStatus: Record<string, number> = {};
     for (const r of deliveries.rows) deliveryByStatus[String(r.status)] = Number(r.v);
+    const countBy = (rows: { status: unknown; v: unknown }[]) => {
+      const out: Record<string, number> = {};
+      for (const r of rows) out[String(r.status)] = Number(r.v);
+      return out;
+    };
+    const emailsBy = countBy(emailOut.rows);
+    const smsBy = countBy(smsOut.rows);
     return {
       totals: {
         messages: Number(messages.rows[0].v),
@@ -662,8 +685,16 @@ communicationOpsRouter.get(
         channels: Number(channels.rows[0].v),
         unreadNotifications: Number(unread.rows[0].v),
         urgentNotifications: Number(urgent.rows[0].v),
+        emailsFailed: Number(emailsBy.FAILED ?? 0),
+        emailsSent: Number(emailsBy.SENT ?? 0),
+        smsFailed: Number(smsBy.FAILED ?? 0),
+        smsSent: Number(smsBy.SENT ?? 0),
       },
       deliveries: deliveryByStatus,
+      lastErrors: {
+        email: lastEmail.rows[0]?.error != null ? String(lastEmail.rows[0].error) : null,
+        sms: lastSms.rows[0]?.error != null ? String(lastSms.rows[0].error) : null,
+      },
     };
   })
 );
@@ -1102,25 +1133,75 @@ communicationOpsRouter.get(
   ...runGet('communication.delivery_logs.view', async (c, ctx, q) => {
     const tenantId = ctx.tenantId ?? 0;
     const { page, pageSize, offset } = parsePagination(q);
-    const where = ['d.tenant_id = $1'];
+    const where = ['TRUE'];
     const params: unknown[] = [tenantId];
     if (q.status) {
       params.push(String(q.status).toUpperCase());
-      where.push(`d.status = $${params.length}`);
+      where.push(`x.status = $${params.length}`);
     }
     if (q.channel) {
       params.push(String(q.channel).toUpperCase());
-      where.push(`d.channel = $${params.length}`);
+      where.push(`x.channel = $${params.length}`);
     }
     const { rows } = await c.query(
-      `SELECT d.*, n.title AS notification_title, n.priority AS notification_priority,
-              u.email AS user_email, u.first_name, u.last_name, u.username,
-              COUNT(*) OVER() AS _total
-         FROM notification_deliveries d
-         LEFT JOIN notifications n ON n.id = d.notification_id
-         LEFT JOIN users u ON u.id = d.user_id
+      `SELECT x.*, COUNT(*) OVER() AS _total FROM (
+          SELECT d.id,
+                 'NOTIFICATION'::text AS source,
+                 d.channel,
+                 d.status,
+                 COALESCE(NULLIF(d.recipient, ''), u.email, u.phone) AS recipient,
+                 n.title AS notification_title,
+                 d.error,
+                 d.retry_count,
+                 d.sent_at,
+                 d.created_at,
+                 n.priority AS notification_priority,
+                 u.email AS user_email,
+                 u.first_name,
+                 u.last_name,
+                 u.username,
+                 d.notification_id AS related_id
+            FROM notification_deliveries d
+            LEFT JOIN notifications n ON n.id = d.notification_id
+            LEFT JOIN users u ON u.id = d.user_id
+           WHERE d.tenant_id = $1
+          UNION ALL
+          SELECT er.id,
+                 'EMAIL'::text,
+                 'EMAIL'::text,
+                 er.status,
+                 er.email,
+                 e.subject,
+                 er.error,
+                 0,
+                 er.sent_at,
+                 er.created_at,
+                 NULL,
+                 NULL, NULL, NULL, NULL,
+                 e.id
+            FROM email_recipients er
+            JOIN emails e ON e.id = er.email_id
+           WHERE e.tenant_id = $1 AND e.direction = 'OUT'
+          UNION ALL
+          SELECT s.id,
+                 'SMS'::text,
+                 'SMS'::text,
+                 s.status,
+                 s.recipient,
+                 left(s.body, 120),
+                 s.error,
+                 s.retry_count,
+                 s.sent_at,
+                 s.created_at,
+                 NULL,
+                 NULL, NULL, NULL, NULL,
+                 s.id
+            FROM sms_messages s
+           WHERE s.tenant_id = $1
+        ) x
         WHERE ${where.join(' AND ')}
-        ORDER BY d.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        ORDER BY x.created_at DESC
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, pageSize, offset]
     );
     const total = rows.length ? Number(rows[0]._total) : 0;
@@ -1131,12 +1212,124 @@ communicationOpsRouter.get(
   })
 );
 
+communicationOpsRouter.post(
+  '/deliveries/retry',
+  ...run('communication.delivery_logs.view', async (c, ctx, b) => {
+    const tenantId = ctx.tenantId ?? 0;
+    const source = String(b.source ?? '').toUpperCase();
+    const id = Number(b.id);
+    if (!Number.isFinite(id) || id <= 0) throw badRequest('id is required');
+    if (source === 'EMAIL') {
+      const { rows } = await c.query(
+        `SELECT er.id, er.email, e.id AS email_id, e.subject, e.body
+           FROM email_recipients er
+           JOIN emails e ON e.id = er.email_id
+          WHERE er.id = $1 AND e.tenant_id = $2`,
+        [id, tenantId]
+      );
+      if (!rows[0]) throw notFound('Email delivery not found');
+      const to = String(rows[0].email ?? '').trim();
+      if (!to) throw badRequest('Recipient email is missing');
+      const subject = String(rows[0].subject ?? 'Hope Design');
+      const body = String(rows[0].body ?? '');
+      const result = await sendEmail({ to: [to], subject, html: body, text: body });
+      await c.query(
+        `UPDATE email_recipients
+            SET status = $2, error = $3, provider_message_id = $4, sent_at = CASE WHEN $5 THEN now() ELSE sent_at END
+          WHERE id = $1`,
+        [id, result.ok ? 'SENT' : 'FAILED', result.error ?? null, result.providerMessageId ?? null, result.ok]
+      );
+      await c.query(
+        `UPDATE emails SET status = $2, sent_at = CASE WHEN $3 THEN now() ELSE sent_at END, updated_at = now() WHERE id = $1`,
+        [Number(rows[0].email_id), result.ok ? 'SENT' : 'FAILED', result.ok]
+      );
+      await auditComms(c, ctx, result.ok ? 'EMAIL_RETRY_SENT' : 'EMAIL_RETRY_FAILED', 'email', Number(rows[0].email_id), {
+        recipientId: id, error: result.error ?? null,
+      });
+      return { source, id, ok: result.ok, error: result.error ?? null };
+    }
+    if (source === 'SMS') {
+      const { rows } = await c.query(
+        `SELECT id, recipient, body, retry_count FROM sms_messages WHERE id = $1 AND tenant_id = $2`,
+        [id, tenantId]
+      );
+      if (!rows[0]) throw notFound('SMS delivery not found');
+      const to = String(rows[0].recipient ?? '').trim();
+      const body = String(rows[0].body ?? '');
+      if (!to) throw badRequest('Recipient phone is missing');
+      const result = await sendSms({ to, text: body, category: 'service' });
+      await c.query(
+        `UPDATE sms_messages
+            SET status = $2, error = $3, provider = COALESCE($4, provider), provider_message_id = $5,
+                retry_count = COALESCE(retry_count, 0) + 1, sent_at = CASE WHEN $6 THEN now() ELSE sent_at END
+          WHERE id = $1`,
+        [id, result.ok ? 'SENT' : 'FAILED', result.error ?? null, result.provider ?? null, result.providerMessageId ?? null, result.ok]
+      );
+      await auditComms(c, ctx, result.ok ? 'SMS_RETRY_SENT' : 'SMS_RETRY_FAILED', 'sms_message', id, {
+        error: result.error ?? null,
+      });
+      return { source, id, ok: result.ok, error: result.error ?? null };
+    }
+    if (source === 'NOTIFICATION') {
+      const { rows } = await c.query(
+        `UPDATE notification_deliveries
+            SET status = 'QUEUED', error = NULL, next_retry_at = now()
+          WHERE id = $1 AND tenant_id = $2 AND channel IN ('EMAIL','SMS','WHATSAPP')
+          RETURNING id, channel`,
+        [id, tenantId]
+      );
+      if (!rows[0]) throw notFound('Notification delivery not found or not retryable');
+      await auditComms(c, ctx, 'NOTIFICATION_DELIVERY_REQUEUED', 'notification_delivery', id, {
+        channel: rows[0].channel,
+      });
+      return { source, id, ok: true, queued: true };
+    }
+    throw badRequest('source must be EMAIL, SMS or NOTIFICATION');
+  })
+);
+
+const PROVIDER_PERMS = ['communication.settings.manage', 'communication.delivery_logs.view'];
+
+communicationOpsRouter.get(
+  '/providers',
+  ...runGet(PROVIDER_PERMS, async () => {
+    const resend = isResendConfigured();
+    const bird = Boolean((config.bird.apiKey ?? '').trim());
+    const at = isAfricasTalkingConfigured();
+    return {
+      email: {
+        ready: resend || bird,
+        provider: resend ? 'resend' : bird ? 'bird' : 'none',
+        fromEmail: resend ? config.resend.fromEmail : config.bird.fromEmail,
+        fromName: resend ? config.resend.fromName : config.bird.fromName,
+      },
+      sms: {
+        ready: at || bird,
+        provider: at ? 'africastalking' : bird ? 'bird' : 'none',
+        senderId: at
+          ? (config.africastalking.senderId || null)
+          : (config.bird.smsFrom || null),
+      },
+      whatsapp: {
+        ready: Boolean(config.africastalking.whatsappNumber.trim()) || Boolean(config.bird.whatsappFrom.trim()) || bird,
+        provider: config.africastalking.whatsappNumber.trim()
+          ? 'africastalking'
+          : config.bird.whatsappFrom.trim()
+            ? 'bird'
+            : bird
+              ? 'bird'
+              : 'none',
+      },
+    };
+  })
+);
+
 // ---------------------------------------------------------------------------
-// Provider test (Bird)
+// Provider test (Bird / Resend / Africa's Talking)
 // ---------------------------------------------------------------------------
 communicationOpsRouter.post(
   '/test-send',
-  ...run('communication.settings.manage', async (c, ctx, b) => {
+  ...run(PROVIDER_PERMS, async (c, ctx, b) => {
     const channel = String(b.channel ?? '').toUpperCase();
     const to = String(b.to ?? '').trim();
     if (!['EMAIL', 'SMS', 'WHATSAPP'].includes(channel)) throw badRequest('channel must be EMAIL, SMS or WHATSAPP');
@@ -1157,6 +1350,41 @@ communicationOpsRouter.post(
         : channel === 'SMS'
           ? await sendSms({ to, text: body, category: 'service' }, provider as ProviderOverride)
           : await sendWhatsApp({ to, text: { body } }, provider as ProviderOverride);
+    const tenantId = ctx.tenantId ?? 0;
+    const status = result.ok ? 'SENT' : 'FAILED';
+    const sentAt = result.ok ? new Date() : null;
+    if (channel === 'EMAIL') {
+      const { rows } = await c.query(
+        `INSERT INTO emails
+           (tenant_id, company_id, branch_id, direction, subject, body, "to", status, sent_at,
+            entity_type, created_by)
+         VALUES ($1,$2,$3,'OUT',$4,$5,$6,$7,$8,'communication_provider_test',$9) RETURNING id`,
+        [
+          tenantId, ctx.companyId ?? null, ctx.branchId ?? null,
+          subject, body, JSON.stringify([to]), status, sentAt, ctx.userId ?? null,
+        ]
+      );
+      const emailId = Number(rows[0]?.id);
+      if (emailId) {
+        await c.query(
+          `INSERT INTO email_recipients (tenant_id, email_id, kind, email, status, provider_message_id, error, sent_at)
+           VALUES ($1,$2,'TO',$3,$4,$5,$6,$7)`,
+          [tenantId, emailId, to, status, result.providerMessageId ?? null, result.error ?? null, sentAt]
+        );
+      }
+    } else if (channel === 'SMS') {
+      await c.query(
+        `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, provider_message_id, error, sent_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [tenantId, ctx.userId ?? null, to, body, result.provider ?? null, status, result.providerMessageId ?? null, result.error ?? null, sentAt]
+      );
+    } else {
+      await c.query(
+        `INSERT INTO whatsapp_messages (tenant_id, user_id, recipient, body, provider, status, provider_message_id, error, sent_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [tenantId, ctx.userId ?? null, to, body, result.provider ?? null, status, result.providerMessageId ?? null, result.error ?? null, sentAt]
+      );
+    }
     await auditComms(c, ctx, 'PROVIDER_TEST_SENT', 'communication_provider', null, {
       channel, to, provider, ok: result.ok, providerMessageId: result.providerMessageId ?? null, error: result.error ?? null,
     });

@@ -377,6 +377,13 @@ export async function moveOpportunity(client: pg.PoolClient, ctx: Ctx, opportuni
     [opportunityId, ctx.tenantId, stage, STAGE_PROB[stage] ?? 10]
   );
   if (res.rows.length === 0) throw badRequest('Opportunity not found or already closed');
+  await emitEvent(client, ctx, {
+    eventType: 'crm.opportunity_moved',
+    entityType: 'opportunities',
+    entityId: opportunityId,
+    entityCode: String(res.rows[0].name),
+    payload: { stage },
+  });
   return { opportunityId, stage, status: 'OPEN' };
 }
 
@@ -539,6 +546,12 @@ export async function resolveComplaint(client: pg.PoolClient, ctx: Ctx, complain
     [complaintId, ctx.tenantId, resolution || 'Resolved']
   );
   if (res.rows.length === 0) throw badRequest('Complaint not found or already closed');
+  await emitEvent(client, ctx, {
+    eventType: 'crm.complaint_resolved',
+    entityType: 'complaints',
+    entityId: complaintId,
+    entityCode: String(res.rows[0].complaint_no),
+  });
   return { complaintId, complaintNo: res.rows[0].complaint_no, status: 'RESOLVED' };
 }
 

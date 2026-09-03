@@ -27,8 +27,8 @@ export const DEFAULT_COMPANY: CompanyBrand = {
   tagline: 'Paper Manufacturing & Printing',
   address: 'Plot 12, Namanve Industrial Park, Kampala, Uganda',
   phone: '+256 414 000 000',
-  email: 'info@hopedesign.co.ug',
-  website: 'https://hopedesign.co.ug',
+  email: 'info@hopedesign.jorlentech.com',
+  website: 'https://hopedesign.jorlentech.com',
 };
 
 export const BRAND_COLORS = {

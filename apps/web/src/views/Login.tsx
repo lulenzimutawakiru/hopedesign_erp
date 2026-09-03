@@ -6,6 +6,14 @@ import { branchLabel, shortCompanyName, useCompanyProfile } from '../company';
 
 type Stage = 'credentials' | 'mfa' | 'enroll';
 
+function telHref(phone: string): string {
+  return 'tel:' + phone.replace(/[^\d+]/g, '');
+}
+
+function mailtoHref(email: string, subject: string, body: string): string {
+  return `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
 export default function Login() {
   const { login, completeMfa, startEnrollment, completeEnrollment } = useAuth();
   const company = useCompanyProfile();
@@ -18,6 +26,24 @@ export default function Login() {
   const [otpauthUrl, setOtpauthUrl] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  const osName = `${shortCompanyName(company.name)} OS`;
+  const adminEmail = (company.email || company.branch_email).trim();
+  const adminPhone = (company.phone || company.branch_phone).trim();
+  const resetMail = adminEmail
+    ? mailtoHref(
+        adminEmail,
+        `Password reset — ${osName}`,
+        `Please reset the plant login for:\n\nUsername or email: ${identifier.trim() || '(not provided)'}\n\nI cannot sign in to ${osName}.`
+      )
+    : '';
+  const contactMail = adminEmail
+    ? mailtoHref(
+        adminEmail,
+        `Sign-in help — ${osName}`,
+        `I need help signing in to ${osName}.\n\nUsername or email: ${identifier.trim() || '(not provided)'}`
+      )
+    : '';
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -63,15 +89,22 @@ export default function Login() {
 
   return (
     <div className="login-page">
-      <div className="login-hero">
-        <div>
+      <aside className="login-hero">
+        <img
+          className="login-hero-photo"
+          src="/login-mill.jpg"
+          alt="Paper mill and security printing hall"
+        />
+        <div className="login-hero-veil" aria-hidden />
+        <div className="login-hero-copy">
           <BrandMark size="lg" tone="hope" />
           <div className="eyebrow">{company.name}{branch ? ` · ${branch}` : ''}</div>
           <h2>The mill, the press, and the money in one operating system.</h2>
           <p>Paper manufacturing, security printing and QR custody — role-bound, dual-controlled, auditable.</p>
         </div>
-        <div className="eyebrow">Clearance · RBAC · SoD · ABAC</div>
-      </div>
+        <div className="login-hero-foot eyebrow">Clearance · RBAC · SoD · ABAC</div>
+      </aside>
+      <main className="login-panel">
       <form className="login-card" onSubmit={submit}>
         <BrandMark size="lg" />
         <h1>{shortCompanyName(company.name)} OS</h1>
@@ -101,7 +134,25 @@ export default function Login() {
             <button type="submit" className="btn btn-primary btn-block" disabled={busy || !identifier || !password}>
               {busy ? 'Checking clearance…' : 'Enter the mill'}
             </button>
-            <p className="hint">Forgot your password? Contact your system administrator.</p>
+            <p className="hint login-help">
+              {resetMail ? (
+                <a href={resetMail}>Forgot your password?</a>
+              ) : (
+                <span>Forgot your password?</span>
+              )}{' '}
+              {contactMail ? (
+                <a href={contactMail}>Contact your system administrator.</a>
+              ) : (
+                <span>Contact your system administrator.</span>
+              )}
+            </p>
+            {(adminEmail || adminPhone) && (
+              <p className="hint login-help-contacts">
+                {adminEmail ? <a href={contactMail || `mailto:${adminEmail}`}>{adminEmail}</a> : null}
+                {adminEmail && adminPhone ? <span aria-hidden> · </span> : null}
+                {adminPhone ? <a href={telHref(adminPhone)}>{adminPhone}</a> : null}
+              </p>
+            )}
           </>
         )}
         {stage === 'enroll' && (
@@ -167,6 +218,7 @@ export default function Login() {
           </>
         )}
       </form>
+      </main>
     </div>
   );
 }

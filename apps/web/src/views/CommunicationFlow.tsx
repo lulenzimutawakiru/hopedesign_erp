@@ -3,7 +3,7 @@ import { api, fmtDate } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
-import { pick, titleCase } from '../helpers';
+import { eventLabel, pick, titleCase } from '../helpers';
 import { pathForEntity } from '../work';
 
 type Rec = Record<string, unknown>;
@@ -152,7 +152,7 @@ function NotifRow({ n, onChanged, showRead }: { n: Rec; onChanged?: () => void; 
       {pick(n, 'body') ? <p className="com-notif-body">{String(pick(n, 'body'))}</p> : null}
       <div className="com-notif-meta">
         <span>{fmtDate(pick(n, 'createdAt', 'created_at'))}</span>
-        {pick(n, 'type') ? <span>{titleCase(String(pick(n, 'type')))}</span> : null}
+        {pick(n, 'type') ? <span>{eventLabel(pick(n, 'type'))}</span> : null}
         {actionRequired ? <span className="com-chip-required">Action required</span> : null}
       </div>
       {Boolean(actionLabel || actionTarget) && (
@@ -384,12 +384,21 @@ function CommunicationAdmin() {
     : s === 'RETRYING' ? 'badge-amber'
     : s === 'READ' || s === 'DELIVERED' ? 'badge-success'
     : 'badge-blue';
-  const failed = Number(deliveries.FAILED ?? 0) + Number(deliveries.BOUNCED ?? 0);
+  const lastErrors = (summary.lastErrors ?? {}) as Rec;
+  const emailFail = Number(totals.emailsFailed ?? 0);
+  const smsFail = Number(totals.smsFailed ?? 0);
+  const failed = Number(deliveries.FAILED ?? 0) + Number(deliveries.BOUNCED ?? 0) + emailFail + smsFail;
+  const emailNote = lastErrors.email
+    ? String(lastErrors.email)
+    : `${Number(totals.emailsSent ?? 0)} sent · ${emailFail} failed`;
+  const smsNote = lastErrors.sms
+    ? String(lastErrors.sms)
+    : smsFail > 0 ? `${smsFail} failed deliveries` : `${Number(totals.smsSent ?? 0)} sent`;
   const health: { name: string; icon: string; note: string; tone: string }[] = [
-    { name: 'Email', icon: '\u2709', note: `${Number(totals.emails ?? 0)} messages tracked`, tone: 'badge-success' },
+    { name: 'Email', icon: '\u2709', note: emailNote, tone: emailFail > 0 || lastErrors.email ? 'badge-critical' : 'badge-success' },
     { name: 'Messaging', icon: '\u{1F4AC}', note: `${Number(totals.messages ?? 0)} messages sent`, tone: 'badge-success' },
     { name: 'Notifications', icon: '\u{1F514}', note: `${Number(totals.notifications ?? 0)} total · ${Number(totals.unreadNotifications ?? 0)} unread`, tone: 'badge-success' },
-    { name: 'SMS / WhatsApp', icon: '\u{1F4F1}', note: failed > 0 ? `${failed} failed deliveries` : 'Operational', tone: failed > 0 ? 'badge-critical' : 'badge-success' },
+    { name: 'SMS / WhatsApp', icon: '\u{1F4F1}', note: smsNote, tone: smsFail > 0 || lastErrors.sms ? 'badge-critical' : 'badge-success' },
   ];
   const tiles: { label: string; value: number; href: string; perm?: string }[] = [
     { label: 'Email templates', value: Number(totals.templates ?? 0), href: '/communication/templates', perm: 'communication.templates.view' },
@@ -439,7 +448,86 @@ function CommunicationAdmin() {
           </div>
         </section>
       </div>
+      <TestSendCard />
     </div>
+  );
+}
+
+function TestSendCard() {
+  const { user } = useAuth();
+  const [providers, setProviders] = useState<Rec | null>(null);
+  const [channel, setChannel] = useState<'EMAIL' | 'SMS'>('EMAIL');
+  const [to, setTo] = useState(user?.email ?? '');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => {
+    api<{ data: Rec }>('/api/ops/communication/providers')
+      .then((r) => setProviders(r.data))
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    if (channel === 'EMAIL' && user?.email) setTo(user.email);
+  }, [channel, user?.email]);
+  const send = async () => {
+    if (!to.trim() || busy) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const r = await api<{ data: { ok?: boolean; error?: string; provider?: string } }>(
+        '/api/ops/communication/test-send',
+        { method: 'POST', body: JSON.stringify({ channel, to: to.trim() }) }
+      );
+      if (r.data.ok) setNotice(`Delivered via ${r.data.provider ?? channel.toLowerCase()}`);
+      else setError(r.data.error || 'Send failed');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Send failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const emailCfg = (providers?.email ?? {}) as Rec;
+  const smsCfg = (providers?.sms ?? {}) as Rec;
+  const emailFrom = String(emailCfg.fromEmail ?? '');
+  const emailProv = String(emailCfg.provider ?? 'none');
+  const smsProv = String(smsCfg.provider ?? 'none');
+  const smsSender = String(smsCfg.senderId ?? '');
+  return (
+    <section className="card card-pad" style={{ marginTop: 16 }}>
+      <div className="card-head">
+        <h3>Test a provider</h3>
+        <span className="muted">
+          Email via {emailProv}{emailFrom ? ` · from ${emailFrom}` : ''}
+          {' · '}SMS via {smsProv}{smsSender ? ` · ${smsSender}` : ''}
+        </span>
+      </div>
+      {notice ? <div className="alert alert-success">{notice}</div> : null}
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="form-grid" style={{ marginTop: 8 }}>
+        <div className="field">
+          <label>Channel</label>
+          <select value={channel} onChange={(e) => setChannel(e.target.value as 'EMAIL' | 'SMS')}>
+            <option value="EMAIL">Email</option>
+            <option value="SMS">SMS</option>
+          </select>
+        </div>
+        <div className="field field-required">
+          <label>{channel === 'EMAIL' ? 'Send to email' : 'Send to phone (E.164)'}</label>
+          <input
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            placeholder={channel === 'EMAIL' ? 'you@company.com' : '+2567…'}
+          />
+        </div>
+      </div>
+      <button className="btn btn-primary" style={{ marginTop: 12 }} disabled={busy || !to.trim()} onClick={() => void send()}>
+        {busy ? 'Sending…' : 'Send test'}
+      </button>
+      <p className="muted" style={{ marginTop: 8 }}>
+        Use this to confirm the from-domain and SMS wallet. Failures show the provider error (unverified domain, empty balance, missing key).
+      </p>
+    </section>
   );
 }
 
@@ -1788,9 +1876,11 @@ function DeliveriesView() {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(15);
   const [total, setTotal] = useState(0);
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState('FAILED');
   const [channel, setChannel] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [busyId, setBusyId] = useState('');
   const load = useCallback(async () => {
     try {
       const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
@@ -1807,19 +1897,42 @@ function DeliveriesView() {
   }, [page, pageSize, status, channel]);
   useEffect(() => { void load(); }, [load]);
   const recipient = (d: Rec): string => {
+    const direct = String(pick(d, 'recipient') ?? '').trim();
+    if (direct) return direct;
     const f = String(pick(d, 'firstName', 'first_name') ?? '');
     const l = String(pick(d, 'lastName', 'last_name') ?? '');
     const name = [f, l].filter(Boolean).join(' ') || String(pick(d, 'username') ?? '');
     const email = String(pick(d, 'userEmail', 'user_email') ?? '');
     return email ? `${name} · ${email}` : name || '—';
   };
+  const retry = async (d: Rec) => {
+    const source = String(pick(d, 'source') ?? 'NOTIFICATION').toUpperCase();
+    const key = `${source}-${d.id}`;
+    setBusyId(key);
+    setError('');
+    setNotice('');
+    try {
+      const r = await api<{ data: { ok?: boolean; error?: string; queued?: boolean } }>(
+        '/api/ops/communication/deliveries/retry',
+        { method: 'POST', body: JSON.stringify({ source, id: Number(d.id) }) }
+      );
+      if (r.data.ok) setNotice(r.data.queued ? 'Re-queued for delivery' : 'Sent');
+      else setError(r.data.error || 'Retry failed');
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Retry failed');
+    } finally {
+      setBusyId('');
+    }
+  };
   return (
     <div className="page">
       <ComHead
         title="Delivery logs"
-        subtitle="Every email, SMS and notification delivery with provider status and retries."
+        subtitle="Staff notifications plus customer, employee and supplier email/SMS — with provider errors and retry."
       />
       <ComTabs active="deliveries" />
+      {notice ? <div className="alert alert-success">{notice}</div> : null}
       {error ? <ErrorBanner error={error} /> : null}
       <div className="filter-row">
         <select className="search-input" value={status} onChange={(e) => { setPage(1); setStatus(e.target.value); }}>
@@ -1839,37 +1952,53 @@ function DeliveriesView() {
         <table className="data">
           <thead>
             <tr>
+              <th>Source</th>
               <th>Recipient</th>
               <th>Channel</th>
               <th>Status</th>
-              <th>Notification</th>
-              <th>Priority</th>
+              <th>Message</th>
+              <th>Error</th>
               <th>Retries</th>
               <th>Sent</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={7}>
+                <td colSpan={9}>
                   <div className="empty-state">
                     <h3>No deliveries found</h3>
-                    <p>Deliveries will appear here as notifications are sent.</p>
+                    <p>Staff notifications, quotation emails and SMS to customers appear here.</p>
                   </div>
                 </td>
               </tr>
             ) : (
-              rows.map((d) => (
-                <tr key={String(d.id)}>
-                  <td><span className="cell-main">{recipient(d)}</span></td>
-                  <td><Badge value={pick(d, 'channel')} /></td>
-                  <td><Badge value={pick(d, 'status')} /></td>
-                  <td className="cell-sub">{trunc(pick(d, 'notificationTitle', 'notification_title'), 60)}</td>
-                  <td>{prioBadge(pick(d, 'notificationPriority', 'notification_priority'))}</td>
-                  <td>{String(pick(d, 'retryCount', 'retry_count') ?? 0)}</td>
-                  <td className="cell-mono">{fmtDate(pick(d, 'sentAt', 'sent_at', 'createdAt', 'created_at'))}</td>
-                </tr>
-              ))
+              rows.map((d) => {
+                const source = String(pick(d, 'source') ?? 'NOTIFICATION').toUpperCase();
+                const st = String(pick(d, 'status') ?? '').toUpperCase();
+                const key = `${source}-${d.id}`;
+                const canRetry = st === 'FAILED' || st === 'BOUNCED';
+                return (
+                  <tr key={key}>
+                    <td><Badge value={source} /></td>
+                    <td><span className="cell-main">{recipient(d)}</span></td>
+                    <td><Badge value={pick(d, 'channel')} /></td>
+                    <td><Badge value={st} /></td>
+                    <td className="cell-sub">{trunc(pick(d, 'notificationTitle', 'notification_title'), 48)}</td>
+                    <td className="cell-sub">{trunc(pick(d, 'error'), 72) || '—'}</td>
+                    <td>{String(pick(d, 'retryCount', 'retry_count') ?? 0)}</td>
+                    <td className="cell-mono">{fmtDate(pick(d, 'sentAt', 'sent_at', 'createdAt', 'created_at'))}</td>
+                    <td>
+                      {canRetry ? (
+                        <button className="btn btn-sm" disabled={busyId === key} onClick={() => void retry(d)}>
+                          {busyId === key ? 'Retrying…' : 'Retry'}
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

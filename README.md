@@ -20,6 +20,18 @@ npm run dev:web   # http://localhost:5173
 
 Default seeded super admin: username `admin` (or `admin@hopedesign.co.ug`) / `ChangeMe!2026`
 
+## Production (AccuWeb Linux VPS)
+
+Docker Compose stack with Caddy (Let’s Encrypt), nginx SPA, API, and Postgres. See **[deploy/README.md](deploy/README.md)**.
+
+```bash
+sudo sh deploy/vps-setup.sh
+node deploy/generate-env.mjs --domain erp.yourdomain.com --email admin@yourdomain.com --seed
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+```
+
+First login after seed: `admin` / `ChangeMe!2026`, then the app requires a new 12-character password. Set `SEED_ON_BOOT=false` afterwards. Details in **[deploy/README.md](deploy/README.md)**.
+
 ## Tests
 ```bash
 npm test
