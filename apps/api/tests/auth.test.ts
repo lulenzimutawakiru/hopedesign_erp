@@ -16,6 +16,12 @@ describe('Authentication', () => {
     expect(res.status).toBe(200);
     expect(res.body.mfaRequired).toBe(true);
     expect(typeof res.body.loginToken).toBe('string');
+    if (res.body.enrollmentRequired) {
+      const es = await api.post('/api/auth/mfa/enroll-start').send({ loginToken: res.body.loginToken });
+      expect(es.status).toBe(200);
+      expect(String(es.body.secret || '')).toBeTruthy();
+      expect(String(es.body.qrDataUrl || '')).toMatch(/^data:image\/png;base64,/);
+    }
     const { token } = await loginAs('admin');
     expect(typeof token).toBe('string');
     expect(token.length).toBeGreaterThan(10);

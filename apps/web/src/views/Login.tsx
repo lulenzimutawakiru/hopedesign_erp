@@ -4,7 +4,7 @@ import { ApiError } from '../api';
 import { BrandMark } from '../components/BrandMark';
 import { branchLabel, shortCompanyName, useCompanyProfile } from '../company';
 
-type Stage = 'credentials' | 'mfa' | 'enroll';
+type Stage = 'credentials' | 'mfa';
 
 function telHref(phone: string): string {
   return 'tel:' + phone.replace(/[^\d+]/g, '');
@@ -23,7 +23,8 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [secret, setSecret] = useState('');
-  const [otpauthUrl, setOtpauthUrl] = useState('');
+  const [qrDataUrl, setQrDataUrl] = useState('');
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -56,12 +57,17 @@ export default function Login() {
           window.location.hash = '/dashboard';
           return;
         }
-        setStage(outcome.enrollmentRequired ? 'enroll' : 'mfa');
-      } else if (stage === 'mfa') {
-        await completeMfa(code.trim());
+        if (outcome.enrollmentRequired) {
+          const r = await startEnrollment();
+          setSecret(r.secret);
+          setQrDataUrl(r.qrDataUrl ?? '');
+        }
+        setStage('mfa');
+      } else if (secret) {
+        await completeEnrollment(code.trim(), secret);
         window.location.hash = '/dashboard';
       } else {
-        await completeEnrollment(code.trim(), secret || undefined);
+        await completeMfa(code.trim());
         window.location.hash = '/dashboard';
       }
     } catch (err) {
@@ -72,19 +78,19 @@ export default function Login() {
     }
   };
 
-  const beginEnrollment = async () => {
-    setError('');
-    setBusy(true);
+  const copySecret = async () => {
+    if (!secret) return;
     try {
-      const r = await startEnrollment();
-      setSecret(r.secret);
-      setOtpauthUrl(r.otpauthUrl);
-      setStage('mfa');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to start MFA setup');
-    } finally {
-      setBusy(false);
+      await navigator.clipboard.writeText(secret);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
     }
+  };
+
+  const onCodeChange = (raw: string) => {
+    setCode(raw.replace(/\D/g, '').slice(0, 6));
   };
 
   return (
@@ -164,40 +170,22 @@ export default function Login() {
             </div>
           </>
         )}
-        {stage === 'enroll' && (
-          <>
-            <p className="muted">Your role requires multi-factor authentication. Set up TOTP to continue.</p>
-            {error && <div className="alert alert-error">{error}</div>}
-            <button
-              type="button"
-              className="btn btn-primary btn-block"
-              onClick={beginEnrollment}
-              disabled={busy}
-            >
-              {busy ? 'Preparing…' : 'Set up MFA'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-block"
-              onClick={() => { setStage('credentials'); setError(''); }}
-            >
-              Back
-            </button>
-          </>
-        )}
         {stage === 'mfa' && (
           <>
             {secret ? (
               <>
-                <p className="muted">
-                  Scan or enter this code in your authenticator app, then enter the 6-digit code below.
-                </p>
-                <div className="alert" style={{ wordBreak: 'break-all' }}>
-                  <strong>{secret}</strong>
+                <p className="muted">Scan this with Google Authenticator, Authy, or 1Password, then enter the 6-digit code.</p>
+                {qrDataUrl ? (
+                  <div className="login-qr">
+                    <img src={qrDataUrl} width={168} height={168} alt="Authenticator QR code" />
+                  </div>
+                ) : null}
+                <div className="login-setup-key">
+                  <code>{secret}</code>
+                  <button type="button" className="btn btn-sm" onClick={() => void copySecret()}>
+                    {copied ? 'Copied' : 'Copy key'}
+                  </button>
                 </div>
-                {otpauthUrl && (
-                  <p className="hint" style={{ wordBreak: 'break-all' }}>{otpauthUrl}</p>
-                )}
               </>
             ) : (
               <p className="muted">Enter the 6-digit code from your authenticator app.</p>
@@ -207,20 +195,30 @@ export default function Login() {
               <span>6-digit code</span>
               <input
                 autoFocus
+                className="login-otp"
                 value={code}
-                onChange={(e) => setCode(e.target.value)}
+                onChange={(e) => onCodeChange(e.target.value)}
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 placeholder="000000"
+                maxLength={6}
+                pattern="[0-9]*"
+                enterKeyHint="go"
               />
             </label>
             <button type="submit" className="btn btn-primary btn-block" disabled={busy || code.trim().length < 6}>
-              {busy ? 'Verifying…' : secret ? 'Enable and continue' : 'Verify and continue'}
+              {busy ? 'Verifying…' : secret ? 'Confirm and continue' : 'Continue'}
             </button>
             <button
               type="button"
               className="btn btn-block"
-              onClick={() => { setStage('credentials'); setSecret(''); setCode(''); setError(''); }}
+              onClick={() => {
+                setStage('credentials');
+                setSecret('');
+                setQrDataUrl('');
+                setCode('');
+                setError('');
+              }}
             >
               Back
             </button>

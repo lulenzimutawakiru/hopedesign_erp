@@ -39,6 +39,19 @@ export const hashToken = (token: string) => createHash('sha256').update(token).d
 export const generateTotpSecret = () => authenticator.generateSecret();
 export const generateTotpQrData = (email: string, secret: string) =>
   authenticator.keyuri(email, config.otpIssuer, secret);
+
+/** otpauth URL plus a scannable PNG data URL for enrollment screens. */
+export async function totpEnrollmentPayload(email: string, secret: string) {
+  const otpauthUrl = generateTotpQrData(email, secret);
+  const { default: QRCode } = await import('qrcode');
+  const qrDataUrl = await QRCode.toDataURL(otpauthUrl, {
+    width: 200,
+    margin: 1,
+    errorCorrectionLevel: 'M',
+    color: { dark: '#0B1F33', light: '#FFFFFF' },
+  });
+  return { secret, otpauthUrl, qrDataUrl };
+}
 export const verifyTotp = (secret: string, code: string) => {
   try {
     return authenticator.verify({ token: code, secret });

@@ -100,7 +100,7 @@ interface AuthState {
   pending: PendingLogin | null;
   login: (identifier: string, password: string) => Promise<LoginOutcome>;
   completeMfa: (code: string) => Promise<void>;
-  startEnrollment: () => Promise<{ secret: string; otpauthUrl: string }>;
+  startEnrollment: () => Promise<{ secret: string; otpauthUrl: string; qrDataUrl?: string }>;
   completeEnrollment: (code: string, secret?: string) => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => void;
@@ -176,7 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const startEnrollment = async () => {
     if (!pending) throw new Error('No pending login');
-    const r = await api<{ secret: string; otpauthUrl: string }>('/api/auth/mfa/enroll-start', {
+    const r = await api<{ secret: string; otpauthUrl: string; qrDataUrl?: string }>('/api/auth/mfa/enroll-start', {
       method: 'POST',
       body: JSON.stringify({ loginToken: pending.loginToken }),
     });

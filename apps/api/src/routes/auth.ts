@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { hashToken, signAccessToken, signLoginToken, verifyLoginToken, verifyPassword, generateTotpSecret, generateTotpQrData, verifyTotp, redactUser, hashPassword } from '../auth.js';
+import { hashToken, signAccessToken, signLoginToken, verifyLoginToken, verifyPassword, generateTotpSecret, totpEnrollmentPayload, verifyTotp, redactUser, hashPassword } from '../auth.js';
 import { query, tx } from '../db.js';
 import { authenticate, loadAuthUser } from '../middleware/auth.js';
 import { asyncHandler, badRequest, unauthorized } from '../utils.js';
@@ -248,7 +248,7 @@ authRouter.post(
     if (Boolean(user.mfa_enabled)) throw badRequest('MFA is already enabled');
     const secret = generateTotpSecret();
     await query(`UPDATE users SET mfa_secret=$1, mfa_method='TOTP' WHERE id=$2`, [secret, Number(user.id)], { tenantId: payload.tid, userId: Number(user.id) });
-    res.json({ secret, otpauthUrl: generateTotpQrData(String(user.email), secret) });
+    res.json(await totpEnrollmentPayload(String(user.email), secret));
   })
 );
 
@@ -294,7 +294,7 @@ authRouter.post(
     if (user.mfa_enabled) throw badRequest('MFA is already enabled');
     const secret = generateTotpSecret();
     await query(`UPDATE users SET mfa_secret=$1, mfa_method='TOTP' WHERE id=$2`, [secret, user.id], { tenantId: user.tenant_id, userId: user.id });
-    res.json({ secret, otpauthUrl: generateTotpQrData(user.email, secret) });
+    res.json(await totpEnrollmentPayload(user.email, secret));
   })
 );
 
