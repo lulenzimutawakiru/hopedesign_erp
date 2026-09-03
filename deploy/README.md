@@ -120,6 +120,7 @@ The API runtime role is `hopedesign_app` (no superuser, no BYPASSRLS). The owner
 
 ## AccuWeb pitfalls
 
+- **SSH on a non-22 port** — AccuWeb often uses a custom SSH port (this host is **2978**). `vps-setup.sh` opens that port in UFW as well as 22; do not enable UFW with only 22 allowed.
 - **Port 80 already in use** — stop `apache2` / `nginx` / `httpd` (the setup script tries this).
 - **Certificate fails** — DNS A record must already point at this VPS; UDP/TCP 443 must be open in AccuWeb’s network firewall as well as UFW.
 - **Blank page / API 403 CORS** — `WEB_PUBLIC_URL` and `API_PUBLIC_URL` must be the exact public origin (`https://hopedesign.jorlentech.com`, no trailing slash).

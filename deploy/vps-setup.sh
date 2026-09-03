@@ -38,10 +38,27 @@ fi
 systemctl enable --now docker
 
 # AccuWeb images sometimes ship Apache/nginx on 80/443. Docker Caddy needs those ports.
-systemctl disable --now apache2 nginx httpd 2>/dev/null || true
+# Stop each unit on its own — a missing apache2/httpd must not skip nginx.
+for svc in apache2 nginx httpd; do
+  systemctl disable --now "$svc" 2>/dev/null || true
+done
+
+# AccuWeb often moves SSH off 22 (this host uses 2978). Opening only 22 would lock us out.
+SSH_PORT="$(awk '/^[Pp]ort[[:space:]]+[0-9]+/{print $2}' /etc/ssh/sshd_config 2>/dev/null | tail -1)"
+if [ -z "$SSH_PORT" ] && [ -d /etc/ssh/sshd_config.d ]; then
+  SSH_PORT="$(awk '/^[Pp]ort[[:space:]]+[0-9]+/{print $2}' /etc/ssh/sshd_config.d/*.conf 2>/dev/null | tail -1)"
+fi
+if [ -z "$SSH_PORT" ]; then
+  SSH_PORT="$(ss -tlnp 2>/dev/null | awk '/sshd/{print $4}' | sed 's/.*://' | head -1)"
+fi
+SSH_PORT="${SSH_PORT:-22}"
 
 if command -v ufw >/dev/null 2>&1; then
-  ufw allow OpenSSH || ufw allow 22/tcp
+  ufw allow OpenSSH || true
+  ufw allow 22/tcp
+  if [ "$SSH_PORT" != "22" ]; then
+    ufw allow "${SSH_PORT}/tcp"
+  fi
   ufw allow 80/tcp
   ufw allow 443/tcp
   ufw allow 443/udp

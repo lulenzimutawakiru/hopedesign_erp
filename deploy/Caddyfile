@@ -13,7 +13,7 @@
 		-Server
 	}
 
-	@https scheme https
+	@https protocol https
 	header @https Strict-Transport-Security "max-age=15552000; includeSubDomains"
 
 	request_body {
