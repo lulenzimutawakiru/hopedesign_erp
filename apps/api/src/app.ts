@@ -113,6 +113,22 @@ app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 app.use(contextMiddleware);
 
+// Root service banner: a browser hitting the API root gets a friendly,
+// unauthenticated response instead of the auth wall.
+app.get('/', (_req, res) => {
+  res.json({
+    service: 'hopedesign-erp-api',
+    name: 'Hope Design ERP API',
+    status: 'ok',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      login: '/api/auth/login',
+      verifyProduct: '/api/public/verify',
+    },
+  });
+});
+
 // Global API rate limiting (login brute-force protection included).
 const apiLimiter = rateLimit({
   windowMs: config.rateLimitWindowMs,
