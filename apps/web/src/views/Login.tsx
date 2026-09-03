@@ -116,43 +116,52 @@ export default function Login() {
               <span>Username or email</span>
               <input
                 autoFocus
+                name="username"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 placeholder="admin"
                 autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="next"
               />
             </label>
             <label className="field">
               <span>Password</span>
               <input
                 type="password"
+                name="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                enterKeyHint="go"
               />
             </label>
             <button type="submit" className="btn btn-primary btn-block" disabled={busy || !identifier || !password}>
               {busy ? 'Checking clearance…' : 'Enter the mill'}
             </button>
-            <p className="hint login-help">
-              {resetMail ? (
-                <a href={resetMail}>Forgot your password?</a>
-              ) : (
-                <span>Forgot your password?</span>
-              )}{' '}
-              {contactMail ? (
-                <a href={contactMail}>Contact your system administrator.</a>
-              ) : (
-                <span>Contact your system administrator.</span>
-              )}
-            </p>
-            {(adminEmail || adminPhone) && (
-              <p className="hint login-help-contacts">
-                {adminEmail ? <a href={contactMail || `mailto:${adminEmail}`}>{adminEmail}</a> : null}
-                {adminEmail && adminPhone ? <span aria-hidden> · </span> : null}
-                {adminPhone ? <a href={telHref(adminPhone)}>{adminPhone}</a> : null}
+            <div className="login-help-block">
+              <p className="hint login-help">
+                {resetMail ? (
+                  <a href={resetMail}>Forgot your password?</a>
+                ) : (
+                  <span>Forgot your password?</span>
+                )}{' '}
+                {contactMail ? (
+                  <a href={contactMail}>Contact your system administrator.</a>
+                ) : (
+                  <span>Contact your system administrator.</span>
+                )}
               </p>
-            )}
+              {(adminEmail || adminPhone) && (
+                <p className="hint login-help-contacts">
+                  {adminEmail ? <a href={contactMail || `mailto:${adminEmail}`}>{adminEmail}</a> : null}
+                  {adminEmail && adminPhone ? <span className="login-help-sep" aria-hidden> · </span> : null}
+                  {adminPhone ? <a href={telHref(adminPhone)}>{adminPhone}</a> : null}
+                </p>
+              )}
+            </div>
           </>
         )}
         {stage === 'enroll' && (
