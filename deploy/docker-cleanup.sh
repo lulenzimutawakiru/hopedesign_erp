@@ -1,7 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-echo "[$(date)] Starting Docker space reclamation..."
-# Prune stopped containers, unused networks, and dangling/unused images
-docker system prune -af --volumes --filter "until=168h"
-echo "[$(date)] Docker cleanup completed successfully."o
+echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Pruning unused Docker containers, networks, and dangling images..."
+docker system prune -f --volumes

@@ -1,18 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="/opt/hopedesign_erp"
-BACKUP_DIR="$APP_DIR/backups"
-DATE=$(date +"%Y-%m-%d_%H-%M-%S")
-BACKUP_FILE="$BACKUP_DIR/cron_storage_$DATE.tar.gz"
+BACKUP_DIR="/opt/hopedesign_erp/backups"
+STORAGE_DIR="/opt/hopedesign_erp/storage"
+TIMESTAMP=$(date +'%Y-%m-%d_%H-%M-%S')
+OUT_FILE="$BACKUP_DIR/storage_backup_$TIMESTAMP.tar.gz"
 
-mkdir -p "$BACKUP_DIR"
-
-if [ -d "$APP_DIR/storage" ]; then
-    echo "[$(date)] Backing up storage directory..."
-    tar -czf "$BACKUP_FILE" -C "$APP_DIR" storage
-    echo "[$(date)] Storage backup created: $BACKUP_FILE"
-
-    # Delete storage backups older than 30 days
-    find "$BACKUP_DIR" -type f -name "cron_storage_*.tar.gz" -mtime +30 -delete
+echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Starting storage backup..."
+if [ -d "$STORAGE_DIR" ]; then
+  tar -czf "$OUT_FILE" -C "$STORAGE_DIR" .
+  echo "Storage backup created: $OUT_FILE"
+  find "$BACKUP_DIR" -type f -name "storage_backup_*.tar.gz" -mtime +14 -delete
+else
+  echo "Storage directory $STORAGE_DIR not found, skipping."
 fi
