@@ -1,0 +1,53 @@
+services:
+
+  api-green:
+
+    image: hopedesign-erp-api:green
+
+    container_name: hopedesign-api-green
+
+    env_file:
+      - .env.production
+
+    ports:
+      - "4001:4000"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+
+  web-green:
+
+    image: hopedesign-erp-web:green
+
+    container_name: hopedesign-web-green
+
+    ports:
+      - "8081:80"01~services:
+
+  api-green:
+
+    image: hopedesign-erp-api:green
+
+    container_name: hopedesign-api-green
+
+    env_file:
+      - .env.production
+
+    ports:
+      - "4001:4000"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+
+  web-green:
+
+    image: hopedesign-erp-web:green
+
+    container_name: hopedesign-web-green
+
+    ports:
+      - "8081:80"
