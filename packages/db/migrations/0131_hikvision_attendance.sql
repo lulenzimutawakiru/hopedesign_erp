@@ -30,11 +30,11 @@ CREATE TABLE hikvision_raw_events (
   received_at TIMESTAMPTZ NOT NULL DEFAULT now(), device_event_time TIMESTAMPTZ, event_type TEXT,
   payload_hash TEXT NOT NULL, processing_status TEXT NOT NULL DEFAULT 'RECEIVED'
     CHECK (processing_status IN ('RECEIVED','QUEUED','PROCESSING','PROCESSED','DUPLICATE','FAILED','REJECTED')),
-  retry_count INTEGER NOT NULL DEFAULT 0, error_message TEXT, processed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  retry_count INTEGER NOT NULL DEFAULT 0, error_message TEXT, processed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (device_id, payload_hash)
 );
 CREATE INDEX idx_hikvision_raw_queue ON hikvision_raw_events (processing_status, received_at);
 CREATE INDEX idx_hikvision_raw_tenant ON hikvision_raw_events (tenant_id, received_at DESC);
-CREATE INDEX idx_hikvision_raw_fingerprint ON hikvision_raw_events (device_id, payload_hash, received_at DESC);
 
 CREATE TABLE hikvision_normalized_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(), raw_event_id UUID NOT NULL UNIQUE REFERENCES hikvision_raw_events(id),
@@ -68,6 +68,7 @@ BEGIN
   END IF;
   INSERT INTO hikvision_raw_events (tenant_id, company_id, device_id, device_serial_number, payload, payload_format, device_event_time, event_type, payload_hash, processing_status)
   VALUES (d.tenant_id, d.company_id, d.id, d.serial_number, p_payload, p_format, p_event_time, p_event_type, p_hash, 'QUEUED')
+  ON CONFLICT (device_id, payload_hash) DO UPDATE SET processing_status = 'DUPLICATE'
   RETURNING id INTO event_id;
   UPDATE hikvision_devices SET last_event_at = now(), last_heartbeat_at = now(), status = 'ONLINE', updated_at = now() WHERE id = d.id;
   RETURN event_id;
@@ -78,16 +79,16 @@ GRANT EXECUTE ON FUNCTION hikvision_ingest_event(TEXT,TEXT,JSONB,TEXT,TIMESTAMPT
 CREATE OR REPLACE FUNCTION hikvision_process_events(p_limit INTEGER DEFAULT 50)
 RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE r hikvision_raw_events%ROWTYPE; d hikvision_devices%ROWTYPE; e employees%ROWTYPE;
-  v_employee_identifier TEXT; verify_method TEXT; class TEXT; normalized_id UUID; count_processed INTEGER := 0;
+  employee_no TEXT; verify_method TEXT; class TEXT; normalized_id UUID; count_processed INTEGER := 0;
 BEGIN
   FOR r IN SELECT * FROM hikvision_raw_events WHERE processing_status = 'QUEUED' ORDER BY received_at FOR UPDATE SKIP LOCKED LIMIT LEAST(GREATEST(p_limit,1),200) LOOP
     UPDATE hikvision_raw_events SET processing_status='PROCESSING' WHERE id=r.id;
     BEGIN
       SELECT * INTO d FROM hikvision_devices WHERE id=r.device_id;
-      v_employee_identifier := COALESCE(r.payload->>'employeeNoString', r.payload->>'employeeNo');
-      SELECT * INTO e FROM employees emp WHERE emp.tenant_id=r.tenant_id AND emp.company_id=r.company_id AND emp.employee_no=v_employee_identifier AND emp.status IN ('ACTIVE','ON_LEAVE') LIMIT 1;
+      employee_no := COALESCE(r.payload->>'employeeNoString', r.payload->>'employeeNo');
+      SELECT * INTO e FROM employees WHERE tenant_id=r.tenant_id AND company_id=r.company_id AND employee_no=employee_no AND status IN ('ACTIVE','ON_LEAVE') LIMIT 1;
       IF NOT FOUND THEN
-        INSERT INTO attendance_exceptions (tenant_id,company_id,raw_event_id,type,detail) VALUES (r.tenant_id,r.company_id,r.id,'UNKNOWN_EMPLOYEE_EVENT',jsonb_build_object('employeeIdentifier',v_employee_identifier));
+        INSERT INTO attendance_exceptions (tenant_id,company_id,raw_event_id,type,detail) VALUES (r.tenant_id,r.company_id,r.id,'UNKNOWN_EMPLOYEE_EVENT',jsonb_build_object('employeeIdentifier',employee_no));
         UPDATE hikvision_raw_events SET processing_status='PROCESSED',processed_at=now() WHERE id=r.id; count_processed := count_processed+1; CONTINUE;
       END IF;
       verify_method := CASE COALESCE(r.payload->>'verifyNo','') WHEN '1' THEN 'FACE' WHEN '2' THEN 'FINGERPRINT' WHEN '3' THEN 'CARD' WHEN '4' THEN 'PASSWORD' WHEN '5' THEN 'QR' ELSE 'UNKNOWN' END;
@@ -97,7 +98,7 @@ BEGIN
         INSERT INTO attendance_exceptions (tenant_id,company_id,raw_event_id,type,detail) VALUES (r.tenant_id,r.company_id,r.id,'DUPLICATE_PUNCH','{}'); count_processed := count_processed+1; CONTINUE;
       END IF;
       INSERT INTO hikvision_normalized_events (raw_event_id,tenant_id,company_id,device_id,employee_identifier,employee_id,event_time,received_time,verification_method,event_type,location,classification)
-      VALUES (r.id,r.tenant_id,r.company_id,d.id,v_employee_identifier,e.id,r.device_event_time,r.received_at,verify_method,r.event_type,d.physical_location,class) RETURNING id INTO normalized_id;
+      VALUES (r.id,r.tenant_id,r.company_id,d.id,employee_no,e.id,r.device_event_time,r.received_at,verify_method,r.event_type,d.physical_location,class) RETURNING id INTO normalized_id;
       INSERT INTO attendance_events (tenant_id,company_id,employee_id,normalized_event_id,event_time,classification) VALUES (r.tenant_id,r.company_id,e.id,normalized_id,r.device_event_time,class);
       IF class IN ('CHECK_IN','CHECK_OUT') THEN
         INSERT INTO attendance (employee_id,work_date,clock_in,clock_out,status) VALUES (e.id,(r.device_event_time AT TIME ZONE d.timezone)::date,CASE WHEN class='CHECK_IN' THEN r.device_event_time END,CASE WHEN class='CHECK_OUT' THEN r.device_event_time END,'PRESENT')
