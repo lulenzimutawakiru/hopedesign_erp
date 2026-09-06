@@ -8,6 +8,7 @@ declare global {
     interface Request {
       ctx: RequestContext;
       auth?: import('../types.js').AuthUser;
+      rawBody?: Buffer;
     }
   }
 }

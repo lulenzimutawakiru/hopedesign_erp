@@ -48,6 +48,8 @@ import { requisitionsOpsRouter } from './routes/ops/requisitions.js';
 import { expenditureOpsRouter } from './routes/ops/expenditure.js';
 import { communicationOpsRouter } from './routes/ops/communication.js';
 import { documentsOpsRouter } from './routes/ops/documents.js';
+import { hikvisionIntegrationRouter, hikvisionRouter } from './routes/hikvision.js';
+import { processHikvisionEvents } from './services/hikvision.js';
 
 export const app = express();
 
@@ -109,7 +111,7 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '5mb', verify: (req, _res, buf) => { (req as express.Request).rawBody = Buffer.from(buf); } }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 app.use(contextMiddleware);
 
@@ -142,6 +144,7 @@ app.use('/api', apiLimiter);
 app.use('/api', healthRouter);                            // GET /api/health
 app.use('/api/public', publicVerificationRouter);          // POST /api/public/verify
 app.use('/api/auth', authRouter);                          // /api/auth/login, /refresh, /me ...
+app.use('/api/integrations/hikvision', hikvisionIntegrationRouter); // device HMAC receiver; no user JWT
 
 // ---- Authenticated API ----
 app.use(authenticate);
@@ -159,6 +162,7 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/admin/database', databaseAdminRouter);
 app.use('/api/admin/cron', adminCronRouter);
+app.use('/api/hikvision', hikvisionRouter);
 
 // Business operations (transactional services; RBAC + SoD + ABAC enforced per route).
 app.use('/api/ops/sales', salesOpsRouter);
@@ -211,5 +215,10 @@ setInterval(() => {
     console.error('[notificationDispatch]', err instanceof Error ? err.message : err);
   });
 }, 15_000);
+
+// Claims small batches; a failed event remains retryable and never blocks the webhook.
+setInterval(() => {
+  processHikvisionEvents().catch((err: unknown) => console.error('[hikvisionWorker]', err instanceof Error ? err.message : err));
+}, 5_000);
 
 export default app;
