@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import crypto from 'node:crypto';
 import { query, tx } from '../db.js';
 import { asyncHandler, badRequest, notFound } from '../utils.js';
@@ -28,7 +28,7 @@ const timingSafe = (a: string, b: string) => {
 };
 
 /** Device-facing receiver. It stores the immutable raw record and returns; processing happens asynchronously. */
-hikvisionIntegrationRouter.post('/events', expressText(), asyncHandler(async (req, res) => {
+hikvisionIntegrationRouter.post('/events', express.text({ type: ['application/xml', 'text/xml'], limit: '5mb' }), asyncHandler(async (req, res) => {
   const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
   const raw = req.rawBody ?? (typeof req.body === 'string' ? Buffer.from(req.body) : Buffer.from(JSON.stringify(req.body ?? {})));
   const payload: Incoming = contentType.includes('xml') ? parseXml(raw.toString('utf8')) : (req.body ?? {});
@@ -39,7 +39,8 @@ hikvisionIntegrationRouter.post('/events', expressText(), asyncHandler(async (re
   const timestamp = text(req.headers['x-hikvision-timestamp']);
   const signature = text(req.headers['x-hikvision-signature']);
   const secret = text(req.headers['x-hikvision-secret']);
-  if (!timestamp || !signature || !secret || Math.abs(Date.now() - Date.parse(timestamp)) > 5 * 60_000) throw badRequest('Event not accepted');
+  const sentAt = Date.parse(timestamp);
+  if (!timestamp || !signature || !secret || !Number.isFinite(sentAt) || Math.abs(Date.now() - sentAt) > 5 * 60_000) throw badRequest('Event not accepted');
   const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.`).update(raw).digest('hex');
   if (!timingSafe(signature, expected)) throw badRequest('Event not accepted');
   const payloadHash = crypto.createHash('sha256').update(raw).digest('hex');
@@ -49,15 +50,14 @@ hikvisionIntegrationRouter.post('/events', expressText(), asyncHandler(async (re
       [serial, secret, JSON.stringify(payload), contentType.includes('xml') ? 'XML' : 'JSON', eventTime, text(pick(payload, 'eventType')) || 'ATTENDANCE', payloadHash]
     );
     res.status(202).json({ accepted: true, eventId: result.rows[0].hikvision_ingest_event });
-  } catch { res.status(401).json({ accepted: false }); } // generic response prevents device enumeration
+  } catch (err: any) {
+    // Authentication failures must not reveal whether a serial is registered.
+    // A persistence failure remains retryable: returning 5xx makes devices retry
+    // instead of silently discarding a biometric event.
+    if (err?.code === '28000') return res.status(401).json({ accepted: false });
+    return res.status(503).json({ accepted: false });
+  }
 }));
-
-function expressText() { return (req: any, _res: any, next: any) => {
-  if (String(req.headers['content-type'] ?? '').toLowerCase().includes('xml')) {
-    let data = ''; req.setEncoding('utf8'); req.on('data', (c: string) => { data += c; if (data.length > 5 * 1024 * 1024) req.destroy(); });
-    req.on('end', () => { req.body = data; req.rawBody = Buffer.from(data); next(); }); return;
-  } next();
-}; }
 
 const secured = (permission: string, fn: (req: any, res: any) => Promise<void>) => [requirePermission(permission), asyncHandler(fn)];
 hikvisionRouter.get('/devices', ...secured('hikvision.devices.view', async (req, res) => {
