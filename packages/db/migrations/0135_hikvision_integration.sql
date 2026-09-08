@@ -6,6 +6,31 @@
 -- ============================================================================
 
 -- ============================================================================
+-- Legacy supersede guard: the earlier minimal 0131_hikvision_attendance schema
+-- (UUID ids, webhook_secret_hash, purpose) is incompatible with this module's
+-- schema. If that schema was already applied to an existing deployment, drop it
+-- first so the tables below are created with the full module design. Fresh
+-- databases are unaffected because the guard only fires on the legacy marker.
+-- ============================================================================
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = 'hikvision_devices'
+      AND a.attname = 'webhook_secret_hash'
+  ) THEN
+    DROP TABLE IF EXISTS attendance_exceptions;
+    DROP TABLE IF EXISTS attendance_events;
+    DROP TABLE IF EXISTS hikvision_normalized_events;
+    DROP TABLE IF EXISTS hikvision_raw_events;
+    DROP TABLE IF EXISTS hikvision_devices;
+    DROP FUNCTION IF EXISTS public.hikvision_ingest_event(TEXT, TEXT, JSONB, TEXT, TIMESTAMPTZ, TEXT, TEXT);
+    DROP FUNCTION IF EXISTS public.hikvision_process_events(INTEGER);
+  END IF;
+END $$;
+-- ============================================================================
 -- 1. Devices
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS hikvision_devices (
