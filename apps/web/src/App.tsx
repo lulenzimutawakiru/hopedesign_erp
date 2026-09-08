@@ -17,7 +17,7 @@ export default function App() {
   const path = useHashRoute();
 
   useEffect(() => {
-    document.title = company.name !== 'Company' ? `${shortCompanyName(company.name)} ERP` : 'Company ERP';
+    document.title = company.name !== 'Company' ? `${shortCompanyName(company.name)} OS` : 'HOPE DESIGN';
   }, [company]);
 
   useEffect(() => {
