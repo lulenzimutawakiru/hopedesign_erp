@@ -25,8 +25,6 @@
 		# `api` resolves to every API replica. Active health checks pull a
 		# replica out of the pool within ~10s of it going unhealthy; passive
 		# checks (max_fails/fail_duration) catch connection failures faster.
-		# try_duration lets an in-flight request retry another replica during a
-		# rolling deploy instead of returning 502 to the client.
 		reverse_proxy api:4000 {
 			lb_policy least_conn
 			health_uri /api/health
@@ -34,7 +32,6 @@
 			health_timeout 3s
 			max_fails 2
 			fail_duration 30s
-			try_duration 15s
 			header_up X-Forwarded-Proto {scheme}
 			header_up X-Forwarded-Host {host}
 			header_up X-Real-IP {remote_host}
@@ -51,7 +48,6 @@
 			health_timeout 3s
 			max_fails 2
 			fail_duration 30s
-			try_duration 10s
 		}
 	}
 }

@@ -105,8 +105,8 @@ Uploads live in the `uploads` volume; Postgres in `pgdata`; certificates in `cad
 
 - **Two stateless API replicas** (`api-1`, `api-2`) share the `uploads` volume
   and are load-balanced by Caddy (`lb_policy least_conn`) with **active health
-  checks** against `/api/health`. `try_duration` keeps an in-flight request
-  retrying another replica during a deploy instead of returning 502.
+  checks** against `/api/health` so a dead replica is pulled out of the pool
+  within seconds.
 - **Periodic workers are single-flight.** The API guards report schedules,
   cron jobs, the Hikvision queue, and notification dispatch with Postgres
   advisory locks, so scaling to two replicas never runs a job twice.
