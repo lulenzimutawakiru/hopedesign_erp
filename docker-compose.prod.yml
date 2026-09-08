@@ -1,16 +1,73 @@
 # Production stack for an AccuWeb Linux VPS (Ubuntu/Debian, Docker CE).
-# Usage:
+#
 #   cp deploy/env.production.example .env.production
 #   node deploy/generate-env.mjs --domain hopedesign.jorlentech.com --email admin@hopedesign.jorlentech.com
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 #
-# Zero-downtime rollout (two stateless API replicas behind Caddy):
-#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --scale api=2
-#   sh deploy/zero-downtime-deploy.sh   # recommended: backup -> pull -> build -> rolling update
+# Blue/green API rollout - two always-running API colors behind Caddy:
+#   api-a   the default active color
+#   api-b   the other color
+# Caddy routes /api only to the ACTIVE color. deploy/zero-downtime-deploy.sh
+# rebuilds the idle color, waits for it to become Docker-healthy, then flips
+# Caddy with an atomic `caddy reload`. One color is always serving, so a
+# rollout never drops a request.
 #
-# Public ports: 80 + 443 only. Postgres is not published.
+# Public ports: 80 + 443 only. Postgres stays on the compose network.
 
 name: hopedesign-erp
+
+x-logging: &default-log
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-api: &api
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: api
+  restart: unless-stopped
+  # Boot migrations are advisory-locked in the API, so both colors may start
+  # against the same database without racing DDL. Only one color receives
+  # traffic at a time (see deploy/README.md).
+  stop_grace_period: 60s
+  depends_on:
+    postgres:
+      condition: service_healthy
+  env_file:
+    - .env.production
+  environment:
+    NODE_ENV: production
+    HOST: 0.0.0.0
+    PORT: "4000"
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_SSL: "false"
+    NODE_OPTIONS: "--max-old-space-size=768"
+    DATABASE_URL: postgres://${POSTGRES_USER:-hopedesign}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hopedesign}
+    STORAGE_ROOT: /data/uploads
+  mem_limit: 1024m
+  mem_reservation: 256m
+  volumes:
+    - uploads:/data/uploads
+  security_opt:
+    - no-new-privileges:true
+  healthcheck: &api-health
+    test:
+      [
+        "CMD",
+        "node",
+        "-e",
+        "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+      ]
+    interval: 10s
+    timeout: 4s
+    start_period: 120s
+    retries: 12
+  logging: *default-log
+  networks:
+    - internal
 
 services:
   postgres:
@@ -19,7 +76,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-hopedesign}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
-      POSTGRES_DB: ${POSTGRES_DB:-hopedesign_erp}
+      POSTGRES_DB: ${POSTGRES_DB:-hopedesign}
     volumes:
       - pgdata:/var/lib/postgresql/data
     command:
@@ -39,66 +96,23 @@ services:
       - -c
       - log_autovacuum_min_duration=250
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hopedesign} -d ${POSTGRES_DB:-hopedesign_erp}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hopedesign} -d ${POSTGRES_DB:-hopedesign}"]
       interval: 5s
       timeout: 5s
       retries: 20
     security_opt:
       - no-new-privileges:true
-    logging: &default-log
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - internal
-
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: api
-    restart: unless-stopped
-    # Two replicas run by default (`--scale api=2`). Both are stateless, share
-    # the uploads volume, and are load-balanced by Caddy with active health
-    # checks, so a replica can be replaced without dropping requests.
-    stop_grace_period: 60s
-    depends_on:
-      postgres:
-        condition: service_healthy
-    env_file:
-      - .env.production
-    environment:
-      NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: "4000"
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
-      POSTGRES_SSL: "false"
-      NODE_OPTIONS: "--max-old-space-size=768"
-      DATABASE_URL: postgres://${POSTGRES_USER:-hopedesign}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hopedesign_erp}
-      STORAGE_ROOT: /data/uploads
-    mem_limit: 1024m
-    mem_reservation: 256m
-    volumes:
-      - uploads:/data/uploads
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
-      interval: 20s
-      timeout: 5s
-      start_period: 180s
-      retries: 8
     logging: *default-log
     networks:
       - internal
+
+  api-a:
+    <<: *api
+    container_name: hopedesign-erp-api-a
+
+  api-b:
+    <<: *api
+    container_name: hopedesign-erp-api-b
 
   web:
     build:
@@ -106,9 +120,6 @@ services:
       dockerfile: Dockerfile
       target: web
     restart: unless-stopped
-    depends_on:
-      api:
-        condition: service_healthy
     stop_grace_period: 20s
     security_opt:
       - no-new-privileges:true
@@ -121,10 +132,13 @@ services:
     restart: unless-stopped
     stop_grace_period: 20s
     depends_on:
-      api:
+      api-a:
+        condition: service_healthy
+      api-b:
         condition: service_healthy
       web:
         condition: service_healthy
+    entrypoint: ["/bin/sh", "/etc/caddy/entrypoint.sh"]
     ports:
       - "80:80"
       - "443:443"
@@ -134,6 +148,10 @@ services:
       ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/caddy-entrypoint.sh:/etc/caddy/entrypoint.sh:ro
+      # deploy/caddy-live/active.caddy (gitignored) is rewritten at deploy time
+      # and flips Caddy between api-a and api-b with `caddy reload`.
+      - ./deploy/caddy-live:/etc/caddy/live
       - caddy_data:/data
       - caddy_config:/config
     security_opt:

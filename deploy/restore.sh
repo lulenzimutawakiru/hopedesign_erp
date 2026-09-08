@@ -17,7 +17,7 @@ env_value() {
   printf '%s' "${raw:-$default}"
 }
 DB_USER="$(env_value POSTGRES_USER hopedesign)"
-DB_NAME="$(env_value POSTGRES_DB hopedesign_erp)"
+DB_NAME="$(env_value POSTGRES_DB hopedesign)"
 
 echo "================================="
 echo " ERP DATABASE RESTORE UTILITY"

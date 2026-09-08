@@ -22,21 +22,10 @@
 
 	@api path /api /api/*
 	handle @api {
-		# `api` resolves to every API replica. Active health checks pull a
-		# replica out of the pool within ~10s of it going unhealthy; passive
-		# checks (max_fails/fail_duration) catch connection failures faster.
-		reverse_proxy api:4000 {
-			lb_policy least_conn
-			health_uri /api/health
-			health_interval 10s
-			health_timeout 3s
-			max_fails 2
-			fail_duration 30s
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Forwarded-Host {host}
-			header_up X-Real-IP {remote_host}
-			header_up X-Forwarded-For {remote_host}
-		}
+		# The ACTIVE API color is chosen by deploy/zero-downtime-deploy.sh and
+		# deploy/stack-watchdog.sh. They rewrite active.caddy and atomically
+		# `caddy reload`, so /api traffic always hits exactly one healthy color.
+		import /etc/caddy/live/active.caddy
 	}
 
 	handle {

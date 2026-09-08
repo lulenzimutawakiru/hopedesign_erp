@@ -18,7 +18,7 @@ env_value() {
   printf '%s' "${raw:-$default}"
 }
 DB_USER="$(env_value POSTGRES_USER hopedesign)"
-DB_NAME="$(env_value POSTGRES_DB hopedesign_erp)"
+DB_NAME="$(env_value POSTGRES_DB hopedesign)"
 
 echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Starting database optimization..." | tee -a "$LOG_FILE"
 

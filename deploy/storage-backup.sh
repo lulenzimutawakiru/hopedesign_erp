@@ -4,10 +4,20 @@ set -euo pipefail
 BACKUP_DIR="/opt/hopedesign_erp/backups"
 LOG_DIR="/opt/hopedesign_erp/logs"
 # Uploads live in the compose-managed named volume (mounted at /data/uploads in
-# the api service), not in a host directory. Snapshot it from the running api
-# container so no extra image pull or host mount is required.
-API_CONTAINER="hopedesign-erp-api-1"
+# both API colors). Snapshot from whichever API color is currently running so
+# the backup works even in the middle of a blue/green rollout.
 VOLUME_MOUNT="/data/uploads"
+API_CONTAINER=""
+for candidate in hopedesign-erp-api-a hopedesign-erp-api-b; do
+  if docker ps --format '{{.Names}}' | grep -qx "$candidate"; then
+    API_CONTAINER="$candidate"
+    break
+  fi
+done
+if [[ -z "$API_CONTAINER" ]]; then
+  echo "ERROR: no running API container found; cannot snapshot uploads volume." >&2
+  exit 1
+fi
 TIMESTAMP=$(date +'%Y-%m-%d_%H-%M-%S')
 OUT_FILE="$BACKUP_DIR/storage_backup_$TIMESTAMP.tar.gz"
 TMP_FILE="$BACKUP_DIR/.storage_backup_$TIMESTAMP.tmp"

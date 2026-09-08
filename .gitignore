@@ -20,6 +20,9 @@ tmp-hr/
 *.token.txt
 *.probe.cjs
 
+# Blue/green runtime state (rewritten by deploy scripts)
+deploy/caddy-live/active.caddy
+
 # Generated production env / secrets – never commit
 .prod-gen.env
 env/

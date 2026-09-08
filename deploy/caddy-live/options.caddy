@@ -1,0 +1,10 @@
+	lb_policy least_conn
+	health_uri /api/health
+	health_interval 5s
+	health_timeout 2s
+	max_fails 1
+	fail_duration 10s
+	header_up X-Forwarded-Proto {scheme}
+	header_up X-Forwarded-Host {host}
+	header_up X-Real-IP {remote_host}
+	header_up X-Forwarded-For {remote_host}

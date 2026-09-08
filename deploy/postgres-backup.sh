@@ -8,7 +8,7 @@ ENV_FILE="$APP_DIR/.env.production"
 DB_CONTAINER="hopedesign-erp-postgres-1"
 
 # Resolve the live role/database from .env.production exactly like docker
-# compose interpolation (${POSTGRES_USER:-hopedesign} / ${POSTGRES_DB:-hopedesign_erp}),
+# compose interpolation (${POSTGRES_USER:-hopedesign} / ${POSTGRES_DB:-hopedesign}),
 # so backups never break when these are overridden. Neither value is a secret.
 env_value() {
   local key="$1" default="$2" raw=""
@@ -21,7 +21,7 @@ env_value() {
   printf '%s' "${raw:-$default}"
 }
 DB_USER="$(env_value POSTGRES_USER hopedesign)"
-DB_NAME="$(env_value POSTGRES_DB hopedesign_erp)"
+DB_NAME="$(env_value POSTGRES_DB hopedesign)"
 
 DATE=$(date +"%Y-%m-%d_%H-%M-%S")
 BACKUP_FILE="$BACKUP_DIR/cron_db_$DATE.sql.gz"

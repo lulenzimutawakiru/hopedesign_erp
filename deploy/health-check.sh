@@ -7,12 +7,12 @@ echo " ERP HEALTH CHECK"
 echo "================================"
 
 SERVICES="
-hopedesign-erp-api-1
+hopedesign-erp-api-a
+hopedesign-erp-api-b
 hopedesign-erp-web-1
 hopedesign-erp-postgres-1
 hopedesign-erp-caddy-1
 "
-
 
 for service in $SERVICES
 do
