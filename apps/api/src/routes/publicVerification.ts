@@ -172,7 +172,15 @@ publicVerificationRouter.get(
     const tenantId = tenantParam
       ? Number(tenantParam)
       : Number((await query<{ id: string }>('SELECT id FROM tenants ORDER BY id ASC LIMIT 1')).rows[0]?.id) || 0;
-    const companyId = companyParam ? Number(companyParam) : null;
+    // Resolve a concrete company when none is supplied so company-scoped branding
+    // (e.g. uploaded logo_url) is returned, matching the first-tenant fallback.
+    const companyId = companyParam
+      ? Number(companyParam)
+      : Number(
+          (
+            await query<{ id: string }>('SELECT id FROM companies WHERE tenant_id = $1 ORDER BY id ASC LIMIT 1', [tenantId])
+          ).rows[0]?.id
+        ) || null;
     const branchId = branchParam ? Number(branchParam) : null;
 
     const profile = await tx(
