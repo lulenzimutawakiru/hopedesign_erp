@@ -139,6 +139,7 @@ services:
       web:
         condition: service_healthy
     entrypoint: ["/bin/sh", "/etc/caddy/entrypoint.sh"]
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
     ports:
       - "80:80"
       - "443:443"
