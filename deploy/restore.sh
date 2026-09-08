@@ -3,8 +3,21 @@ set -euo pipefail
 
 BACKUP_DIR="/opt/hopedesign_erp/backups"
 CONTAINER="hopedesign-erp-postgres-1"
-DB_USER="hopedesign"
-DB_NAME="hopedesign_erp"
+ENV_FILE="/opt/hopedesign_erp/.env.production"
+
+# Resolve live role/database from .env.production (mirrors compose interpolation).
+env_value() {
+  local key="$1" default="$2" raw=""
+  if [[ -f "$ENV_FILE" ]]; then
+    raw="$(grep -E "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2-)"
+  fi
+  raw="${raw#\"}"; raw="${raw%\"}"
+  raw="${raw#\'}"; raw="${raw%\'}"
+  raw="$(printf '%s' "$raw" | tr -d '\r')"
+  printf '%s' "${raw:-$default}"
+}
+DB_USER="$(env_value POSTGRES_USER hopedesign)"
+DB_NAME="$(env_value POSTGRES_DB hopedesign_erp)"
 
 echo "================================="
 echo " ERP DATABASE RESTORE UTILITY"
