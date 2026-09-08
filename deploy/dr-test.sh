@@ -27,12 +27,11 @@ cleanup() {
 trap cleanup EXIT
 
 # 1. Spin up ephemeral container
-echo "[1/4] Launching ephemeral PostgreSQL container on port $TEST_PORT..." | tee -a "$LOG_FILE"
+echo "[1/4] Launching ephemeral PostgreSQL container..." | tee -a "$LOG_FILE"
 docker run --name "$TEST_CONTAINER" \
   -e POSTGRES_USER=dr_tester \
   -e POSTGRES_PASSWORD=dr_password \
   -e POSTGRES_DB=hopedesign_erp_dr \
-  -p "$TEST_PORT":5432 \
   -d postgres:15-alpine >/dev/null
 
 # Wait for DB readiness

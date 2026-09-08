@@ -52,8 +52,14 @@ for c in hopedesign-erp-postgres-1 hopedesign-erp-web-1 hopedesign-erp-caddy-1; 
 done
 
 # Endpoint gate through Caddy on localhost.
-if ! curl -fsS --max-time 10 http://127.0.0.1/api/health >/dev/null 2>&1; then
-  log "CRITICAL: http://127.0.0.1/api/health unreachable"
+DOMAIN="$(sed -n 's/^DOMAIN=//p' "$ENV_FILE" 2>/dev/null | tail -1)"
+if [[ -n "$DOMAIN" && "$DOMAIN" != ":80" ]]; then
+  probe="curl -fsS --max-time 10 --resolve $DOMAIN:443:127.0.0.1 https://$DOMAIN/api/health"
+else
+  probe="curl -fsS --max-time 10 http://127.0.0.1/api/health"
+fi
+if ! eval "$probe" >/dev/null 2>&1; then
+  log "CRITICAL: API unreachable through Caddy"
   need_recreate=1
 fi
 
@@ -63,7 +69,7 @@ if [[ "$need_recreate" == "1" ]]; then
   log "recreating stack (api scale=$API_SCALE)"
   "${compose[@]}" up -d --scale "api=$API_SCALE" >> "$LOG_FILE" 2>&1 || true
   sleep 10
-  if curl -fsS --max-time 10 http://127.0.0.1/api/health >/dev/null 2>&1; then
+  if eval "$probe" >/dev/null 2>&1; then
     log "recovery OK"
   else
     log "CRITICAL: still unhealthy after recreate — manual intervention required"

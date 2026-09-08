@@ -100,6 +100,7 @@ async function main() {
     await run(process.execPath, [path.join(root, 'packages/db/src/seed.js')], { DATABASE_URL: ownerUrl });
   }
 
+  console.log('[boot] starting API', JSON.stringify({ node: process.version, pid: process.pid }));
   const api = spawn(process.execPath, [path.join(root, 'apps/api/dist/index.js')], {
     cwd: root,
     stdio: 'inherit',

@@ -75,10 +75,18 @@ log "[4/6] rolling update (api scale=$API_SCALE)"
 "${compose[@]}" up -d --scale "api=$API_SCALE"
 
 # 5) Health gate — internal (through Caddy on localhost).
-log "[5/6] waiting for a healthy API"
+DOMAIN="$(sed -n 's/^DOMAIN=//p' "$ENV_FILE" | tail -1)"
+probe_health() {
+  if [[ -n "$DOMAIN" && "$DOMAIN" != ":80" ]]; then
+    curl -fsS --max-time 8 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/api/health" >/dev/null 2>&1
+  else
+    curl -fsS --max-time 5 http://127.0.0.1/api/health >/dev/null 2>&1
+  fi
+}
+log "[5/6] waiting for a healthy API (internal HTTPS through Caddy)"
 OK=0
 for _ in $(seq 1 90); do
-  if curl -fsS --max-time 5 http://127.0.0.1/api/health >/dev/null 2>&1; then
+  if probe_health; then
     OK=1
     break
   fi
