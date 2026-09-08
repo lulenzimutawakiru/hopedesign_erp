@@ -1030,7 +1030,24 @@ export async function getPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: num
      ORDER BY x.severity DESC, x.created_at DESC, x.id DESC`,
     [payrollId]
   );
-  return { payroll: toCamelRow(res.rows[0]), items: toCamelRows(items.rows), exceptions: toCamelRows(exceptions.rows) };
+  const slips = toCamelRows(items.rows).map((row) => {
+    const breakdown = row.breakdown && typeof row.breakdown === 'object' && !Array.isArray(row.breakdown)
+      ? (row.breakdown as Record<string, unknown>)
+      : {};
+    const num = (v: unknown) => Number(v) || 0;
+    return {
+      ...row,
+      overtime: num(breakdown.overtime),
+      amountPaid: num(breakdown.finalPayout) || num(breakdown.amountPaid),
+      balance: num(breakdown.balance),
+      transport: num(breakdown.transport),
+      lunch: num(breakdown.lunch),
+      previousBalance: num(breakdown.previousBalance),
+      reimbursement: num(breakdown.reimbursement),
+      otherDeductions: num(row.otherDeductions) || num(breakdown.otherDeductions),
+    };
+  });
+  return { payroll: toCamelRow(res.rows[0]), items: slips, exceptions: toCamelRows(exceptions.rows) };
 }
 
 export async function hrBoard(client: pg.PoolClient, ctx: Ctx) {

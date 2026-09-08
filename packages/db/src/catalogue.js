@@ -210,7 +210,7 @@ const MODULES = {
     assessments: ["view","create","update","complete"],
     offers: ["view","create","update","send","accept","decline","withdraw","expire"],
     onboarding: ["view","create","update","start","complete","cancel","delete"],
-    attendance: ["view","create","update","export"],
+    attendance: ["view","create","update","export","review","approve","reject","lock","create_adjustment","view_own"],
     shifts: ["view","create","update","delete","assign"],
     shift_assignments: ["view","create","update","delete"],
     timesheets: ["view","create","update","submit","approve","reject"],
@@ -396,6 +396,18 @@ const MODULES = {
     locks: ["view"],
     maintenance: ["run"],
   },
+  hikvision: {
+    command: ["view"],
+    dashboard: ["view"],
+    devices: ["view","create","update","delete"],
+    events: ["view","retry","reprocess","reject"],
+    exceptions: ["view","assign","resolve","approve","reject"],
+    sync: ["view","employee","bulk","remove_access"],
+    configuration: ["view","manage"],
+    health: ["view"],
+    reports: ["view","export"],
+    employee_links: ["view","create","update","delete"],
+  },
 };
 
 function buildPermissions() {
@@ -422,10 +434,10 @@ function buildPermissions() {
 const ROLES = [
   // Administration
   { code: "super_administrator", name: "Super Administrator", grants: ["*"] },
-  { code: "system_administrator", name: "System Administrator", grants: ["admin.*", "database.*", "settings", "workflows.*", "reports.*", "expenditure.*", "communication.*"] },
-  { code: "security_administrator", name: "Security Administrator", grants: ["admin.users.*", "admin.roles.*", "admin.permissions.*", "admin.policies.*", "admin.sod.*", "admin.audit.*", "qr.*", "security_printing.audit.*"] },
+  { code: "system_administrator", name: "System Administrator", grants: ["admin.*", "database.*", "settings", "workflows.*", "reports.*", "expenditure.*", "communication.*", "hikvision.*"] },
+  { code: "security_administrator", name: "Security Administrator", grants: ["admin.users.*", "admin.roles.*", "admin.permissions.*", "admin.policies.*", "admin.sod.*", "admin.audit.*", "qr.*", "security_printing.audit.*", "hikvision.*"] },
   { code: "it_support_administrator", name: "IT Support Administrator", grants: ["admin.users.view", "admin.settings.*", "documents.*"] },
-  { code: "integration_administrator", name: "Integration Administrator", grants: ["admin.imports.*", "admin.exports.*", "admin.events.*", "admin.integrations.*", "admin.settings.view"] },
+  { code: "integration_administrator", name: "Integration Administrator", grants: ["admin.imports.*", "admin.exports.*", "admin.events.*", "admin.integrations.*", "admin.settings.view", "hikvision.*"] },
   { code: "backup_administrator", name: "Backup Administrator", grants: ["admin.settings.view", "admin.audit.view"] },
   { code: "audit_administrator", name: "Audit Administrator", grants: ["admin.audit.*", "admin.events.*", "reports.*"] },
   // Executive
@@ -436,7 +448,7 @@ const ROLES = [
   { code: "operations_director", name: "Operations Director", grants: ["production.*", "quality.*", "maintenance.*", "inventory.*", "procurement.*", "expenditure.*", "workflows.instances.*", "reports.*", "communication.command.view", "communication.notifications.*", "communication.delivery_logs.view"] },
   { code: "cfo", name: "CFO", grants: ["finance.*", "expenditure.*", "procurement.payments.*", "workflows.instances.*", "reports.finance.*", "reports.executive.*", "hr.final_settlements.view", "hr.final_settlements.approve", "hr.final_settlements.pay", "hr.final_settlements.export", "communication.command.view", "communication.notifications.*", "communication.delivery_logs.view"] },
   { code: "commercial_director", name: "Commercial Director", grants: ["crm.*", "sales.*", "expenditure.*", "reports.sales.*", "reports.executive.*", "communication.*"] },
-  { code: "hr_director", name: "HR Director", grants: ["hr.*", "reports.hr.*", "reports.dashboards.view", "communication.*"] },
+  { code: "hr_director", name: "HR Director", grants: ["hr.*", "reports.hr.*", "reports.dashboards.view", "communication.*", "hikvision.*"] },
   // Finance
   { code: "finance_manager", name: "Finance Manager", grants: ["finance.*", "expenditure.*", "procurement.supplier_invoices.*", "procurement.payments.*", "workflows.instances.*", "reports.finance.*", "hr.final_settlements.view", "hr.final_settlements.approve", "hr.final_settlements.pay"] },
   { code: "chief_accountant", name: "Chief Accountant", grants: ["finance.*", "expenditure.*", "workflows.instances.*", "reports.finance.*"] },
@@ -518,16 +530,16 @@ const ROLES = [
   { code: "security_printing_auditor", name: "Security Printing Auditor", grants: ["security_printing.audit.*", "security_printing.custody.view", "security_printing.jobs.view", "admin.audit.view", "reports.security.view"] },
   { code: "secure_job_approver", name: "Secure Job Approver", grants: ["security_printing.jobs.view", "security_printing.jobs.approve", "security_printing.jobs.reject", "security_printing.jobs.authorize_materials", "security_printing.jobs.reconcile", "workflows.instances.view", "workflows.instances.approve", "workflows.instances.reject", "workflows.instances.return", "dashboard.*", "reports.executive.view", "notifications.notifications.*"] },
   // HR
-  { code: "hr_manager", name: "HR Manager", grants: ["hr.*", "workflows.instances.*", "communication.command.view", "communication.notifications.*", "communication.delivery_logs.view", "communication.announcements.view"] },
-  { code: "hr_officer", name: "HR Officer", grants: ["hr.employees.*", "hr.contracts.*", "hr.certificates.*", "hr.legal_rules.view", "hr.attendance.*", "hr.leave.*", "hr.loans.*", "hr.divisions.*", "hr.locations.*", "hr.org_units.*", "hr.teams.*", "hr.job_families.*", "hr.job_grades.*", "hr.positions.*", "hr.position_assignments.*", "hr.workforce_plans.*", "hr.shifts.*", "hr.shift_assignments.*", "hr.timesheets.*", "hr.overtime.*", "hr.leave_types.*", "hr.leave_policies.*", "hr.leave_accruals.*", "hr.leave_balances.*", "hr.holidays.*", "hr.benefit_plans.*", "hr.benefit_enrollments.*", "hr.benefit_claims.*", "hr.grievances.*", "hr.investigations.*", "hr.disciplinary.*", "hr.warnings.*", "hr.asset_assignments.*", "hr.employee_requests.*", "hr.projects.*", "hr.onboarding.*", "hr.offboardings.*", "hr.alumni.view", "hr.payroll_components.view", "hr.employee_salaries.view", "hr.employee_earnings.view", "hr.employee_deductions.view", "hr.employee_benefits.view", "hr.overtime_records.view", "hr.bonus_records.view", "hr.commission_records.view", "hr.final_settlements.view", "hr.final_settlements.create", "hr.final_settlements.update", "hr.final_settlements.submit"] },
-  { code: "hr_assistant", name: "HR Assistant", grants: ["hr.employees.view", "hr.employees.create", "hr.attendance.*", "hr.leave.view", "hr.positions.view", "hr.onboarding.*", "hr.offboardings.view", "hr.alumni.view", "hr.employee_requests.*", "hr.leave_types.view", "hr.holidays.view", "hr.asset_assignments.view", "hr.employee_identity.view", "hr.employee_card.view", "hr.employee_qr.view", "hr.employee_assignments.view"] },
+  { code: "hr_manager", name: "HR Manager", grants: ["hr.*", "workflows.instances.*", "communication.command.view", "communication.notifications.*", "communication.delivery_logs.view", "communication.announcements.view", "hikvision.*"] },
+  { code: "hr_officer", name: "HR Officer", grants: ["hr.employees.*", "hr.contracts.*", "hr.certificates.*", "hr.legal_rules.view", "hr.attendance.*", "hr.leave.*", "hr.loans.*", "hr.divisions.*", "hr.locations.*", "hr.org_units.*", "hr.teams.*", "hr.job_families.*", "hr.job_grades.*", "hr.positions.*", "hr.position_assignments.*", "hr.workforce_plans.*", "hr.shifts.*", "hr.shift_assignments.*", "hr.timesheets.*", "hr.overtime.*", "hr.leave_types.*", "hr.leave_policies.*", "hr.leave_accruals.*", "hr.leave_balances.*", "hr.holidays.*", "hr.benefit_plans.*", "hr.benefit_enrollments.*", "hr.benefit_claims.*", "hr.grievances.*", "hr.investigations.*", "hr.disciplinary.*", "hr.warnings.*", "hr.asset_assignments.*", "hr.employee_requests.*", "hr.projects.*", "hr.onboarding.*", "hr.offboardings.*", "hr.alumni.view", "hr.payroll_components.view", "hr.employee_salaries.view", "hr.employee_earnings.view", "hr.employee_deductions.view", "hr.employee_benefits.view", "hr.overtime_records.view", "hr.bonus_records.view", "hr.commission_records.view", "hr.final_settlements.view", "hr.final_settlements.create", "hr.final_settlements.update", "hr.final_settlements.submit", "hikvision.command.view", "hikvision.dashboard.view", "hikvision.devices.view", "hikvision.events.view", "hikvision.exceptions.view", "hikvision.exceptions.assign", "hikvision.exceptions.resolve", "hikvision.sync.view", "hikvision.configuration.view", "hikvision.health.view", "hikvision.reports.view", "hikvision.employee_links.view"] },
+  { code: "hr_assistant", name: "HR Assistant", grants: ["hr.employees.view", "hr.employees.create", "hr.attendance.*", "hr.leave.view", "hr.positions.view", "hr.onboarding.*", "hr.offboardings.view", "hr.alumni.view", "hr.employee_requests.*", "hr.leave_types.view", "hr.holidays.view", "hr.asset_assignments.view", "hr.employee_identity.view", "hr.employee_card.view", "hr.employee_qr.view", "hr.employee_assignments.view", "hikvision.dashboard.view", "hikvision.devices.view", "hikvision.events.view", "hikvision.exceptions.view", "hikvision.health.view", "hikvision.sync.view"] },
   { code: "recruitment_officer", name: "Recruitment Officer", grants: ["hr.requisitions.*", "hr.vacancies.*", "hr.vacancy_channels.*", "hr.candidates.*", "hr.applications.*", "hr.interviews.*", "hr.assessments.*", "hr.offers.*", "hr.onboarding.view", "hr.positions.view", "hr.workforce_plans.view", "hr.employees.view"] },
   { code: "training_officer", name: "Training Officer", grants: ["hr.training_catalog.*", "hr.training_sessions.*", "hr.training_requests.*", "hr.training_enrollments.*", "hr.training_certificates.*", "hr.competencies.*", "hr.employees.view"] },
   { code: "performance_officer", name: "Performance Officer", grants: ["hr.performance_goals.*", "hr.performance_kpis.*", "hr.performance_reviews.*", "hr.pips.*", "hr.employees.view"] },
   { code: "payroll_manager", name: "Payroll Manager", grants: ["hr.payrolls.view", "hr.payrolls.update", "hr.payrolls.submit", "hr.payrolls.approve", "hr.payrolls.post", "hr.payrolls.print", "hr.payroll_components.*", "hr.employee_salaries.*", "hr.employee_earnings.*", "hr.employee_deductions.*", "hr.employee_benefits.*", "hr.overtime_records.*", "hr.bonus_records.*", "hr.commission_records.*", "hr.statutory_configs.view", "hr.employees.view", "hr.loans.view", "hr.timesheets.view", "hr.overtime.view", "hr.employee_requests.view", "hr.final_settlements.*", "hr.loans.approve", "hr.loans.write_off", "hr.advances.view", "hr.advances.approve", "workflows.instances.*"] },
   { code: "payroll_officer", name: "Payroll Officer", grants: ["hr.payrolls.view", "hr.payrolls.create", "hr.payrolls.update", "hr.payrolls.submit", "hr.payrolls.print", "hr.payroll_components.view", "hr.employee_salaries.view", "hr.employee_salaries.create", "hr.employee_salaries.update", "hr.employee_earnings.view", "hr.employee_earnings.create", "hr.employee_earnings.update", "hr.employee_deductions.view", "hr.employee_deductions.create", "hr.employee_deductions.update", "hr.employee_benefits.view", "hr.employee_benefits.create", "hr.employee_benefits.update", "hr.overtime_records.view", "hr.overtime_records.create", "hr.overtime_records.update", "hr.bonus_records.view", "hr.bonus_records.create", "hr.bonus_records.update", "hr.commission_records.view", "hr.commission_records.create", "hr.commission_records.update", "hr.statutory_configs.view", "hr.timesheets.view", "hr.overtime.view", "hr.employees.view", "hr.final_settlements.view", "hr.final_settlements.create", "hr.final_settlements.update", "hr.final_settlements.submit", "hr.final_settlements.export"] },
-  { code: "time_attendance_officer", name: "Time & Attendance Officer", grants: ["hr.attendance.*", "hr.shifts.*", "hr.shift_assignments.*", "hr.timesheets.*", "hr.overtime.*", "hr.holidays.view", "hr.employees.view", "hr.leave.view"] },
-  { code: "employee_self_service", name: "Employee Self-Service User", grants: ["hr.leave.view", "hr.leave.create", "hr.attendance.view", "hr.payslips.view", "hr.employee_requests.*", "hr.benefit_plans.view", "hr.benefit_enrollments.view", "hr.training_catalog.view", "hr.training_sessions.view", "hr.competencies.view", "hr.performance_goals.view", "hr.performance_reviews.view", "hr.holidays.view", "hr.contracts.view", "hr.contracts.sign", "hr.contracts.download", "hr.certificates.view", "notifications.notifications.*"] },
+  { code: "time_attendance_officer", name: "Time & Attendance Officer", grants: ["hr.attendance.*", "hr.shifts.*", "hr.shift_assignments.*", "hr.timesheets.*", "hr.overtime.*", "hr.holidays.view", "hr.employees.view", "hr.leave.view", "hikvision.*"] },
+  { code: "employee_self_service", name: "Employee Self-Service User", grants: ["hr.leave.view", "hr.leave.create", "hr.attendance.view", "hr.payslips.view", "hr.employee_requests.*", "hr.benefit_plans.view", "hr.benefit_enrollments.view", "hr.training_catalog.view", "hr.training_sessions.view", "hr.competencies.view", "hr.performance_goals.view", "hr.performance_reviews.view", "hr.holidays.view", "hr.contracts.view", "hr.contracts.sign", "hr.contracts.download", "hr.certificates.view", "notifications.notifications.*", "hr.attendance.view_own"] },
   { code: "onboarding_officer", name: "Onboarding Officer", grants: ["hr.onboarding.*", "hr.employees.view", "hr.asset_assignments.*", "hr.positions.view", "hr.employee_requests.view"] },
   { code: "benefits_officer", name: "Benefits Officer", grants: ["hr.benefit_plans.*", "hr.benefit_enrollments.*", "hr.benefit_claims.*", "hr.employee_benefits.*", "hr.employees.view"] },
   { code: "workforce_planner", name: "Workforce Planner", grants: ["hr.workforce_plans.*", "hr.workforce_scenarios.*", "hr.positions.view", "hr.job_families.view", "hr.job_grades.view", "hr.employees.view"] },

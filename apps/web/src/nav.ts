@@ -358,6 +358,21 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'me', label: 'My HR', href: '/people/me', perm: 'hr.leave.view' },
         ],
       },
+      {
+        id: 'hikvision', label: 'Biometric Attendance', href: '/hikvision', perm: 'hikvision.dashboard.view', module: 'hr', accent: 'hr',
+        keywords: 'hikvision biometric attendance access control terminals devices events punches exceptions sync',
+        children: [
+          { id: 'live', label: 'Live', href: '/hikvision', perm: 'hikvision.dashboard.view' },
+          { id: 'devices', label: 'Devices', href: '/hikvision/devices', perm: 'hikvision.devices.view' },
+          { id: 'events', label: 'Events', href: '/hikvision/events', perm: 'hikvision.events.view' },
+          { id: 'failed', label: 'Failed Events', href: '/hikvision/events/failed', perm: 'hikvision.events.view' },
+          { id: 'exceptions', label: 'Exceptions', href: '/hikvision/exceptions', perm: 'hikvision.exceptions.view' },
+          { id: 'attendance', label: 'Attendance', href: '/hikvision/attendance', perm: 'hr.attendance.view' },
+          { id: 'health', label: 'Health', href: '/hikvision/health', perm: 'hikvision.health.view' },
+          { id: 'sync', label: 'Sync', href: '/hikvision/sync', perm: 'hikvision.sync.view' },
+          { id: 'reports', label: 'Reports', href: '/hikvision/reports', perm: 'hr.attendance.view' },
+        ],
+      },
     ],
   },
   {
@@ -602,6 +617,16 @@ export function requiredPermForPath(path: string): string | undefined {
   const parts = path.split('/').filter(Boolean);
   if (path === '/exports') return 'admin.exports.run';
   if (path === '/settings') return 'admin.settings.view';
+  if (parts[0] === 'hikvision') {
+    if (parts[1] === 'devices') return 'hikvision.devices.view';
+    if (parts[1] === 'events') return 'hikvision.events.view';
+    if (parts[1] === 'exceptions') return 'hikvision.exceptions.view';
+    if (parts[1] === 'attendance') return 'hr.attendance.view';
+    if (parts[1] === 'health') return 'hikvision.health.view';
+    if (parts[1] === 'sync') return 'hikvision.sync.view';
+    if (parts[1] === 'reports') return 'hr.attendance.view';
+    return 'hikvision.dashboard.view';
+  }
   if (parts[0] === 'admin') {
     const map: Record<string, string> = {
       users: 'admin.users.view',

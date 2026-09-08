@@ -44,6 +44,9 @@ import { contractsOpsRouter } from './routes/ops/contracts.js';
 import { hcmOpsRouter } from './routes/ops/hcm.js';
 import { assetsOpsRouter } from './routes/ops/assets.js';
 import { employeeIdentityOpsRouter } from './routes/ops/employeeIdentity.js';
+import { hikvisionEventsRouter, hikvisionWebhookErrorFilter } from './routes/hikvisionEvents.js';
+import { hikvisionOpsRouter, hikvisionAttendanceOpsRouter } from './routes/ops/hikvision.js';
+import { runHikvisionWorkerTick } from './services/hikvision/processor.js';
 import { requisitionsOpsRouter } from './routes/ops/requisitions.js';
 import { expenditureOpsRouter } from './routes/ops/expenditure.js';
 import { communicationOpsRouter } from './routes/ops/communication.js';
@@ -143,6 +146,10 @@ app.use('/api', healthRouter);                            // GET /api/health
 app.use('/api/public', publicVerificationRouter);          // POST /api/public/verify
 app.use('/api/auth', authRouter);                          // /api/auth/login, /refresh, /me ...
 
+// ---- Hikvision device-facing event receiver (public webhook; each terminal is
+// authenticated + authorized inside ingestDeviceEvent before any storage) ----
+app.use('/api/integrations/hikvision', hikvisionEventsRouter, hikvisionWebhookErrorFilter);
+
 // ---- Authenticated API ----
 app.use(authenticate);
 app.use('/api/approvals', approvalsRouter);
@@ -171,6 +178,8 @@ app.use('/api/ops/inventory-intel', inventoryIntelRouter);
 app.use('/api/ops/finance', financeOpsRouter);
 app.use('/api/ops/hr', hrOpsRouter);
 app.use('/api/ops/hr/identity', employeeIdentityOpsRouter);
+app.use('/api/hikvision', hikvisionOpsRouter);
+app.use('/api/attendance', hikvisionAttendanceOpsRouter);
 app.use('/api/ops/hr', contractsOpsRouter);
 app.use('/api/ops/hcm', hcmOpsRouter);
 app.use('/api/ops/security', securityOpsRouter);
@@ -204,6 +213,13 @@ setInterval(() => {
     console.error('[cronJobs]', err instanceof Error ? err.message : err);
   });
 }, 60_000);
+
+// Hikvision queue worker: drain claimed raw events every 10s (retry policy in SQL).
+setInterval(() => {
+  runHikvisionWorkerTick().catch((err: unknown) => {
+    console.error('[hikvisionWorker]', err instanceof Error ? err.message : err);
+  });
+}, 10_000);
 
 // Notification delivery worker: dispatch queued EMAIL/SMS/WHATSAPP via Bird.
 setInterval(() => {

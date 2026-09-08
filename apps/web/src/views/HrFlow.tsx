@@ -1950,7 +1950,7 @@ function PayrollDesk({ id }: { id: number }) {
 </div>
         <div className="table-wrap">
           <table className="data">
-            <thead><tr><th>Employee</th><th className="cell-num">Basic</th><th className="cell-num">Allow.</th><th className="cell-num">Gross</th><th className="cell-num">PAYE</th><th className="cell-num">NSSF</th><th className="cell-num">Loans</th><th className="cell-num">Net</th>{canPrintSlips ? <th></th> : null}</tr></thead>
+            <thead><tr><th>Employee</th><th className="cell-num">Basic</th><th className="cell-num">Allow.</th><th className="cell-num">Gross</th><th className="cell-num">PAYE</th><th className="cell-num">NSSF</th><th className="cell-num">Net</th><th className="cell-num">OT</th><th className="cell-num">Prev.</th><th className="cell-num">Reimb.</th><th className="cell-num">Advance</th><th className="cell-num">Other</th><th className="cell-num">Paid</th><th className="cell-num">Balance</th>{canPrintSlips ? <th></th> : null}</tr></thead>
             <tbody>
               {doc.items.map((i) => (
                 <tr key={String(i.id)}>
@@ -1960,8 +1960,14 @@ function PayrollDesk({ id }: { id: number }) {
                   <td className="cell-num">{fmtMoney(i.grossPay)}</td>
                   <td className="cell-num">{fmtMoney(i.paye)}</td>
                   <td className="cell-num">{fmtMoney(i.nssf)}</td>
-                  <td className="cell-num">{fmtMoney(i.loans)}</td>
                   <td className="cell-num">{fmtMoney(i.netPay)}</td>
+                  <td className="cell-num">{fmtMoney(i.overtime)}</td>
+                  <td className="cell-num">{fmtMoney(i.previousBalance)}</td>
+                  <td className="cell-num">{fmtMoney(i.reimbursement)}</td>
+                  <td className="cell-num">{fmtMoney(i.advances)}</td>
+                  <td className="cell-num">{fmtMoney(i.otherDeductions)}</td>
+                  <td className="cell-num">{fmtMoney(i.amountPaid)}</td>
+                  <td className="cell-num">{fmtMoney(i.balance)}</td>
                   {canPrintSlips && (
                     <td>
                       <div className="action-group">
@@ -1972,6 +1978,25 @@ function PayrollDesk({ id }: { id: number }) {
                   )}
                 </tr>
               ))}
+              {doc.items.length > 0 && (
+                <tr>
+                  <td><strong>Total</strong></td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.basicPay) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.allowances) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.grossPay) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.paye) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.nssf) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.netPay) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.overtime) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.previousBalance) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.reimbursement) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.advances) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.otherDeductions) || 0), 0))}</td>
+                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.amountPaid) || 0), 0))}</td>
+                  <td className="cell-num"><strong>{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.balance) || 0), 0))}</strong></td>
+                  {canPrintSlips ? <td /> : null}
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

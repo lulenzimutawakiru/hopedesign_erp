@@ -31,6 +31,7 @@ const SpendFlow = lazy(() => import('./SpendFlow'));
 const ProcurementFlow = lazy(() => import('./ProcurementFlow'));
 const CrmFlow = lazy(() => import('./CrmFlow'));
 const HrFlow = lazy(() => import('./HrFlow'));
+const HikvisionFlow = lazy(() => import('./HikvisionFlow'));
 const WorkOrderWizard = lazy(() => import('./WorkOrderWizard'));
 const AssetsFlow = lazy(() => import('./AssetsFlow'));
 const AdminFlow = lazy(() => import('./AdminFlow'));
@@ -161,6 +162,7 @@ export default function Shell() {
   else if (path === '/buy' || path.startsWith('/buy/')) body = <ProcurementFlow path={path} />;
   else if (path === '/crm' || path.startsWith('/crm/')) body = <CrmFlow path={path} />;
   else if (path === '/people' || path.startsWith('/people/')) body = <HrFlow path={path} />;
+  else if (path === '/hikvision' || path.startsWith('/hikvision/')) body = <HikvisionFlow path={path} />;
   else if (path === '/operator') body = <OperatorFloor />;
   else if (opMatch) body = <OperatorFloor woId={Number(opMatch.segments[1])} />;
   else if (path === '/reports') body = <Reports />;
