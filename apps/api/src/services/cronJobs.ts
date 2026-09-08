@@ -4,6 +4,7 @@ import { logAudit } from './audit.js';
 import { notifyUsers, renderEmailForSend, resolveRecipients } from './communication.js';
 import { sendEmail } from './bird.js';
 import { computeNextRun } from './reportScheduler.js';
+import { governanceSweep } from './governance.js';
 
 export interface CronJobRow {
   id: number;
@@ -843,6 +844,15 @@ async function emailQueueFlush(client: pg.PoolClient, ctx: Ctx, job: CronJobRow)
   return { checked: rows.length, sent, failed };
 }
 
+
+
+async function governanceAuthoritySweep(client: pg.PoolClient, ctx: Ctx): Promise<Record<string, unknown>> {
+  const result = await governanceSweep(client, ctx);
+  return {
+    expiredDelegations: result.expiredDelegations,
+    expiredSignatureProfiles: result.expiredSignatureProfiles,
+  };
+}
 async function runHandler(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
   switch (job.jobType) {
     case 'STOCK_REORDER_CHECK':
@@ -875,6 +885,8 @@ async function runHandler(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Pro
       return passwordExpiryCheck(client, ctx, job);
     case 'EMAIL_QUEUE_FLUSH':
       return emailQueueFlush(client, ctx, job);
+    case 'GOVERNANCE_AUTHORITY_SWEEP':
+      return governanceAuthoritySweep(client, ctx);
     default:
       return { skipped: true, reason: `Unknown job type ${job.jobType}` };
   }

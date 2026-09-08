@@ -7,6 +7,7 @@ import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { ConfirmDialog, Drawer, EmptyState, Skeleton } from '../components/os';
 import { Rec, labelize, s, tileStyle } from './assetsShared';
 import DatabaseCenter from './DatabaseCenter';
+import GovernanceFlow from './GovernanceFlow';
 
 const USER_STATUSES = ['ACTIVE', 'INVITED', 'PENDING_ACTIVATION', 'INACTIVE', 'SUSPENDED', 'LOCKED', 'DISABLED', 'TERMINATED'];
 
@@ -54,6 +55,9 @@ export default function AdminFlow({ path }: { path: string }) {
     case 'health': return <Health />;
     case 'backups': return <Backups />;
     case 'database': return <DatabaseCenter />;
+    case 'delegations':
+    case 'signatures':
+      return <GovernanceFlow path={path} />;
     default: return <Dashboard />;
   }
 }

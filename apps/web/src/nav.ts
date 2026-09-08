@@ -424,6 +424,8 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'adminfeatures', label: 'Features', href: '/admin/features', perm: 'admin.feature_flags.view' },
           { id: 'adminhealth', label: 'Health', href: '/admin/health', perm: 'admin.health.view' },
           { id: 'adminbackups', label: 'Backups', href: '/admin/backups', perm: 'admin.backups.view' },
+          { id: 'delegations', label: 'Delegations', href: '/admin/delegations', perm: 'governance.delegations.view' },
+          { id: 'signatures', label: 'Signatures', href: '/admin/signatures', perm: 'governance.signature_profiles.view' },
         ],
       },
       {
@@ -641,6 +643,8 @@ export function requiredPermForPath(path: string): string | undefined {
       features: 'admin.feature_flags.view',
       health: 'admin.health.view',
       backups: 'admin.backups.view',
+      delegations: 'governance.delegations.view',
+      signatures: 'governance.signature_profiles.view',
     };
     return map[parts[1] ?? ''] ?? 'admin.users.view';
   }

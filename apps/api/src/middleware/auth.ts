@@ -3,6 +3,7 @@ import { verifyAccessToken } from '../auth.js';
 import { query } from '../db.js';
 import { AuthUser } from '../types.js';
 import { unauthorized } from '../utils.js';
+type ActingRoleSummary = NonNullable<AuthUser['actingRoles']>[number];
 
 const USER_SQL = `
   SELECT u.id, u.tenant_id, u.company_id, u.default_company_id, u.default_branch_id, u.branch_id, u.department_id, u.division_id, u.requesting_location_id, u.cost_centre_id, u.project_id, u.budget_id, u.fiscal_year_id, u.employee_id, u.email, u.username,
@@ -33,6 +34,33 @@ export async function loadAuthUser(userId: number, tenantId: number): Promise<Au
   if (Number(userRow.tenant_id) !== tenantId) throw unauthorized('Tenant mismatch');
   const rolesRes = await query(ROLES_SQL, [userId], { tenantId });
   const permsRes = await query(PERMS_SQL, [userId], { tenantId });
+  const delegationRes = await query(DELEGATIONS_SQL, [userId, tenantId], { tenantId });
+  const actingRoles: ActingRoleSummary[] = [];
+  const delegationPerms = new Set<string>();
+  for (const row of delegationRes.rows as Record<string, unknown>[]) {
+    const permCode = String(row.permission_code ?? '');
+    if (permCode) delegationPerms.add(permCode);
+  }
+  const actingByDelegation = new Map<number, ActingRoleSummary>();
+  for (const row of delegationRes.rows as Record<string, unknown>[]) {
+    const delegationId = Number(row.delegation_id);
+    if (!actingByDelegation.has(delegationId)) {
+      actingByDelegation.set(delegationId, {
+        delegation_id: delegationId,
+        delegation_code: String(row.delegation_code ?? ''),
+        delegation_company_id: row.delegation_company_id ?? null,
+        delegator_user_id: row.delegator_user_id ?? null,
+        delegator_name: row.delegator_first_name && row.delegator_last_name
+          ? `${row.delegator_first_name} ${row.delegator_last_name}`
+          : null,
+        role_code: String(row.role_code ?? ''),
+        role_name: String(row.role_name ?? ''),
+        starts_at: row.starts_at ?? null,
+        expires_at: row.expires_at ?? null,
+      } as ActingRoleSummary);
+    }
+  }
+  actingByDelegation.forEach((v) => actingRoles.push(v));
   const modsRes = await query('SELECT activate_modules FROM tenants WHERE id = $1', [tenantId], { tenantId });
   const activateModules = Array.isArray(modsRes.rows[0]?.activate_modules)
     ? (modsRes.rows[0].activate_modules as string[])
@@ -100,8 +128,9 @@ export async function loadAuthUser(userId: number, tenantId: number): Promise<Au
     ...(userRow as unknown as AuthUser),
     ...(scopeRes.rows[0] ?? {}),
     roles: rolesRes.rows as unknown as AuthUser['roles'],
-    permissions: permsRes.rows.map((r) => String(r.code)),
+    permissions: [...new Set([...permsRes.rows.map((r) => String(r.code)), ...delegationPerms])],
     activate_modules: activateModules,
+    actingRoles: actingRoles.length > 0 ? actingRoles : undefined,
   };
 }
 
@@ -130,3 +159,23 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     next(unauthorized('Invalid or expired token'));
   }
 }
+const DELEGATIONS_SQL = `
+  SELECT d.id AS delegation_id, d.code AS delegation_code, d.delegator_user_id,
+         d.company_id AS delegation_company_id,
+         TO_CHAR(d.starts_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS starts_at,
+         TO_CHAR(d.expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS expires_at,
+         du.first_name AS delegator_first_name, du.last_name AS delegator_last_name,
+         r.code AS role_code, r.name AS role_name,
+         p.code AS permission_code
+  FROM delegations d
+  JOIN roles r ON r.id = d.temporary_role_id
+  JOIN role_permissions rp ON rp.role_id = r.id
+  JOIN permissions p ON p.id = rp.permission_id
+  JOIN users du ON du.id = d.delegator_user_id
+ WHERE d.delegate_user_id = $1
+   AND d.tenant_id = $2
+   AND d.status = 'ACTIVE'
+   AND d.starts_at <= now() AND d.expires_at > now()
+`;
+
+

@@ -20,6 +20,17 @@ export interface MeUser {
   permissions: string[];
   activate_modules?: string[];
   roles: { role_id: number; role_code: string; company_id: number | null; branch_id: number | null }[];
+  actingRoles?: {
+    delegation_id: number;
+    delegation_code: string;
+    delegation_company_id: number | null;
+    delegator_user_id: number | null;
+    delegator_name: string | null;
+    role_code: string;
+    role_name: string;
+    starts_at: string | null;
+    expires_at: string | null;
+  }[];
   tenant_code?: string | null;
   tenant_name?: string | null;
   company_name?: string | null;
@@ -233,3 +244,4 @@ export function can(user: MeUser | null, permission: string): boolean {
     perms.includes(`${m}.*`)
   );
 }
+
