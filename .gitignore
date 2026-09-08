@@ -36,3 +36,7 @@ hv-*.txt
 /vercel-sync-env.cjs
 /dba-probe.cjs
 /prod-env-gen.cjs
+
+# Runtime operational logs written by cron/deploy scripts on the server
+logs/
+
