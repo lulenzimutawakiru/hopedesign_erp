@@ -140,7 +140,7 @@ GRANT EXECUTE ON FUNCTION public.governance_expire_signature_profiles() TO hoped
 DO $$ DECLARE t TEXT; BEGIN
   FOREACH t IN ARRAY ARRAY['signature_profiles','signature_authority_scopes'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
-    DROP POLICY IF EXISTS tenant_isolation ON public.%I;
+    EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON public.%I', t);
     EXECUTE format('CREATE POLICY tenant_isolation ON public.%I USING (tenant_id = app_tenant_id())', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation_insert ON public.%I', t);
     EXECUTE format('CREATE POLICY tenant_isolation_insert ON public.%I FOR INSERT WITH CHECK (tenant_id = app_tenant_id())', t);
