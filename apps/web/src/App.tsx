@@ -44,7 +44,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="center-box" style={{ flexDirection: 'column', gap: 12 }}>
-        <BrandMark size="lg" />
+        <BrandMark size="lg" logoUrl={company.logo_url} />
         <div className="muted">Restoring named session…</div>
       </div>
     );

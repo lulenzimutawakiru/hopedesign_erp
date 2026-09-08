@@ -5,8 +5,7 @@ const RESEND_API_URL = 'https://api.resend.com/emails';
 
 /**
  * True when Resend is configured (RESEND_API_KEY and a verified sender
- * address). When enabled, email delivery is routed through Resend instead of
- * Bird.
+ * address). Resend is the only email delivery provider.
  */
 export function isResendConfigured(): boolean {
   return Boolean(config.resend.apiKey.trim() && config.resend.fromEmail.trim());
@@ -14,8 +13,8 @@ export function isResendConfigured(): boolean {
 
 /**
  * Send an email through the Resend REST API.
- * Returns the same shape as the Bird providers (BirdSendResult) so callers
- * can route between providers without changing their code.
+ * Returns the shared provider result shape so callers can route without
+ * changing their code.
  */
 export async function sendEmailViaResend(input: BirdEmailInput): Promise<BirdSendResult> {
   const { apiKey, fromEmail, fromName } = config.resend;

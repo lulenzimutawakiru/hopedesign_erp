@@ -269,6 +269,10 @@ button, input, select, textarea { font-family: inherit; }
   line-height: 0;
 }
 .brand-mark svg { display: block; }
+.brand-mark img {
+  width: 100%; height: 100%; object-fit: contain;
+  display: block;
+}
 .brand-mark-lg { width: 56px; height: 56px; border-radius: 12px; }
 .brand-lockup { display: inline-flex; align-items: center; gap: 12px; }
 .brand-lockup-copy { display: flex; flex-direction: column; }

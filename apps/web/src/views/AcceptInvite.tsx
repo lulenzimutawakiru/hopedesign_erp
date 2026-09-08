@@ -45,7 +45,7 @@ export default function AcceptInvite() {
     <div className="login-page">
       <div className="login-hero">
         <div>
-          <BrandMark size="lg" tone="hope" />
+          <BrandMark size="lg" tone="hope" logoUrl={company.logo_url} />
           <div className="eyebrow">{company.name}{branch ? ` · ${branch}` : ''}</div>
           <h2>Welcome to {shortCompanyName(company.name)} OS.</h2>
           <p>Set your password to activate your account and join the mill.</p>
@@ -53,7 +53,7 @@ export default function AcceptInvite() {
         <div className="eyebrow">Invitation - Secure token - Audited</div>
       </div>
       <form className="login-card" onSubmit={submit}>
-        <BrandMark size="lg" />
+        <BrandMark size="lg" logoUrl={company.logo_url} />
         <h1>Accept invitation</h1>
         <p className="muted">Choose a password for your {company.name} account.</p>
         {!token && <div className="alert alert-error">This invitation link is missing its token. Check the link you were sent.</div>}

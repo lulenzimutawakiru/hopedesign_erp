@@ -90,7 +90,7 @@ async function main(): Promise<void> {
   ]);
   await pingDb();
   const server = (app as unknown as import('express').Express).listen(config.port, config.host, () => {
-    console.log(`[api] Hope Design ERP API listening on http://${config.host}:${config.port}`);
+    console.log(`[api] Hope Design API listening on http://${config.host}:${config.port}`);
   });
 
   const shutdown = (signal: string) => {

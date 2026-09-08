@@ -4324,7 +4324,7 @@ async function seedAll(pool) {
       },
       {
         key: "system.name",
-        value: { name: "Hope Design ERP" },
+        value: { name: "Hope Design" },
         desc: "System display name.",
       },
       {

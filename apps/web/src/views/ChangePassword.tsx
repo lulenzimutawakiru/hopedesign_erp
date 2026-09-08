@@ -38,7 +38,7 @@ export default function ChangePassword() {
         <img className="login-hero-photo" src="/login-mill.jpg" alt="Paper mill and security printing hall" />
         <div className="login-hero-veil" aria-hidden />
         <div className="login-hero-copy">
-          <BrandMark size="lg" tone="hope" />
+          <BrandMark size="lg" tone="hope" logoUrl={company.logo_url} />
           <div className="eyebrow">{company.name}{branch ? ` · ${branch}` : ''}</div>
           <h2>Set a password only you hold.</h2>
           <p>Seeded and reset accounts must be rotated before the mill OS will open.</p>
@@ -47,7 +47,7 @@ export default function ChangePassword() {
       </aside>
       <main className="login-panel">
         <form className="login-card" onSubmit={submit}>
-          <BrandMark size="lg" />
+          <BrandMark size="lg" logoUrl={company.logo_url} />
           <h1>Change password</h1>
           <p className="muted">
             {user?.first_name ? `${user.first_name}, your ` : 'Your '}

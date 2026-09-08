@@ -1294,38 +1294,31 @@ communicationOpsRouter.get(
   '/providers',
   ...runGet(PROVIDER_PERMS, async () => {
     const resend = isResendConfigured();
-    const bird = Boolean((config.bird.apiKey ?? '').trim());
     const at = isAfricasTalkingConfigured();
     return {
       email: {
-        ready: resend || bird,
-        provider: resend ? 'resend' : bird ? 'bird' : 'none',
-        fromEmail: resend ? config.resend.fromEmail : config.bird.fromEmail,
-        fromName: resend ? config.resend.fromName : config.bird.fromName,
+        ready: resend,
+        provider: resend ? 'resend' : 'none',
+        fromEmail: resend ? config.resend.fromEmail : null,
+        fromName: resend ? config.resend.fromName : null,
       },
       sms: {
-        ready: at || bird,
-        provider: at ? 'africastalking' : bird ? 'bird' : 'none',
-        senderId: at
-          ? (config.africastalking.senderId || null)
-          : (config.bird.smsFrom || null),
+        ready: at,
+        provider: at ? 'africastalking' : 'none',
+        senderId: at ? (config.africastalking.senderId || null) : null,
       },
       whatsapp: {
-        ready: Boolean(config.africastalking.whatsappNumber.trim()) || Boolean(config.bird.whatsappFrom.trim()) || bird,
+        ready: Boolean(config.africastalking.whatsappNumber.trim()),
         provider: config.africastalking.whatsappNumber.trim()
           ? 'africastalking'
-          : config.bird.whatsappFrom.trim()
-            ? 'bird'
-            : bird
-              ? 'bird'
-              : 'none',
+          : 'none',
       },
     };
   })
 );
 
 // ---------------------------------------------------------------------------
-// Provider test (Bird / Resend / Africa's Talking)
+// Provider test (Resend / Africa's Talking)
 // ---------------------------------------------------------------------------
 communicationOpsRouter.post(
   '/test-send',
@@ -1334,11 +1327,11 @@ communicationOpsRouter.post(
     const to = String(b.to ?? '').trim();
     if (!['EMAIL', 'SMS', 'WHATSAPP'].includes(channel)) throw badRequest('channel must be EMAIL, SMS or WHATSAPP');
     if (!to) throw badRequest('to is required (email address or E.164 phone number)');
-    const subject = String(b.subject ?? 'HOPE DESIGN ERP test email');
+    const subject = String(b.subject ?? 'HOPE DESIGN test email');
     const body = String(b.body ?? 'This is a test message from the HOPE DESIGN communication center.');
     const provider = String(b.provider ?? 'auto').toLowerCase();
-    if (!['auto', 'bird', 'africastalking', 'resend'].includes(provider)) {
-      throw badRequest('provider must be auto, bird, africastalking or resend');
+    if (!['auto', 'africastalking', 'resend'].includes(provider)) {
+      throw badRequest('provider must be auto, africastalking or resend');
     }
     const result =
       channel === 'EMAIL'

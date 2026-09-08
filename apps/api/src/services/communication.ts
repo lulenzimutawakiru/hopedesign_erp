@@ -455,13 +455,13 @@ export async function renderEmailForSend(
     if (!vars.COMPANY_NAME) vars.COMPANY_NAME = 'HOPE DESIGN GROUP LTD';
   }
   return renderTemplate(
-    String(email.subject ?? 'HOPE DESIGN ERP'),
+    String(email.subject ?? 'HOPE DESIGN'),
     String(email.body ?? ''),
     vars
   );
 }
 // ---------------------------------------------------------------------------
-// Delivery dispatcher (Bird email / SMS / WhatsApp)
+// Delivery dispatcher (email / SMS / WhatsApp)
 // ---------------------------------------------------------------------------
 
 const RETRY_DELAYS_SECONDS = [30, 120, 600];
@@ -470,7 +470,7 @@ const MAX_DELIVERY_RETRIES = 3;
 let deliveryLoopRunning = false;
 
 /**
- * Dispatch queued EMAIL/SMS/WHATSAPP deliveries through the Bird provider.
+ * Dispatch queued EMAIL/SMS/WHATSAPP deliveries through the configured provider (Resend for email; Africa's Talking for SMS/WhatsApp).
  * Called on an interval from the API server (single-flight). On failure the
  * delivery is retried with an exponential backoff, then marked FAILED.
  */
@@ -495,6 +495,7 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
     for (const row of res.rows as Record<string, unknown>[]) {
       const deliveryId = Number(row.id);
       const channel = String(row.channel);
+      const fallbackProvider = channel === 'EMAIL' ? 'resend' : 'africastalking';
       const recipient = String(row.recipient ?? '').trim();
       const email = String(row.email ?? '').trim();
       const phone = String(row.phone ?? '').trim();
@@ -522,13 +523,13 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
           `UPDATE notification_deliveries
               SET status = 'SENT', provider = $1, provider_message_id = $2, sent_at = now(), error = NULL
             WHERE id = $3`,
-          [result.provider ?? 'bird', result.providerMessageId ?? null, deliveryId]
+          [result.provider ?? fallbackProvider, result.providerMessageId ?? null, deliveryId]
         );
         if (channel === 'SMS') {
           await query(
             `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, provider_message_id, sent_at)
              VALUES ($1,$2,$3,$4,$5,'SENT',$6,now())`,
-            [row.tenant_id, row.user_id, to, body, result.provider ?? 'bird', result.providerMessageId ?? null]
+            [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.providerMessageId ?? null]
           );
         }
         ok += 1;
@@ -548,7 +549,7 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
             await query(
               `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, error, retry_count)
                VALUES ($1,$2,$3,$4,$5,'RETRYING',$6,$7)`,
-              [row.tenant_id, row.user_id, to, body, result.provider ?? 'bird', result.error ?? 'unknown', attempts]
+              [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.error ?? 'unknown', attempts]
             );
           }
         } else {
@@ -562,7 +563,7 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
             await query(
               `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, error, retry_count)
                VALUES ($1,$2,$3,$4,$5,'FAILED',$6,$7)`,
-              [row.tenant_id, row.user_id, to, body, result.provider ?? 'bird', result.error ?? 'unknown', attempts]
+              [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.error ?? 'unknown', attempts]
             );
           }
         }

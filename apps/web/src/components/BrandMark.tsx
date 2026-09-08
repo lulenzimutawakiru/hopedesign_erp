@@ -1,5 +1,7 @@
 /** Corporate brand mark — paper mill columns + security-print register bar. */
 
+import { useState } from 'react';
+
 type Size = 'sm' | 'md' | 'lg';
 type Tone = 'hope' | 'navy' | 'paper';
 
@@ -10,19 +12,25 @@ export function BrandMark({
   tone = 'hope',
   title,
   className,
+  logoUrl,
 }: {
   size?: Size;
   tone?: Tone;
   title?: string;
   className?: string;
+  logoUrl?: string;
 }) {
   const px = PX[size];
+  const [logoFailed, setLogoFailed] = useState(false);
   const fill = tone === 'navy' ? '#0B1F33' : tone === 'paper' ? '#F5F7FA' : '#1261A0';
   const paper = tone === 'paper' ? '#0B1F33' : '#FFFFFF';
   const bar = tone === 'paper' ? '#00A6A6' : '#00A6A6';
   const register = tone === 'paper' ? '#0B1F33' : '#0B1F33';
   return (
     <span className={`brand-mark brand-mark-${size} ${className ?? ''}`} style={{ width: px, height: px }} aria-hidden={title ? undefined : true}>
+      {typeof logoUrl === 'string' && /^https?:\/\//i.test(logoUrl) && !logoFailed ? (
+        <img src={logoUrl} width={px} height={px} alt={title ?? ''} referrerPolicy="no-referrer" onError={() => setLogoFailed(true)} />
+      ) : (
       <svg viewBox="0 0 40 40" width={px} height={px} role={title ? 'img' : undefined} aria-label={title ?? undefined}>
         {title ? <title>{title}</title> : null}
         <rect width="40" height="40" rx="8" fill={fill} />
@@ -32,6 +40,7 @@ export function BrandMark({
         <rect x="18.6" y="14.4" width="2.8" height="11.2" rx="0.4" fill={register} />
         <rect x="14.4" y="18.6" width="11.2" height="2.8" rx="0.4" fill={register} />
       </svg>
+      )}
     </span>
   );
 }
@@ -41,15 +50,17 @@ export function BrandLockup({
   compact = false,
   name = 'Company',
   subtitle,
+  logoUrl,
 }: {
   inverted?: boolean;
   compact?: boolean;
   name?: string;
   subtitle?: string;
+  logoUrl?: string;
 }) {
   return (
     <span className={`brand-lockup ${inverted ? 'is-inverted' : ''}`}>
-      <BrandMark size={compact ? 'sm' : 'md'} tone={inverted ? 'hope' : 'hope'} />
+      <BrandMark size={compact ? 'sm' : 'md'} tone={inverted ? 'hope' : 'hope'} logoUrl={logoUrl} />
       <span className="brand-lockup-copy">
         <strong>{name || 'Company'}</strong>
         {!compact && subtitle ? <span className="brand-sub">{subtitle}</span> : null}

@@ -209,6 +209,7 @@ export default function Shell() {
           path={path}
           user={user}
           companyName={brandCompany.name}
+          companyLogo={company.logo_url}
           companyCode={brandCompany.code}
           collapsed={collapsed && !compact}
           open={sideOpen}
@@ -234,7 +235,7 @@ export default function Shell() {
           )}
           {compact && (
             <button className="topbar-brand" onClick={() => navigate('/dashboard')} aria-label={`${brandCompany.name} dashboard`}>
-              <BrandMark size="sm" />
+              <BrandMark size="sm" logoUrl={company.logo_url} />
             </button>
           )}
           <button className="cmd-open" onClick={() => setCmdOpen(true)} aria-label="Search or command">

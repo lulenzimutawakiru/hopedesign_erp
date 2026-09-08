@@ -110,7 +110,7 @@ export const COMMANDS: CommandAction[] = [
   { id: 'people-board', label: 'People board', hint: 'HR and payroll', href: '/people', keywords: 'hr employee leave payroll nssf paye', perm: 'hr.employees.view' },
   { id: 'payroll', label: 'Payroll runs', hint: 'Calculate and post', href: '/people/payrolls', keywords: 'payroll paye nssf payslip', perm: 'hr.payrolls.view' },
   { id: 'comms', label: 'Communication', hint: 'Health and inbox', href: '/communication', keywords: 'email sms notify comms inbox', perm: 'communication.command.view' },
-  { id: 'comms-health', label: 'Comms health', hint: 'Test email and SMS', href: '/communication/admin', keywords: 'provider test resend bird africastalking', perm: 'communication.command.view' },
+  { id: 'comms-health', label: 'Comms health', hint: 'Test email and SMS', href: '/communication/admin', keywords: 'provider test resend africastalking', perm: 'communication.command.view' },
   { id: 'comms-deliv', label: 'Delivery logs', hint: 'Failed email and SMS', href: '/communication/deliveries', keywords: 'retry failed sms email delivery', perm: 'communication.delivery_logs.view' },
 ];
 

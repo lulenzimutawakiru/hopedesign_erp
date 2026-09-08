@@ -366,7 +366,7 @@ export default function ExceptionsCentre() {
           {panel === 'assign' ? (
             <div className="hk-warn-bar" style={{ marginTop: 14 }}>
               <div className="section-title" style={{ margin: '0 0 8px' }}>Assign exception</div>
-              <Field label="Assignee user id" req hint="User ids are tenant users in HOPE DESIGN ERP. Enter the reviewer's numeric user id.">
+              <Field label="Assignee user id" req hint="User ids are tenant users in HOPE DESIGN. Enter the reviewer's numeric user id.">
                 <Inp value={assigneeId} onChange={setAssigneeId} placeholder="e.g. 42" />
               </Field>
               <div className="hk-actions" style={{ marginTop: 8 }}>

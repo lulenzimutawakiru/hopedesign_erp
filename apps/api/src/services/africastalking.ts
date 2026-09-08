@@ -6,7 +6,7 @@ const AT_WHATSAPP_URL = 'https://chat.africastalking.com/whatsapp/message/send';
 
 /**
  * True when Africa's Talking SMS credentials are configured. When enabled,
- * SMS delivery is routed through Africa's Talking instead of Bird.
+ * SMS delivery is routed through Africa's Talking (the only SMS provider).
  */
 export function isAfricasTalkingConfigured(): boolean {
   return Boolean(config.africastalking.apiKey.trim() && config.africastalking.username.trim());
@@ -30,8 +30,8 @@ export function normalizeE164(raw: string): string {
 
 /**
  * Send an SMS through the Africa's Talking REST API.
- * Returns the same shape as the Bird providers (BirdSendResult) so callers
- * can route between providers without changing their code.
+ * Returns the shared provider result shape so callers can route without
+ * changing their code.
  */
 export async function sendSmsViaAfricastalking(to: string, text: string): Promise<BirdSendResult> {
   const { apiKey, username, senderId } = config.africastalking;
@@ -87,7 +87,7 @@ export async function sendSmsViaAfricastalking(to: string, text: string): Promis
 /**
  * Send a WhatsApp message through the Africa's Talking Chat API.
  * Requires the AT-issued WhatsApp virtual number (AT_WHATSAPP_NUMBER).
- * Returns the same shape as the Bird providers (BirdSendResult).
+ * Returns the shared provider result shape.
  */
 export async function sendWhatsAppViaAfricastalking(to: string, text: string): Promise<BirdSendResult> {
   const { apiKey, username, whatsappNumber } = config.africastalking;

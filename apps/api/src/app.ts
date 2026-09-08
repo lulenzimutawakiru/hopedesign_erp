@@ -123,7 +123,7 @@ app.use(contextMiddleware);
 app.get('/', (_req, res) => {
   res.json({
     service: 'hopedesign-erp-api',
-    name: 'Hope Design ERP API',
+    name: 'Hope Design API',
     status: 'ok',
     version: '1.0.0',
     endpoints: {
@@ -226,7 +226,7 @@ setInterval(() => {
   });
 }, 10_000);
 
-// Notification delivery worker: dispatch queued EMAIL/SMS/WHATSAPP via Bird.
+// Notification delivery worker: dispatch queued EMAIL/SMS/WHATSAPP deliveries.
 setInterval(() => {
   singleFlight(WORKER_LOCKS.NOTIFICATION_DISPATCH, processNotificationDeliveries).catch((err: unknown) => {
     console.error('[notificationDispatch]', err instanceof Error ? err.message : err);

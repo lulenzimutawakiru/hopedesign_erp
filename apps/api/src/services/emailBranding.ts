@@ -1,7 +1,7 @@
 /**
- * Branded email rendering for all HOPE DESIGN ERP outgoing mail.
- * Every email sent through sendEmail() (Resend or Bird) is wrapped in this
- * template so recipients always see the HOPE DESIGN GROUP LTD identity.
+ * Branded email rendering for all HOPE DESIGN outgoing mail.
+ * Every email sent through sendEmail() (Resend) is wrapped in this template
+ * so recipients always see the HOPE DESIGN GROUP LTD identity.
  *
  * The template is email-client safe: tables + inline styles, no external CSS,
  * no scripts. Brand palette: navy #0F172A, red #FF0000, sky blue #87CEEB,
@@ -249,7 +249,7 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
         <tr>
           <td style="background:#F8FAFC;padding:14px 36px 22px;font-family:${FONT};">
             <div style="font-size:11px;color:${BRAND_COLORS.softMuted};line-height:1.7;border-top:1px solid ${BRAND_COLORS.border};padding-top:14px;">
-              This is an automated message from the HOPE DESIGN ERP. Please do not reply to this email.<br>
+              This is an automated message from HOPE DESIGN. Please do not reply to this email.<br>
               &copy; ${year} ${escapeHtml(company.name)}. All rights reserved.
             </div>
           </td>
@@ -275,7 +275,7 @@ export function brandEmailContent(opts: {
   button?: EmailActionButton | null;
   preheader?: string | null;
 }): { html: string; text: string } {
-  const subject = String(opts.subject ?? 'HOPE DESIGN ERP');
+  const subject = String(opts.subject ?? 'HOPE DESIGN');
   const html = opts.html ? String(opts.html) : '';
   const text = opts.text ? String(opts.text) : '';
   if (html && isFullEmailDocument(html)) {

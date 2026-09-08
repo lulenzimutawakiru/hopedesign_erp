@@ -103,7 +103,7 @@ export default function Login() {
         />
         <div className="login-hero-veil" aria-hidden />
         <div className="login-hero-copy">
-          <BrandMark size="lg" tone="hope" />
+          <BrandMark size="lg" tone="hope" logoUrl={company.logo_url} />
           <div className="eyebrow">{company.name}{branch ? ` · ${branch}` : ''}</div>
           <h2>The mill, the press, and the money in one operating system.</h2>
           <p>Paper manufacturing, security printing and QR custody — role-bound, dual-controlled, auditable.</p>
@@ -112,7 +112,7 @@ export default function Login() {
       </aside>
       <main className="login-panel">
       <form className="login-card" onSubmit={submit}>
-        <BrandMark size="lg" />
+        <BrandMark size="lg" logoUrl={company.logo_url} />
         <h1>{shortCompanyName(company.name)} OS</h1>
         {stage === 'credentials' && (
           <>

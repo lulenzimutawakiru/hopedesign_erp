@@ -1,5 +1,3 @@
-import { BirdClient, type SmsSendParams, type WhatsappSendParams } from '@messagebird/sdk';
-import { config } from '../config.js';
 import {
   isAfricasTalkingConfigured,
   sendSmsViaAfricastalking,
@@ -16,7 +14,12 @@ export interface BirdSendResult {
   error?: string;
 }
 
-export type ProviderOverride = 'auto' | 'bird' | 'africastalking' | 'resend';
+/**
+ * Delivery provider override. Africa's Talking is the only SMS/WhatsApp
+ * provider and Resend is the only email provider. 'auto' routes each channel
+ * to its single configured provider.
+ */
+export type ProviderOverride = 'auto' | 'africastalking' | 'resend';
 
 export interface BirdEmailInput {
   to: string[];
@@ -27,98 +30,66 @@ export interface BirdEmailInput {
   preheader?: string | null;
 }
 
-let client: BirdClient | null = null;
-
-/**
- * Lazy Bird client. Constructing BirdClient without an API key throws, so the
- * client is only built once BIRD_API_KEY is configured (in the gitignored .env).
- */
-function getClient(): BirdClient | null {
-  const apiKey = (config.bird.apiKey ?? '').trim();
-  if (!apiKey) return null;
-  if (!client) client = new BirdClient({ apiKey });
-  return client;
+export interface SmsParams {
+  to: string;
+  text?: string;
+  from?: string;
+  category?: string;
 }
 
-function okResult(msg: { id?: unknown; status?: unknown }): BirdSendResult {
-  return {
-    ok: true,
-    provider: 'bird',
-    providerMessageId: msg?.id != null ? String(msg.id) : undefined,
-    status: msg?.status != null ? String(msg.status) : undefined,
-  };
-}
-
-function errResult(err: unknown): BirdSendResult {
-  return { ok: false, error: err instanceof Error ? err.message : String(err) };
+export interface WhatsappParams {
+  to: string;
+  text: { body?: string };
 }
 
 /**
- * Send an SMS. Routes through Africa's Talking when its credentials are
- * configured (AT_USERNAME / AT_API_KEY), otherwise falls back to Bird.
- * Pass providerOverride = 'bird' to force Bird or 'africastalking' to force
- * Africa's Talking (e.g. from the provider test screen).
+ * Send an SMS through Africa's Talking - the only supported SMS provider.
+ * providerOverride 'resend' is rejected: Resend does not carry SMS traffic.
  */
 export async function sendSms(
-  params: SmsSendParams,
+  params: SmsParams,
   providerOverride?: ProviderOverride
 ): Promise<BirdSendResult> {
-  const wantAt =
-    providerOverride === 'africastalking' ||
-    (providerOverride !== 'bird' && isAfricasTalkingConfigured());
-  if (wantAt) return sendSmsViaAfricastalking(params.to, params.text ?? '');
-  const c = getClient();
-  if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
-  try {
-    const msg = await c.sms.send(params);
-    return okResult(msg);
-  } catch (err) {
-    return errResult(err);
+  if (providerOverride === 'resend') {
+    return { ok: false, error: "SMS is delivered through Africa's Talking only" };
   }
+  if (!isAfricasTalkingConfigured()) {
+    return {
+      ok: false,
+      error: "Africa's Talking not configured (AT_USERNAME / AT_API_KEY missing)",
+    };
+  }
+  return sendSmsViaAfricastalking(params.to, params.text ?? '');
 }
 
 /**
- * Send a WhatsApp message. Routes through Africa's Talking when its WhatsApp
- * virtual number is configured (AT_WHATSAPP_NUMBER), otherwise falls back to
- * Bird. Pass providerOverride = 'bird' to force Bird or 'africastalking' to
- * force Africa's Talking (e.g. from the provider test screen).
+ * Send a WhatsApp message through the Africa's Talking Chat API - the only
+ * supported WhatsApp provider. Requires AT_WHATSAPP_NUMBER.
  */
 export async function sendWhatsApp(
-  params: WhatsappSendParams,
+  params: WhatsappParams,
   providerOverride?: ProviderOverride
 ): Promise<BirdSendResult> {
-  const wantAt =
-    providerOverride === 'africastalking' ||
-    (providerOverride !== 'bird' &&
-      isAfricasTalkingConfigured() &&
-      Boolean(config.africastalking.whatsappNumber.trim()));
-  if (wantAt) {
-    const body = params.text?.body ?? '';
-    if (!body.trim()) {
-      return { ok: false, error: 'WhatsApp message body is empty' };
-    }
-    return sendWhatsAppViaAfricastalking(params.to, body);
+  if (providerOverride === 'resend') {
+    return { ok: false, error: "WhatsApp is delivered through Africa's Talking only" };
   }
-  const c = getClient();
-  if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
-  try {
-    const msg = await c.whatsapp.send(params);
-    return okResult(msg);
-  } catch (err) {
-    return errResult(err);
-  }
+  const body = params.text?.body ?? '';
+  if (!body.trim()) return { ok: false, error: 'WhatsApp message body is empty' };
+  return sendWhatsAppViaAfricastalking(params.to, body);
 }
 
 /**
- * Send an email. Routes through Resend when its credentials are configured
- * (RESEND_API_KEY / RESEND_FROM_EMAIL), otherwise falls back to Bird.
- * Pass providerOverride = 'bird' to force Bird or 'resend' to force Resend
- * (e.g. from the provider test screen).
+ * Send an email through Resend - the only supported email provider.
+ * providerOverride 'africastalking' is rejected: Africa's Talking does not
+ * carry email traffic.
  */
 export async function sendEmail(
   input: BirdEmailInput,
   providerOverride?: ProviderOverride
 ): Promise<BirdSendResult> {
+  if (providerOverride === 'africastalking') {
+    return { ok: false, error: 'Email is delivered through Resend only' };
+  }
   const branded = brandEmailContent({
     subject: input.subject,
     html: input.html,
@@ -127,34 +98,18 @@ export async function sendEmail(
     preheader: input.preheader ?? undefined,
   });
   const payload = { ...input, html: branded.html, text: branded.text };
-  const wantResend =
-    providerOverride === 'resend' || (providerOverride !== 'bird' && isResendConfigured());
-  if (wantResend) {
-    const resendResult = await sendEmailViaResend(payload);
-    if (resendResult.ok) return resendResult;
-    const quota = /quota|rate limit/i.test(resendResult.error ?? '');
-    if (providerOverride === 'resend' || !quota) return resendResult;
+  if (!isResendConfigured()) {
+    return {
+      ok: false,
+      error: 'Resend not configured (RESEND_API_KEY / RESEND_FROM_EMAIL missing)',
+    };
   }
-  const c = getClient();
-  if (!c) return { ok: false, error: 'Bird not configured (BIRD_API_KEY missing)' };
-  if (!payload.to?.length) return { ok: false, error: 'Email recipients missing' };
-  try {
-    const msg = await c.email.send({
-      from: { email: config.bird.fromEmail, name: config.bird.fromName },
-      to: payload.to,
-      subject: payload.subject,
-      ...(payload.html ? { html: payload.html } : {}),
-      ...(payload.text ? { text: payload.text } : {}),
-    });
-    return okResult(msg);
-  } catch (err) {
-    return errResult(err);
-  }
+  return sendEmailViaResend(payload);
 }
 
 /**
- * Route a delivery by channel (EMAIL / SMS / WHATSAPP) to the Bird provider.
- * The recipient must be an email address or an E.164 phone number.
+ * Route a delivery by channel (EMAIL / SMS / WHATSAPP) to its configured
+ * provider: Resend for email, Africa's Talking for SMS and WhatsApp.
  */
 export async function dispatchBird(
   channel: string,
@@ -167,25 +122,16 @@ export async function dispatchBird(
   if (ch === 'EMAIL') {
     return sendEmail({
       to: [to],
-      subject: payload.title ?? 'HOPE DESIGN ERP',
+      subject: payload.title ?? 'HOPE DESIGN',
       text: body,
       button: payload.button ?? undefined,
     });
   }
   if (ch === 'SMS') {
-    return sendSms({
-      to,
-      ...(config.bird.smsFrom ? { from: config.bird.smsFrom } : {}),
-      text: body,
-      category: 'service',
-    });
+    return sendSms({ to, text: body });
   }
   if (ch === 'WHATSAPP') {
-    return sendWhatsApp({
-      to,
-      ...(config.bird.whatsappFrom ? { from: config.bird.whatsappFrom } : {}),
-      text: { body },
-    });
+    return sendWhatsApp({ to, text: { body } });
   }
   return { ok: false, error: 'Unsupported channel ' + channel };
 }

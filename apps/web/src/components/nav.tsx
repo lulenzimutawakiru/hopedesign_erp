@@ -158,6 +158,7 @@ export function Sidebar({
   user,
   companyName,
   companyCode,
+  companyLogo,
   collapsed,
   open,
   peek,
@@ -172,6 +173,7 @@ export function Sidebar({
   user: MeUser | null;
   companyName?: string;
   companyCode?: string;
+  companyLogo?: string;
   collapsed: boolean;
   open: boolean;
   peek: boolean;
@@ -196,7 +198,7 @@ export function Sidebar({
       aria-label="Primary"
     >
       <div className="sidebar-brand" onClick={() => go('/dashboard')} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && go('/dashboard')}>
-        <BrandMark size="md" />
+        <BrandMark size="md" logoUrl={companyLogo} />
         {expanded && (
           <div>
             <strong>{shortCompanyName(companyName || 'Company')}</strong>
