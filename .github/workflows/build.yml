@@ -1,0 +1,86 @@
+name: HOPE DESIGN ERP Docker Build
+
+on:
+
+  push:
+
+    branches:
+      - main
+
+
+permissions:
+
+  contents: read
+
+  packages: write
+
+
+
+jobs:
+
+
+  build:
+
+
+    runs-on: ubuntu-latest
+
+
+
+    steps:
+
+
+      - name: Checkout source
+
+        uses: actions/checkout@v4
+
+
+
+      - name: Login to GitHub Container Registry
+
+        uses: docker/login-action@v3
+
+        with:
+
+          registry: ghcr.io
+
+          username: ${{ github.actor }}
+
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+
+
+      - name: Build API Image
+
+        run:
+
+          docker build \
+          -t ghcr.io/${{ github.repository_owner }}/hopedesign-api:${{ github.sha }} \
+          -f Dockerfile .
+
+
+
+      - name: Build Web Image
+
+        run:
+
+          docker build \
+          -t ghcr.io/${{ github.repository_owner }}/hopedesign-web:${{ github.sha }} \
+          -f apps/web/Dockerfile .
+
+
+
+      - name: Push API Image
+
+        run:
+
+          docker push \
+          ghcr.io/${{ github.repository_owner }}/hopedesign-api:${{ github.sha }}
+
+
+
+      - name: Push Web Image
+
+        run:
+
+          docker push \
+          ghcr.io/${{ github.repository_owner }}/hopedesign-web:${{ github.sha }}

@@ -112,7 +112,7 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '5mb', verify: (req, _res, buf) => { (req as express.Request).rawBody = Buffer.from(buf); } }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 app.use(contextMiddleware);
 

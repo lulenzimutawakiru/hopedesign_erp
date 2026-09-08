@@ -1,0 +1,23 @@
+name: HOPE DESIGN ERP Security
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+
+  security:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency Audit
+        run: npm audit --audit-level=high
+
+      - name: Secret Detection
+        uses: gitleaks/gitleaks-action@v2

@@ -1,0 +1,78 @@
+name: HOPE DESIGN ERP Production Deploy
+
+
+on:
+
+  workflow_dispatch:
+
+  push:
+
+    branches:
+      - main
+
+
+
+permissions:
+
+  contents: read
+
+
+
+jobs:
+
+
+  deploy:
+
+
+    name: Deploy Production
+
+
+    runs-on: ubuntu-latest
+
+
+
+    environment:
+
+      name: production
+
+
+
+    steps:
+
+
+      - name: Checkout
+
+        uses: actions/checkout@v4
+
+
+
+      - name: Deploy to ERP Server
+
+        uses: appleboy/ssh-action@v1.0.3
+
+        with:
+
+
+          host: ${{ secrets.SERVER_HOST }}
+
+
+          username: ${{ secrets.SERVER_USER }}
+
+
+          key: ${{ secrets.SERVER_SSH_KEY }}
+
+
+
+          script: |
+
+
+            cd /opt/hopedesign_erp
+
+
+            git pull origin main
+
+
+            chmod +x deploy/erp-deploy.sh
+
+
+            ./deploy/erp-deploy.sh
