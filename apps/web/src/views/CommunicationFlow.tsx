@@ -456,6 +456,13 @@ function CommunicationAdmin() {
 const providerLabel = (id: string) =>
   id === 'africastalking' ? "Africa's Talking" : id === 'resend' ? 'Resend' : id === 'none' ? 'not configured' : id;
 
+function providerReadyBadge(cfg: Rec) {
+  const prov = String(cfg?.provider ?? 'none');
+  if (prov === 'none') return null;
+  if (cfg?.ready === true) return <span className="badge badge-green">READY</span>;
+  return <span className="badge badge-red">NOT READY</span>;
+}
+
 function TestSendCard() {
   const { user } = useAuth();
   const [providers, setProviders] = useState<Rec | null>(null);
@@ -502,7 +509,9 @@ function TestSendCard() {
         <h3>Test a provider</h3>
         <span className="muted">
           Email via {providerLabel(emailProv)}{emailFrom ? ` · from ${emailFrom}` : ''}
+          {providerReadyBadge(emailCfg)}
           {' · '}SMS via {providerLabel(smsProv)}{smsSender ? ` · ${smsSender}` : ''}
+          {providerReadyBadge(smsCfg)}
         </span>
       </div>
       {notice ? <div className="alert alert-success">{notice}</div> : null}
