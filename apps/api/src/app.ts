@@ -27,6 +27,7 @@ import { adminCronRouter } from './routes/adminCron.js';
 import { runDueReportSchedules } from './services/reportScheduler.js';
 import { runDueCronJobs } from './services/cronJobs.js';
 import { processNotificationDeliveries } from './services/communication.js';
+import { singleFlight, WORKER_LOCKS } from './services/singleFlight.js';
 import { mountCrud } from './routes/registry.js';
 import { salesOpsRouter } from './routes/ops/sales.js';
 import { crmOpsRouter } from './routes/ops/crm.js';
@@ -202,30 +203,32 @@ mountCrud(app);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// Report schedule worker: run due schedules every minute (idempotent).
+// Report schedule worker: run due schedules every minute. Single-flight across
+// replicas so a report is never generated twice when the API is scaled out.
 setInterval(() => {
-  runDueReportSchedules().catch((err: unknown) => {
+  singleFlight(WORKER_LOCKS.REPORT_SCHEDULER, runDueReportSchedules).catch((err: unknown) => {
     console.error('[reportScheduler]', err instanceof Error ? err.message : err);
   });
 }, 60_000);
 
 // Cron job worker: run due background jobs every minute (single-flight).
 setInterval(() => {
-  runDueCronJobs().catch((err: unknown) => {
+  singleFlight(WORKER_LOCKS.CRON_JOBS, runDueCronJobs).catch((err: unknown) => {
     console.error('[cronJobs]', err instanceof Error ? err.message : err);
   });
 }, 60_000);
 
-// Hikvision queue worker: drain claimed raw events every 10s (retry policy in SQL).
+// Hikvision queue worker: drain claimed raw events every 10s (retry policy in
+// SQL). Single-flight so only one replica drains the queue at a time.
 setInterval(() => {
-  runHikvisionWorkerTick().catch((err: unknown) => {
+  singleFlight(WORKER_LOCKS.HIKVISION_QUEUE, runHikvisionWorkerTick).catch((err: unknown) => {
     console.error('[hikvisionWorker]', err instanceof Error ? err.message : err);
   });
 }, 10_000);
 
 // Notification delivery worker: dispatch queued EMAIL/SMS/WHATSAPP via Bird.
 setInterval(() => {
-  processNotificationDeliveries().catch((err: unknown) => {
+  singleFlight(WORKER_LOCKS.NOTIFICATION_DISPATCH, processNotificationDeliveries).catch((err: unknown) => {
     console.error('[notificationDispatch]', err instanceof Error ? err.message : err);
   });
 }, 15_000);

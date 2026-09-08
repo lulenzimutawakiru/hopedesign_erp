@@ -4,6 +4,10 @@
 #   node deploy/generate-env.mjs --domain hopedesign.jorlentech.com --email admin@hopedesign.jorlentech.com
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 #
+# Zero-downtime rollout (two stateless API replicas behind Caddy):
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --scale api=2
+#   sh deploy/zero-downtime-deploy.sh   # recommended: backup -> pull -> build -> rolling update
+#
 # Public ports: 80 + 443 only. Postgres is not published.
 
 name: hopedesign-erp
@@ -21,11 +25,19 @@ services:
     command:
       - postgres
       - -c
-      - shared_buffers=128MB
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
       - -c
       - max_connections=100
       - -c
       - log_min_duration_statement=1000
+      - -c
+      - log_autovacuum_min_duration=250
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hopedesign} -d ${POSTGRES_DB:-hopedesign_erp}"]
       interval: 5s
@@ -47,6 +59,10 @@ services:
       dockerfile: Dockerfile
       target: api
     restart: unless-stopped
+    # Two replicas run by default (`--scale api=2`). Both are stateless, share
+    # the uploads volume, and are load-balanced by Caddy with active health
+    # checks, so a replica can be replaced without dropping requests.
+    stop_grace_period: 60s
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,8 +75,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_SSL: "false"
+      NODE_OPTIONS: "--max-old-space-size=768"
       DATABASE_URL: postgres://${POSTGRES_USER:-hopedesign}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hopedesign_erp}
       STORAGE_ROOT: /data/uploads
+    mem_limit: 1024m
+    mem_reservation: 256m
     volumes:
       - uploads:/data/uploads
     security_opt:
@@ -88,7 +107,9 @@ services:
       target: web
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    stop_grace_period: 20s
     security_opt:
       - no-new-privileges:true
     logging: *default-log
@@ -98,11 +119,12 @@ services:
   caddy:
     image: caddy:2.8-alpine
     restart: unless-stopped
+    stop_grace_period: 20s
     depends_on:
       api:
         condition: service_healthy
       web:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"
@@ -116,6 +138,12 @@ services:
       - caddy_config:/config
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
     logging: *default-log
     networks:
       - internal

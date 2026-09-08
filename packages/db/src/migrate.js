@@ -17,6 +17,11 @@ async function main() {
   const pool = createPool();
   const client = await pool.connect();
   try {
+    // Session-level advisory lock shared with the API's WORKER_LOCKS.MIGRATIONS
+    // key (88100). With multiple API replicas booting at the same time, only
+    // one runs the migration pass; the others block here, then observe the
+    // already-applied migration set below and start cleanly.
+    await client.query('SELECT pg_advisory_lock(88100)');
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         id BIGSERIAL PRIMARY KEY,
@@ -24,6 +29,8 @@ async function main() {
         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
+    // Re-read after acquiring the lock: a concurrent boot may have applied
+    // migrations while we waited for the advisory lock.
     const dir = path.resolve(__dirname, "..", "migrations");
     const files = fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
     const { rows } = await client.query("SELECT name FROM schema_migrations");
@@ -47,6 +54,7 @@ async function main() {
     }
     console.log("Migrations up to date.");
   } finally {
+    await client.query('SELECT pg_advisory_unlock(88100)').catch(() => undefined);
     client.release();
     await pool.end();
   }

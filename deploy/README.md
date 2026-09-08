@@ -88,9 +88,12 @@ docker compose -f docker-compose.prod.yml --env-file .env.production up -d
 # logs
 docker compose -f docker-compose.prod.yml --env-file .env.production logs -f --tail=200
 
-# rebuild after git pull
+# zero-downtime rollout (backup -> pull -> build -> rolling update -> health gate)
+sh deploy/zero-downtime-deploy.sh
+
+# manual rebuild after git pull (keeps 2 API replicas)
 git pull
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build --scale api=2
 
 # database dump
 sh deploy/backup.sh
@@ -98,13 +101,50 @@ sh deploy/backup.sh
 
 Uploads live in the `uploads` volume; Postgres in `pgdata`; certificates in `caddy_data`.
 
+## Zero-downtime architecture
+
+- **Two stateless API replicas** (`api-1`, `api-2`) share the `uploads` volume
+  and are load-balanced by Caddy (`lb_policy least_conn`) with **active health
+  checks** against `/api/health`. `try_duration` keeps an in-flight request
+  retrying another replica during a deploy instead of returning 502.
+- **Periodic workers are single-flight.** The API guards report schedules,
+  cron jobs, the Hikvision queue, and notification dispatch with Postgres
+  advisory locks, so scaling to two replicas never runs a job twice.
+- **Boot migrations are advisory-locked**, so both replicas can start against
+  the same database at the same time without racing DDL.
+- **Rollout script** `deploy/zero-downtime-deploy.sh` backups up first,
+  fast-forwards to `origin/main`, builds, rolls the replicas, health-gates
+  through Caddy, and rolls back to the previous commit automatically if the
+  new build fails to become healthy.
+- **Self-healing watchdog** (`deploy/stack-watchdog.sh`, installed every 2
+  minutes by `deploy/install-watchdog.sh`) restarts missing/unhealthy
+  containers and recreates the stack if `/api/health` stops answering.
+- **Host tuning** (`deploy/system-tune.sh`) applies conservative
+  kernel/network settings for the single-node Docker + Postgres host.
+
+One-time setup after pulling this version:
+
+```bash
+# 1) add the scale knob to .env.production
+echo 'API_SCALE=2' >> .env.production
+
+# 2) apply host tuning and install the watchdog cron
+sh deploy/system-tune.sh
+sh deploy/install-watchdog.sh
+
+# 3) scale the API to two replicas
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --scale api=2
+```
+
+Next rollouts are then a single command: `sh deploy/zero-downtime-deploy.sh`.
+
 ## Layout
 
 | Service  | Image target | Role |
 |----------|--------------|------|
-| `caddy`  | caddy:2.8    | TLS termination, `/api` → API, everything else → web |
+| `caddy`  | caddy:2.8    | TLS termination + health-checked load balancer |
 | `web`    | Dockerfile `web` | nginx serving the Vite SPA |
-| `api`    | Dockerfile `api` | Express API, migrations on boot |
+| `api`    | Dockerfile `api` | API — 2 replicas by default, migrations on boot (advisory-locked) |
 | `postgres` | postgres:16-alpine | Database (not published) |
 
 The API runtime role is `hopedesign_app` (no superuser, no BYPASSRLS). The owner role `hopedesign` is used only for migrations.

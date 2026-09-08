@@ -22,7 +22,19 @@
 
 	@api path /api /api/*
 	handle @api {
+		# `api` resolves to every API replica. Active health checks pull a
+		# replica out of the pool within ~10s of it going unhealthy; passive
+		# checks (max_fails/fail_duration) catch connection failures faster.
+		# try_duration lets an in-flight request retry another replica during a
+		# rolling deploy instead of returning 502 to the client.
 		reverse_proxy api:4000 {
+			lb_policy least_conn
+			health_uri /api/health
+			health_interval 10s
+			health_timeout 3s
+			max_fails 2
+			fail_duration 30s
+			try_duration 15s
 			header_up X-Forwarded-Proto {scheme}
 			header_up X-Forwarded-Host {host}
 			header_up X-Real-IP {remote_host}
@@ -32,6 +44,14 @@
 
 	handle {
 		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-		reverse_proxy web:80
+		reverse_proxy web:80 {
+			lb_policy least_conn
+			health_uri /
+			health_interval 15s
+			health_timeout 3s
+			max_fails 2
+			fail_duration 30s
+			try_duration 10s
+		}
 	}
 }
