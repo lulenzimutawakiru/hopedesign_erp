@@ -3530,6 +3530,17 @@ async function seedAll(pool) {
       bump("product_categories");
     }
 
+    categoryId["CONS-OFF"] = await insertOne(client, "product_categories", {
+      company_id: companyId,
+      tenant_id: tenantId,
+      parent_id: categoryId["CONSUMABLES"],
+      code: "CONS-OFF",
+      name: "Office Consumables",
+      kind: "CONSUMABLE",
+      status: "ACTIVE",
+    });
+    bump("product_categories");
+
     const productDefs = [
       {
         code: "JUMBO-105",

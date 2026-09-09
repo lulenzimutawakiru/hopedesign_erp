@@ -147,6 +147,7 @@ export default function InventoryFlow({ path }: { path: string }) {
     if (resource === 'items') return <ProductStock id={Number(id)} />;
     if (resource === 'materials') return <EntityDetail route={{ segments: ['records', 'inventory', 'materials', String(id)] }} />;
     if (resource === 'consumables') return <EntityDetail route={{ segments: ['records', 'inventory', 'consumables', String(id)] }} />;
+    if (resource === 'office') return <EntityDetail route={{ segments: ['records', 'inventory', 'consumables', String(id)] }} />;
     if (resource === 'warehouses') return <StockBoard warehouseId={Number(id)} />;
   }
   if (resource === 'stock' || resource === 'warehouses' && !id) {
@@ -154,6 +155,7 @@ export default function InventoryFlow({ path }: { path: string }) {
   }
   if (resource === 'movements') return <MovementLedger />;
   if (resource === 'transfers' || resource === 'adjustments') return <DocumentList resource={resource} />;
+  if (resource === 'office') return <OfficeConsumablesPage />;
   const catalog = CATALOGS[resource];
   if (catalog) return <CatalogList {...catalog} />;
   return <CatalogList resource={resource} module="inventory" label={resource} detail={(id) => `/records/inventory/${resource}/${id}`} />;
@@ -240,7 +242,10 @@ function StockBoard({ warehouseId }: { warehouseId?: number }) {
             <span className="kpi-label">Raw materials</span><span className="kpi-value">{fmtNum(summary.catalogMaterials)}</span><span className="kpi-sub">{fmtNum(summary.materialLines)} stocked · consumed by production</span>
           </button>
           <button className="kpi-card" onClick={() => navigate('/inventory/consumables')}>
-            <span className="kpi-label">Consumables</span><span className="kpi-value">{fmtNum(summary.catalogConsumables)}</span><span className="kpi-sub">{fmtNum(summary.consumableLines)} stocked · spares & supplies</span>
+            <span className="kpi-label">Factory consumables</span><span className="kpi-value">{fmtNum(summary.catalogFactoryConsumables)}</span><span className="kpi-sub">{fmtNum(summary.consumableLines)} stocked · production spares and supplies</span>
+          </button>
+          <button className="kpi-card" onClick={() => navigate('/inventory/office')}>
+            <span className="kpi-label">Office consumables</span><span className="kpi-value">{fmtNum(summary.catalogOfficeConsumables)}</span><span className="kpi-sub">Stationery · printer paper · office supplies</span>
           </button>
           <button className="kpi-card" onClick={() => navigate('/inventory/items')}>
             <span className="kpi-label">Products</span><span className="kpi-value">{fmtNum(summary.catalogProducts)}</span><span className="kpi-sub">{fmtNum(summary.productLines)} stocked · reams and finished goods</span>
@@ -710,6 +715,183 @@ function CatalogList({ resource, module = 'inventory', label, tagline, createLab
       {showCreate && meta && (
         <Modal title={createLabel ?? `New ${label ?? resource}`} onClose={() => setShowCreate(false)} wide>
           <JsonForm meta={meta} onSubmit={create} onCancel={() => setShowCreate(false)} submitLabel="Create" />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function OfficeConsumablesPage() {
+  const { user } = useAuth();
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [units, setUnits] = useState<Rec[]>([]);
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [sku, setSku] = useState('');
+  const [unitId, setUnitId] = useState('');
+  const [cost, setCost] = useState('');
+  const [price, setPrice] = useState('');
+  const [reorder, setReorder] = useState('');
+  const [safety, setSafety] = useState('');
+  const [description, setDescription] = useState('');
+
+  const load = useCallback(async (pg: number, query: string) => {
+    const params = new URLSearchParams({ page: String(pg), pageSize: '25' });
+    if (query.trim()) params.set('q', query.trim());
+    const r = await api<{ data: { rows: Rec[]; total: number } }>('/api/ops/inventory/catalogs/office-consumables?' + params.toString());
+    setRows(r.data.rows ?? []);
+    setTotal(r.data.total ?? 0);
+  }, []);
+
+  useEffect(() => {
+    setBusy(true);
+    load(page, q).catch((e) => setError(e instanceof Error ? e.message : 'Failed to load office consumables')).finally(() => setBusy(false));
+  }, [load, page, q]);
+
+  const openCreate = () => {
+    setFormError('');
+    setName(''); setCode(''); setSku(''); setUnitId('');
+    setCost(''); setPrice(''); setReorder(''); setSafety(''); setDescription('');
+    setUnits([]);
+    setShowCreate(true);
+    api<{ data: { units: Rec[] } }>('/api/ops/inventory/catalogs/office-consumables/options')
+      .then((r) => setUnits(Array.isArray(r.data?.units) ? r.data.units : []))
+      .catch(() => setUnits([]));
+  };
+
+  const create = async () => {
+    setFormError('');
+    if (!name.trim()) { setFormError('Name is required'); return; }
+    const payload: Record<string, unknown> = { name: name.trim() };
+    if (code.trim()) payload.code = code.trim();
+    if (sku.trim()) payload.sku = sku.trim();
+    if (unitId) payload.unitId = Number(unitId);
+    const toNum = (v: string): number | null => (v.trim() === '' ? null : Number(v));
+    payload.standardCost = toNum(cost);
+    payload.standardPrice = toNum(price);
+    payload.reorderPoint = toNum(reorder);
+    payload.safetyStock = toNum(safety);
+    if (description.trim()) payload.description = description.trim();
+    setSaving(true);
+    try {
+      await api('/api/ops/inventory/catalogs/office-consumables', { method: 'POST', body: JSON.stringify(payload) });
+      setShowCreate(false);
+      if (q === '' && page === 1) await load(1, '');
+      else { setQ(''); setPage(1); }
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Failed to create office consumable');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const canCreate = can(user, 'inventory.items.create');
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <h1>Office Consumables</h1>
+          <p className="muted">Stationery, printer paper and office supplies - kept separate from factory consumables.</p>
+        </div>
+        <div className="head-actions">
+          {canCreate && <button className="btn btn-primary" onClick={openCreate}>+ New office consumable</button>}
+        </div>
+      </header>
+      <div className="toolbar">
+        <input className="search-input" placeholder="Search code, name or SKU..." value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+      </div>
+      {error && <ErrorBanner error={error} />}
+      {busy ? <PageLoader label="Loading office consumables..." /> : (
+        <div className="table-wrap card">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Name</th>
+                <th>Unit</th>
+                <th className="cell-num">Cost</th>
+                <th className="cell-num">Price</th>
+                <th className="cell-num">Reorder</th>
+                <th className="cell-num">Safety</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={String(row.id)} className="row-click" onClick={() => navigate('/inventory/office/' + row.id)}>
+                  <td className="cell-mono">{String(pick(row, 'code') ?? '')}</td>
+                  <td>{String(pick(row, 'name') ?? '')}</td>
+                  <td>{String(pick(row, 'unitCode') ?? pick(row, 'unit_code') ?? '')}</td>
+                  <td className="cell-num">{fmtMoney(pick(row, 'standardCost', 'standard_cost'))}</td>
+                  <td className="cell-num">{fmtMoney(pick(row, 'standardPrice', 'standard_price'))}</td>
+                  <td className="cell-num">{fmtNum(pick(row, 'reorderPoint', 'reorder_point'))}</td>
+                  <td className="cell-num">{fmtNum(pick(row, 'safetyStock', 'safety_stock'))}</td>
+                  <td><Badge value={pick(row, 'status')} /></td>
+                </tr>
+              ))}
+              {rows.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: 'center', padding: 28 }}>No office consumables yet</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <Pager page={page} pageSize={25} total={total} onPage={setPage} />
+      {showCreate && (
+        <Modal title="New office consumable" onClose={() => setShowCreate(false)} wide footer={(
+          <>
+            <button className="btn" onClick={() => setShowCreate(false)}>Cancel</button>
+            <button className="btn btn-primary" disabled={saving} onClick={create}>{saving ? 'Saving...' : 'Create'}</button>
+          </>
+        )}>
+          {formError && <ErrorBanner error={formError} />}
+          <div className="form-grid">
+            <div className="field field-required">
+              <label>Name</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. A4 copy paper ream" />
+            </div>
+            <div className="field">
+              <label>Code (optional)</label>
+              <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Auto OFC-2026-..." />
+            </div>
+            <div className="field">
+              <label>SKU</label>
+              <input value={sku} onChange={(e) => setSku(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Unit</label>
+              <select value={unitId} onChange={(e) => setUnitId(e.target.value)}>
+                <option value="">Select...</option>
+                {units.map((u) => <option key={String(u.id)} value={String(u.id)}>{String(pick(u, 'code'))} - {String(pick(u, 'name'))}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label>Standard cost</label>
+              <input type="number" min={0} step="any" value={cost} onChange={(e) => setCost(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Standard price</label>
+              <input type="number" min={0} step="any" value={price} onChange={(e) => setPrice(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Reorder point</label>
+              <input type="number" min={0} step="any" value={reorder} onChange={(e) => setReorder(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Safety stock</label>
+              <input type="number" min={0} step="any" value={safety} onChange={(e) => setSafety(e.target.value)} />
+            </div>
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label>Description</label>
+              <textarea value={description} onChange={(e) => setDescription(e.target.value)} />
+            </div>
+          </div>
         </Modal>
       )}
     </div>

@@ -72,6 +72,14 @@ inventoryOpsRouter.get('/movements', ...runGet('inventory.movements.view', (c, c
 })));
 inventoryOpsRouter.get('/adjustments/:id', ...runGet('inventory.adjustments.view', (c, ctx, _q, p) => inv.getAdjustment(c, ctx, Number(p.id))));
 inventoryOpsRouter.get('/transfers/:id', ...runGet('inventory.transfers.view', (c, ctx, _q, p) => inv.getTransfer(c, ctx, Number(p.id))));
+// Office consumables catalogue (kept separate from factory consumables)
+inventoryOpsRouter.get('/catalogs/office-consumables', ...runGet('inventory.items.view', (c, ctx, q) => inv.listOfficeConsumables(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+inventoryOpsRouter.get('/catalogs/office-consumables/options', ...runGet('inventory.items.view', (c, ctx) => inv.getOfficeConsumableOptions(c, ctx)));
+inventoryOpsRouter.post('/catalogs/office-consumables', ...run('inventory.items.create', (c, ctx, b) => inv.createOfficeConsumable(c, ctx, b)));
 
 // Stock movements (scan-driven postings from the mobile/desktop scanner)
 inventoryOpsRouter.post('/moves', ...run('inventory.movements.create', (c, ctx, b) => inv.postMove(c, ctx, b as inv.MoveInput)));

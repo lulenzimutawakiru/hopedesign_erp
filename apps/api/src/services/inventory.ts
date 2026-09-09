@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { Ctx } from '../db.js';
 import { badRequest, notFound, toCamelRow, toCamelRows } from '../utils.js';
+import { logAudit } from './audit.js';
 
 export interface MoveInput {
   movementType: string;
@@ -25,6 +26,7 @@ export interface MoveInput {
 
 export const RAW_MATERIAL_TYPES = ['JUMBO_ROLL', 'PAPER_BOBBIN', 'PACKAGING'];
 export const CONSUMABLE_TYPES = ['CONSUMABLE', 'SPARE_PART'];
+export const OFFICE_CONS_ANCHOR = 'CONS-OFF';
 
 export async function postMove(client: pg.PoolClient, ctx: Ctx, m: MoveInput) {
   const res = await client.query('SELECT post_inventory_move($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) AS movement_id', [
@@ -349,6 +351,8 @@ export async function stockSummary(client: pg.PoolClient, ctx: Ctx) {
        count(DISTINCT i.product_id) FILTER (WHERE NOT (p.type = ANY($3::text[]) OR p.type = ANY($4::text[])))::int AS product_lines,
        (SELECT count(*)::int FROM products p2 WHERE p2.tenant_id = $1 AND p2.company_id = $2 AND p2.type = ANY($3::text[])) AS catalog_materials,
        (SELECT count(*)::int FROM products p2 WHERE p2.tenant_id = $1 AND p2.company_id = $2 AND p2.type = ANY($4::text[])) AS catalog_consumables,
+       (SELECT count(*)::int FROM products p3 JOIN product_categories pc3 ON pc3.company_id = p3.company_id AND pc3.code = 'CONS-OFF' WHERE p3.tenant_id = $1 AND p3.company_id = $2 AND p3.type = ANY($4::text[])) AS catalog_office_consumables,
+       (SELECT count(*)::int FROM products p4 WHERE p4.tenant_id = $1 AND p4.company_id = $2 AND p4.type = ANY($4::text[]) AND NOT EXISTS (SELECT 1 FROM product_categories pc4 WHERE pc4.company_id = p4.company_id AND pc4.code = 'CONS-OFF' AND pc4.id = p4.category_id)) AS catalog_factory_consumables,
        (SELECT count(*)::int FROM products p2 WHERE p2.tenant_id = $1 AND p2.company_id = $2 AND NOT (p2.type = ANY($3::text[]) OR p2.type = ANY($4::text[]))) AS catalog_products,
        (SELECT count(*)::int FROM asset_register ar WHERE ar.tenant_id = $1 AND ar.company_id = $2 AND NOT ar.is_deleted) AS assets
      FROM inventory i
@@ -495,4 +499,106 @@ export async function listMovements(
     params.slice(0, params.length - 2)
   );
   return { rows: toCamelRows(res.rows), total: Number(totalRes.rows[0].n), page, pageSize };
+}
+export async function listOfficeConsumables(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  filters: { q?: string; page?: number; pageSize?: number }
+) {
+  const page = Math.max(1, filters.page ?? 1);
+  const pageSize = Math.min(200, Math.max(1, filters.pageSize ?? 25));
+  const params: unknown[] = [ctx.tenantId, ctx.companyId, CONSUMABLE_TYPES];
+  const where = ['p.tenant_id = $1', 'p.company_id = $2', 'p.type = ANY($3::text[])'];
+  if (filters.q?.trim()) {
+    params.push(`%${filters.q.trim()}%`);
+    where.push(`(p.code ILIKE $${params.length} OR p.name ILIKE $${params.length} OR p.sku ILIKE $${params.length})`);
+  }
+  params.push(pageSize, (page - 1) * pageSize);
+  const res = await client.query(
+    `SELECT p.id, p.code, p.name, p.sku, p.type, p.status,
+            p.standard_cost, p.standard_price, p.reorder_point, p.safety_stock,
+            p.description, p.created_at,
+            u.code AS unit_code, u.name AS unit_name
+     FROM products p
+     JOIN product_categories pc ON pc.company_id = p.company_id AND pc.code = 'CONS-OFF' AND pc.id = p.category_id
+     LEFT JOIN units u ON u.id = p.unit_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY p.id DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
+  const totalRes = await client.query(
+    `SELECT count(*)::int AS n
+     FROM products p
+     JOIN product_categories pc ON pc.company_id = p.company_id AND pc.code = 'CONS-OFF' AND pc.id = p.category_id
+     WHERE ${where.join(' AND ')}`,
+    params.slice(0, params.length - 2)
+  );
+  return { rows: toCamelRows(res.rows), total: Number(totalRes.rows[0].n), page, pageSize };
+}
+
+export async function getOfficeConsumableOptions(client: pg.PoolClient, ctx: Ctx) {
+  const cat = await client.query(
+    `SELECT id, code, name, kind, status
+     FROM product_categories
+     WHERE company_id = $1 AND tenant_id = $2 AND code = 'CONS-OFF'`,
+    [ctx.companyId, ctx.tenantId]
+  );
+  if (!cat.rows.length) throw badRequest('Office consumables category is not configured');
+  const units = await client.query(
+    `SELECT id, code, name FROM units WHERE tenant_id = $1 ORDER BY code`,
+    [ctx.tenantId]
+  );
+  return { category: toCamelRow(cat.rows[0]), units: toCamelRows(units.rows) };
+}
+
+export async function createOfficeConsumable(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  input: {
+    name?: string;
+    code?: string;
+    sku?: string;
+    unitId?: number | null;
+    description?: string | null;
+    standardCost?: number | null;
+    standardPrice?: number | null;
+    reorderPoint?: number | null;
+    safetyStock?: number | null;
+  }
+) {
+  const companyId = ctx.companyId ?? null;
+  if (!companyId) throw badRequest('Company context required');
+  const name = String(input.name ?? '').trim();
+  if (!name) throw badRequest('Name is required');
+  const cat = await client.query(
+    `SELECT id FROM product_categories
+     WHERE company_id = $1 AND tenant_id = $2 AND code = 'CONS-OFF'`,
+    [companyId, ctx.tenantId]
+  );
+  if (!cat.rows.length) throw badRequest('Office consumables category is not configured');
+  const categoryId = Number(cat.rows[0].id);
+  let code = String(input.code ?? '').trim();
+  if (!code) {
+    const noRes = await client.query('SELECT next_doc_no($1,$2,8) AS code', [ctx.tenantId, 'OFC']);
+    code = String(noRes.rows[0].code);
+  }
+  const sku = input.sku != null && String(input.sku).trim() ? String(input.sku).trim() : null;
+  const description = input.description != null && String(input.description).trim() ? String(input.description).trim() : null;
+  const unitId = input.unitId != null && Number.isFinite(Number(input.unitId)) ? Number(input.unitId) : null;
+  const toNum = (v: unknown): number | null => (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+  const ins = await client.query(
+    `INSERT INTO products
+       (company_id, tenant_id, category_id, code, name, sku, type, unit_id,
+        valuation_method, standard_cost, standard_price, reorder_point, safety_stock,
+        security_classification, status, attributes, description)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'WEIGHTED_AVERAGE',$9,$10,$11,$12,'NONE','ACTIVE','{}',$13)
+     RETURNING id`,
+    [companyId, ctx.tenantId, categoryId, code, name, sku, 'CONSUMABLE', unitId,
+     toNum(input.standardCost), toNum(input.standardPrice), toNum(input.reorderPoint), toNum(input.safetyStock),
+     description]
+  );
+  const id = Number(ins.rows[0].id);
+  await logAudit(client, ctx, { action: 'create', resource: 'products', recordId: id, recordCode: code, newValues: input });
+  return { id, code };
 }
