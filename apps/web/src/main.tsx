@@ -3,9 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { AuthProvider } from './auth';
 import App from './App';
 import { applyPrefs } from './prefs';
+import { startBuildWatch } from './buildwatch';
 import './styles.css';
 
 applyPrefs();
+startBuildWatch();
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
