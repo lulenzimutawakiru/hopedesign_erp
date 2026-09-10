@@ -6,12 +6,12 @@
 // period close cockpit, financial audit trail.
 // ============================================================
 import pg from 'pg';
-import { randomBytes } from 'node:crypto';
 import { Ctx } from '../db.js';
 import { badRequest, forbidden, notFound, toCamelRow, toCamelRows } from '../utils.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import { getAccountId, postJournalLines, budgetPosition } from './finance.js';
+import { resolveFiscalTarget, type FiscalTarget } from './efris/config.js';
 
 const n = (v: unknown): number => Number(v) || 0;
 const round2 = (v: number): number => Math.round(v * 100) / 100;
@@ -27,9 +27,6 @@ function isoDate(v: unknown): string {
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
   return new Date().toISOString().slice(0, 10);
 }
-
-const randCode = (len: number): string =>
-  randomBytes(Math.ceil(len / 2)).toString('hex').slice(0, len).toUpperCase();
 
 function renderTemplate(tpl: string, vars: Record<string, number>): string {
   return String(tpl ?? '0').replace(/\{\{(\w+)\}\}/g, (_, k: string) => String(vars[k] ?? 0));
@@ -510,11 +507,22 @@ export async function listEfrisTransactions(
   filters: { status?: string; from?: string; to?: string } = {}
 ) {
   const params: unknown[] = [ctx.tenantId, ctx.companyId];
-  let where = 'WHERE tenant_id = $1 AND company_id = $2';
-  if (filters.status) { params.push(filters.status); where += ` AND status = $${params.length}`; }
-  if (filters.from) { params.push(filters.from); where += ` AND txn_date >= $${params.length}::date`; }
-  if (filters.to) { params.push(filters.to); where += ` AND txn_date <= $${params.length}::date`; }
-  const res = await client.query(`SELECT * FROM efris_transactions ${where} ORDER BY created_at DESC, id DESC`, params);
+  let where = 'WHERE t.tenant_id = $1 AND t.company_id = $2';
+  if (filters.status) { params.push(filters.status); where += ` AND t.status = $${params.length}`; }
+  if (filters.from) { params.push(filters.from); where += ` AND t.txn_date >= $${params.length}::date`; }
+  if (filters.to) { params.push(filters.to); where += ` AND t.txn_date <= $${params.length}::date`; }
+  // FDN / verification code live on efris_documents and are only ever populated
+  // by the worker from a confirmed URA response, so they are joined - never
+  // synthesised on the transaction row.
+  const res = await client.query(
+    `SELECT t.*, d.fdn, d.verification_code, d.qr_ref,
+            d.erp_doc_no AS document_erp_doc_no,
+            d.fiscalized_at AS document_fiscalized_at
+       FROM efris_transactions t
+       LEFT JOIN efris_documents d ON d.efris_transaction_id = t.id
+       ${where} ORDER BY t.created_at DESC, t.id DESC`,
+    params
+  );
   return toCamelRows(res.rows);
 }
 
@@ -522,6 +530,13 @@ export async function listEfrisTransactions(
  * Register an ERP document (e.g. a posted sales invoice) for fiscalisation.
  * Idempotent on idempotency_key - retries return the existing transaction and
  * can never create duplicate fiscal documents.
+ *
+ * The transaction is tagged with the active TEST/ACTIVE fiscal configuration.
+ * When the company has an active configuration with auto_submit enabled the
+ * document is queued immediately for the background worker; otherwise it is
+ * parked as PENDING and an authorized user queues it explicitly via
+ * syncEfrisTransaction(). FISCALIZED is never written here - only the EFRIS
+ * background worker writes it after a confirmed URA FDN + verification code.
  */
 export async function registerEfrisDocument(
   client: pg.PoolClient,
@@ -529,7 +544,8 @@ export async function registerEfrisDocument(
   input: {
     docType: string; docRefType: string; docRefId: number; docRefCode: string;
     txnDate?: string; currency?: string; grossAmount: number; taxAmount?: number;
-    idempotencyKey: string;
+    idempotencyKey: string; requestRef?: string | null;
+    requestPayload?: Record<string, unknown> | null;
   }
 ) {
   if (!input.idempotencyKey) throw badRequest('EFRIS idempotency_key is required');
@@ -538,32 +554,58 @@ export async function registerEfrisDocument(
     [ctx.tenantId, input.idempotencyKey]
   );
   if (existing.rows.length) return toCamelRow(existing.rows[0]);
+
+  const target: FiscalTarget | null = await resolveFiscalTarget(client, ctx);
+  const config = target?.config ?? null;
+  const taxpayer = target?.taxpayer ?? null;
+  const fiscalMode = config?.mode ?? 'DISABLED';
+  const auto = config?.auto_submit === true && fiscalMode !== 'DISABLED';
+  const status = auto ? 'QUEUED' : 'PENDING';
+
   const ins = await client.query(
     `INSERT INTO efris_transactions
-       (company_id, tenant_id, doc_type, doc_ref_type, doc_ref_id, doc_ref_code, txn_date,
-        currency, gross_amount, tax_amount, idempotency_key, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'PENDING') RETURNING *`,
-    [ctx.companyId, ctx.tenantId, input.docType, input.docRefType, Number(input.docRefId),
-     input.docRefCode, isoDate(input.txnDate), input.currency ?? 'UGX',
-     n(input.grossAmount), n(input.taxAmount), input.idempotencyKey]
+       (company_id, tenant_id, taxpayer_id, branch_id, fiscal_mode, doc_type, doc_ref_type,
+        doc_ref_id, doc_ref_code, txn_date, currency, gross_amount, tax_amount,
+        idempotency_key, status, request_ref, request_payload, requested_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18)
+     RETURNING *`,
+    [
+      ctx.companyId, ctx.tenantId,
+      config?.taxpayer_id ?? null,
+      taxpayer?.branch_id ?? null,
+      fiscalMode,
+      input.docType, input.docRefType, Number(input.docRefId), input.docRefCode,
+      isoDate(input.txnDate), input.currency ?? 'UGX',
+      n(input.grossAmount), n(input.taxAmount),
+      input.idempotencyKey, status,
+      input.requestRef && input.requestRef.trim() ? input.requestRef.trim() : null,
+      input.requestPayload && typeof input.requestPayload === 'object'
+        ? JSON.stringify(input.requestPayload)
+        : null,
+      ctx.userId ?? null,
+    ]
   );
   const row = ins.rows[0];
   await finAudit(client, ctx, {
-    action: 'EFRIS_REGISTERED', module: 'efris', docType: input.docType, docId: Number(row.id),
-    docCode: input.docRefCode, newValue: { status: 'PENDING', idempotencyKey: input.idempotencyKey },
+    action: auto ? 'EFRIS_QUEUED' : 'EFRIS_REGISTERED',
+    module: 'efris', docType: input.docType, docId: Number(row.id), docCode: input.docRefCode,
+    newValue: { status, fiscalMode, idempotencyKey: input.idempotencyKey },
   });
   await emitEvent(client, ctx, {
-    eventType: 'efris.registered', entityType: 'EFRIS_TRANSACTION', entityId: Number(row.id),
-    entityCode: input.docRefCode, payload: { status: 'PENDING' },
+    eventType: auto ? 'efris.queued' : 'efris.registered',
+    entityType: 'EFRIS_TRANSACTION', entityId: Number(row.id),
+    entityCode: input.docRefCode, payload: { status, fiscalMode },
   });
   return toCamelRow(row);
 }
 
 /**
- * Simulated URA adapter. Walks PENDING -> QUEUED -> TRANSMITTED -> FISCALIZED and
- * issues the fiscal identifiers (FDN, verification code, fiscal QR). Already
- * fiscalised transactions are returned untouched - retries never duplicate a
- * fiscal document.
+ * Queue a registered ERP document for the background fiscalization worker.
+ *
+ * This endpoint never fabricates fiscal identifiers. It re-resolves the active
+ * TEST/ACTIVE configuration for the company and flips the transaction to QUEUED
+ * so efris_claim_fiscal_batch() can claim it; FISCALIZED is written only by the
+ * worker after URA returns a confirmed FDN + verification code.
  */
 export async function syncEfrisTransaction(client: pg.PoolClient, ctx: Ctx, id: number) {
   const lock = await client.query(
@@ -572,57 +614,48 @@ export async function syncEfrisTransaction(client: pg.PoolClient, ctx: Ctx, id: 
   if (!lock.rows.length) throw notFound('EFRIS transaction not found');
   const t = lock.rows[0];
   if (t.status === 'FISCALIZED') return toCamelRow(t);
-  if (t.status === 'CANCELLED') throw badRequest('EFRIS transaction is cancelled and cannot be synced');
-  const steps = t.status === 'PENDING'
-    ? ['QUEUED', 'TRANSMITTED']
-    : t.status === 'QUEUED'
-      ? ['TRANSMITTED']
-      : [];
-  for (const step of steps) {
-    await client.query(`UPDATE efris_transactions SET status=$2, updated_at=now() WHERE id=$1`, [id, step]);
-    await client.query(
-      `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, request_payload)
-       VALUES ($1,$2,$3,$4::jsonb)`,
-      [ctx.tenantId, id, step, JSON.stringify({ action: 'submitInvoice', attempt: Number(t.attempts) + 1 })]
-    );
+  if (['CANCELLED', 'VOIDED', 'REJECTED'].includes(String(t.status))) {
+    throw badRequest(`EFRIS transaction is ${String(t.status).toLowerCase()} and cannot be queued`);
   }
-  const fdn = `FDN${randCode(12)}`;
-  const vrc = `VRC${randCode(12)}`;
-  const qrRef = `QR${randCode(24)}`;
-  const payload = { fdn, verificationCode: vrc, qrRef, submittedAt: new Date().toISOString() };
-  const upd = await client.query(
+
+  const target: FiscalTarget | null = await resolveFiscalTarget(client, ctx);
+  if (!target) {
+    throw badRequest('EFRIS is not enabled for this company. Activate a TEST/ACTIVE integration configuration before submitting fiscal documents.');
+  }
+  const config = target.config;
+  await client.query(
     `UPDATE efris_transactions
-        SET status='FISCALIZED', attempts=attempts+1, transmitted_at=now(), fiscalized_at=now(),
-            last_error=NULL, updated_at=now()
-      WHERE id=$1 RETURNING *`, [id]
+        SET status='QUEUED', fiscal_mode=$3, taxpayer_id=$4, branch_id=$5, requested_by=$6,
+            claimed_at=NULL, next_attempt_at=now(), error_code=NULL, last_error=NULL, updated_at=now()
+      WHERE id=$1 AND tenant_id=$2`,
+    [
+      id, ctx.tenantId, config.mode,
+      config.taxpayer_id ?? null,
+      target.taxpayer?.branch_id ?? null,
+      ctx.userId ?? null,
+    ]
   );
   await client.query(
-    `INSERT INTO efris_documents
-       (tenant_id, efris_transaction_id, erp_doc_no, fdn, verification_code, qr_ref,
-        response_payload, transmitted_at, fiscalized_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,now(),now())
-     ON CONFLICT (efris_transaction_id) DO UPDATE
-       SET fdn=EXCLUDED.fdn, verification_code=EXCLUDED.verification_code,
-           qr_ref=EXCLUDED.qr_ref, response_payload=EXCLUDED.response_payload,
-           fiscalized_at=now()`,
-    [ctx.tenantId, id, String(t.doc_ref_code), fdn, vrc, qrRef, JSON.stringify(payload)]
-  );
-  await client.query(
-    `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, request_payload, response_payload)
-     VALUES ($1,$2,'FISCALIZED',$3::jsonb,$4::jsonb)`,
-    [ctx.tenantId, id, JSON.stringify({ action: 'submitInvoice' }), JSON.stringify(payload)]
+    `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, request_payload)
+     VALUES ($1,$2,'QUEUED',$3::jsonb)`,
+    [
+      ctx.tenantId, id,
+      JSON.stringify({ action: 'queueForFiscalization', queuedById: ctx.userId ?? null }),
+    ]
   );
   await finAudit(client, ctx, {
-    action: 'EFRIS_FISCALIZED', module: 'efris', docType: String(t.doc_type), docId: id,
+    action: 'EFRIS_QUEUED', module: 'efris', docType: String(t.doc_type), docId: id,
     docCode: String(t.doc_ref_code),
-    previousValue: { status: String(t.status) }, newValue: { status: 'FISCALIZED', fdn, vrc, qrRef },
+    previousValue: { status: String(t.status) }, newValue: { status: 'QUEUED', mode: config.mode },
   });
   await emitEvent(client, ctx, {
-    eventType: 'efris.fiscalized', entityType: 'EFRIS_TRANSACTION', entityId: id,
-    entityCode: String(t.doc_ref_code), payload: { status: 'FISCALIZED', fdn, vrc, qrRef },
+    eventType: 'efris.queued', entityType: 'EFRIS_TRANSACTION', entityId: id,
+    entityCode: String(t.doc_ref_code), payload: { status: 'QUEUED', mode: config.mode },
   });
-  return toCamelRow(upd.rows[0]);
+  const row = await client.query(`SELECT * FROM efris_transactions WHERE id=$1 AND tenant_id=$2`, [id, ctx.tenantId]);
+  return toCamelRow(row.rows[0]);
 }
+
 export async function cancelEfrisTransaction(client: pg.PoolClient, ctx: Ctx, id: number, reason: string) {
   const lock = await client.query(
     `SELECT * FROM efris_transactions WHERE id = $1 AND tenant_id = $2 FOR UPDATE`, [id, ctx.tenantId]
@@ -630,27 +663,32 @@ export async function cancelEfrisTransaction(client: pg.PoolClient, ctx: Ctx, id
   if (!lock.rows.length) throw notFound('EFRIS transaction not found');
   const t = lock.rows[0];
   if (t.status === 'FISCALIZED') throw badRequest('A fiscalised EFRIS transaction cannot be cancelled');
-  if (t.status === 'CANCELLED') return toCamelRow(t);
+  if (['CANCELLED', 'VOIDED', 'REJECTED'].includes(String(t.status))) return toCamelRow(t);
+  if (t.status === 'PROCESSING') throw badRequest('EFRIS transaction is currently being processed by the fiscalization worker');
+  const note = reason && reason.trim() ? reason.trim() : 'Cancelled in ERP';
   await client.query(
-    `UPDATE efris_transactions SET status='CANCELLED', last_error=$2, updated_at=now() WHERE id=$1`, [id, reason ?? 'Cancelled']
+    `UPDATE efris_transactions
+        SET status='CANCELLED', claimed_at=NULL, next_attempt_at=NULL, last_error=$2, updated_at=now()
+      WHERE id=$1`, [id, note]
   );
   await client.query(
     `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, request_payload, error)
      VALUES ($1,$2,'CANCELLED',$3::jsonb,$4)`,
-    [ctx.tenantId, id, JSON.stringify({ action: 'cancelInvoice' }), reason ?? 'Cancelled']
+    [ctx.tenantId, id, JSON.stringify({ action: 'cancelInvoice' }), note]
   );
   await finAudit(client, ctx, {
     action: 'EFRIS_CANCELLED', module: 'efris', docType: String(t.doc_type), docId: id,
     docCode: String(t.doc_ref_code),
-    previousValue: { status: String(t.status) }, newValue: { status: 'CANCELLED', reason },
+    previousValue: { status: String(t.status) }, newValue: { status: 'CANCELLED', reason: note },
   });
-  return toCamelRow(await client.query(`SELECT * FROM efris_transactions WHERE id=$1`, [id]).then((r) => r.rows[0]));
+  const row = await client.query(`SELECT * FROM efris_transactions WHERE id=$1 AND tenant_id=$2`, [id, ctx.tenantId]);
+  return toCamelRow(row.rows[0]);
 }
 
 export async function listEfrisDocuments(client: pg.PoolClient, ctx: Ctx, efrisTransactionId?: number) {
   const params: unknown[] = [ctx.tenantId];
   let where = 'WHERE d.tenant_id = $1';
-  if (efrisTransactionId) { params.push(efrisTransactionId); where += ` AND d.efris_transaction_id = $${params.length}`; }
+  if (efrisTransactionId) { params.push(efrisTransactionId); where += ` AND d.efris_transaction_id = ${params.length}`; }
   const res = await client.query(
     `SELECT d.*, t.doc_ref_type, t.doc_ref_code, t.currency, t.gross_amount, t.tax_amount, t.status AS txn_status
      FROM efris_documents d
@@ -663,7 +701,7 @@ export async function listEfrisDocuments(client: pg.PoolClient, ctx: Ctx, efrisT
 export async function listEfrisSyncLogs(client: pg.PoolClient, ctx: Ctx, efrisTransactionId?: number) {
   const params: unknown[] = [ctx.tenantId];
   let where = 'WHERE l.tenant_id = $1';
-  if (efrisTransactionId) { params.push(efrisTransactionId); where += ` AND l.efris_transaction_id = $${params.length}`; }
+  if (efrisTransactionId) { params.push(efrisTransactionId); where += ` AND l.efris_transaction_id = ${params.length}`; }
   const res = await client.query(
     `SELECT l.*, t.doc_ref_code FROM efris_sync_logs l
      JOIN efris_transactions t ON t.id = l.efris_transaction_id

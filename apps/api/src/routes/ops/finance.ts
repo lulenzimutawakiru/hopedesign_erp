@@ -5,6 +5,7 @@ import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler } from '../../utils.js';
 import * as fin from '../../services/finance.js';
 import * as finAdv from '../../services/finance-advanced.js';
+import * as efrisDir from '../../services/efris/directory.js';
 
 export const financeOpsRouter = Router();
 
@@ -363,12 +364,15 @@ financeOpsRouter.get('/tax/compliance', ...runGet(['finance.tax_transactions.vie
   const from = q.from != null ? String(q.from) : `${to.slice(0, 4)}-01-01`;
   return finAdv.taxComplianceSummary(c, ctx, from, to);
 }));// ---- URA EFRIS fiscal compliance adapter ----
-financeOpsRouter.get('/efris', ...runGet('finance.efris.view', (c, ctx, q) => finAdv.listEfrisTransactions(c, ctx, {
+// Permissions are declared as any-of arrays so the legacy finance.efris.* codes
+// and the granular efris.* governance codes from 0142 are both honoured.
+financeOpsRouter.get('/efris', ...runGet(['efris.transactions.view', 'finance.efris.view'], (c, ctx, q) => finAdv.listEfrisTransactions(c, ctx, {
   status: q.status != null ? String(q.status) : undefined,
   from: q.from != null ? String(q.from) : undefined,
   to: q.to != null ? String(q.to) : undefined,
 })));
-financeOpsRouter.post('/efris', ...run('finance.efris.create', (c, ctx, b) => finAdv.registerEfrisDocument(c, ctx, {
+financeOpsRouter.get('/efris/status', ...runGet('efris.configuration.view', (c, ctx) => efrisDir.efrisIntegrationStatus(c, ctx)));
+financeOpsRouter.post('/efris', ...run(['efris.transactions.submit', 'finance.efris.create'], (c, ctx, b) => finAdv.registerEfrisDocument(c, ctx, {
   docType: String(b.docType),
   docRefType: String(b.docRefType),
   docRefId: Number(b.docRefId),
@@ -379,10 +383,36 @@ financeOpsRouter.post('/efris', ...run('finance.efris.create', (c, ctx, b) => fi
   taxAmount: b.taxAmount !== undefined ? Number(b.taxAmount) : undefined,
   idempotencyKey: String(b.idempotencyKey),
 })));
-financeOpsRouter.post('/efris/:id/sync', ...run('finance.efris.sync', (c, ctx, _b, p) => finAdv.syncEfrisTransaction(c, ctx, Number(p.id))));
+financeOpsRouter.post('/efris/:id/sync', ...run(['efris.transactions.retry', 'finance.efris.sync'], (c, ctx, _b, p) => finAdv.syncEfrisTransaction(c, ctx, Number(p.id))));
 financeOpsRouter.post('/efris/:id/cancel', ...run('finance.efris.cancel', (c, ctx, b, p) => finAdv.cancelEfrisTransaction(c, ctx, Number(p.id), String(b.reason ?? 'Cancelled'))));
-financeOpsRouter.get('/efris/documents', ...runGet('finance.efris.view', (c, ctx, q) => finAdv.listEfrisDocuments(c, ctx, q.efrisTransactionId != null ? Number(q.efrisTransactionId) : undefined)));
-financeOpsRouter.get('/efris/logs', ...runGet('finance.efris.view', (c, ctx, q) => finAdv.listEfrisSyncLogs(c, ctx, q.efrisTransactionId != null ? Number(q.efrisTransactionId) : undefined)));// ---- Budget control: revisions, commitments, availability ----
+financeOpsRouter.get('/efris/documents', ...runGet(['efris.transactions.view', 'finance.efris.view'], (c, ctx, q) => finAdv.listEfrisDocuments(c, ctx, q.efrisTransactionId != null ? Number(q.efrisTransactionId) : undefined)));
+financeOpsRouter.get('/efris/logs', ...runGet(['efris.transactions.view', 'finance.efris.view'], (c, ctx, q) => finAdv.listEfrisSyncLogs(c, ctx, q.efrisTransactionId != null ? Number(q.efrisTransactionId) : undefined)));
+
+// Taxpayer / place-of-business registration (spec 76-77). Credentials are never
+// accepted here - only the env pointer keys, which are validated server-side.
+financeOpsRouter.get('/efris/taxpayers', ...runGet('efris.configuration.view', (c, ctx, q) => efrisDir.listEfrisTaxpayers(c, ctx, {
+  status: q.status != null ? String(q.status) : undefined,
+})));
+financeOpsRouter.post('/efris/taxpayers', ...run('efris.configuration.manage', (c, ctx, b) => efrisDir.createEfrisTaxpayer(c, ctx, b)));
+financeOpsRouter.patch('/efris/taxpayers/:id', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisDir.updateEfrisTaxpayer(c, ctx, Number(p.id), b)));
+
+// Integration configuration (spec 76-77).
+financeOpsRouter.get('/efris/configurations', ...runGet('efris.configuration.view', (c, ctx) => efrisDir.listEfrisConfigurations(c, ctx)));
+financeOpsRouter.post('/efris/configurations', ...run('efris.configuration.manage', (c, ctx, b) => efrisDir.createEfrisConfiguration(c, ctx, b)));
+financeOpsRouter.patch('/efris/configurations/:id', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisDir.updateEfrisConfiguration(c, ctx, Number(p.id), b)));
+
+// Error centre + controlled retry engine (spec 91-92).
+financeOpsRouter.get('/efris/errors', ...runGet('efris.errors.view', (c, ctx, q) => efrisDir.listEfrisErrors(c, ctx, {
+  resolved: q.resolved,
+  stage: q.stage,
+  transactionId: q.efrisTransactionId ?? q.transactionId,
+})));
+financeOpsRouter.post('/efris/errors/:id/retry', ...run('efris.errors.retry', (c, ctx, b, p) => efrisDir.retryEfrisError(c, ctx, Number(p.id), b.note != null ? String(b.note) : null)));
+financeOpsRouter.post('/efris/errors/:id/archive', ...run('efris.errors.archive', (c, ctx, b, p) => efrisDir.archiveEfrisError(c, ctx, Number(p.id), String(b.resolution ?? ''), { cancelTransaction: b.cancelTransaction })));
+
+// ERP vs EFRIS reconciliation (spec 94).
+financeOpsRouter.get('/efris/reconciliation', ...runGet('efris.reconciliation.view', (c, ctx, q) => efrisDir.efrisReconciliation(c, ctx, q.from != null ? String(q.from) : null, q.to != null ? String(q.to) : null)));
+// ---- Budget control: revisions, commitments, availability ----
 financeOpsRouter.get('/budget/revisions', ...runGet('finance.budget_revisions.view', (c, ctx, q) => finAdv.listBudgetRevisions(c, ctx, q.budgetId != null ? Number(q.budgetId) : undefined)));
 financeOpsRouter.post('/budget/revisions', ...run('finance.budget_revisions.create', (c, ctx, b) => finAdv.createBudgetRevision(c, ctx, {
   budgetId: Number(b.budgetId),

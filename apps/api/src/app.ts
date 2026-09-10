@@ -48,6 +48,7 @@ import { employeeIdentityOpsRouter } from './routes/ops/employeeIdentity.js';
 import { hikvisionEventsRouter, hikvisionWebhookErrorFilter } from './routes/hikvisionEvents.js';
 import { hikvisionOpsRouter, hikvisionAttendanceOpsRouter } from './routes/ops/hikvision.js';
 import { runHikvisionWorkerTick } from './services/hikvision/processor.js';
+import { runEfrisWorkerTick } from './services/efris/processor.js';
 import { requisitionsOpsRouter } from './routes/ops/requisitions.js';
 import { expenditureOpsRouter } from './routes/ops/expenditure.js';
 import { communicationOpsRouter } from './routes/ops/communication.js';
@@ -225,6 +226,15 @@ setInterval(() => {
     console.error('[hikvisionWorker]', err instanceof Error ? err.message : err);
   });
 }, 10_000);
+
+// EFRIS fiscalization worker: drain due fiscal transactions every 20s.
+// Single-flight across replicas; DISABLED mode leaves the queue inert until
+// an ACTIVE/TEST configuration exists, so no transaction is ever auto-submitted.
+setInterval(() => {
+  singleFlight(WORKER_LOCKS.EFRIS_WORKER, runEfrisWorkerTick).catch((err: unknown) => {
+    console.error('[efrisWorker]', err instanceof Error ? err.message : err);
+  });
+}, 20_000);
 
 // Notification delivery worker: dispatch queued EMAIL/SMS/WHATSAPP deliveries.
 setInterval(() => {

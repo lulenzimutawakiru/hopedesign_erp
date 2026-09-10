@@ -9,6 +9,15 @@ import DownloadMenu from '../components/DownloadMenu';
 
 type Rec = Record<string, unknown>;
 
+// A module tile may be reachable through any one of several equivalent permission
+// codes (for example the legacy finance.efris.* codes and the granular efris.*
+// governance codes introduced with the EFRIS production module).
+type FinanceTile = { href: string; label: string; hint: string; perm: string; perms?: string[] };
+
+function canAny(user: Parameters<typeof can>[0], permissions: string[]): boolean {
+  return permissions.some((permission) => can(user, permission));
+}
+
 const JOURNAL_STATUSES = ['DRAFT', 'POSTED', 'VOID'];
 const EXPENSE_STATUSES = ['DRAFT', 'SUBMITTED', 'APPROVED', 'POSTED', 'VOID'];
 const ADVANCE_STATUSES = ['POSTED', 'SETTLED', 'VOID'];
@@ -2462,10 +2471,10 @@ function AdvancedOverview() {
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader label="Opening the advanced books..." />;
-  const tiles = [
+  const tiles: FinanceTile[] = [
     { href: '/finance/journals', label: 'Journals', hint: 'Double-entry workflow', perm: 'finance.journals.view' },
     { href: '/finance/posting-rules', label: 'Posting Rules', hint: 'Configurable accounting engine', perm: 'finance.posting_rules.view' },
-    { href: '/finance/efris', label: 'EFRIS', hint: 'URA fiscal compliance', perm: 'finance.efris.view' },
+    { href: '/finance/efris', label: 'EFRIS', hint: 'URA fiscal compliance', perm: 'finance.efris.view', perms: ['finance.efris.view', 'efris.transactions.view', 'efris.dashboard.view'] },
     { href: '/finance/tax-compliance', label: 'Tax Compliance', hint: 'VAT, WHT & filings', perm: 'finance.tax_transactions.view' },
     { href: '/finance/costing', label: 'Manufacturing Costing', hint: 'Production, variance & WIP', perm: 'finance.production_costs.view' },
     { href: '/finance/consolidation', label: 'Consolidation', hint: 'Group financials', perm: 'finance.consolidation.view' },
@@ -2485,7 +2494,7 @@ function AdvancedOverview() {
         </div>
         <div className="head-actions">
           {can(user, 'finance.journals.create') && <button className="btn btn-primary" onClick={() => navigate('/finance/journals/new')}>New journal</button>}
-          {can(user, 'finance.efris.create') && <button className="btn" onClick={() => navigate('/finance/efris')}>Fiscalize</button>}
+          {canAny(user, ['finance.efris.create', 'efris.transactions.submit']) && <button className="btn" onClick={() => navigate('/finance/efris')}>Fiscalize</button>}
         </div>
       </header>
       <div className="kpi-grid">
@@ -2521,7 +2530,7 @@ function AdvancedOverview() {
         </button>
       </div>
       <div className="kpi-grid" style={{ marginTop: 16 }}>
-        {tiles.filter((t) => can(user, t.perm)).map((t) => (
+        {tiles.filter((t) => (t.perms ? canAny(user, t.perms) : can(user, t.perm))).map((t) => (
           <button key={t.href} className="kpi-card" onClick={() => navigate(t.href)}>
             <span className="kpi-label">{t.label}</span>
             <span className="kpi-sub">{t.hint}</span>
@@ -2651,25 +2660,77 @@ function ApplyRuleModal({ busy, onClose, onSave }: { busy: boolean; onClose: () 
     </Modal>
   );
 }
+type EfrisStatus = {
+  configured: boolean; mode: string; active: boolean; fiscalizationEnabled: boolean;
+  secretsResolvable: boolean; taxpayerStatus: string | null; environment: string | null;
+  companyTinConfigured: boolean; openErrors: number; pendingTransactions: number;
+  fiscalizedTransactions: number; failedTransactions: number;
+  lastSuccessfulTransactionAt: string | null; message: string;
+};
+
+type EfrisRecon = {
+  range: { from: string; to: string };
+  generatedAt: string;
+  erp: { invoiceCount: number; salesTotal: number; taxTotal: number };
+  fiscal: {
+    totalCount: number; fiscalizedCount: number; fiscalizedSalesTotal: number;
+    fiscalizedTaxTotal: number; pendingCount: number; failedCount: number; cancelledCount: number;
+  };
+  reconciliation: {
+    matchedInvoices: number; unreconciledInvoices: number;
+    varianceSales: number; varianceTax: number; balanced: boolean;
+  };
+  alerts: {
+    openErrors: number; errorsLast24h: number; hasFailedFiscalization: boolean;
+    hasUnreconciledTransactions: boolean; hasFinanceVariance: boolean; connectionConfigured: boolean;
+  };
+};
+
+const EFRIS_TABS = [
+  ['txn', 'Transactions'],
+  ['docs', 'Fiscal documents'],
+  ['errors', 'Error centre'],
+  ['recon', 'Reconciliation'],
+  ['logs', 'Sync logs'],
+] as const;
+
 function EfrisDesk() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<'txn' | 'docs' | 'logs'>('txn');
+  const [tab, setTab] = useState<'txn' | 'docs' | 'errors' | 'recon' | 'logs'>('txn');
   const [rows, setRows] = useState<Rec[]>([]);
   const [docs, setDocs] = useState<Rec[]>([]);
   const [logs, setLogs] = useState<Rec[]>([]);
+  const [errs, setErrs] = useState<Rec[]>([]);
+  const [status, setStatus] = useState<EfrisStatus | null>(null);
+  const [recon, setRecon] = useState<EfrisRecon | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [resolveTarget, setResolveTarget] = useState<Rec | null>(null);
+  const [openOnly, setOpenOnly] = useState(true);
+
   const load = useCallback(() => {
     api<{ data: Rec[] }>('/api/ops/finance/efris').then((r) => setRows(r.data ?? [])).catch((e) => setError(e instanceof Error ? e.message : 'EFRIS failed'));
     api<{ data: Rec[] }>('/api/ops/finance/efris/documents').then((r) => setDocs(r.data ?? [])).catch(() => undefined);
     api<{ data: Rec[] }>('/api/ops/finance/efris/logs').then((r) => setLogs(r.data ?? [])).catch(() => undefined);
+    api<{ data: Rec[] }>('/api/ops/finance/efris/errors').then((r) => setErrs(r.data ?? [])).catch(() => undefined);
+    api<{ data: EfrisStatus }>('/api/ops/finance/efris/status').then((r) => setStatus(r.data ?? null)).catch(() => undefined);
+    api<{ data: EfrisRecon }>('/api/ops/finance/efris/reconciliation').then((r) => setRecon(r.data ?? null)).catch(() => undefined);
   }, []);
   useEffect(() => { load(); }, [load]);
+
   const act = async (id: number, action: string, payload: Rec = {}) => {
     setBusy(true); setError('');
     try {
       await api(`/api/ops/finance/efris/${id}/${action}`, { method: 'POST', body: JSON.stringify(payload) });
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+  const errorAct = async (id: number, action: string, payload: Rec = {}) => {
+    setBusy(true); setError('');
+    try {
+      await api(`/api/ops/finance/efris/errors/${id}/${action}`, { method: 'POST', body: JSON.stringify(payload) });
+      setResolveTarget(null);
       load();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
@@ -2681,22 +2742,51 @@ function EfrisDesk() {
       load();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
+
+  const live = status?.fiscalizationEnabled === true;
+  const visibleErrors = openOnly ? errs.filter((e) => !e.resolved) : errs;
+  const canQueue = can(user, 'efris.transactions.retry') || can(user, 'finance.efris.sync');
+  const canRetry = can(user, 'efris.errors.retry');
+  const canArchive = can(user, 'efris.errors.archive');
+  const canSubmit = can(user, 'efris.transactions.submit') || can(user, 'finance.efris.create');
+
   return (
     <div className="page">
       <header className="page-head">
         <div>
           <p className="mod-kicker" data-mod="fin">URA EFRIS</p>
-          <h1>Fiscal compliance adapter</h1>
-          <p className="muted">ERP records and fiscal documents stay linked but logically separate. Retries are idempotent - no duplicate fiscal documents.</p>
+          <h1>Fiscal compliance</h1>
+          <p className="muted">
+            ERP records and URA fiscal documents stay linked but separate. A transaction is only fiscalized after URA
+            returns a fiscal document number and verification code - the ERP never marks a document fiscalized on its own.
+          </p>
         </div>
         <div className="head-actions">
-          {can(user, 'finance.efris.create') && <button className="btn btn-primary" onClick={() => setRegisterOpen(true)}>Register document</button>}
+          {canSubmit && <button className="btn btn-primary" disabled={!live} title={live ? '' : 'EFRIS is not enabled for this company'} onClick={() => setRegisterOpen(true)}>Register document</button>}
         </div>
       </header>
+
+      {status && (
+        <div className={`card card-pad ${live ? '' : 'card-warn'}`} style={{ marginBottom: 16 }}>
+          <div className="row" style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div><span className="muted">Connection</span><div><Badge value={live ? 'ACTIVE' : status.configured ? status.mode : 'NOT_CONFIGURED'} /></div></div>
+            <div><span className="muted">Taxpayer</span><div><Badge value={status.taxpayerStatus ?? 'NOT_CONFIGURED'} /></div></div>
+            <div><span className="muted">TIN on file</span><div>{status.companyTinConfigured ? 'Yes' : 'No'}</div></div>
+            <div><span className="muted">Credentials in env</span><div>{status.secretsResolvable ? 'Resolvable' : 'Missing'}</div></div>
+            <div><span className="muted">Pending</span><div>{fmtNum(status.pendingTransactions)}</div></div>
+            <div><span className="muted">Fiscalized</span><div>{fmtNum(status.fiscalizedTransactions)}</div></div>
+            <div><span className="muted">Failed</span><div>{fmtNum(status.failedTransactions)}</div></div>
+            <div><span className="muted">Open errors</span><div>{fmtNum(status.openErrors)}</div></div>
+            <div><span className="muted">Last successful</span><div>{status.lastSuccessfulTransactionAt ? String(status.lastSuccessfulTransactionAt).slice(0, 19).replace('T', ' ') : '-'}</div></div>
+          </div>
+          <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>{status.message}</p>
+        </div>
+      )}
+
       <div className="tabs" style={{ marginBottom: 16 }}>
-        {(['txn', 'docs', 'logs'] as const).map((t) => (
+        {EFRIS_TABS.map(([t, label]) => (
           <button key={t} className={tab === t ? 'tab active' : 'tab'} onClick={() => setTab(t)}>
-            {t === 'txn' ? 'Transactions' : t === 'docs' ? 'Fiscal documents' : 'Sync logs'}
+            {label}{t === 'errors' && errs.some((e) => !e.resolved) ? ` (${errs.filter((e) => !e.resolved).length})` : ''}
           </button>
         ))}
       </div>
@@ -2704,7 +2794,7 @@ function EfrisDesk() {
       {tab === 'txn' && (
         <div className="table-wrap card">
           <table className="data">
-            <thead><tr><th>Ref</th><th>Type</th><th>Date</th><th>Currency</th><th>Gross</th><th>Tax</th><th>Status</th><th>FDN / VRC</th><th /></tr></thead>
+            <thead><tr><th>Ref</th><th>Type</th><th>Date</th><th>Currency</th><th>Gross</th><th>Tax</th><th>Status</th><th>FDN / VRC</th><th>Last error</th><th /></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={String(r.id)}>
@@ -2715,16 +2805,17 @@ function EfrisDesk() {
                   <td>{fmtMoney(r.grossAmount)}</td>
                   <td>{fmtMoney(r.taxAmount)}</td>
                   <td><Badge value={r.status} /></td>
-                  <td className="cell-mono">{String(r.fdn ?? '')}{r.verificationCode ? ` / ${String(r.verificationCode)}` : ''}</td>
+                  <td className="cell-mono">{r.fdn ? `${String(r.fdn)}${r.verificationCode ? ` / ${String(r.verificationCode)}` : ''}` : '-'}</td>
+                  <td className="muted">{r.errorCode ? `${String(r.errorCode)}` : r.lastError ? String(r.lastError).slice(0, 60) : '-'}</td>
                   <td>
                     <div className="row-actions">
-                      {can(user, 'finance.efris.sync') && ['PENDING', 'QUEUED', 'TRANSMITTED', 'RETRYING', 'FAILED'].includes(String(r.status)) && <button className="btn btn-sm" disabled={busy} onClick={() => act(Number(r.id), 'sync')}>Sync</button>}
+                      {canQueue && ['PENDING', 'QUEUED', 'TRANSMITTED', 'RETRYING', 'FAILED'].includes(String(r.status)) && <button className="btn btn-sm" disabled={busy} onClick={() => act(Number(r.id), 'sync')}>Queue for fiscalization</button>}
                       {can(user, 'finance.efris.cancel') && ['PENDING', 'QUEUED', 'FAILED', 'RETRYING'].includes(String(r.status)) && <button className="btn btn-sm" disabled={busy} onClick={() => act(Number(r.id), 'cancel', { reason: 'Cancelled in ERP' })}>Cancel</button>}
                     </div>
                   </td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={9} className="muted" style={{ textAlign: 'center', padding: 24 }}>No EFRIS transactions. Register a posted invoice to fiscalize it.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={10} className="muted" style={{ textAlign: 'center', padding: 24 }}>No EFRIS transactions. Register a posted invoice to fiscalize it.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -2732,16 +2823,16 @@ function EfrisDesk() {
       {tab === 'docs' && (
         <div className="table-wrap card">
           <table className="data">
-            <thead><tr><th>FDN</th><th>Verification code</th><th>QR ref</th><th>Status</th><th>Transmitted at</th><th>Payload ref</th></tr></thead>
+            <thead><tr><th>ERP document</th><th>FDN</th><th>Verification code</th><th>Fiscal QR ref</th><th>Status</th><th>Fiscalized at</th></tr></thead>
             <tbody>
               {docs.map((r) => (
                 <tr key={String(r.id)}>
-                  <td className="cell-mono">{String(r.fdn ?? '')}</td>
-                  <td className="cell-mono">{String(r.verificationCode ?? '')}</td>
-                  <td className="cell-mono">{String(r.fiscalQrRef ?? '')}</td>
-                  <td><Badge value={r.status} /></td>
-                  <td>{r.transmittedAt ? String(r.transmittedAt) : '-'}</td>
-                  <td className="cell-mono">{String(r.responsePayloadRef ?? '')}</td>
+                  <td className="cell-mono">{String(r.erpDocNo ?? r.docRefCode ?? '')}</td>
+                  <td className="cell-mono">{r.fdn ? String(r.fdn) : '-'}</td>
+                  <td className="cell-mono">{r.verificationCode ? String(r.verificationCode) : '-'}</td>
+                  <td className="cell-mono">{r.qrRef ? String(r.qrRef) : '-'}</td>
+                  <td><Badge value={r.txnStatus} /></td>
+                  <td>{r.fiscalizedAt ? String(r.fiscalizedAt).slice(0, 19).replace('T', ' ') : (r.transmittedAt ? `sent ${String(r.transmittedAt).slice(0, 19).replace('T', ' ')}` : '-')}</td>
                 </tr>
               ))}
               {docs.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 24 }}>No fiscal documents issued yet.</td></tr>}
@@ -2749,18 +2840,78 @@ function EfrisDesk() {
           </table>
         </div>
       )}
+      {tab === 'errors' && (
+        <div className="card">
+          <div className="card-head">
+            <h3>EFRIS error centre</h3>
+            <label className="muted" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input type="checkbox" checked={openOnly} onChange={(e) => setOpenOnly(e.target.checked)} /> Open only
+            </label>
+          </div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Time</th><th>Stage</th><th>Reference</th><th>Code</th><th>Message</th><th>Retries</th><th>State</th><th /></tr></thead>
+              <tbody>
+                {visibleErrors.map((r) => (
+                  <tr key={String(r.id)}>
+                    <td>{String(r.createdAt ?? '').slice(0, 19).replace('T', ' ')}</td>
+                    <td>{String(r.stage)}</td>
+                    <td className="cell-mono">{String(r.docRefCode ?? '')}</td>
+                    <td className="cell-mono">{String(r.errorCode)}</td>
+                    <td>{String(r.errorMessage ?? '').slice(0, 90)}</td>
+                    <td>{String(r.retryCount ?? 0)}</td>
+                    <td>{r.resolved ? <Badge value="RESOLVED" /> : <Badge value="FAILED" />}</td>
+                    <td>
+                      <div className="row-actions">
+                        {!r.resolved && canRetry && <button className="btn btn-sm" disabled={busy} onClick={() => errorAct(Number(r.id), 'retry', {})}>Retry</button>}
+                        {!r.resolved && canArchive && <button className="btn btn-sm" disabled={busy} onClick={() => setResolveTarget(r)}>Resolve</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {visibleErrors.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: 'center', padding: 24 }}>No EFRIS errors recorded.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {tab === 'recon' && (
+        <div className="card card-pad">
+          {!recon && <p className="muted">Reconciliation is not available yet.</p>}
+          {recon && (
+            <>
+              <p className="muted">Window {recon.range.from} to {recon.range.to} - generated {String(recon.generatedAt).slice(0, 19).replace('T', ' ')}</p>
+              <div className="grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                <div className="kpi-card"><span className="kpi-label">ERP invoices</span><span className="kpi-value">{fmtNum(recon.erp.invoiceCount)}</span><span className="kpi-sub">{fmtMoney(recon.erp.salesTotal)}</span></div>
+                <div className="kpi-card"><span className="kpi-label">Fiscalized</span><span className="kpi-value">{fmtNum(recon.fiscal.fiscalizedCount)}</span><span className="kpi-sub">{fmtMoney(recon.fiscal.fiscalizedSalesTotal)}</span></div>
+                <div className="kpi-card"><span className="kpi-label">Pending</span><span className="kpi-value">{fmtNum(recon.fiscal.pendingCount)}</span><span className="kpi-sub">awaiting URA</span></div>
+                <div className="kpi-card"><span className="kpi-label">Failed</span><span className="kpi-value">{fmtNum(recon.fiscal.failedCount)}</span><span className="kpi-sub">{fmtNum(recon.alerts.openErrors)} open errors</span></div>
+                <div className={`kpi-card ${recon.reconciliation.varianceSales !== 0 || recon.reconciliation.varianceTax !== 0 ? 'card-warn' : ''}`}><span className="kpi-label">Sales variance</span><span className="kpi-value">{fmtMoney(recon.reconciliation.varianceSales)}</span><span className="kpi-sub">tax {fmtMoney(recon.reconciliation.varianceTax)}</span></div>
+                <div className={`kpi-card ${recon.reconciliation.unreconciledInvoices ? 'card-warn' : ''}`}><span className="kpi-label">Unreconciled invoices</span><span className="kpi-value">{fmtNum(recon.reconciliation.unreconciledInvoices)}</span><span className="kpi-sub">{fmtNum(recon.reconciliation.matchedInvoices)} matched</span></div>
+              </div>
+              <div style={{ marginTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {recon.alerts.hasFailedFiscalization && <Badge value="FAILED" />}
+                {recon.alerts.hasUnreconciledTransactions && <Badge value="WARNING" />}
+                {recon.alerts.hasFinanceVariance && <Badge value="WARNING" />}
+                {recon.reconciliation.balanced && <Badge value="BALANCED" />}
+                {!recon.alerts.connectionConfigured && <Badge value="DISABLED" />}
+              </div>
+            </>
+          )}
+        </div>
+      )}
       {tab === 'logs' && (
         <div className="table-wrap card">
           <table className="data">
-            <thead><tr><th>Time</th><th>Status</th><th>Attempt</th><th>Message</th><th>Response ref</th></tr></thead>
+            <thead><tr><th>Time</th><th>Reference</th><th>Status</th><th>Error</th><th>Request</th></tr></thead>
             <tbody>
               {logs.map((r) => (
                 <tr key={String(r.id)}>
-                  <td>{String(r.createdAt)}</td>
+                  <td>{String(r.createdAt ?? '').slice(0, 19).replace('T', ' ')}</td>
+                  <td className="cell-mono">{String(r.docRefCode ?? '')}</td>
                   <td><Badge value={r.status} /></td>
-                  <td>{String(r.attemptNo ?? 1)}</td>
-                  <td>{String(r.message ?? '')}</td>
-                  <td className="cell-mono">{String(r.responsePayloadRef ?? '')}</td>
+                  <td className="muted">{r.error ? String(r.error).slice(0, 80) : '-'}</td>
+                  <td className="cell-mono">{r.requestPayload ? JSON.stringify(r.requestPayload).slice(0, 80) : '-'}</td>
                 </tr>
               ))}
               {logs.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 24 }}>No sync attempts yet.</td></tr>}
@@ -2769,7 +2920,33 @@ function EfrisDesk() {
         </div>
       )}
       {registerOpen && <EfrisRegisterModal busy={busy} onClose={() => setRegisterOpen(false)} onSave={register} />}
+      {resolveTarget && <EfrisResolveModal busy={busy} target={resolveTarget} onClose={() => setResolveTarget(null)} onSave={(resolution, cancelTransaction) => errorAct(Number(resolveTarget.id), 'archive', { resolution, cancelTransaction })} />}
     </div>
+  );
+}
+
+function EfrisResolveModal({ busy, target, onClose, onSave }: { busy: boolean; target: Rec; onClose: () => void; onSave: (resolution: string, cancelTransaction: boolean) => void }) {
+  const [resolution, setResolution] = useState('');
+  const [cancelTransaction, setCancelTransaction] = useState(false);
+  return (
+    <Modal
+      title="Resolve EFRIS error"
+      onClose={onClose}
+      footer={<button className="btn btn-primary" disabled={busy || resolution.trim().length < 5} onClick={() => onSave(resolution.trim(), cancelTransaction)}>Record resolution</button>}
+    >
+      <p className="muted">
+        {String(target.errorCode ?? '')} - {String(target.errorMessage ?? '')}
+      </p>
+      <p className="muted">
+        Resolving records why this failure was accepted as closed. It does not fiscalize anything; only a confirmed URA
+        response can do that.
+      </p>
+      <label>Resolution <textarea rows={3} value={resolution} onChange={(e) => setResolution(e.target.value)} placeholder="Corrected TIN and re-submitted; URA accepted." /></label>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <input type="checkbox" checked={cancelTransaction} onChange={(e) => setCancelTransaction(e.target.checked)} />
+        Also cancel the linked ERP transaction
+      </label>
+    </Modal>
   );
 }
 
