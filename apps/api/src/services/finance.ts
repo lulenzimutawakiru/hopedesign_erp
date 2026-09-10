@@ -302,6 +302,105 @@ async function markPosted(client: pg.PoolClient, table: string, id: number, jour
   );
 }
 
+/**
+ * Auto-register a posted sales document for EFRIS fiscalisation (spec 79/85/86).
+ *
+ * Runs inside the caller's posting transaction but under a SAVEPOINT, so a
+ * fiscalisation registration failure can never abort or roll back the ERP
+ * accounting entry that was just written.
+ *
+ * FISCALIZED is never written here. This only registers the document (PENDING)
+ * or queues it (QUEUED) for the background URA worker, and only when the
+ * company's active EFRIS configuration has fiscalize_sales_on_post enabled.
+ * The idempotency key is derived from the ERP document itself, so a repeated
+ * post can never create a duplicate fiscal document.
+ */
+async function queueAutoFiscalization(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  input: {
+    docType: string;
+    docRefType: string;
+    docRefId: number;
+    docRefCode: string;
+    txnDate?: string | null;
+    currency?: string | null;
+    grossAmount: number;
+    taxAmount?: number | null;
+  }
+): Promise<void> {
+  if (ctx.companyId == null || ctx.tenantId == null) return;
+  const docRefId = Number(input.docRefId);
+  if (!Number.isFinite(docRefId) || docRefId <= 0) return;
+  await client.query('SAVEPOINT efris_autofiscal');
+  try {
+    const { resolveFiscalTarget } = await import('./efris/config.js');
+    const target = await resolveFiscalTarget(client, ctx);
+    if (!target || target.config.fiscalize_sales_on_post !== true) {
+      await client.query('RELEASE SAVEPOINT efris_autofiscal');
+      return;
+    }
+    const { registerEfrisDocument } = await import('./finance-advanced.js');
+    await registerEfrisDocument(client, ctx, {
+      docType: input.docType,
+      docRefType: input.docRefType,
+      docRefId,
+      docRefCode: input.docRefCode,
+      txnDate: input.txnDate ? String(input.txnDate) : undefined,
+      currency: input.currency ? String(input.currency) : undefined,
+      grossAmount: Number(input.grossAmount) || 0,
+      taxAmount: Number(input.taxAmount) || 0,
+      idempotencyKey: `AUTO:${input.docType}:${docRefId}`,
+      requestRef: input.docRefCode,
+    });
+    await client.query('RELEASE SAVEPOINT efris_autofiscal');
+  } catch (err) {
+    await client.query('ROLLBACK TO SAVEPOINT efris_autofiscal');
+    await client.query('RELEASE SAVEPOINT efris_autofiscal');
+    await recordAutoFiscalizationFailure(client, ctx, input, err);
+  }
+}
+
+/**
+ * Best-effort capture of an auto-fiscalisation registration failure so the event
+ * is never silently discarded (spec 91). Never throws: the accounting posting
+ * that triggered it must still succeed.
+ */
+async function recordAutoFiscalizationFailure(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  input: { docType: string; docRefType: string; docRefId: number; docRefCode: string; grossAmount: number },
+  err: unknown
+): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[efris] auto-fiscalisation registration failed for ${input.docRefType}#${input.docRefId}: ${message}`);
+  if (ctx.tenantId == null) return;
+  await client.query('SAVEPOINT efris_autofiscal_err');
+  try {
+    await client.query(
+      `INSERT INTO efris_integration_errors
+         (tenant_id, company_id, stage, error_code, error_message, request_payload, created_by)
+       VALUES ($1,$2,'REGISTER',$3,$4,$5::jsonb,$6)`,
+      [
+        ctx.tenantId,
+        ctx.companyId ?? null,
+        'EFRIS_AUTO_REGISTER_FAILED',
+        message.slice(0, 2000),
+        JSON.stringify({
+          docType: input.docType, docRefType: input.docRefType,
+          docRefId: input.docRefId, docRefCode: input.docRefCode,
+          grossAmount: input.grossAmount,
+        }),
+        ctx.userId ?? null,
+      ]
+    );
+    await client.query('RELEASE SAVEPOINT efris_autofiscal_err');
+  } catch {
+    await client.query('ROLLBACK TO SAVEPOINT efris_autofiscal_err');
+    await client.query('RELEASE SAVEPOINT efris_autofiscal_err');
+  }
+}
+
 /** Sales invoice: Dr AR, Cr Revenue, Cr VAT. */
 export async function postSalesInvoice(client: pg.PoolClient, ctx: Ctx, invoiceId: number) {
   const res = await client.query(
@@ -345,6 +444,16 @@ export async function postSalesInvoice(client: pg.PoolClient, ctx: Ctx, invoiceI
     payload: { journalId: entryId, total },
   });
   await logAudit(client, ctx, { action: 'post', resource: 'customer_invoices', recordId: invoiceId, recordCode: String(inv.invoice_no), newValues: { gl_journal_id: entryId } });
+  await queueAutoFiscalization(client, ctx, {
+    docType: 'SALES_INVOICE',
+    docRefType: 'customer_invoices',
+    docRefId: invoiceId,
+    docRefCode: String(inv.invoice_no),
+    txnDate: inv.invoice_date,
+    currency: inv.currency,
+    grossAmount: total,
+    taxAmount: tax,
+  });
   return entryId;
 }
 
@@ -452,6 +561,16 @@ export async function postCreditNote(client: pg.PoolClient, ctx: Ctx, creditNote
       [amount, cn.invoice_id]
     );
   }
+  await queueAutoFiscalization(client, ctx, {
+    docType: 'CREDIT_NOTE',
+    docRefType: 'credit_notes',
+    docRefId: creditNoteId,
+    docRefCode: String(cn.credit_no),
+    txnDate: cn.credit_date,
+    currency: cn.currency,
+    grossAmount: amount,
+    taxAmount: cn.tax_amount,
+  });
   return entryId;
 }
 
@@ -493,6 +612,16 @@ export async function postDebitNote(client: pg.PoolClient, ctx: Ctx, debitNoteId
       [amount, dn.invoice_id]
     );
   }
+  await queueAutoFiscalization(client, ctx, {
+    docType: 'DEBIT_NOTE',
+    docRefType: 'debit_notes',
+    docRefId: debitNoteId,
+    docRefCode: String(dn.debit_no),
+    txnDate: dn.debit_date,
+    currency: dn.currency,
+    grossAmount: amount,
+    taxAmount: dn.tax_amount,
+  });
   return entryId;
 }
 
