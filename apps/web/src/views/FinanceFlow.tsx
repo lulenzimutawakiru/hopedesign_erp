@@ -2692,11 +2692,29 @@ const EFRIS_TABS = [
   ['errors', 'Error centre'],
   ['recon', 'Reconciliation'],
   ['logs', 'Sync logs'],
+  ['taxpayers', 'Taxpayers'],
+  ['setup', 'Integration setup'],
 ] as const;
+
+/** Mirrors the efris_taxpayers.efris_status CHECK constraint in migration 0142. */
+const EFRIS_TAXPAYER_STATUSES = [
+  'NOT_CONFIGURED', 'PENDING_REGISTRATION', 'REGISTERED', 'PENDING_INTEGRATION',
+  'TESTING', 'ACTIVE', 'SUSPENDED', 'ERROR', 'DISABLED',
+] as const;
+
+/** Mirrors the efris_configurations.mode CHECK constraint. DISABLED is the safe default. */
+const EFRIS_MODES = ['DISABLED', 'TEST', 'ACTIVE'] as const;
+
+const EFRIS_TAXPAYER_TYPES = [
+  'COMPANY', 'INDIVIDUAL', 'PARTNERSHIP', 'SOLE_PROPRIETOR', 'NGO', 'GOVERNMENT', 'OTHER',
+] as const;
+
+/** Name of the two server-side env keys the backend resolves pointer references against. */
+const EFRIS_ENV_HINT = 'EFRIS_CLIENT_ID / EFRIS_CLIENT_SECRET';
 
 function EfrisDesk() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<'txn' | 'docs' | 'errors' | 'recon' | 'logs'>('txn');
+  const [tab, setTab] = useState<'txn' | 'docs' | 'errors' | 'recon' | 'logs' | 'taxpayers' | 'setup'>('txn');
   const [rows, setRows] = useState<Rec[]>([]);
   const [docs, setDocs] = useState<Rec[]>([]);
   const [logs, setLogs] = useState<Rec[]>([]);
@@ -2708,6 +2726,13 @@ function EfrisDesk() {
   const [registerOpen, setRegisterOpen] = useState(false);
   const [resolveTarget, setResolveTarget] = useState<Rec | null>(null);
   const [openOnly, setOpenOnly] = useState(true);
+  const [taxpayers, setTaxpayers] = useState<Rec[]>([]);
+  const [configs, setConfigs] = useState<Rec[]>([]);
+  const [taxpayerOpen, setTaxpayerOpen] = useState(false);
+  const [taxpayerRow, setTaxpayerRow] = useState<Rec | null>(null);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configRow, setConfigRow] = useState<Rec | null>(null);
+  const [formErr, setFormErr] = useState('');
 
   const load = useCallback(() => {
     api<{ data: Rec[] }>('/api/ops/finance/efris').then((r) => setRows(r.data ?? [])).catch((e) => setError(e instanceof Error ? e.message : 'EFRIS failed'));
@@ -2716,6 +2741,8 @@ function EfrisDesk() {
     api<{ data: Rec[] }>('/api/ops/finance/efris/errors').then((r) => setErrs(r.data ?? [])).catch(() => undefined);
     api<{ data: EfrisStatus }>('/api/ops/finance/efris/status').then((r) => setStatus(r.data ?? null)).catch(() => undefined);
     api<{ data: EfrisRecon }>('/api/ops/finance/efris/reconciliation').then((r) => setRecon(r.data ?? null)).catch(() => undefined);
+    api<{ data: Rec[] }>('/api/ops/finance/efris/taxpayers').then((r) => setTaxpayers(r.data ?? [])).catch(() => undefined);
+    api<{ data: Rec[] }>('/api/ops/finance/efris/configurations').then((r) => setConfigs(r.data ?? [])).catch(() => undefined);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -2743,12 +2770,38 @@ function EfrisDesk() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
+  // Taxpayer + configuration admin. Secrets are never posted: the API rejects them by
+  // name, and the environment pointer keys are only sent when an admin actually types one.
+  const saveTaxpayer = async (payload: Rec) => {
+    setBusy(true); setFormErr('');
+    try {
+      const id = taxpayerRow ? Number(taxpayerRow.id) : null;
+      if (id) await api(`/api/ops/finance/efris/taxpayers/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      else await api('/api/ops/finance/efris/taxpayers', { method: 'POST', body: JSON.stringify(payload) });
+      setTaxpayerOpen(false); setTaxpayerRow(null);
+      load();
+    } catch (e) { setFormErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+  const saveConfiguration = async (payload: Rec) => {
+    setBusy(true); setFormErr('');
+    try {
+      const id = configRow ? Number(configRow.id) : null;
+      if (id) await api(`/api/ops/finance/efris/configurations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      else await api('/api/ops/finance/efris/configurations', { method: 'POST', body: JSON.stringify(payload) });
+      setConfigOpen(false); setConfigRow(null);
+      load();
+    } catch (e) { setFormErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+
   const live = status?.fiscalizationEnabled === true;
   const visibleErrors = openOnly ? errs.filter((e) => !e.resolved) : errs;
   const canQueue = can(user, 'efris.transactions.retry') || can(user, 'finance.efris.sync');
   const canRetry = can(user, 'efris.errors.retry');
   const canArchive = can(user, 'efris.errors.archive');
   const canSubmit = can(user, 'efris.transactions.submit') || can(user, 'finance.efris.create');
+  const canManageConfig = can(user, 'efris.configuration.manage');
+  const canViewConfig = canManageConfig || can(user, 'efris.configuration.view');
+  const visibleTabs = EFRIS_TABS.filter(([t]) => (t === 'taxpayers' || t === 'setup' ? canViewConfig : true));
 
   return (
     <div className="page">
@@ -2784,7 +2837,7 @@ function EfrisDesk() {
       )}
 
       <div className="tabs" style={{ marginBottom: 16 }}>
-        {EFRIS_TABS.map(([t, label]) => (
+        {visibleTabs.map(([t, label]) => (
           <button key={t} className={tab === t ? 'tab active' : 'tab'} onClick={() => setTab(t)}>
             {label}{t === 'errors' && errs.some((e) => !e.resolved) ? ` (${errs.filter((e) => !e.resolved).length})` : ''}
           </button>
@@ -2919,6 +2972,115 @@ function EfrisDesk() {
           </table>
         </div>
       )}
+      {tab === 'taxpayers' && (
+        <div className="card">
+          <div className="card-head">
+            <div>
+              <h3>Registered taxpayers</h3>
+              <p className="muted" style={{ margin: 0 }}>
+                Every fiscal document is issued by one legal entity at one place of business. A taxpayer must be
+                REGISTERED before a configuration can point at it.
+              </p>
+            </div>
+            {canManageConfig && (
+              <button className="btn btn-primary" disabled={busy} onClick={() => { setTaxpayerRow(null); setFormErr(''); setTaxpayerOpen(true); }}>New taxpayer</button>
+            )}
+          </div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Code</th><th>Legal name</th><th>TIN</th><th>VAT</th><th>Type</th><th>Place of business</th><th>Branch</th><th>Registration</th><th>Environment</th><th /></tr></thead>
+              <tbody>
+                {taxpayers.map((r) => (
+                  <tr key={String(r.id)}>
+                    <td className="cell-mono">{String(r.code)}</td>
+                    <td>
+                      {String(r.legalName)}
+                      {r.tradingName ? <span className="muted"> - {String(r.tradingName)}</span> : null}
+                      {r.isDefault ? <> <Badge value="DEFAULT" /></> : null}
+                    </td>
+                    <td className="cell-mono">{String(r.tin)}</td>
+                    <td>{r.vatRegistered ? String(r.vatNumber ?? 'Registered') : 'Not registered'}</td>
+                    <td>{String(r.taxpayerType ?? '')}</td>
+                    <td>{String(r.placeOfBusiness ?? '-')}</td>
+                    <td>{r.branchName ? `${String(r.branchCode ?? '')} ${String(r.branchName)}`.trim() : '-'}</td>
+                    <td><Badge value={r.efrisStatus} /></td>
+                    <td>{String(r.environment ?? 'DISABLED')}</td>
+                    <td>
+                      <div className="row-actions">
+                        {canManageConfig && <button className="btn btn-sm" disabled={busy} onClick={() => { setTaxpayerRow(r); setFormErr(''); setTaxpayerOpen(true); }}>Edit</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {taxpayers.length === 0 && <tr><td colSpan={10} className="muted" style={{ textAlign: 'center', padding: 24 }}>No taxpayer registered yet. Add the company TIN and place of business to begin.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {tab === 'setup' && (
+        <>
+          <div className="card card-pad" style={{ marginBottom: 16 }}>
+            <h3>Where URA credentials live</h3>
+            <p className="muted">
+              The ERP never stores URA secrets. This screen records only the <strong>names</strong> of server environment
+              variables - the values stay in the server environment and are read by the backend at submission time. Anything
+              that looks like a secret (client secret, password, token, api key) is rejected by the API on sight.
+            </p>
+            <div className="form-grid">
+              <div className="field"><label>Client ID env key</label><div className="cell-mono">EFRIS_CLIENT_ID</div></div>
+              <div className="field"><label>Client secret env key</label><div className="cell-mono">EFRIS_CLIENT_SECRET</div></div>
+            </div>
+            <p className="muted" style={{ marginBottom: 0 }}>
+              A configuration can only be set to TEST or ACTIVE once both keys resolve on the server. Leave it DISABLED
+              until the URA sandbox values have been loaded and verified there.
+            </p>
+          </div>
+          <div className="card">
+            <div className="card-head">
+              <div>
+                <h3>Integration configurations</h3>
+                <p className="muted" style={{ margin: 0 }}>Runtime settings per company and taxpayer, including retry behaviour and the duplicate window.</p>
+              </div>
+              {canManageConfig && (
+                <button className="btn btn-primary" disabled={busy} onClick={() => { setConfigRow(null); setFormErr(''); setConfigOpen(true); }}>New configuration</button>
+              )}
+            </div>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Code</th><th>Name</th><th>Taxpayer</th><th>Mode</th><th>Active</th><th>Auto submit</th><th>Fiscalize on post</th><th>Env pointers</th><th>Duplicate window</th><th /></tr></thead>
+                <tbody>
+                  {configs.map((r) => (
+                    <tr key={String(r.id)}>
+                      <td className="cell-mono">{String(r.code)}</td>
+                      <td>{String(r.name)}</td>
+                      <td>{r.taxpayerLegalName ? `${String(r.taxpayerLegalName)} (${String(r.taxpayerTin ?? '')})` : <span className="muted">default taxpayer</span>}</td>
+                      <td><Badge value={r.mode} /></td>
+                      <td>{r.isActive ? 'Yes' : 'No'}</td>
+                      <td>{r.autoSubmit ? 'Yes' : 'No'}</td>
+                      <td>{r.fiscalizeSalesOnPost ? 'Yes' : 'No'}</td>
+                      <td>
+                        {r.secretsResolvable
+                          ? <Badge value="RESOLVED" />
+                          : <Badge value={r.clientIdRefSet && r.credentialsRefSet ? 'MISSING IN ENV' : 'NOT SET'} />}
+                      </td>
+                      <td>{String(r.duplicateWindowSeconds ?? 0)}s</td>
+                      <td>
+                        <div className="row-actions">
+                          {canManageConfig && <button className="btn btn-sm" disabled={busy} onClick={() => { setConfigRow(r); setFormErr(''); setConfigOpen(true); }}>Edit</button>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {configs.length === 0 && <tr><td colSpan={10} className="muted" style={{ textAlign: 'center', padding: 24 }}>No EFRIS configuration yet. Fiscalization stays off until one exists and is enabled.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+      {taxpayerOpen && <EfrisTaxpayerModal row={taxpayerRow} busy={busy} error={formErr} onClose={() => { setTaxpayerOpen(false); setTaxpayerRow(null); setFormErr(''); }} onSave={saveTaxpayer} />}
+      {configOpen && <EfrisConfigModal row={configRow} taxpayers={taxpayers} busy={busy} error={formErr} onClose={() => { setConfigOpen(false); setConfigRow(null); setFormErr(''); }} onSave={saveConfiguration} />}
       {registerOpen && <EfrisRegisterModal busy={busy} onClose={() => setRegisterOpen(false)} onSave={register} />}
       {resolveTarget && <EfrisResolveModal busy={busy} target={resolveTarget} onClose={() => setResolveTarget(null)} onSave={(resolution, cancelTransaction) => errorAct(Number(resolveTarget.id), 'archive', { resolution, cancelTransaction })} />}
     </div>
@@ -2977,7 +3139,251 @@ function EfrisRegisterModal({ busy, onClose, onSave }: { busy: boolean; onClose:
       </div>
     </Modal>
   );
-}function TaxCompliance() {
+}
+
+function EfrisTaxpayerModal({ row, busy, error, onClose, onSave }: { row: Rec | null; busy: boolean; error: string; onClose: () => void; onSave: (p: Rec) => void }) {
+  const init = (key: string): string => (row && row[key] != null ? String(row[key]) : '');
+  const [code, setCode] = useState(init('code'));
+  const [legalName, setLegalName] = useState(init('legalName'));
+  const [tradingName, setTradingName] = useState(init('tradingName'));
+  const [tin, setTin] = useState(init('tin'));
+  const [vatRegistered, setVatRegistered] = useState(row ? Boolean(row.vatRegistered) : false);
+  const [vatNumber, setVatNumber] = useState(init('vatNumber'));
+  const [taxpayerType, setTaxpayerType] = useState(init('taxpayerType') || 'COMPANY');
+  const [businessSector, setBusinessSector] = useState(init('businessSector'));
+  const [placeOfBusiness, setPlaceOfBusiness] = useState(init('placeOfBusiness'));
+  const [address, setAddress] = useState(init('address'));
+  const [contactName, setContactName] = useState(init('contactName'));
+  const [contactEmail, setContactEmail] = useState(init('contactEmail'));
+  const [contactPhone, setContactPhone] = useState(init('contactPhone'));
+  const [efrisStatus, setEfrisStatus] = useState(init('efrisStatus') || 'NOT_CONFIGURED');
+  const [environment, setEnvironment] = useState(init('environment') || 'DISABLED');
+  const [branchId, setBranchId] = useState(init('branchId'));
+  const [credentialsRef, setCredentialsRef] = useState(init('credentialsRef'));
+  const [isDefault, setIsDefault] = useState(row ? Boolean(row.isDefault) : false);
+  const [effectiveFrom, setEffectiveFrom] = useState(init('effectiveFrom').slice(0, 10));
+  const [effectiveTo, setEffectiveTo] = useState(init('effectiveTo').slice(0, 10));
+
+  const submit = () => onSave({
+    code, legalName, tradingName, tin, vatRegistered, vatNumber, taxpayerType,
+    businessSector, placeOfBusiness, address, contactName, contactEmail, contactPhone,
+    efrisStatus, environment, isDefault,
+    branchId: branchId.trim() === '' ? undefined : Number(branchId),
+    credentialsRef: credentialsRef.trim() === '' ? undefined : credentialsRef.trim(),
+    effectiveFrom: effectiveFrom.trim() === '' ? undefined : effectiveFrom,
+    effectiveTo: effectiveTo.trim() === '' ? undefined : effectiveTo,
+  });
+
+  return (
+    <Modal
+      title={row ? `Edit taxpayer ${String(row.code ?? '')}` : 'Register EFRIS taxpayer'}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy || !code.trim() || !legalName.trim() || !tin.trim()} onClick={submit}>
+            {row ? 'Save taxpayer' : 'Register taxpayer'}
+          </button>
+        </>
+      }
+    >
+      <p className="muted">
+        Registration tells the ERP which legal entity and place of business issues fiscal documents, and which URA
+        environment it may talk to. Only the registration status decides whether the taxpayer is usable.
+      </p>
+      {error ? <ErrorBanner error={error} /> : null}
+      <div className="form-grid">
+        <label>Taxpayer code <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="HDG-UG" /></label>
+        <label>Legal name <input value={legalName} onChange={(e) => setLegalName(e.target.value)} placeholder="HOPE DESIGN GROUP LTD" /></label>
+        <label>Trading name <input value={tradingName} onChange={(e) => setTradingName(e.target.value)} /></label>
+        <label>TIN <input value={tin} onChange={(e) => setTin(e.target.value)} placeholder="1000000000" /></label>
+        <label>Taxpayer type
+          <input list="efris-taxpayer-types" value={taxpayerType} onChange={(e) => setTaxpayerType(e.target.value)} />
+          <datalist id="efris-taxpayer-types">
+            {EFRIS_TAXPAYER_TYPES.map((x) => <option key={x} value={x} />)}
+          </datalist>
+        </label>
+        <label>Business sector <input value={businessSector} onChange={(e) => setBusinessSector(e.target.value)} placeholder="Manufacturing" /></label>
+        <label>Place of business <input value={placeOfBusiness} onChange={(e) => setPlaceOfBusiness(e.target.value)} placeholder="Plot 12, Kampala" /></label>
+        <label>Branch ID (optional) <input type="number" value={branchId} onChange={(e) => setBranchId(e.target.value)} placeholder="defaults to your branch" /></label>
+        <label style={{ gridColumn: '1 / -1' }}>Registered address <input value={address} onChange={(e) => setAddress(e.target.value)} /></label>
+        <label>Contact name <input value={contactName} onChange={(e) => setContactName(e.target.value)} /></label>
+        <label>Contact email <input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></label>
+        <label>Contact phone <input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} /></label>
+        <label>URA registration status
+          <select value={efrisStatus} onChange={(e) => setEfrisStatus(e.target.value)}>
+            {EFRIS_TAXPAYER_STATUSES.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+        </label>
+        <label>Environment
+          <select value={environment} onChange={(e) => setEnvironment(e.target.value)}>
+            {EFRIS_MODES.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+        </label>
+        <label>Credentials env key (optional)
+          <input value={credentialsRef} onChange={(e) => setCredentialsRef(e.target.value)} placeholder="EFRIS_CREDENTIALS" />
+        </label>
+        <label>Effective from <input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} /></label>
+        <label>Effective to <input type="date" value={effectiveTo} onChange={(e) => setEffectiveTo(e.target.value)} /></label>
+      </div>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <input type="checkbox" checked={vatRegistered} onChange={(e) => setVatRegistered(e.target.checked)} />
+        VAT registered
+      </label>
+      {vatRegistered && (
+        <div className="form-grid">
+          <label>VAT number <input value={vatNumber} onChange={(e) => setVatNumber(e.target.value)} /></label>
+        </div>
+      )}
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} />
+        Use as the default taxpayer for this company
+      </label>
+    </Modal>
+  );
+}
+
+function EfrisConfigModal({ row, taxpayers, busy, error, onClose, onSave }: { row: Rec | null; taxpayers: Rec[]; busy: boolean; error: string; onClose: () => void; onSave: (p: Rec) => void }) {
+  const init = (key: string): string => (row && row[key] != null ? String(row[key]) : '');
+  const [code, setCode] = useState(init('code'));
+  const [name, setName] = useState(init('name'));
+  const [taxpayerId, setTaxpayerId] = useState(init('taxpayerId'));
+  const [mode, setMode] = useState(init('mode') || 'DISABLED');
+  const [baseUrl, setBaseUrl] = useState(init('baseUrl'));
+  const [tokenUrl, setTokenUrl] = useState(init('tokenUrl'));
+  const [authGrantType, setAuthGrantType] = useState(init('authGrantType') || 'client_credentials');
+  const [clientIdRef, setClientIdRef] = useState('');
+  const [credentialsRef, setCredentialsRef] = useState('');
+  const [timeoutSeconds, setTimeoutSeconds] = useState(init('timeoutSeconds') || '20');
+  const [maxAttempts, setMaxAttempts] = useState(init('maxAttempts') || '5');
+  const [retryBackoffSeconds, setRetryBackoffSeconds] = useState(init('retryBackoffSeconds') || '120');
+  const [pollIntervalSeconds, setPollIntervalSeconds] = useState(init('pollIntervalSeconds') || '30');
+  const [duplicateWindowSeconds, setDuplicateWindowSeconds] = useState(init('duplicateWindowSeconds') || '300');
+  const [notifyRoleCodes, setNotifyRoleCodes] = useState(
+    row && Array.isArray(row.notifyRoleCodes) ? (row.notifyRoleCodes as unknown[]).map((x) => String(x)).join(', ') : ''
+  );
+  const [payloadMapping, setPayloadMapping] = useState(row ? JSON.stringify(row.payloadMapping ?? {}, null, 2) : '');
+  const [securityFlags, setSecurityFlags] = useState(row ? JSON.stringify(row.securityFlags ?? {}, null, 2) : '');
+  const [fiscalizeSalesOnPost, setFiscalizeSalesOnPost] = useState(row ? Boolean(row.fiscalizeSalesOnPost) : false);
+  const [autoSubmit, setAutoSubmit] = useState(row ? Boolean(row.autoSubmit) : false);
+  const [notifyOnFailure, setNotifyOnFailure] = useState(row ? row.notifyOnFailure !== false : true);
+  const [isActive, setIsActive] = useState(row ? row.isActive !== false : true);
+  const [localErr, setLocalErr] = useState('');
+
+  const numOr = (value: string): unknown => (value.trim() === '' ? undefined : Number(value));
+  const jsonOr = (value: string, current: unknown): unknown => {
+    const text = value.trim();
+    if (text === '') return undefined;
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Payload mapping and security flags must be JSON objects');
+    if (row && JSON.stringify(parsed) === JSON.stringify(current ?? {})) return undefined;
+    return parsed;
+  };
+  const submit = () => {
+    setLocalErr('');
+    try {
+      const roles = notifyRoleCodes.split(',').map((x) => x.trim()).filter((x) => x.length > 0);
+      const payload: Rec = {
+        code, name, mode, authGrantType, baseUrl, tokenUrl,
+        fiscalizeSalesOnPost, autoSubmit, notifyOnFailure, isActive,
+        taxpayerId: taxpayerId.trim() === '' ? undefined : Number(taxpayerId),
+        timeoutSeconds: numOr(timeoutSeconds),
+        maxAttempts: numOr(maxAttempts),
+        retryBackoffSeconds: numOr(retryBackoffSeconds),
+        pollIntervalSeconds: numOr(pollIntervalSeconds),
+        duplicateWindowSeconds: numOr(duplicateWindowSeconds),
+        notifyRoleCodes: row ? roles : (roles.length ? roles : undefined),
+        payloadMapping: jsonOr(payloadMapping, row?.payloadMapping),
+        securityFlags: jsonOr(securityFlags, row?.securityFlags),
+      };
+      // Env pointer keys are only sent when an admin types one; on edit the stored
+      // names are never read back from the API, so a blind save would blank them.
+      if (clientIdRef.trim() !== '') payload.clientIdRef = clientIdRef.trim();
+      if (credentialsRef.trim() !== '') payload.credentialsRef = credentialsRef.trim();
+      onSave(payload);
+    } catch (e) { setLocalErr(e instanceof Error ? e.message : String(e)); }
+  };
+
+  return (
+    <Modal
+      title={row ? `Edit configuration ${String(row.code ?? '')}` : 'New EFRIS configuration'}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy || !code.trim() || !name.trim()} onClick={submit}>
+            {row ? 'Save configuration' : 'Create configuration'}
+          </button>
+        </>
+      }
+    >
+      <p className="muted">
+        TEST and ACTIVE only work once the referenced environment keys exist on the server ({EFRIS_ENV_HINT}).
+        Keep the mode DISABLED until the URA sandbox connection has been proven.
+      </p>
+      {mode !== 'DISABLED' && (
+        <p className="muted">
+          {row ? (row.secretsResolvable ? 'Environment pointers currently resolve on the server.' : 'Environment pointers do not resolve on the server yet - the change will be refused.') : 'A new configuration is refused unless its environment pointers resolve on the server.'}
+        </p>
+      )}
+      {error || localErr ? <ErrorBanner error={localErr || error} /> : null}
+      <div className="form-grid">
+        <label>Configuration code <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="URA-EFRIS-PROD" /></label>
+        <label>Name <input value={name} onChange={(e) => setName(e.target.value)} placeholder="URA EFRIS production" /></label>
+        <label>Taxpayer
+          <select value={taxpayerId} onChange={(e) => setTaxpayerId(e.target.value)}>
+            <option value="">Default taxpayer</option>
+            {taxpayers.map((t) => <option key={String(t.id)} value={String(t.id)}>{String(t.code)} - {String(t.legalName)}</option>)}
+          </select>
+        </label>
+        <label>Mode
+          <select value={mode} onChange={(e) => setMode(e.target.value)}>
+            {EFRIS_MODES.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+        </label>
+        <label style={{ gridColumn: '1 / -1' }}>Base URL <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://efris.ura.go.ug/..." /></label>
+        <label style={{ gridColumn: '1 / -1' }}>OAuth token URL <input value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)} placeholder="https://efris.ura.go.ug/..." /></label>
+        <label>Grant type <input value={authGrantType} onChange={(e) => setAuthGrantType(e.target.value)} /></label>
+        <label>Client ID env key {row ? '(leave blank to keep)' : ''}
+          <input value={clientIdRef} onChange={(e) => setClientIdRef(e.target.value)} placeholder={row && row.clientIdRefSet ? 'stored - type to replace' : 'EFRIS_CLIENT_ID'} />
+        </label>
+        <label>Client secret env key {row ? '(leave blank to keep)' : ''}
+          <input value={credentialsRef} onChange={(e) => setCredentialsRef(e.target.value)} placeholder={row && row.credentialsRefSet ? 'stored - type to replace' : 'EFRIS_CLIENT_SECRET'} />
+        </label>
+        <label>Timeout (seconds) <input type="number" value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} /></label>
+        <label>Max attempts <input type="number" value={maxAttempts} onChange={(e) => setMaxAttempts(e.target.value)} /></label>
+        <label>Retry backoff (seconds) <input type="number" value={retryBackoffSeconds} onChange={(e) => setRetryBackoffSeconds(e.target.value)} /></label>
+        <label>Poll interval (seconds) <input type="number" value={pollIntervalSeconds} onChange={(e) => setPollIntervalSeconds(e.target.value)} /></label>
+        <label>Duplicate window (seconds) <input type="number" value={duplicateWindowSeconds} onChange={(e) => setDuplicateWindowSeconds(e.target.value)} /></label>
+        <label style={{ gridColumn: '1 / -1' }}>Notify role codes (comma separated) <input value={notifyRoleCodes} onChange={(e) => setNotifyRoleCodes(e.target.value)} placeholder="cfo, finance_manager, tax_officer" /></label>
+        <label style={{ gridColumn: '1 / -1' }}>Payload mapping (JSON object)
+          <textarea rows={4} value={payloadMapping} onChange={(e) => setPayloadMapping(e.target.value)} placeholder="{}" />
+        </label>
+        <label style={{ gridColumn: '1 / -1' }}>Security flags (JSON object)
+          <textarea rows={3} value={securityFlags} onChange={(e) => setSecurityFlags(e.target.value)} placeholder="{}" />
+        </label>
+      </div>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <input type="checkbox" checked={fiscalizeSalesOnPost} onChange={(e) => setFiscalizeSalesOnPost(e.target.checked)} />
+        Fiscalize sales invoices automatically once posted
+      </label>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <input type="checkbox" checked={autoSubmit} onChange={(e) => setAutoSubmit(e.target.checked)} />
+        Auto submit queued documents to URA
+      </label>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <input type="checkbox" checked={notifyOnFailure} onChange={(e) => setNotifyOnFailure(e.target.checked)} />
+        Notify the roles above on fiscalization failure
+      </label>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+        Configuration active
+      </label>
+    </Modal>
+  );
+}
+
+function TaxCompliance() {
   const { user } = useAuth();
   const [summary, setSummary] = useState<Rec[]>([]);
   const [rows, setRows] = useState<Rec[]>([]);
