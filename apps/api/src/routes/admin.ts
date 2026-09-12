@@ -5,7 +5,8 @@ import { tx, Ctx } from '../db.js';
 import { requirePermission } from '../middleware/authorize.js';
 import { asyncHandler, badRequest, notFound, conflict, nowIso, parsePagination, toCamelRow, toCamelRows } from '../utils.js';
 import { logAudit } from '../services/audit.js';
-import { hashPassword, hashToken } from '../auth.js';
+import { hashPassword, hashToken, maskEmail } from '../auth.js';
+import { EMAIL_RE } from '../services/mfaEmail.js';
 import { SETTINGS, SETTING_CATEGORIES } from './settings.js';
 import * as identityLink from '../services/identityLink.js';
 
@@ -41,7 +42,8 @@ const USER_STATUSES = ['INVITED', 'PENDING_ACTIVATION', 'ACTIVE', 'INACTIVE', 'S
 const USER_LIST_SQL = `
   SELECT u.id, u.email, u.username, u.first_name, u.last_name, u.job_title, u.phone, u.status,
          u.company_id, u.branch_id, u.department_id, u.employee_id, u.must_change_password,
-         u.mfa_enabled, u.last_login_at, u.locked_until, u.created_at, u.updated_at,
+         u.mfa_enabled, u.mfa_method, u.personal_email, u.personal_email_verified_at,
+         u.last_login_at, u.locked_until, u.created_at, u.updated_at,
          c.code AS company_code, c.name AS company_name,
          b.code AS branch_code, b.name AS branch_name,
          d.code AS department_code, d.name AS department_name,
@@ -458,19 +460,77 @@ adminRouter.post('/users/:id/reset_password', ...run('admin.users.reset_password
 
 adminRouter.post('/users/:id/mfa/reset', ...run('admin.users.update', async (c, ctx, _body, p) => {
   const userId = Number(p.id);
-  const u = await c.query('SELECT email, mfa_enabled FROM users WHERE id = $1 AND tenant_id = $2', [userId, ctx.tenantId]);
+  const u = await c.query('SELECT email, mfa_enabled, mfa_method, personal_email FROM users WHERE id = $1 AND tenant_id = $2', [userId, ctx.tenantId]);
   if (u.rows.length === 0) throw notFound('User not found');
-  await c.query('UPDATE users SET mfa_enabled = false, mfa_secret = NULL, mfa_method = NULL, updated_at = now() WHERE id = $1', [userId]);
+  // MFA-002: clearing the factor drops the verification stamp so the holder must
+  // re-prove the mailbox, but the address itself is retained for re-enrollment.
+  await c.query(
+    `UPDATE users SET mfa_enabled = false, mfa_secret = NULL, mfa_method = 'EMAIL',
+            personal_email_verified_at = NULL, updated_at = now() WHERE id = $1`,
+    [userId]
+  );
   await c.query('UPDATE mfa_methods SET is_active = false, verified_at = NULL WHERE user_id = $1', [userId]);
   await logAudit(c, ctx, {
     action: 'mfa_reset',
     resource: 'users',
     recordId: userId,
     recordCode: u.rows[0].email,
-    oldValues: { mfa_enabled: u.rows[0].mfa_enabled },
-    newValues: { mfa_enabled: false },
+    oldValues: { mfa_enabled: u.rows[0].mfa_enabled, mfa_method: u.rows[0].mfa_method },
+    newValues: { mfa_enabled: false, mfa_method: 'EMAIL' },
   });
   return { ok: true };
+}));
+
+/**
+ * MFA-002: administrator maintenance of a holder's personal sign-in address.
+ * `verified: true` records that the mailbox was confirmed out-of-band and turns
+ * the emailed-code factor on; without it the address is stored unverified.
+ */
+adminRouter.patch('/users/:id/personal-email', ...run('admin.users.update', async (c, ctx, body, p) => {
+  const userId = Number(p.id);
+  const typed = s(body.personal_email);
+  const email = typed ? typed.trim().toLowerCase() : '';
+  const u = await c.query('SELECT email, personal_email, personal_email_verified_at FROM users WHERE id = $1 AND tenant_id = $2', [userId, ctx.tenantId]);
+  if (u.rows.length === 0) throw notFound('User not found');
+
+  if (!email) {
+    await c.query('UPDATE users SET personal_email = NULL, personal_email_verified_at = NULL, updated_at = now() WHERE id = $1', [userId]);
+    await logAudit(c, ctx, {
+      action: 'mfa_personal_email_cleared',
+      resource: 'users',
+      recordId: userId,
+      recordCode: u.rows[0].email,
+      oldValues: { personal_email: u.rows[0].personal_email },
+      newValues: { personal_email: null },
+    });
+    return { ok: true, personalEmail: null, maskedEmail: null, verified: false };
+  }
+
+  if (email.length > 254 || !EMAIL_RE.test(email)) throw badRequest('Enter a valid email address');
+  const clash = await c.query(
+    'SELECT id FROM users WHERE tenant_id = $1 AND lower(personal_email) = $2 AND id <> $3',
+    [ctx.tenantId, email, userId]
+  );
+  if (clash.rows.length > 0) throw conflict('That email address is already in use');
+
+  const markVerified = body.verified === true;
+  await c.query(
+    `UPDATE users SET personal_email = $1,
+            personal_email_verified_at = CASE WHEN $2 THEN now() ELSE NULL END,
+            mfa_enabled = CASE WHEN $2 THEN true ELSE mfa_enabled END,
+            mfa_method = 'EMAIL', updated_at = now()
+      WHERE id = $3`,
+    [email, markVerified, userId]
+  );
+  await logAudit(c, ctx, {
+    action: 'mfa_personal_email_set',
+    resource: 'users',
+    recordId: userId,
+    recordCode: u.rows[0].email,
+    oldValues: { personal_email: u.rows[0].personal_email, personal_email_verified_at: u.rows[0].personal_email_verified_at },
+    newValues: { personal_email: email, verified: markVerified },
+  });
+  return { ok: true, personalEmail: email, maskedEmail: maskEmail(email), verified: markVerified };
 }));
 
 adminRouter.post('/users/:id/roles', ...run('admin.users.assign_roles', async (c, ctx, body, p) => {

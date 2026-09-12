@@ -1,4 +1,4 @@
-﻿import { config as loadEnv } from 'dotenv';
+import { config as loadEnv } from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -93,6 +93,17 @@ export const config = {
   apiPublicUrl: process.env.API_PUBLIC_URL ?? 'http://localhost:4000',
   webPublicUrl: process.env.WEB_PUBLIC_URL ?? 'http://localhost:5173',
   otpIssuer: process.env.OTP_ISSUER ?? 'HopeDesignERP',
+  // MFA-002: the second factor is a six-digit code emailed to the holder's
+  // personal address. TOTP stays supported as a fallback for accounts that
+  // were already enrolled in an authenticator app.
+  mfa: {
+    emailCodeTtlMinutes: num(process.env.MFA_EMAIL_CODE_TTL_MINUTES, 10),
+    emailCodeMaxAttempts: num(process.env.MFA_EMAIL_CODE_MAX_ATTEMPTS, 5),
+    emailCodeResendSeconds: num(process.env.MFA_EMAIL_CODE_RESEND_SECONDS, 60),
+    // Self-service enrolment is only reachable after a successful password
+    // check. Switch off to force every personal address through an admin.
+    allowSelfEnroll: (process.env.MFA_ALLOW_SELF_ENROLL ?? 'true').toLowerCase() !== 'false',
+  },
   rateLimitWindowMs: num(process.env.RATE_LIMIT_WINDOW_MS, 60_000),
   rateLimitMax: num(process.env.RATE_LIMIT_MAX, 300),
   storageRoot: process.env.STORAGE_ROOT ?? './data/uploads',

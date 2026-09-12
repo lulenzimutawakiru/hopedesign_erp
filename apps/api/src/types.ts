@@ -14,6 +14,9 @@ export interface AuthUser {
   status: string;
   must_change_password: boolean;
   mfa_enabled: boolean;
+  mfa_method?: string | null;
+  personal_email?: string | null;
+  personal_email_verified_at?: string | null;
   attributes: Record<string, unknown>;
   roles: { role_id: number; role_code: string; company_id: number | null; branch_id: number | null }[];
   permissions: string[];

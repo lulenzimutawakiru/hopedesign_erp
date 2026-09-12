@@ -8,7 +8,7 @@ type ActingRoleSummary = NonNullable<AuthUser['actingRoles']>[number];
 const USER_SQL = `
   SELECT u.id, u.tenant_id, u.company_id, u.default_company_id, u.default_branch_id, u.branch_id, u.department_id, u.division_id, u.requesting_location_id, u.cost_centre_id, u.project_id, u.budget_id, u.fiscal_year_id, u.employee_id, u.email, u.username,
          u.first_name, u.last_name, u.job_title, u.status, u.must_change_password,
-         u.mfa_enabled, u.attributes
+         u.mfa_enabled, u.mfa_method, u.personal_email, u.personal_email_verified_at, u.attributes
   FROM users u WHERE u.id = $1
 `;
 

@@ -1,10 +1,12 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useAuth } from '../auth';
 import { ApiError } from '../api';
 import { BrandMark } from '../components/BrandMark';
 import { branchLabel, shortCompanyName, useCompanyProfile } from '../company';
 
 type Stage = 'credentials' | 'mfa';
+/** How the second factor is being satisfied. Email is the default; TOTP stays for legacy enrollments. */
+type MfaMode = 'code' | 'email-enroll' | 'totp-enroll';
 
 function telHref(phone: string): string {
   return 'tel:' + phone.replace(/[^\d+]/g, '');
@@ -15,7 +17,15 @@ function mailtoHref(email: string, subject: string, body: string): string {
 }
 
 export default function Login() {
-  const { login, completeMfa, startEnrollment, completeEnrollment } = useAuth();
+  const {
+    login,
+    completeMfa,
+    startEnrollment,
+    completeEnrollment,
+    startEmailCode,
+    resendEmailCode,
+    completeEmailEnroll,
+  } = useAuth();
   const company = useCompanyProfile();
   const branch = branchLabel(company);
   const [stage, setStage] = useState<Stage>('credentials');
@@ -26,7 +36,20 @@ export default function Login() {
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [mfaMode, setMfaMode] = useState<MfaMode>('code');
+  const [maskedEmail, setMaskedEmail] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [emailEntry, setEmailEntry] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
+
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = window.setTimeout(() => setResendIn((n) => (n <= 1 ? 0 : n - 1)), 1000);
+    return () => window.clearTimeout(t);
+  }, [resendIn]);
 
   const osName = `${shortCompanyName(company.name)} OS`;
   const adminEmail = (company.email || company.branch_email).trim();
@@ -49,6 +72,7 @@ export default function Login() {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    setNotice('');
     setBusy(true);
     try {
       if (stage === 'credentials') {
@@ -57,25 +81,91 @@ export default function Login() {
           window.location.hash = '/dashboard';
           return;
         }
-        if (outcome.enrollmentRequired) {
-          const r = await startEnrollment();
-          setSecret(r.secret);
-          setQrDataUrl(r.qrDataUrl ?? '');
-        }
         setStage('mfa');
-      } else if (secret) {
+        if (outcome.method === 'totp') {
+          setMfaMode('code');
+          setMaskedEmail('');
+          setResendIn(0);
+          if (outcome.enrollmentRequired) {
+            const r = await startEnrollment();
+            setSecret(r.secret);
+            setQrDataUrl(r.qrDataUrl ?? '');
+            setMfaMode('totp-enroll');
+          }
+          return;
+        }
+        // Email factor. A privileged account with no address on file enrolls one
+        // here rather than being stranded at the sign-in screen.
+        if (outcome.enrollmentRequired) {
+          setMfaMode('email-enroll');
+          setMaskedEmail('');
+          setEmailEntry(true);
+          setResendIn(0);
+        } else {
+          setMfaMode('code');
+          setMaskedEmail(outcome.maskedEmail ?? '');
+          setResendIn(outcome.resendAfterSeconds ?? 0);
+        }
+        return;
+      }
+
+      if (mfaMode === 'email-enroll') {
+        if (!codeSent) {
+          const r = await startEmailCode(newEmail.trim());
+          setMaskedEmail(r.maskedEmail);
+          setResendIn(r.resendAfterSeconds ?? 0);
+          setCodeSent(true);
+          setEmailEntry(false);
+          setNotice(r.alreadySent ? 'That code is still valid — enter it below.' : 'Code sent. Check your inbox.');
+          return;
+        }
+        await completeEmailEnroll(code.trim());
+      } else if (mfaMode === 'totp-enroll') {
         await completeEnrollment(code.trim(), secret);
-        window.location.hash = '/dashboard';
       } else {
         await completeMfa(code.trim());
-        window.location.hash = '/dashboard';
       }
+      window.location.hash = '/dashboard';
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Unable to sign in';
       setError(msg);
     } finally {
       setBusy(false);
     }
+  };
+
+  const resend = async (email?: string) => {
+    setError('');
+    setNotice('');
+    setBusy(true);
+    try {
+      const r = email ? await startEmailCode(email) : await resendEmailCode();
+      setMaskedEmail(r.maskedEmail);
+      setResendIn(r.resendAfterSeconds ?? 0);
+      setCodeSent(true);
+      setEmailEntry(false);
+      setNotice(r.alreadySent ? 'A code is already on its way — check your inbox.' : 'Re-sent. Check your inbox.');
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Could not send the code';
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetMfa = () => {
+    setStage('credentials');
+    setSecret('');
+    setQrDataUrl('');
+    setCode('');
+    setError('');
+    setNotice('');
+    setMfaMode('code');
+    setMaskedEmail('');
+    setNewEmail('');
+    setEmailEntry(false);
+    setCodeSent(false);
+    setResendIn(0);
   };
 
   const copySecret = async () => {
@@ -92,6 +182,15 @@ export default function Login() {
   const onCodeChange = (raw: string) => {
     setCode(raw.replace(/\D/g, '').slice(0, 6));
   };
+
+  const emailEntryStage = mfaMode === 'email-enroll' && emailEntry;
+  const codeFieldVisible = !emailEntryStage;
+  const primaryLabel = emailEntryStage
+    ? 'Send code'
+    : mfaMode === 'totp-enroll'
+      ? 'Confirm and continue'
+      : 'Continue';
+  const submitDisabled = emailEntryStage ? !newEmail.trim() : code.trim().length < 6;
 
   return (
     <div className="login-page">
@@ -172,7 +271,7 @@ export default function Login() {
         )}
         {stage === 'mfa' && (
           <>
-            {secret ? (
+            {mfaMode === 'totp-enroll' ? (
               <>
                 <p className="muted">Scan this with Google Authenticator, Authy, or 1Password, then enter the 6-digit code.</p>
                 {qrDataUrl ? (
@@ -187,39 +286,83 @@ export default function Login() {
                   </button>
                 </div>
               </>
+            ) : emailEntryStage ? (
+              <p className="muted">
+                Add the personal email address your sign-in codes should go to. We will mail a 6-digit code there to confirm it.
+              </p>
             ) : (
-              <p className="muted">Enter the 6-digit code from your authenticator app.</p>
+              <p className="muted">
+                We emailed a 6-digit code to <strong>{maskedEmail || 'your personal email address'}</strong>. It expires in 10 minutes.
+              </p>
             )}
+            {notice && <div className="alert alert-success">{notice}</div>}
             {error && <div className="alert alert-error">{error}</div>}
-            <label className="field">
-              <span>6-digit code</span>
-              <input
-                autoFocus
-                className="login-otp"
-                value={code}
-                onChange={(e) => onCodeChange(e.target.value)}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                placeholder="000000"
-                maxLength={6}
-                pattern="[0-9]*"
-                enterKeyHint="go"
-              />
-            </label>
-            <button type="submit" className="btn btn-primary btn-block" disabled={busy || code.trim().length < 6}>
-              {busy ? 'Verifying…' : secret ? 'Confirm and continue' : 'Continue'}
+            {emailEntryStage && (
+              <label className="field">
+                <span>Personal email</span>
+                <input
+                  autoFocus
+                  type="email"
+                  name="personal-email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  placeholder="name@gmail.com"
+                  autoComplete="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  enterKeyHint="go"
+                />
+              </label>
+            )}
+            {codeFieldVisible && (
+              <label className="field">
+                <span>6-digit code</span>
+                <input
+                  autoFocus
+                  className="login-otp"
+                  value={code}
+                  onChange={(e) => onCodeChange(e.target.value)}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="000000"
+                  maxLength={6}
+                  pattern="[0-9]*"
+                  enterKeyHint="go"
+                />
+              </label>
+            )}
+            <button type="submit" className="btn btn-primary btn-block" disabled={busy || submitDisabled}>
+              {busy ? 'Verifying\u2026' : primaryLabel}
             </button>
-            <button
-              type="button"
-              className="btn btn-block"
-              onClick={() => {
-                setStage('credentials');
-                setSecret('');
-                setQrDataUrl('');
-                setCode('');
-                setError('');
-              }}
-            >
+            {codeFieldVisible && maskedEmail ? (
+              <button
+                type="button"
+                className="btn btn-block"
+                disabled={busy || resendIn > 0}
+                onClick={() => void resend(mfaMode === 'email-enroll' ? newEmail.trim() : undefined)}
+              >
+                {resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend code'}
+              </button>
+            ) : null}
+            {mfaMode !== 'totp-enroll' && !emailEntryStage ? (
+              <button
+                type="button"
+                className="btn btn-block"
+                disabled={busy}
+                onClick={() => {
+                  setMfaMode('email-enroll');
+                  setEmailEntry(true);
+                  setCodeSent(false);
+                  setCode('');
+                  setError('');
+                  setNotice('');
+                }}
+              >
+                Use a different email address
+              </button>
+            ) : null}
+            <button type="button" className="btn btn-block" onClick={resetMfa}>
               Back
             </button>
           </>

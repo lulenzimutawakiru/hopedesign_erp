@@ -17,6 +17,9 @@ export interface MeUser {
   status: string;
   must_change_password: boolean;
   mfa_enabled: boolean;
+  mfa_method?: string | null;
+  personal_email?: string | null;
+  personal_email_verified_at?: string | null;
   permissions: string[];
   activate_modules?: string[];
   roles: { role_id: number; role_code: string; company_id: number | null; branch_id: number | null }[];
@@ -88,6 +91,27 @@ export interface MeUser {
   default_fiscal_year_name?: string | null;
 }
 
+export type MfaMethod = 'email' | 'totp';
+
+/** Result of asking the server to mail a one-time code. Never carries the code. */
+export interface EmailCodeIssued {
+  ok: boolean;
+  method: 'email';
+  maskedEmail: string;
+  alreadySent: boolean;
+  expiresInMinutes: number;
+  resendAfterSeconds: number;
+}
+
+export interface MfaStatus {
+  mfaEnabled: boolean;
+  method: string | null;
+  personalEmail: string | null;
+  maskedEmail: string | null;
+  verifiedAt: string | null;
+  pendingEmail: string | null;
+}
+
 export type LoginOutcome =
   | { status: 'ok' }
   | {
@@ -95,12 +119,18 @@ export type LoginOutcome =
       enrollmentRequired: boolean;
       loginToken: string;
       user: Partial<MeUser>;
+      method: MfaMethod;
+      maskedEmail: string | null;
+      resendAfterSeconds: number;
     };
 
 export interface PendingLogin {
   loginToken: string;
   enrollmentRequired: boolean;
   user: Partial<MeUser>;
+  method: MfaMethod;
+  maskedEmail: string | null;
+  resendAfterSeconds: number;
   enrollmentSecret?: string;
   enrollmentUrl?: string;
 }
@@ -111,6 +141,16 @@ interface AuthState {
   pending: PendingLogin | null;
   login: (identifier: string, password: string) => Promise<LoginOutcome>;
   completeMfa: (code: string) => Promise<void>;
+  /** Mail a fresh code to the address on file, or to `email` when enrolling one. */
+  startEmailCode: (email?: string) => Promise<EmailCodeIssued>;
+  /** Repeat the current email challenge. The server applies its own cooldown. */
+  resendEmailCode: () => Promise<EmailCodeIssued>;
+  /** Finish email enrollment; holding the code is what proves the address. */
+  completeEmailEnroll: (code: string) => Promise<void>;
+  mfaStatus: () => Promise<MfaStatus>;
+  setPersonalEmail: (email: string) => Promise<EmailCodeIssued>;
+  confirmPersonalEmail: (code: string) => Promise<void>;
+  disableMfa: () => Promise<void>;
   startEnrollment: () => Promise<{ secret: string; otpauthUrl: string; qrDataUrl?: string }>;
   completeEnrollment: (code: string, secret?: string) => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
@@ -150,6 +190,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       | {
           mfaRequired: boolean;
           enrollmentRequired: boolean;
+          method?: string;
+          maskedEmail?: string | null;
+          resendAfterSeconds?: number;
           loginToken: string;
           user: Partial<MeUser>;
         }
@@ -167,9 +210,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loginToken: r.loginToken,
         enrollmentRequired: !!r.enrollmentRequired,
         user: r.user,
+        method: r.method === 'totp' ? 'totp' : 'email',
+        maskedEmail: r.maskedEmail ?? null,
+        resendAfterSeconds: Number(r.resendAfterSeconds ?? 0) || 0,
       };
       setPending(pl);
-      return { status: 'mfa', enrollmentRequired: pl.enrollmentRequired, loginToken: pl.loginToken, user: pl.user };
+      return {
+        status: 'mfa',
+        enrollmentRequired: pl.enrollmentRequired,
+        loginToken: pl.loginToken,
+        user: pl.user,
+        method: pl.method,
+        maskedEmail: pl.maskedEmail,
+        resendAfterSeconds: pl.resendAfterSeconds,
+      };
     }
     throw new Error('Unexpected login response');
   };
@@ -182,6 +236,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setToken(r.accessToken);
     setPending(null);
+    await loadMe();
+  };
+
+  const startEmailCode = async (email?: string): Promise<EmailCodeIssued> => {
+    if (!pending) throw new Error('No pending login');
+    const r = await api<EmailCodeIssued>('/api/auth/mfa/email/start', {
+      method: 'POST',
+      body: JSON.stringify(email ? { loginToken: pending.loginToken, email } : { loginToken: pending.loginToken }),
+    });
+    setPending({
+      ...pending,
+      method: 'email',
+      maskedEmail: r.maskedEmail,
+      resendAfterSeconds: Number(r.resendAfterSeconds ?? 0) || 0,
+    });
+    return r;
+  };
+
+  const resendEmailCode = (): Promise<EmailCodeIssued> => startEmailCode();
+
+  const completeEmailEnroll = async (code: string) => {
+    if (!pending) throw new Error('No pending login');
+    const r = await api<{ accessToken: string; user: MeUser }>('/api/auth/mfa/email/confirm-enroll', {
+      method: 'POST',
+      body: JSON.stringify({ loginToken: pending.loginToken, code }),
+    });
+    setToken(r.accessToken);
+    setPending(null);
+    await loadMe();
+  };
+
+  const mfaStatus = () => api<MfaStatus>('/api/auth/mfa/status');
+
+  const setPersonalEmail = (email: string): Promise<EmailCodeIssued> =>
+    api<EmailCodeIssued>('/api/auth/mfa/personal-email', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+
+  const confirmPersonalEmail = async (code: string) => {
+    await api('/api/auth/mfa/personal-email/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+    await loadMe();
+  };
+
+  const disableMfa = async () => {
+    await api('/api/auth/mfa/disable', { method: 'POST', body: JSON.stringify({}) });
     await loadMe();
   };
 
@@ -221,7 +324,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, pending, login, completeMfa, startEnrollment, completeEnrollment, changePassword, logout }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        pending,
+        login,
+        completeMfa,
+        startEmailCode,
+        resendEmailCode,
+        completeEmailEnroll,
+        mfaStatus,
+        setPersonalEmail,
+        confirmPersonalEmail,
+        disableMfa,
+        startEnrollment,
+        completeEnrollment,
+        changePassword,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

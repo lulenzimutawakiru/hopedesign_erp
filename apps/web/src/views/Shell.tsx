@@ -21,6 +21,7 @@ import { PageLoader } from '../components/ui';
 const EntityList = lazy(() => import('./EntityList'));
 const EntityDetail = lazy(() => import('./EntityDetail'));
 const Settings = lazy(() => import('./Settings'));
+const SecuritySettings = lazy(() => import('./SecuritySettings'));
 const ReamPacking = lazy(() => import('./ReamPacking'));
 const LabelVarieties = lazy(() => import('./LabelVarieties'));
 const SalesFlow = lazy(() => import('./SalesFlow'));
@@ -168,6 +169,7 @@ export default function Shell() {
   else if (path === '/reports') body = <Reports />;
   else if (path === '/exports') body = <DataExports />;
   else if (path === '/settings') body = <Settings />;
+  else if (path === '/account/security') body = <SecuritySettings />;
   else if (path === '/security-jobs') body = <SecurityJobs />;
   else if (path === '/qr/scan') body = <QrScanner onClose={() => navigate('/dashboard')} />;
   else if (qrTraceMatch && qrTraceMatch.segments[1] !== 'scan') body = <QrTrace code={decodeURIComponent(qrTraceMatch.segments[1])} />;

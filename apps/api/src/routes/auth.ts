@@ -1,11 +1,13 @@
 import { Router } from 'express';
-import { hashToken, signAccessToken, signLoginToken, verifyLoginToken, verifyPassword, generateTotpSecret, totpEnrollmentPayload, verifyTotp, redactUser, hashPassword } from '../auth.js';
+import { hashToken, signAccessToken, signLoginToken, verifyLoginToken, verifyPassword, generateTotpSecret, totpEnrollmentPayload, verifyTotp, redactUser, hashPassword, maskEmail } from '../auth.js';
 import { query, tx } from '../db.js';
 import { authenticate, loadAuthUser } from '../middleware/auth.js';
 import { asyncHandler, badRequest, unauthorized } from '../utils.js';
 import { logAudit } from '../services/audit.js';
 import { loginLimiter, mfaLimiter, inviteLimiter } from '../middleware/rateLimits.js';
 import { ApiError } from '../utils.js';
+import { config } from '../config.js';
+import { issueEmailCode, verifyEmailCode, clearEmailCodes, EMAIL_RE } from '../services/mfaEmail.js';
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_MINUTES = 15;
@@ -113,27 +115,77 @@ authRouter.post(
     await query(`UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now() WHERE id=$1`, [userId], { tenantId, userId });
     await recordAttempt(identifier, ipOf(req), true);
 
-    // AUTH-001: privileged roles must complete (or enroll in) MFA before a
-    // session is issued. The login token lets the client walk the user through
-    // enrollment when no second factor is configured yet.
-    if (!Boolean(user.mfa_enabled) && (await userHoldsPrivilegedPermission(userId, tenantId))) {
-      const loginToken = signLoginToken(userId, tenantId);
-      return res.json({ mfaRequired: true, enrollmentRequired: true, loginToken, user: redactUser(user) });
-    }
+    // AUTH-001 / MFA-002: a second factor must be satisfied before a session is
+    // issued. `mfa_method` selects the challenge:
+    //   EMAIL -> a six-digit code mailed to the holder's personal address
+    //   TOTP  -> the authenticator-app code, retained for already-enrolled users
+    // Accounts with no usable second factor that hold privileged permissions are
+    // routed to enrollment instead of straight into a session.
+    const personalEmail = String(user.personal_email ?? '').trim();
+    const mfaMethod = String(user.mfa_method ?? '').toUpperCase();
+    const emailMfaReady = Boolean(user.mfa_enabled) && mfaMethod === 'EMAIL' && personalEmail.length > 0;
+    const totpMfaReady = Boolean(user.mfa_enabled) && Boolean(String(user.mfa_secret ?? ''));
 
-    if (Boolean(user.mfa_enabled)) {
-      if (!mfaCode) {
-        const loginToken = signLoginToken(userId, tenantId);
-        return res.json({ mfaRequired: true, loginToken, user: redactUser(user) });
+    if (emailMfaReady || totpMfaReady) {
+      if (emailMfaReady) {
+        if (!mfaCode) {
+          const issued = await issueEmailCode({
+            tenantId,
+            userId,
+            email: personalEmail,
+            name: [user.first_name, user.last_name].filter(Boolean).join(' '),
+            purpose: 'LOGIN',
+            ip: ipOf(req),
+            userAgent: req.ctx.userAgent,
+          });
+          if (!issued.ok) {
+            throw new ApiError(503, 'EMAIL_DELIVERY_FAILED', 'We could not send your sign-in code. Please try again shortly.');
+          }
+          return res.json({
+            mfaRequired: true,
+            method: 'email',
+            maskedEmail: maskEmail(personalEmail),
+            alreadySent: Boolean(issued.alreadySent),
+            resendAfterSeconds: issued.resendAfterSeconds ?? config.mfa.emailCodeResendSeconds,
+            loginToken: signLoginToken(userId, tenantId),
+            user: redactUser(user),
+          });
+        }
+        const verified = await verifyEmailCode({ tenantId, userId, code: mfaCode });
+        if (!verified.ok) throw badRequest('Invalid MFA code');
+        await clearEmailCodes(tenantId, userId);
+      } else {
+        if (!mfaCode) {
+          return res.json({ mfaRequired: true, method: 'totp', loginToken: signLoginToken(userId, tenantId), user: redactUser(user) });
+        }
+        const secret = String(user.mfa_secret ?? '');
+        if (!secret || !verifyTotp(secret, mfaCode)) throw badRequest('Invalid MFA code');
       }
-      const secret = String(user.mfa_secret ?? '');
-      if (!secret || !verifyTotp(secret, mfaCode)) throw badRequest('Invalid MFA code');
       const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, true);
       const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
       await tx(async (client) => {
-        await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, { action: 'login_mfa', resource: 'auth', recordId: userId });
+        await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, {
+          action: 'login_mfa',
+          resource: 'auth',
+          recordId: userId,
+          metadata: { method: emailMfaReady ? 'EMAIL' : 'TOTP' },
+        });
       }, { tenantId, userId });
       return res.json({ accessToken, refreshToken, user: redactUser(user) });
+    }
+
+    // MFA-002: mfa_enabled is only meaningful when a usable factor exists.
+    // A row can be flagged enabled yet hold neither a personal address nor a
+    // TOTP secret, in which case the challenge above cannot run. Enrolment is
+    // forced instead of issuing a session that silently skipped the factor.
+    if (Boolean(user.mfa_enabled) || (await userHoldsPrivilegedPermission(userId, tenantId))) {
+      return res.json({
+        mfaRequired: true,
+        enrollmentRequired: true,
+        method: 'email',
+        loginToken: signLoginToken(userId, tenantId),
+        user: redactUser(user),
+      });
     }
 
     const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, true);
@@ -214,18 +266,163 @@ authRouter.post(
     const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid], { tenantId: payload.tid, userId: payload.sub });
     const user = userRes.rows[0] as Record<string, unknown> | undefined;
     if (!user) throw unauthorized('User not found');
-    if (!Boolean(user.mfa_enabled)) throw badRequest('MFA is not enabled for this account');
-    const secret = String(user.mfa_secret ?? '');
-    if (!secret || !verifyTotp(secret, code)) throw badRequest('Invalid MFA code');
-
     const userId = Number(user.id);
     const tenantId = Number(user.tenant_id);
+    const method = String(user.mfa_method ?? '').toUpperCase();
+    const emailReady = method === 'EMAIL' && String(user.personal_email ?? '').trim().length > 0;
+    if (!Boolean(user.mfa_enabled) && !emailReady) throw badRequest('MFA is not enabled for this account');
+    if (emailReady) {
+      // The code itself proves control of the mailbox, so an account part-way
+      // through email enrollment may still complete here.
+      const verified = await verifyEmailCode({ tenantId, userId, code });
+      if (!verified.ok) throw badRequest('Invalid MFA code');
+      await clearEmailCodes(tenantId, userId);
+    } else {
+      const secret = String(user.mfa_secret ?? '');
+      if (!secret || !verifyTotp(secret, code)) throw badRequest('Invalid MFA code');
+    }
+
     const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, true);
     const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
     await tx(async (client) => {
       await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, { action: 'login_mfa', resource: 'auth', recordId: userId });
     }, { tenantId, userId });
     res.json({ accessToken, refreshToken, user: redactUser(user) });
+  })
+);
+
+// ---------------------------------------------------------------- MFA email code (login token flow)
+/**
+ * MFA-002: begin (or repeat) an emailed challenge from the pre-session login
+ * token. Passing `email` enrolls that address; omitting it re-sends to the
+ * address already on file. The plaintext code is never returned to the client.
+ */
+authRouter.post(
+  '/mfa/email/start',
+  mfaLimiter,
+  asyncHandler(async (req, res) => {
+    const token = String(req.body?.loginToken ?? '');
+    const supplied = String(req.body?.email ?? '').trim().toLowerCase();
+    if (!token) throw badRequest('loginToken is required');
+    let payload;
+    try {
+      payload = verifyLoginToken(token);
+    } catch {
+      throw unauthorized('Invalid login token');
+    }
+    const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid], { tenantId: payload.tid, userId: payload.sub });
+    const user = userRes.rows[0] as Record<string, unknown> | undefined;
+    if (!user) throw unauthorized('User not found');
+    const userId = Number(user.id);
+    const tenantId = Number(user.tenant_id);
+    const onFile = String(user.personal_email ?? '').trim().toLowerCase();
+
+    if (supplied && (supplied.length > 254 || !EMAIL_RE.test(supplied))) {
+      throw badRequest('Enter a valid email address');
+    }
+    const target = supplied || onFile;
+    if (!target) throw badRequest('Enter your personal email address');
+    if (supplied) {
+      const clash = await query(
+        `SELECT 1 FROM users WHERE tenant_id = $1 AND lower(personal_email) = $2 AND id <> $3`,
+        [tenantId, supplied, userId],
+        { tenantId, userId }
+      );
+      if (clash.rows.length > 0) throw badRequest('That email address is already in use');
+    }
+
+    const issued = await issueEmailCode({
+      tenantId,
+      userId,
+      email: target,
+      name: [user.first_name, user.last_name].filter(Boolean).join(' '),
+      purpose: supplied && supplied !== onFile ? 'ENROLL' : 'LOGIN',
+      ip: ipOf(req),
+      userAgent: req.ctx.userAgent,
+    });
+    if (!issued.ok) {
+      throw new ApiError(503, 'EMAIL_DELIVERY_FAILED', 'We could not send your code. Please try again shortly.');
+    }
+    res.json({
+      ok: true,
+      method: 'email',
+      maskedEmail: maskEmail(target),
+      alreadySent: Boolean(issued.alreadySent),
+      expiresInMinutes: issued.expiresInMinutes ?? config.mfa.emailCodeTtlMinutes,
+      resendAfterSeconds: issued.resendAfterSeconds ?? config.mfa.emailCodeResendSeconds,
+    });
+  })
+);
+
+/**
+ * MFA-002: finish enrollment. The verified code row carries the address the
+ * code was delivered to, which becomes the account's personal email.
+ */
+authRouter.post(
+  '/mfa/email/confirm-enroll',
+  mfaLimiter,
+  asyncHandler(async (req, res) => {
+    const token = String(req.body?.loginToken ?? '');
+    const code = String(req.body?.code ?? '').trim();
+    if (!token || !code) throw badRequest('loginToken and code are required');
+    let payload;
+    try {
+      payload = verifyLoginToken(token);
+    } catch {
+      throw unauthorized('Invalid login token');
+    }
+    const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid], { tenantId: payload.tid, userId: payload.sub });
+    const user = userRes.rows[0] as Record<string, unknown> | undefined;
+    if (!user) throw unauthorized('User not found');
+    const userId = Number(user.id);
+    const tenantId = Number(user.tenant_id);
+
+    const verified = await verifyEmailCode({ tenantId, userId, code });
+    if (!verified.ok) throw badRequest('Invalid or expired code');
+    const email = String(verified.email ?? '').trim().toLowerCase();
+    if (email.length > 254 || !EMAIL_RE.test(email)) throw badRequest('Invalid or expired code');
+    const clash = await query(
+      `SELECT 1 FROM users WHERE tenant_id = $1 AND lower(personal_email) = $2 AND id <> $3`,
+      [tenantId, email, userId],
+      { tenantId, userId }
+    );
+    if (clash.rows.length > 0) throw badRequest('That email address is already in use');
+
+    await query(
+      `UPDATE users SET personal_email = $1, personal_email_verified_at = now(),
+              mfa_enabled = true, mfa_method = 'EMAIL' WHERE id = $2`,
+      [email, userId],
+      { tenantId, userId }
+    );
+    await query(
+      `INSERT INTO mfa_methods (tenant_id, user_id, method, verified_at, is_active)
+       VALUES ($1,$2,'EMAIL',now(),true)
+       ON CONFLICT (user_id, method) DO UPDATE SET verified_at = now(), is_active = true, updated_at = now()`,
+      [tenantId, userId],
+      { tenantId, userId }
+    );
+    await clearEmailCodes(tenantId, userId);
+    await tx(async (client) => {
+      await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, {
+        action: 'mfa_enrolled_email',
+        resource: 'auth',
+        recordId: userId,
+        newValues: { mfa_enabled: true, mfa_method: 'EMAIL' },
+        metadata: { purpose: verified.purpose ?? 'ENROLL' },
+      });
+    }, { tenantId, userId });
+
+    const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, true);
+    const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
+    const freshRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [userId, tenantId], { tenantId, userId });
+    res.json({
+      accessToken,
+      refreshToken,
+      mfaEnabled: true,
+      method: 'email',
+      maskedEmail: maskEmail(email),
+      user: redactUser(freshRes.rows[0] as Record<string, unknown>),
+    });
   })
 );
 
@@ -311,6 +508,127 @@ authRouter.post(
     if (!s || !verifyTotp(s, code)) throw badRequest('Invalid MFA code');
     await query(`UPDATE users SET mfa_enabled=true, mfa_secret=$1 WHERE id=$2`, [s, user.id], { tenantId: user.tenant_id, userId: user.id });
     res.json({ mfaEnabled: true });
+  })
+);
+
+// ---------------------------------------------------------------- MFA status & personal email (authenticated)
+authRouter.get(
+  '/mfa/status',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const user = req.auth!;
+    const pending = await query(
+      `SELECT email FROM mfa_email_codes
+        WHERE user_id = $1 AND purpose = 'CHANGE_EMAIL' AND consumed_at IS NULL AND expires_at > now()
+        ORDER BY created_at DESC LIMIT 1`,
+      [user.id],
+      { tenantId: user.tenant_id, userId: user.id }
+    );
+    const personal = String(user.personal_email ?? '').trim() || null;
+    res.json({
+      mfaEnabled: Boolean(user.mfa_enabled),
+      method: String(user.mfa_method ?? '').trim() || null,
+      personalEmail: personal,
+      maskedEmail: personal ? maskEmail(personal) : null,
+      verifiedAt: user.personal_email_verified_at ?? null,
+      pendingEmail: pending.rows[0] ? String((pending.rows[0] as { email: string }).email) : null,
+    });
+  })
+);
+
+/** Set or change the personal address; the code always goes to the NEW address. */
+authRouter.post(
+  '/mfa/personal-email',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const user = req.auth!;
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    if (!email || email.length > 254 || !EMAIL_RE.test(email)) throw badRequest('Enter a valid email address');
+    const clash = await query(
+      `SELECT 1 FROM users WHERE tenant_id = $1 AND lower(personal_email) = $2 AND id <> $3`,
+      [user.tenant_id, email, user.id],
+      { tenantId: user.tenant_id, userId: user.id }
+    );
+    if (clash.rows.length > 0) throw badRequest('That email address is already in use');
+    const issued = await issueEmailCode({
+      tenantId: user.tenant_id,
+      userId: user.id,
+      email,
+      name: [user.first_name, user.last_name].filter(Boolean).join(' '),
+      purpose: 'CHANGE_EMAIL',
+      ip: ipOf(req),
+      userAgent: req.ctx.userAgent,
+    });
+    if (!issued.ok) {
+      throw new ApiError(503, 'EMAIL_DELIVERY_FAILED', 'We could not send your code. Please try again shortly.');
+    }
+    res.json({
+      ok: true,
+      maskedEmail: maskEmail(email),
+      alreadySent: Boolean(issued.alreadySent),
+      expiresInMinutes: issued.expiresInMinutes ?? config.mfa.emailCodeTtlMinutes,
+      resendAfterSeconds: issued.resendAfterSeconds ?? config.mfa.emailCodeResendSeconds,
+    });
+  })
+);
+
+authRouter.post(
+  '/mfa/personal-email/confirm',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const user = req.auth!;
+    const code = String(req.body?.code ?? '').trim();
+    if (!code) throw badRequest('Verification code is required');
+    const verified = await verifyEmailCode({ tenantId: user.tenant_id, userId: user.id, code });
+    if (!verified.ok || String(verified.purpose) !== 'CHANGE_EMAIL') throw badRequest('Invalid or expired code');
+    const email = String(verified.email ?? '').trim().toLowerCase();
+    if (email.length > 254 || !EMAIL_RE.test(email)) throw badRequest('Invalid or expired code');
+    const previous = String(user.personal_email ?? '').trim() || null;
+    await query(
+      `UPDATE users SET personal_email = $1, personal_email_verified_at = now(),
+              mfa_enabled = true, mfa_method = 'EMAIL' WHERE id = $2`,
+      [email, user.id],
+      { tenantId: user.tenant_id, userId: user.id }
+    );
+    await query(
+      `INSERT INTO mfa_methods (tenant_id, user_id, method, verified_at, is_active)
+       VALUES ($1,$2,'EMAIL',now(),true)
+       ON CONFLICT (user_id, method) DO UPDATE SET verified_at = now(), is_active = true, updated_at = now()`,
+      [user.tenant_id, user.id],
+      { tenantId: user.tenant_id, userId: user.id }
+    );
+    await clearEmailCodes(user.tenant_id, user.id);
+    await tx(async (client) => {
+      await logAudit(client, { tenantId: user.tenant_id, userId: user.id, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, {
+        action: 'mfa_personal_email_changed',
+        resource: 'users',
+        recordId: user.id,
+        oldValues: { personal_email: previous },
+        newValues: { personal_email: email },
+      });
+    }, { tenantId: user.tenant_id, userId: user.id });
+    res.json({ ok: true, personalEmail: email, maskedEmail: maskEmail(email), mfaEnabled: true, method: 'email' });
+  })
+);
+
+/** Turn the emailed-code factor off. The address is kept so it can be re-enabled. */
+authRouter.post(
+  '/mfa/disable',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const user = req.auth!;
+    await query(`UPDATE users SET mfa_enabled = false WHERE id = $1`, [user.id], { tenantId: user.tenant_id, userId: user.id });
+    await query(`UPDATE mfa_methods SET is_active = false WHERE user_id = $1`, [user.id], { tenantId: user.tenant_id, userId: user.id });
+    await clearEmailCodes(user.tenant_id, user.id);
+    await tx(async (client) => {
+      await logAudit(client, { tenantId: user.tenant_id, userId: user.id, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, {
+        action: 'mfa_disabled',
+        resource: 'users',
+        recordId: user.id,
+        newValues: { mfa_enabled: false },
+      });
+    }, { tenantId: user.tenant_id, userId: user.id });
+    res.json({ ok: true, mfaEnabled: false });
   })
 );
 
