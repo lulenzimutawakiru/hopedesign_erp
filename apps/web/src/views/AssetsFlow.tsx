@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { api, fmtDate, fmtMoney, fmtNum } from '../api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
 import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
@@ -170,29 +170,109 @@ function AssetBoard() {
 
 const STATUS_OPTIONS = ['DRAFT', 'PENDING_APPROVAL', 'REGISTERED', 'IN_STORE', 'AVAILABLE', 'ASSIGNED', 'IN_USE', 'TRANSFERRED', 'UNDER_MAINTENANCE', 'UNDER_INSPECTION', 'MISSING', 'LOST', 'STOLEN', 'DAMAGED', 'QUARANTINED', 'RESERVED', 'DISPOSED', 'RETIRED', 'ARCHIVED'];
 
+const PAGE_SIZES = [25, 50, 100];
+// Server-sortable columns (see ops/assets listAssets whitelist).
+const SORT_COLS = ['asset_no', 'name', 'status', 'condition', 'current_book_value'];
+const SORT_LABELS: Record<string, string> = {
+  asset_no: 'Asset ID',
+  name: 'Name',
+  status: 'Status',
+  condition: 'Condition',
+  current_book_value: 'Book value',
+};
+const sortLabel = (col: string) => SORT_LABELS[col] ?? col;
+
+// Remember the user's preferred page size across visits.
+const PAGE_SIZE_KEY = 'hope.assets.pageSize';
+const loadPageSize = (): number => {
+  try {
+    const n = Number(localStorage.getItem(PAGE_SIZE_KEY));
+    return PAGE_SIZES.includes(n) ? n : PAGE_SIZES[0];
+  } catch { return PAGE_SIZES[0]; }
+};
+const savePageSize = (n: number): void => {
+  try { localStorage.setItem(PAGE_SIZE_KEY, String(n)); } catch { /* storage unavailable */ }
+};
+
+/** Whole days from today to a date value, or null when absent/unparseable. */
+function daysUntil(v: unknown): number | null {
+  if (!v) return null;
+  const d = new Date(String(v));
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return Math.round((day.getTime() - today.getTime()) / 86400000);
+}
+
+/** Date-only rendering; fmtDate appends a time that is meaningless for due dates. */
+function fmtDay(v: unknown): string {
+  if (!v) return '-';
+  const d = new Date(String(v));
+  return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleDateString('en-UG');
+}
+
+const CONDITION_TONE: Record<string, string> = {
+  NEW: 'pill-ok', EXCELLENT: 'pill-ok', GOOD: 'pill-ok',
+  FAIR: 'pill-warn', POOR: 'pill-warn', UNDER_REPAIR: 'pill-warn',
+  DAMAGED: 'pill-danger', CRITICAL: 'pill-danger',
+  BEYOND_ECONOMIC_REPAIR: 'pill-danger', DISPOSED: 'pill-danger',
+};
+
+/** Condition rendered as a severity pill, so wear is scannable down the column. */
+function ConditionPill({ value }: { value: unknown }) {
+  const key = s(value).toUpperCase();
+  if (!key) return <>-</>;
+  const tone = CONDITION_TONE[key];
+  const text = labelize(value);
+  return tone ? <span className={`pill ${tone}`}>{text}</span> : <>{text}</>;
+}
+
+/** Next-maintenance date with overdue / due-soon emphasis and a relative hint. */
+function DueCell({ value }: { value: unknown }) {
+  const d = daysUntil(value);
+  if (d === null) return <>-</>;
+  if (d < 0) return <span className="reg-due-over" title={`Overdue by ${Math.abs(d)} day(s)`}>{fmtDay(value)} <span className="pill pill-danger">Overdue</span></span>;
+  if (d <= 30) return <span className="reg-due-soon" title={`Due in ${d} day(s)`}>{fmtDay(value)} <span className="pill pill-warn">{d}d</span></span>;
+  return <span title={`Due in ${d} day(s)`}>{fmtDay(value)}</span>;
+}
+
 function Register() {
   const { user } = useAuth();
   const q = useHashQuery();
   const [rows, setRows] = useState<Rec[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(loadPageSize);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState(q.get('search') ?? '');
   const [status, setStatus] = useState(q.get('status') ?? '');
+  const [condition, setCondition] = useState(q.get('condition') ?? '');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [showCreate, setShowCreate] = useState(q.get('new') === '1');
   const [showTags, setShowTags] = useState(false);
   const [tagResult, setTagResult] = useState<Rec | null>(null);
   const [busy, setBusy] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [selectNote, setSelectNote] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
   const filterFlags: Array<[string, string]> = [
     ['unassigned', 'Unassigned'],
     ['dueMaintenance', 'Due maintenance'],
     ['dueInspection', 'Due inspection'],
     ['nearEol', 'Near end of life'],
     ['mine', 'My assets'],
+    ['highValue', 'High value'],
+    ['includeDisposed', 'Include disposed'],
   ];
+  const committedSearch = q.get('search') ?? '';
+  const committedStatus = q.get('status') ?? '';
+  const committedCondition = q.get('condition') ?? '';
+  const sortBy = SORT_COLS.includes(q.get('sortBy') ?? '') ? (q.get('sortBy') as string) : '';
+  const sortDir: 'asc' | 'desc' = q.get('sortDir') === 'asc' ? 'asc' : 'desc';
   const qs = useMemo(() => {
     const p = new URLSearchParams();
     const statuses = (q.get('status') ?? '').split(',').filter(Boolean).join(',');
@@ -202,24 +282,130 @@ function Register() {
     for (const [k] of filterFlags) if (q.get(k)) p.set(k, '1');
     if (q.get('categoryId')) p.set('categoryId', q.get('categoryId')!);
     if (q.get('locationId')) p.set('locationId', q.get('locationId')!);
+    if (q.get('condition')) p.set('condition', q.get('condition')!);
+    if (sortBy) { p.set('sortBy', sortBy); p.set('sortDir', sortDir); }
     return p;
-  }, [q]);
+  }, [q, sortBy, sortDir]);
+  // Single funnel for filter and sort changes so every one of them returns to page 1,
+  // and so an in-flight search draft is never dropped by another filter click.
+  const writeQuery = (extra: Record<string, string>) => {
+    const next: Record<string, string> = { ...Object.fromEntries(qs), ...extra };
+    // Preserve an in-flight search draft unless this call is itself setting search.
+    if (!('search' in extra) && committedSearch !== search) {
+      if (search) next.search = search; else delete next.search;
+    }
+    for (const [k, v] of Object.entries(next)) if (!v) delete next[k];
+    if (!next.sortBy) delete next.sortDir;
+    setPage(1);
+    navigate('/assets/register', { query: next });
+  };
+  const setSort = (col: string) => {
+    if (sortBy !== col) return writeQuery({ sortBy: col, sortDir: 'asc' });
+    if (sortDir === 'asc') return writeQuery({ sortBy: col, sortDir: 'desc' });
+    return writeQuery({ sortBy: '' });
+  };
   useEffect(() => {
     let alive = true;
-    setLoading(true);
+    setRefreshing(true);
     setError('');
     api<{ data: { rows: Rec[]; total: number } }>(`/api/ops/assets?${qs.toString()}&page=${page}&pageSize=${pageSize}`)
       .then((r) => { if (!alive) return; setRows(r.data.rows ?? []); setTotal(r.data.total ?? 0); })
       .catch((e) => { if (alive) setError(e instanceof Error ? e.message : 'Asset register failed'); })
-      .finally(() => { if (alive) setLoading(false); });
+      .finally(() => { if (alive) { setRefreshing(false); setLoading(false); } });
     return () => { alive = false; };
   }, [qs, page, pageSize]);
-  const apply = (extra: Record<string, string>) => navigate('/assets/register', { query: { ...Object.fromEntries(qs), ...extra } });
+  // Keep the filter drafts in step with back/forward navigation.
+  useEffect(() => {
+    setSearch(committedSearch);
+    setStatus(committedStatus);
+    setCondition(committedCondition);
+  }, [committedSearch, committedStatus, committedCondition]);
+  // Refresh as the user types instead of waiting for Enter.
+  useEffect(() => {
+    if (committedSearch === search) return;
+    const t = setTimeout(() => writeQuery({ search }), 300);
+    return () => clearTimeout(t);
+  }, [search, committedSearch, qs]);
+  // Never strand the user on a page that no longer exists once filters narrow the result.
+  useEffect(() => {
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    if (page > pages) setPage(pages);
+  }, [total, pageSize, page]);
+  // "/" jumps to the search box, the way a register user expects.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const changePageSize = (n: number) => { savePageSize(n); setPageSize(n); setPage(1); };
+  // Deep-link the exact filtered view so it can be shared with a colleague.
+  const copyViewLink = () => {
+    const p = navigator.clipboard?.writeText(location.href);
+    if (!p) return;
+    void p.then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1800); }).catch(() => undefined);
+  };
   const toggle = (id: number) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id); else next.add(id);
     setSelected(next);
   };
+  const allOnPageSelected = rows.length > 0 && rows.every((r) => selected.has(Number(r.id)));
+  const someOnPageSelected = rows.some((r) => selected.has(Number(r.id)));
+  const toggleAllOnPage = () => {
+    const next = new Set(selected);
+    for (const r of rows) {
+      const id = Number(r.id);
+      if (allOnPageSelected) next.delete(id); else next.add(id);
+    }
+    setSelected(next);
+  };
+  const selectedCount = selected.size;
+  // Bulk actions should not be capped by the page size, so walk the remaining pages of the
+  // current filter set and collect the ids. Guarded so a huge register cannot loop forever.
+  const selectAllMatching = async () => {
+    setSelectingAll(true);
+    setError('');
+    setSelectNote('');
+    try {
+      const next = new Set(selected);
+      const batchSize = 200;
+      const maxPages = 25;
+      let seen = 0;
+      let exhausted = false;
+      for (let p = 1; p <= maxPages; p++) {
+        const r = await api<{ data: { rows: Rec[]; total: number } }>(
+          `/api/ops/assets?${qs.toString()}&page=${p}&pageSize=${batchSize}`,
+        );
+        const batch = r.data.rows ?? [];
+        for (const row of batch) next.add(Number(row.id));
+        seen += batch.length;
+        setSelected(new Set(next));
+        if (batch.length < batchSize || seen >= (r.data.total ?? 0)) { exhausted = true; break; }
+      }
+      if (!exhausted) setSelectNote(`Only the first ${maxPages * batchSize} matching assets could be selected.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not select all matching assets');
+    } finally { setSelectingAll(false); }
+  };
+  const activeFilters: Array<{ key: string; label: string; value: string }> = [];
+  if (committedSearch) activeFilters.push({ key: 'search', label: 'Search', value: committedSearch });
+  if (committedStatus) activeFilters.push({ key: 'status', label: 'Status', value: committedStatus.split(',').map(labelize).join(', ') });
+  if (committedCondition) activeFilters.push({ key: 'condition', label: 'Condition', value: labelize(committedCondition) });
+  for (const [k, label] of filterFlags) if (q.get(k)) activeFilters.push({ key: k, label, value: '' });
+  if (q.get('categoryId')) activeFilters.push({ key: 'categoryId', label: 'Category', value: `#${q.get('categoryId')}` });
+  if (q.get('locationId')) activeFilters.push({ key: 'locationId', label: 'Location', value: `#${q.get('locationId')}` });
+  const hasFilters = activeFilters.length > 0;
+  const sortMark = (col: string) => (sortBy === col ? (sortDir === 'asc' ? ' \u2191' : ' \u2193') : '');
+  const ariaSort = (col: string): 'ascending' | 'descending' | undefined =>
+    sortBy === col ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined;
   const generateTags = async () => {
     setBusy(true);
     setError('');
@@ -262,64 +448,154 @@ function Register() {
       />
       <AssetModuleTabs active="register" />
       <div className="card card-pad" style={{ marginBottom: 14 }}>
-        <div className="form-grid">
-          <div className="field">
-            <label htmlFor="ast-search">Search assets</label>
-            <input id="ast-search" placeholder="Asset ID, name, serial, barcode, model" value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') apply({ search }); }} />
-          </div>
-          <div className="field">
-            <label htmlFor="ast-status">Status</label>
-            <select id="ast-status" value={status} onChange={(e) => { setStatus(e.target.value); apply({ status: e.target.value }); }}>
-              <option value="">Any status</option>
-              {STATUS_OPTIONS.map((st) => <option key={st} value={st}>{labelize(st)}</option>)}
-            </select>
-          </div>
-          <div className="field" style={{ justifyContent: 'flex-end' }}>
-            <label>&nbsp;</label>
-            <button className="btn" onClick={() => apply({ search })}>Apply filters</button>
-          </div>
+        <div className="toolbar" style={{ marginBottom: 10 }}>
+          <input id="ast-search" ref={searchRef} className="search-input" type="search" aria-label="Search assets"
+            placeholder="Asset ID, name, serial, barcode, model" title="Press / to search" value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && committedSearch !== search) writeQuery({ search }); }} />
+          <select id="ast-status" className="search-input" style={{ maxWidth: 220 }} value={status}
+            aria-label="Filter by status"
+            onChange={(e) => { setStatus(e.target.value); writeQuery({ status: e.target.value }); }}>
+            <option value="">Any status</option>
+            {STATUS_OPTIONS.map((st) => <option key={st} value={st}>{labelize(st)}</option>)}
+          </select>
+          <select id="ast-condition" className="search-input" style={{ maxWidth: 200 }} value={condition}
+            aria-label="Filter by condition"
+            onChange={(e) => { setCondition(e.target.value); writeQuery({ condition: e.target.value }); }}>
+            <option value="">Any condition</option>
+            {CONDITIONS.map((c) => <option key={c} value={c}>{labelize(c)}</option>)}
+          </select>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={copyViewLink}
+            title="Copy a link to this exact search, filter and sort">
+            {copied ? "Link copied" : "Copy view link"}
+          </button>
         </div>
-        <div className="page-meta" style={{ marginTop: 10 }}>
-          {filterFlags.map(([k, label]) => (
-            <label key={k} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-              <input type="checkbox" checked={!!q.get(k)} onChange={(e) => { const nq = { ...Object.fromEntries(qs) }; if (e.target.checked) nq[k] = '1'; else delete nq[k]; navigate('/assets/register', { query: nq }); }} />
-              {label}
-            </label>
-          ))}
+        <div className="chips">
+          {filterFlags.map(([k, label]) => {
+            const on = !!q.get(k);
+            return (
+              <button key={k} type="button" className={`chip ${on ? 'chip-on' : ''}`} aria-pressed={on}
+                onClick={() => writeQuery({ [k]: on ? '' : '1' })}>
+                {label}
+              </button>
+            );
+          })}
         </div>
+        {(activeFilters.length > 0 || sortBy) && (
+          <div className="filter-chips" style={{ padding: '12px 0 0' }}>
+            {activeFilters.map((f) => (
+              <span key={f.key} className="filter-chip">
+                <b>{f.label}</b>{f.value ? `: ${f.value}` : ''}
+                <button type="button" title="Remove filter" aria-label={`Remove ${f.label} filter`}
+                  onClick={() => { const next: Record<string, string> = { ...Object.fromEntries(qs) }; delete next[f.key]; setPage(1); navigate('/assets/register', { query: next }); }}>{'\u00D7'}</button>
+              </span>
+            ))}
+            {sortBy && (
+              <span className="filter-chip">
+                <b>Sort</b>{`: ${sortLabel(sortBy)} ${sortDir === 'asc' ? 'ascending' : 'descending'}`}
+                <button type="button" title="Clear sort" aria-label="Clear sort" onClick={() => writeQuery({ sortBy: '' })}>{'\u00D7'}</button>
+              </span>
+            )}
+            <button className="btn btn-sm btn-ghost" onClick={() => navigate('/assets/register', { query: {} })}>Clear all</button>
+          </div>
+        )}
       </div>
       {error && <ErrorBanner error={error} />}
-      {selected.size > 0 && (
-        <div className="callout callout-info" style={{ margin: '0 0 12px' }}>
-          <span className="callout-icon" aria-hidden>▣</span>
-          <div className="callout-body">
-            <strong>{selected.size} assets selected</strong>
-            <div className="stack" style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-              {can(user, 'assets.tags.generate') && <button className="btn btn-sm btn-primary" disabled={busy} onClick={generateTags}>Generate QR tags</button>}
-              {can(user, 'assets.tags.print') && <button className="btn btn-sm" disabled={busy} onClick={printSelected}>Print tags</button>}
-              <button className="btn btn-sm btn-ghost" onClick={() => setSelected(new Set())}>Clear</button>
-            </div>
-          </div>
+      {selectedCount > 0 && (
+        <div className="bulk-bar" role="region" aria-label="Bulk actions">
+          <span className="bulk-count"><b>{selectedCount}</b> selected</span>
+          {selectedCount < total && (
+            <button className="btn btn-sm" disabled={selectingAll || busy} onClick={selectAllMatching}>
+              {selectingAll ? 'Selecting…' : `Select all ${total.toLocaleString()} matching`}
+            </button>
+          )}
+          {selectNote && <span className="muted" style={{ fontSize: 12 }}>{selectNote}</span>}
+          <span className="bulk-spacer" />
+          {can(user, 'assets.tags.generate') && <button className="btn btn-sm btn-primary" disabled={busy} onClick={generateTags}>Generate QR tags</button>}
+          {can(user, 'assets.tags.print') && <button className="btn btn-sm" disabled={busy} onClick={printSelected}>Print tags</button>}
+          <button className="btn btn-sm btn-ghost" onClick={() => { setSelected(new Set()); setSelectNote(''); }}>Clear</button>
         </div>
       )}
-      <section className="card card-pad">
-        <div className="card-head"><h3>Register ({total.toLocaleString()})</h3></div>
+      <section className={`card card-pad${refreshing && !loading ? ' is-refreshing' : ''}`} aria-busy={refreshing && !loading}>
+        <div className="card-head">
+          <h3>Register ({total.toLocaleString()})</h3>
+          {!loading && total > 0 && (
+            <span className="muted" style={{ fontSize: 12 }} role="status" aria-live="polite">
+              Showing {((page - 1) * pageSize + 1).toLocaleString()}-{Math.min(page * pageSize, total).toLocaleString()} of {total.toLocaleString()}
+              {sortBy ? ` \u00B7 sorted by ${sortLabel(sortBy)} (${sortDir === 'asc' ? 'ascending' : 'descending'})` : ''}
+            </span>
+          )}
+        </div>
         {loading ? <Skeleton rows={6} /> : rows.length === 0 ? (
-          <EmptyState title="No assets found" body="Adjust the filters, or register a new asset to begin its lifecycle." action={can(user, 'assets.register.create') ? 'Register asset' : undefined} onAction={() => setShowCreate(true)} />
+          hasFilters ? (
+            <EmptyState title="No assets match these filters"
+              body={committedSearch
+                ? `Nothing in the register matches "${committedSearch}" with the other filters applied. Clear them to see the full register.`
+                : 'Nothing in the register matches the current search and filters. Clear them to see the full register.'}
+              action="Clear filters" onAction={() => navigate('/assets/register', { query: {} })} />
+          ) : (
+            <EmptyState title="No assets yet" body="Register an asset to begin its lifecycle. Every asset gets a permanent, non-reusable asset number." action={can(user, 'assets.register.create') ? 'Register asset' : undefined} onAction={() => setShowCreate(true)} />
+          )
         ) : (
-          <div className="table-wrap">
+          <>
+          <div className="record-cards mobile-only">
+            {rows.map((r) => (
+              <div key={`card-${s(r.asset_no)}`} className={`record-card${selected.has(Number(r.id)) ? ' is-selected' : ''}`}
+                onClick={() => navigate(`/assets/${r.id}`)}>
+                <div className="record-card-top">
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    {can(user, 'assets.tags.generate') && (
+                      <input type="checkbox" checked={selected.has(Number(r.id))} onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggle(Number(r.id))} aria-label={`Select ${s(r.asset_no)}`} />
+                    )}
+                    <strong className="cell-mono">{s(r.asset_no)}</strong>
+                  </span>
+                  <Badge value={r.status} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <strong>{s(r.name)}</strong>
+                  {r.is_machine === true && <span className="badge badge-teal">MACHINE</span>}
+                </div>
+                <div className="record-card-meta">
+                  <span>{s(r.category_name)}</span>
+                  <span>{s(r.location_name)}</span>
+                  <span>{s(r.custodian_name)}</span>
+                  <ConditionPill value={r.condition} />
+                  <span>{fmtMoney(r.current_book_value)}</span>
+                  <DueCell value={r.next_maintenance} />
+                </div>
+                <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); navigate(`/assets/${r.id}`); }}>Open</button>
+              </div>
+            ))}
+          </div>
+          <div className="table-wrap desktop-only">
             <table className="data">
               <thead>
                 <tr>
-                  <th style={{ width: 34 }}>{can(user, 'assets.tags.generate') ? 'Sel' : ''}</th>
-                  <th>QR</th><th>Asset ID</th><th>Name</th><th>Category</th><th>Type</th><th>Custodian</th><th>Location</th><th>Status</th><th>Condition</th><th>Book value</th><th>Next maint.</th><th></th>
+                  <th style={{ width: 34 }}>
+                    {can(user, 'assets.tags.generate') && (
+                      <input type="checkbox" checked={allOnPageSelected} onChange={toggleAllOnPage}
+                        ref={(el) => { if (el) el.indeterminate = someOnPageSelected && !allOnPageSelected; }}
+                        aria-label="Select all assets on this page" title="Select all on this page" />
+                    )}
+                  </th>
+                  <th>QR</th>
+                  <th aria-sort={ariaSort('asset_no')}><button className="th-btn" title="Sort by asset ID" onClick={() => setSort('asset_no')}>Asset ID{sortMark('asset_no')}</button></th>
+                  <th aria-sort={ariaSort('name')}><button className="th-btn" title="Sort by name" onClick={() => setSort('name')}>Name{sortMark('name')}</button></th>
+                  <th>Category</th>
+                  <th className="col-hide-md">Type</th>
+                  <th className="col-hide-sm">Custodian</th>
+                  <th>Location</th>
+                  <th aria-sort={ariaSort('status')}><button className="th-btn" title="Sort by status" onClick={() => setSort('status')}>Status{sortMark('status')}</button></th>
+                  <th className="col-hide-sm" aria-sort={ariaSort('condition')}><button className="th-btn" title="Sort by condition" onClick={() => setSort('condition')}>Condition{sortMark('condition')}</button></th>
+                  <th aria-sort={ariaSort('current_book_value')}><button className="th-btn" title="Sort by book value" onClick={() => setSort('current_book_value')}>Book value{sortMark('current_book_value')}</button></th>
+                  <th className="col-hide-sm">Next maint.</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={s(r.asset_no)} className="row-link" onClick={() => navigate(`/assets/${r.id}`)}>
+                  <tr key={s(r.asset_no)} className={`row-link${selected.has(Number(r.id)) ? ' row-selected' : ''}`} onClick={() => navigate(`/assets/${r.id}`)}>
                     <td onClick={(e) => e.stopPropagation()}>
                       {can(user, 'assets.tags.generate') && <input type="checkbox" checked={selected.has(Number(r.id))} onChange={() => toggle(Number(r.id))} aria-label={`Select ${s(r.asset_no)}`} />}
                     </td>
@@ -327,13 +603,13 @@ function Register() {
                     <td className="td-cell-mono"><button className="link-btn" onClick={(e) => { e.stopPropagation(); navigate(`/assets/${r.id}`); }}>{s(r.asset_no)}</button></td>
                     <td><strong>{s(r.name)}</strong>{r.is_machine === true && <span className="badge badge-teal" style={{ marginLeft: 6 }}>MACHINE</span>}</td>
                     <td>{s(r.category_name)}</td>
-                    <td>{s(r.type_name)}</td>
-                    <td>{s(r.custodian_name)}</td>
+                    <td className="col-hide-md">{s(r.type_name)}</td>
+                    <td className="col-hide-sm">{s(r.custodian_name)}</td>
                     <td>{s(r.location_name)}</td>
                     <td><Badge value={r.status} /></td>
-                    <td>{s(r.condition)}</td>
+                    <td className="col-hide-sm"><ConditionPill value={r.condition} /></td>
                     <td>{fmtMoney(r.current_book_value)}</td>
-                    <td>{fmtDate(r.next_maintenance)}</td>
+                    <td className="col-hide-sm"><DueCell value={r.next_maintenance} /></td>
                     <td>
                       <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); navigate(`/assets/${r.id}`); }}>Open</button>
                     </td>
@@ -342,8 +618,9 @@ function Register() {
               </tbody>
             </table>
           </div>
+          </>
         )}
-        <Pager page={page} pageSize={pageSize} total={total} onPage={setPage} />
+        <Pager page={page} pageSize={pageSize} total={total} onPage={setPage} onPageSize={changePageSize} pageSizes={PAGE_SIZES} />
       </section>
       {tagResult && (
         <Modal title="Tag batch result" onClose={() => setTagResult(null)}>
