@@ -67,7 +67,10 @@ const postgresSsl = postgresSslRaw
   : !isLoopbackHost(postgresHost);
 
 export const config = {
-  env: process.env.NODE_ENV ?? 'development',
+  // Vitest injects VITEST into the worker process; treat that as the test
+  // environment so the rate-limit ceiling below is lifted for the suite even
+  // though .env/.env.local pin NODE_ENV=development for local dev servers.
+  env: process.env.VITEST ? 'test' : (process.env.NODE_ENV ?? 'development'),
   port: num(process.env.PORT, 4000),
   host: envStr('HOST') ?? '0.0.0.0',
   postgres: {
