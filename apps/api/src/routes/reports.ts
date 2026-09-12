@@ -1,22 +1,15 @@
 import { Router } from 'express';
-import ExcelJS from 'exceljs';
-import { stringify } from 'csv-stringify/sync';
 import { query, tx } from '../db.js';
 import { requirePermission } from '../middleware/authorize.js';
 import { asyncHandler, badRequest, notFound, forbidden, toCamelRow, parsePagination } from '../utils.js';
 import { logAudit } from '../services/audit.js';
 import {
-  applyExcelBrandHeader,
-  companyContactLines,
-  companyRegLines,
   documentVerifyUrl,
-  formatDocDateTime,
   issueDocumentToken,
   loadCompanyProfile,
-  renderBrandedHtml,
   reportFingerprint,
 } from '../services/branding.js';
-import { renderTablePdf } from '../services/brandedExport.js';
+import { renderTableCsv, renderTablePdf, renderTablePrintHtml, renderTableXlsx } from '../services/brandedExport.js';
 import {
   REPORTS,
   buildWhere,
@@ -37,15 +30,6 @@ export const reportsRouter = Router();
 reportsRouter.use(reportAnalyticsRouter);
 function toCamel(s: string): string {
   return s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
-}
-
-function esc(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  return String(v)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 const issuerName = (req: { auth?: { email?: string; first_name?: string; last_name?: string } | null }): string => {
@@ -558,85 +542,33 @@ reportsRouter.get(
       }
     };
 
-    if (format === 'csv') {
-      await audit('csv');
+    if (format === 'csv' || format === 'xlsx') {
+      await audit(format);
       const company = await tx(async (client) => loadCompanyProfile(client, req.ctx), req.ctx);
       const fingerprint = reportFingerprint(def.table, cols, rows);
       const issued = new Date().toISOString();
-      const out: (string | number | null)[][] = [];
-      out.push([company.name]);
-      if (company.tagline) out.push([company.tagline]);
-      for (const ln of [...companyContactLines(company), ...companyRegLines(company)]) out.push([ln]);
-      if (company.footerText) out.push([company.footerText]);
-      out.push([]);
-      out.push([def.label.toUpperCase()]);
-      out.push(['Document No', def.name]);
-      out.push([`Issued by ${issuerName(req)} on ${formatDocDateTime(issued)}`]);
-      out.push(['Rows', rows.length]);
-      out.push(['Classification', 'Internal']);
-      out.push([]);
-      out.push(cols.map(toCamel));
-      for (const row of rows) {
-        out.push(cols.map((c) => (row[c] == null ? '' : String(row[c]))));
-      }
-      out.push([]);
-      out.push(['SHA-256 Fingerprint', fingerprint]);
-      out.push(['Exported By', issuerName(req)]);
-      out.push(['Exported At', formatDocDateTime(issued)]);
-      const csv = stringify(out, { header: false });
-      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="${def.name}.csv"`);
-      return res.send(csv);
-    }
-    if (format === 'xlsx') {
-      await audit('xlsx');
-      const company = await tx(async (client) => loadCompanyProfile(client, req.ctx), req.ctx);
-      const fingerprint = reportFingerprint(def.table, cols, rows);
-      const issued = new Date().toISOString();
-      const issuedBy = issuerName(req);
-      const wb = new ExcelJS.Workbook();
-      wb.creator = company.name;
-      wb.company = company.legalName || company.name;
-      const ws = wb.addWorksheet(def.label.slice(0, 31), {
-        pageSetup: {
-          paperSize: 9,
-          orientation: cols.length > 8 ? 'landscape' : 'portrait',
-          fitToPage: true,
-          fitToWidth: 1,
-          fitToHeight: 0,
-          margins: { left: 0.5, right: 0.5, top: 0.6, bottom: 0.6, header: 0.2, footer: 0.2 },
-        },
-        headerFooter: {
-          oddHeader: `&L${company.name}&C${def.label}`,
-          oddFooter: `&L${company.legalName || company.name}${company.tin ? `  TIN ${company.tin}` : ''}&RPage &P of &N`,
-        },
-      });
-      const navy = 'FF0B1F33';
-      applyExcelBrandHeader(ws, company, {
+      const branded = {
         title: def.label,
+        subtitle: `${rows.length} row${rows.length === 1 ? '' : 's'}`,
+        kicker: 'Management report',
         docNo: def.name,
-        issuedBy,
+        company,
+        issuedBy: issuerName(req),
         issuedAt: issued,
-        facts: [['Rows', String(rows.length)]],
+        correlationId: req.ctx.correlationId ?? null,
+        facts: [['Rows', String(rows.length)]] as [string, string][],
+        columns: cols.map((c) => ({ key: c, label: toCamel(c) })),
+        rows,
+        fingerprint,
         classification: 'Internal',
-        columns: Math.max(8, cols.length),
-      });
-      const hr = ws.addRow(cols.map(toCamel));
-      hr.font = { bold: true, color: { argb: 'FFFFFFFF' }, name: 'Calibri', size: 9 };
-      hr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
-      hr.alignment = { vertical: 'middle' };
-      rows.forEach((row, i) => {
-        const r = ws.addRow(cols.map((c) => (row[c] == null ? '' : row[c])));
-        if (i % 2 === 1) r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F8F9' } };
-      });
-      ws.addRow([]);
-      ws.addRow(['SHA-256 Fingerprint', fingerprint]);
-      ws.addRow(['Exported By', issuedBy]);
-      ws.addRow(['Exported At', formatDocDateTime(issued)]);
-      cols.forEach((_, i) => {
-        ws.getColumn(i + 1).width = 18;
-      });
-      const buf = Buffer.from(await wb.xlsx.writeBuffer());
+      };
+      if (format === 'csv') {
+        const csv = renderTableCsv(branded);
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${def.name}.csv"`);
+        return res.send(csv);
+      }
+      const buf = await renderTableXlsx(branded);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename="${def.name}.xlsx"`);
       return res.send(buf);
@@ -708,11 +640,7 @@ reportsRouter.get(
           })
         : '';
       const verifyUrl = token ? documentVerifyUrl(company, token) : '';
-      const head = cols.map((c) => `<th>${esc(toCamel(c))}</th>`).join('');
-      const body = rows
-        .map((r) => `<tr>${cols.map((c) => `<td>${esc(r[c] ?? '')}</td>`).join('')}</tr>`)
-        .join('');
-      const html = await renderBrandedHtml({
+      const html = await renderTablePrintHtml({
         title: def.label,
         subtitle: `${rows.length} row${rows.length === 1 ? '' : 's'}`,
         kicker: 'Management report',
@@ -723,8 +651,11 @@ reportsRouter.get(
         docNo: def.name,
         classification: 'Internal',
         facts: [['Rows', String(rows.length)]],
-        authenticity: token && verifyUrl ? { fingerprint, token, verifyUrl } : undefined,
-        body: `<table class="data"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`,
+        columns: cols.map((c) => ({ key: c, label: toCamel(c) })),
+        rows,
+        fingerprint,
+        token,
+        verifyUrl,
       });
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.send(html);

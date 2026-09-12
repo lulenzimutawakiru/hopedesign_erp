@@ -322,7 +322,11 @@ export function ExportFlow() {
                 <div className="field">
                   <label htmlFor="ex-format">Format</label>
                   <select id="ex-format" value={format} onChange={(e) => setFormat(e.target.value)}>
-                    {EXPORT_FORMATS.map((f) => <option key={f} value={f}>{f.toUpperCase()}</option>)}
+                    {EXPORT_FORMATS.map((f) => (
+                      <option key={f} value={f}>
+                        {f === 'pdf' ? 'Official PDF' : f === 'xlsx' ? 'Excel workbook' : f.toUpperCase()}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div className="field">

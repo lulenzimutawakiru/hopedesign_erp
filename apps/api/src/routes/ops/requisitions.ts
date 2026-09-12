@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import pg from 'pg';
 import multer from 'multer';
-import { stringify } from 'csv-stringify/sync';
 import { tx, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest } from '../../utils.js';
@@ -13,6 +12,7 @@ import {
   reportFingerprint,
 } from '../../services/branding.js';
 import {
+  renderTableCsv,
   renderTablePdf,
   renderTablePrintHtml,
   renderTableXlsx,
@@ -293,18 +293,7 @@ requisitionsOpsRouter.get(
       return res.send(buf);
     }
 
-    const csvRows: unknown[][] = [EXPORT_COLUMNS.map((c) => c.label)];
-    for (const row of rows) {
-      csvRows.push(
-        EXPORT_COLUMNS.map((c) => {
-          const v = row[c.key];
-          if (v == null || v === '') return '';
-          if (typeof v === 'object') return JSON.stringify(v);
-          return String(v);
-        })
-      );
-    }
-    const csv = stringify(csvRows, { header: false });
+    const csv = renderTableCsv({ ...common, columns: EXPORT_COLUMNS, rows });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="requisitions_${Date.now()}.csv"`);
     return res.send(csv);

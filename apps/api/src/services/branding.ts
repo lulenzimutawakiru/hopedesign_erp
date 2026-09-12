@@ -706,6 +706,8 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   table.data, table { border-collapse: collapse; width: 100%; font-size: 10.5px; margin-top: 12px; }
   table.data th, table th { background: var(--navy); color: #fff; font-weight: 600; letter-spacing: 0.04em; font-size: 9.5px; text-transform: uppercase; border: 0; padding: 7px 8px; text-align: left; }
   table.data td, table td { border: 0; border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; color: var(--ink); }
+  table.data th.num, table.data td.num, table th.num, table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.data th.ctr, table.data td.ctr, table th.ctr, table td.ctr { text-align: center; }
   table.data tbody tr:nth-child(even) td, table tbody tr:nth-child(even) td { background: ${BRAND_HEX.zebra}; }
   .totals { margin: 16px 0 0 auto; width: 280px; font-size: 11px; }
   .totals .row { display: flex; justify-content: space-between; padding: 4px 8px; color: var(--ink); }

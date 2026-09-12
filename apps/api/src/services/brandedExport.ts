@@ -1,5 +1,5 @@
 /**
- * Shared branded table export pipeline (PDF / print HTML / XLSX).
+ * Shared branded table export pipeline (PDF / print HTML / XLSX / CSV).
  *
  * Reuses the PdfDoc writer, the brand palette and the company profile loader
  * so every exported table - generic data exports, management reports and
@@ -8,6 +8,7 @@
  */
 
 import ExcelJS from 'exceljs';
+import { stringify } from 'csv-stringify/sync';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
@@ -532,6 +533,32 @@ export async function renderTablePrintHtml(opts: BrandedTableOpts): Promise<stri
   });
 }
 
+const QTY_LABEL = /(qty|quantity|units|count|rows)/i;
+const MONEY_LABEL = /(amount|total|price|cost|value|tax|discount|subtotal|balance|debit|credit|pay|depr)/i;
+
+/** Coerce display strings such as "12,500.00" or "UGX 1,180.00" into Excel numbers. */
+export function toExcelValue(v: unknown): unknown {
+  if (v == null || v === '') return '';
+  if (typeof v === 'number') return Number.isFinite(v) ? v : '';
+  if (v instanceof Date) return v;
+  if (typeof v === 'boolean') return v;
+  if (typeof v !== 'string') return v;
+  const trimmed = v.trim();
+  const stripped = trimmed.replace(/^(UGX|USD|EUR|GBP|KES|TZS)\s+/i, '').replace(/,/g, '');
+  if (/^-?\d+(\.\d+)?$/.test(stripped)) {
+    if (/^0\d+$/.test(stripped) && stripped.length > 1) return v;
+    const n = Number(stripped);
+    if (Number.isFinite(n)) return n;
+  }
+  return v;
+}
+
+export function excelNumFmt(label: string, align?: string): string | undefined {
+  if (QTY_LABEL.test(label)) return '#,##0.####';
+  if (MONEY_LABEL.test(label) || align === 'right') return '#,##0.00';
+  return undefined;
+}
+
 export async function renderTableXlsx(opts: BrandedTableOpts): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = opts.company.name;
@@ -568,15 +595,67 @@ export async function renderTableXlsx(opts: BrandedTableOpts): Promise<Buffer> {
   hr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
   hr.alignment = { vertical: 'middle' };
   opts.rows.forEach((row, i) => {
-    const r = ws.addRow(opts.columns.map((c) => (row[c.key] == null ? '' : row[c.key])));
+    const r = ws.addRow(opts.columns.map((c) => toExcelValue(row[c.key])));
     if (i % 2 === 1) r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F8F9' } };
+    r.alignment = { vertical: 'middle' };
   });
   ws.addRow([]);
   ws.addRow(['SHA-256 Fingerprint', opts.fingerprint ?? '']);
   ws.addRow(['Exported By', opts.issuedBy]);
   ws.addRow(['Exported At', formatDocDateTime(opts.issuedAt)]);
-  opts.columns.forEach((_, i) => {
-    ws.getColumn(i + 1).width = 18;
+  opts.columns.forEach((col, i) => {
+    const excelCol = ws.getColumn(i + 1);
+    excelCol.width = Math.max(14, Math.min(36, col.label.length + 12));
+    const fmt = excelNumFmt(col.label, col.align);
+    if (fmt) excelCol.numFmt = fmt;
+    if (col.align === 'right' || fmt) excelCol.alignment = { horizontal: 'right' };
   });
+  ws.views = [{ state: 'frozen', ySplit: hr.number }];
+  if (opts.columns.length) {
+    ws.autoFilter = {
+      from: { row: hr.number, column: 1 },
+      to: { row: hr.number, column: opts.columns.length },
+    };
+  }
   return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/** Company-letterhead CSV used by table dumps and management reports. */
+export function renderTableCsv(
+  opts: BrandedTableOpts,
+  extraMeta: Array<[string, string]> = []
+): string {
+  const c = opts.company;
+  const rows: unknown[][] = [];
+  rows.push([c.name]);
+  if (c.tagline) rows.push([c.tagline]);
+  for (const ln of [...companyContactLines(c), ...companyRegLines(c)]) rows.push([ln]);
+  if (c.footerText) rows.push([c.footerText]);
+  rows.push([]);
+  rows.push([opts.title.toUpperCase()]);
+  if (opts.docNo) rows.push(['Document No', opts.docNo]);
+  if (opts.subtitle) rows.push([opts.subtitle]);
+  rows.push([`Issued by ${opts.issuedBy} on ${formatDocDateTime(opts.issuedAt)}`]);
+  if (opts.classification) rows.push(['Classification', opts.classification]);
+  for (const [k, v] of opts.facts ?? []) if (v) rows.push([k, v]);
+  for (const [k, v] of extraMeta) if (v) rows.push([k, v]);
+  rows.push([]);
+  rows.push(opts.columns.map((col) => col.label));
+  for (const row of opts.rows) {
+    rows.push(
+      opts.columns.map((col) => {
+        const v = row[col.key];
+        if (v == null || v === '') return '';
+        if (typeof v === 'object' && !(v instanceof Date)) return JSON.stringify(v);
+        return String(v);
+      })
+    );
+  }
+  if (opts.fingerprint) {
+    rows.push([]);
+    rows.push(['SHA-256 Fingerprint', opts.fingerprint]);
+  }
+  rows.push(['Exported By', opts.issuedBy]);
+  rows.push(['Exported At', formatDocDateTime(opts.issuedAt)]);
+  return stringify(rows, { header: false });
 }

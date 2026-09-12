@@ -32,6 +32,24 @@ describe('data exports: formats, tenant info and audit trail', () => {
     expect(Number(res.headers['content-length'] ?? 0)).toBeGreaterThan(0);
   });
 
+  it('brands table PDF and includeTenant CSV with company letterhead', async () => {
+    const { token } = await loginAs('admin');
+    const pdf = await api.get('/api/import-export/exports/customers?format=pdf').set(auth(token)).buffer(true);
+    expect(pdf.status).toBe(200);
+    expect(pdf.headers['content-type']).toContain('application/pdf');
+    const pdfText = Buffer.isBuffer(pdf.body) ? pdf.body.toString('latin1') : String(pdf.body);
+    expect(pdfText.startsWith('%PDF-')).toBe(true);
+    expect(pdfText).toContain('Hope Design Group Ltd');
+    expect(pdfText).toContain('CUSTOMER EXPORT');
+
+    const csv = await api.get('/api/import-export/exports/customers?format=csv&includeTenant=1').set(auth(token));
+    expect(csv.status).toBe(200);
+    expect(csv.text).toContain('Hope Design Group Ltd');
+    expect(csv.text).toContain('TIN');
+    expect(csv.text).toContain('CUSTOMER EXPORT');
+    expect(csv.text).toContain('Tenant Code');
+  });
+
   it('exports customers as JSON with a data array and meta', async () => {
     const { token } = await loginAs('admin');
     const res = await api.get('/api/import-export/exports/customers?format=json').set(auth(token));

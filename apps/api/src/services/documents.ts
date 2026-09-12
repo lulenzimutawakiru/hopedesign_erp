@@ -30,6 +30,7 @@ import {
   formatDocStatus,
   renderBrandedHtml,
 } from './branding.js';
+import { excelNumFmt, toExcelValue } from './brandedExport.js';
 
 /**
  * Generic business-document export layer.
@@ -4002,10 +4003,11 @@ async function renderXlsx(data: DocData, opts: DocumentRenderOpts): Promise<Buff
   hr.alignment = { vertical: 'middle' };
   hr.height = 18;
   data.items.forEach((it, i) => {
-    const row = ws.addRow([i + 1, ...data.columns.map((cc) => (it[cc.key] == null ? '' : it[cc.key]))]);
+    const row = ws.addRow([i + 1, ...data.columns.map((cc) => toExcelValue(it[cc.key]))]);
     if (i % 2 === 1) {
       row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F8F9' } };
     }
+    row.alignment = { vertical: 'middle' };
   });
   ws.addRow([]);
   data.totals.forEach(([label, value], i) => {
@@ -4050,13 +4052,20 @@ async function renderXlsx(data: DocData, opts: DocumentRenderOpts): Promise<Buff
     ws.addRow(['Verify URL', opts.verifyUrl]);
   }
 
-  ws.getColumn(1).width = 22;
+  ws.getColumn(1).width = 6;
+  ws.getColumn(1).alignment = { horizontal: 'right' };
   data.columns.forEach((col, i) => {
-    ws.getColumn(i + 2).width = Math.max(14, Math.min(36, col.label.length + 12));
-    if (col.align === 'right') ws.getColumn(i + 2).alignment = { horizontal: 'right' };
+    const excelCol = ws.getColumn(i + 2);
+    excelCol.width = Math.max(14, Math.min(36, col.label.length + 12));
+    const fmt = excelNumFmt(col.label, col.align);
+    if (fmt) excelCol.numFmt = fmt;
+    if (col.align === 'right' || fmt) excelCol.alignment = { horizontal: 'right' };
   });
-  ws.views = [{ state: 'frozen', ySplit: 1 }];
-  ws.autoFilter = undefined;
+  ws.views = [{ state: 'frozen', ySplit: hr.number }];
+  ws.autoFilter = {
+    from: { row: hr.number, column: 1 },
+    to: { row: hr.number, column: data.columns.length + 1 },
+  };
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
@@ -4207,16 +4216,24 @@ function htmlNotes(notes: string[], heading = 'Statutory notice'): string {
   return `<div class="notes"><h4>${htmlEsc(heading)}</h4>${notes.map((n) => `<p>${htmlEsc(n)}</p>`).join('')}</div>`;
 }
 
+function htmlAlignAttr(align?: string | null): string {
+  if (align === 'right') return ' class="num"';
+  if (align === 'center') return ' class="ctr"';
+  return '';
+}
+
 function htmlItemsTable(data: DocData): string {
   if (!data.items.length || !data.columns.length) return '';
-  const head = data.columns.map((c) => `<th>${htmlEsc(c.label)}</th>`).join('');
+  const head = data.columns.map((c) => `<th${htmlAlignAttr(c.align)}>${htmlEsc(c.label)}</th>`).join('');
   const body = data.items
     .map(
       (it, i) =>
-        `<tr><td>${i + 1}</td>${data.columns.map((c) => `<td>${htmlEsc(it[c.key] ?? '')}</td>`).join('')}</tr>`
+        `<tr><td class="num">${i + 1}</td>${data.columns
+          .map((c) => `<td${htmlAlignAttr(c.align)}>${htmlEsc(it[c.key] ?? '')}</td>`)
+          .join('')}</tr>`
     )
     .join('');
-  return `<table class="data"><thead><tr><th>#</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  return `<table class="data"><thead><tr><th class="num">#</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function htmlPayBreakdown(data: DocData): string {

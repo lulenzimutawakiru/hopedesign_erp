@@ -2,7 +2,6 @@ import { Router } from 'express';
 import multer from 'multer';
 import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
-import ExcelJS from 'exceljs';
 import { query, tx, type Ctx } from '../db.js';
 import { requirePermission } from '../middleware/authorize.js';
 import { ENTITIES, entityForTable } from './registry.js';
@@ -15,7 +14,7 @@ import {
   loadCompanyProfile,
   reportFingerprint,
 } from '../services/branding.js';
-import { renderTablePdf, renderTablePrintHtml } from '../services/brandedExport.js';
+import { renderTableCsv, renderTablePdf, renderTablePrintHtml, renderTableXlsx } from '../services/brandedExport.js';
 
 export const importExportRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -449,26 +448,48 @@ requirePermission('admin.exports.run'),
       });
     }
 
+    const company = await tx(async (client) => loadCompanyProfile(client, req.ctx), req.ctx);
+    const label = tableLabel(table);
+    const columns = cols.map((c) => ({ key: c, label: humanizeColumn(c) }));
+    const tenantFacts: Array<[string, string]> = info
+      ? (Object.entries(info)
+          .filter(([k]) => k !== 'fingerprint')
+          .map(([k, v]) => [INFO_LABELS[k] ?? k, v == null ? '' : String(v)]) as Array<[string, string]>)
+      : [];
+    const branded = {
+      title: `${label} Export`,
+      subtitle: `${rows.length} row${rows.length === 1 ? '' : 's'}`,
+      kicker: 'Data export',
+      docNo: table,
+      company,
+      issuedBy,
+      issuedAt: exportedAt,
+      correlationId: req.ctx.correlationId ?? null,
+      facts: [
+        ['Rows', String(rows.length)],
+        ...tenantFacts.filter(([k]) => ['Company Name', 'Branch Name', 'Exported By'].includes(k)),
+      ] as Array<[string, string]>,
+      columns,
+      rows,
+      fingerprint,
+      classification: 'Internal' as const,
+    };
+
     if (format === 'xlsx') {
-      const wb = new ExcelJS.Workbook();
-      const ws = wb.addWorksheet(table.slice(0, 31));
-      if (info) {
-        for (const [k, v] of Object.entries(info)) ws.addRow([INFO_LABELS[k] ?? k, v == null ? '' : v]);
-        ws.addRow([]);
-      }
-      ws.addRow(header);
-      for (const row of rows) ws.addRow(cols.map((c) => (row[c] == null ? '' : row[c])));
-      const buf = Buffer.from(await wb.xlsx.writeBuffer());
+      const buf = await renderTableXlsx(branded);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename="${table}_export_${Date.now()}.xlsx"`);
       return res.send(buf);
     }
 
-    const out: (string | number | boolean | null)[][] = [];
-    if (info) {
-      for (const [k, v] of Object.entries(info)) out.push([INFO_LABELS[k] ?? k, v == null ? '' : String(v)]);
-      out.push([]);
+    if (includeTenant) {
+      const csv = renderTableCsv(branded, tenantFacts);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${table}_export_${Date.now()}.csv"`);
+      return res.send(csv);
     }
+
+    const out: (string | number | boolean | null)[][] = [];
     out.push(header);
     for (const row of rows) {
       out.push(

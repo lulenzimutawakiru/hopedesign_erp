@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { getToken } from '../api';
 
-const FORMATS = [
-  { id: 'print', label: 'Print' },
-  { id: 'pdf', label: 'PDF' },
-  { id: 'xlsx', label: 'Excel (XLSX)' },
-  { id: 'csv', label: 'CSV' },
-  { id: 'json', label: 'JSON' },
+export const DOCUMENT_EXPORT_FORMATS = [
+  { id: 'print', label: 'Print letterhead', hint: 'Open a branded A4 view for printing' },
+  { id: 'pdf', label: 'Official PDF', hint: 'Signed, letterheaded PDF' },
+  { id: 'xlsx', label: 'Excel workbook', hint: 'Company-branded spreadsheet' },
+  { id: 'csv', label: 'CSV', hint: 'Letterhead plus line items' },
+  { id: 'json', label: 'JSON', hint: 'Structured data with company meta' },
 ];
 
 export default function DownloadMenu({
@@ -71,9 +71,10 @@ export default function DownloadMenu({
       {open && (
         <div className="topbar-dropdown" style={{ top: 36, minWidth: 200 }}>
           <div className="dropdown-head">Export as</div>
-          {FORMATS.map((f) => (
-            <button key={f.id} className="search-item" onClick={() => download(f.id)}>
-              <span className="search-item-title">{f.label}</span>
+          {DOCUMENT_EXPORT_FORMATS.map((f) => (
+            <button key={f.id} className="search-item" onClick={() => download(f.id)} disabled={busy === f.id}>
+              <span className="search-item-title">{busy === f.id ? 'Preparing…' : f.label}</span>
+              <span className="search-item-sub">{f.hint}</span>
             </button>
           ))}
         </div>

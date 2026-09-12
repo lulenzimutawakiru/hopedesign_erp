@@ -1184,13 +1184,11 @@ export default function Reports() {
                   )}
                   {canExport && (
                     <>
+                      <button className="btn btn-sm btn-ghost" onClick={() => exportFmt('print')}>Print letterhead</button>
+                      <button className="btn btn-sm" onClick={() => exportFmt('pdf')}>Official PDF</button>
+                      <button className="btn btn-sm" onClick={() => exportFmt('xlsx')}>Excel</button>
                       <button className="btn btn-sm" onClick={() => exportFmt('csv')}>CSV</button>
-                      <button className="btn btn-sm" onClick={() => exportFmt('xlsx')}>XLSX</button>
-                      <button className="btn btn-sm" onClick={() => exportFmt('pdf')}>PDF</button>
                       <button className="btn btn-sm" onClick={() => exportFmt('json')}>JSON</button>
-                      <button className="btn btn-sm btn-ghost" onClick={() => exportFmt('print')}>
-                        Print
-                      </button>
                     </>
                   )}
                 </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, getToken, fmtDate } from '../api';
 import { ErrorBanner } from '../components/ui';
+import { DOCUMENT_EXPORT_FORMATS } from '../components/DownloadMenu';
 
 interface ExportTable {
   table: string;
@@ -26,13 +27,7 @@ interface HistoryRow {
   createdAt: string;
 }
 
-const FORMATS = [
-  { id: 'csv', label: 'CSV', mime: 'text/csv' },
-  { id: 'xlsx', label: 'Excel (XLSX)', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
-  { id: 'json', label: 'JSON', mime: 'application/json' },
-  { id: 'pdf', label: 'PDF', mime: 'application/pdf' },
-  { id: 'print', label: 'Print', mime: 'text/html' },
-];
+const FORMATS = DOCUMENT_EXPORT_FORMATS;
 
 export default function DataExports() {
   const [tables, setTables] = useState<ExportTable[]>([]);
@@ -111,7 +106,7 @@ export default function DataExports() {
         <div className="card-head">
           <h3>New export</h3>
         </div>
-        <div className="form-grid" style={{ gridTemplateColumns: 'minmax(220px, 340px) auto auto auto auto auto' }}>
+        <div className="form-grid" style={{ gridTemplateColumns: 'minmax(220px, 340px) auto auto auto auto auto auto' }}>
           <label>
             <span>Table</span>
             <select value={table} onChange={(e) => setTable(e.target.value)}>
@@ -133,7 +128,7 @@ export default function DataExports() {
             <div className="field" key={f.id}>
               <span>&nbsp;</span>
               <button className="btn" disabled={!table || busy} onClick={() => download(f.id)}>
-                {busy ? 'Exporting…' : `Export ${f.label}`}
+                {busy ? 'Exporting…' : f.label}
               </button>
             </div>
           ))}

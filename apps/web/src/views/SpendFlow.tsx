@@ -3,6 +3,7 @@ import { api, fmtDate, fmtMoney, fmtNum, getToken } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
+import { DOCUMENT_EXPORT_FORMATS } from '../components/DownloadMenu';
 
 type Rec = Record<string, unknown>;
 
@@ -341,13 +342,7 @@ let lineKeyCounter = 0;
 function nextLineKey(): number { lineKeyCounter += 1; return lineKeyCounter; }
 interface LineDraft { key: number; itemType: string; productId?: number; assetCategory: string; description: string; quantity: string; unitId?: number; unitCode: string; unitCost: string; }
 
-const REQ_EXPORT_FORMATS = [
-  { id: 'print', label: 'Print' },
-  { id: 'pdf', label: 'PDF' },
-  { id: 'xlsx', label: 'Excel (XLSX)' },
-  { id: 'csv', label: 'CSV' },
-  { id: 'json', label: 'JSON' },
-];
+const REQ_EXPORT_FORMATS = DOCUMENT_EXPORT_FORMATS;
 
 function RequisitionExportMenu({ status, type, q }: { status: string; type: string; q: string }) {
   const [open, setOpen] = useState(false);
@@ -406,8 +401,9 @@ function RequisitionExportMenu({ status, type, q }: { status: string; type: stri
         <div className="topbar-dropdown" style={{ top: 36, minWidth: 200 }}>
           <div className="dropdown-head">Export as</div>
           {REQ_EXPORT_FORMATS.map((f) => (
-            <button key={f.id} className="search-item" onClick={() => download(f.id)}>
-              <span className="search-item-title">{f.label}</span>
+            <button key={f.id} className="search-item" onClick={() => download(f.id)} disabled={busy === f.id}>
+              <span className="search-item-title">{busy === f.id ? 'Preparing…' : f.label}</span>
+              <span className="search-item-sub">{f.hint}</span>
             </button>
           ))}
         </div>
