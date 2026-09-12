@@ -475,6 +475,23 @@ button, input, select, textarea { font-family: inherit; }
 .btn-ghost-on { border-color: var(--mill); color: var(--mill); }
 .btn-ghost-danger { color: var(--clay); }
 .btn-ghost-danger:hover { color: #FFFFFF; background: var(--clay); border-color: var(--clay); }
+/* Inline text actions (Open / 360 / Resolve / Post entry) in tables and lists. */
+.link-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 0; border: 0; background: none;
+  font: inherit; font-weight: 600;
+  color: var(--hope);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: color 0.14s ease;
+}
+.link-btn:hover { color: var(--hope-hover); text-decoration: underline; text-underline-offset: 2px; }
+.link-btn:disabled { opacity: 0.5; cursor: not-allowed; text-decoration: none; }
+/* A .quick-actions strip placed in a table cell must not inherit card padding. */
+td .quick-actions { padding: 0; gap: 10px; }
+/* Touch devices get a full-size hit target without inflating rows on desktop. */
+@media (pointer: coarse) { .link-btn { min-height: 44px; } }
 
 /* ---------- Cards / KPI ---------- */
 .card {
@@ -2525,7 +2542,7 @@ a.verify-company-v:hover { color: var(--hope); text-decoration: underline; }
 
 /* Interactive micro-transitions */
 .tab, .btn, .chip { transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease; }
-.btn:focus-visible, .tab:focus-visible, .chip:focus-visible, .cstep:focus-visible, .kpi-tile:focus-visible { outline: 2px solid var(--mod-hr); outline-offset: 2px; }
+.btn:focus-visible, .tab:focus-visible, .chip:focus-visible, .cstep:focus-visible, .kpi-tile:focus-visible, .link-btn:focus-visible { outline: 2px solid var(--mod-hr); outline-offset: 2px; }
 table.data th { position: sticky; top: 0; z-index: 1; }
 
 @media (max-width: 720px) {
