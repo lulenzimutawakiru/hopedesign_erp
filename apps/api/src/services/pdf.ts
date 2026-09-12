@@ -57,20 +57,85 @@ export interface PdfDocMetadata {
   creationDate?: Date;
 }
 
-// Helvetica regular advance widths for chars 32..126 (units of 1/1000 em).
-const REG = '278278355556556889667191333333389584278333278278556556556556556556556556556556' +
-  '278278584584584556101566766772272266761177872227850066755683372277866777872266761' +
-  '172266794466766761127827827846955633355655650055655627855655622222250022283355655' +
-  '6556556333500278556500722500500500334260334584';
-const BOLD_SCALE = 1.05;
+/**
+ * Advance widths for the standard-14 Helvetica faces, in units of 1/1000 em.
+ * The content stream carries WinAnsiEncoding (see toWinAnsi), so a character is
+ * measured by its *encoded byte*: that is the glyph a viewer actually rasterises.
+ * These are the Adobe core metrics and must stay exact - textWidth() drives
+ * centring, rounded pills, shrink-to-fit, wrapping and table column sizing in
+ * every document this service produces.
+ *
+ * Every entry is exactly four digits so that values above 999 round-trip: "@" is
+ * 1015. An earlier three-digit packing could not express that, which is where the
+ * table desynchronised and every glyph after "@" measured 4%-38% too narrow.
+ */
+function decodeWidths(spec: string): readonly number[] {
+  const out: number[] = [];
+  for (let i = 0; i + 4 <= spec.length; i += 4) out.push(Number(spec.slice(i, i + 4)));
+  return out;
+}
+
+/** 0x20-0x7E. */
+const ASCII_REGULAR = decodeWidths(
+  '0278027803550556055608890667019103330333038905840278033302780278' +
+  '0556055605560556055605560556055605560556027802780584058405840556' +
+  '1015066706670722072206670611077807220278050006670556083307220778' +
+  '0667077807220667061107220667094406670667061102780278027804690556' +
+  '0333055605560500055605560278055605560222022205000222083305560556' +
+  '055605560333050002780556050007220500050005000334026003340584'
+);
+const ASCII_BOLD = decodeWidths(
+  '0278033304740556055608890722023803330333038905840278033302780278' +
+  '0556055605560556055605560556055605560556033303330584058405840611' +
+  '0975072207220722072206670611077807220278055607220611083307220778' +
+  '0667077807220667061107220667094406670667061103330278033305840556' +
+  '0333055606110556061105560333061106110278027805560278088906110611' +
+  '061106110389055603330611055607780556055605000389028003890584'
+);
+
+/** 0x80-0x9F, the WinAnsi extras WIN_EXTRA maps onto. Bytes that WinAnsi leaves
+ * unassigned keep the fallback width and are never produced by toWinAnsi(). */
+const EXTRA_REGULAR = decodeWidths(
+  '0556055602220500033310000556055603331000066703331000055606110556' +
+  '0556022202220333033303500556100003331000050003330944055605000667'
+);
+const EXTRA_BOLD = decodeWidths(
+  '0556055602780556050010000556055603331000066703331000055606110556' +
+  '0556027802780500050003500556100003331000055603330944055605000667'
+);
+
+/** 0xA0-0xFF, Latin-1: accented names, the middle dot, currency signs. */
+const LATIN1_REGULAR = decodeWidths(
+  '0278033305560556055605560556055603330737037005560584033307370333' +
+  '0400058403330333033305560537027803330333036505560834083408340611' +
+  '0667066706670667066706671000072206670667066706670278027802780278' +
+  '0722072207780778077807780778058407780722072207220722066706670611' +
+  '0556055605560556055605560889050005560556055605560278027802780278' +
+  '0556055605560556055605560556058405560556055605560556050005560500'
+);
+const LATIN1_BOLD = decodeWidths(
+  '0278033305560556055605560556055603330737037005560584033307370333' +
+  '0400058403330333033306110556027803330333036505560834083408340611' +
+  '0722072207220722072207221000072206670667066706670278027802780278' +
+  '0722072207780778077807780778058407780722072207220722066706670611' +
+  '0556055605560556055605560889055605560556055605560278027802780278' +
+  '0611061106110611061106110611058406110611061106110611055606110556'
+);
+
+// A byte with no glyph of its own measures as "?": toWinAnsi() maps whatever it
+// cannot represent there, so this matches what the page will actually show.
+const UNKNOWN_BYTE_WIDTH = 556;
+
+function byteWidth(byte: number, bold: boolean): number {
+  if (byte >= 0x20 && byte <= 0x7e) return (bold ? ASCII_BOLD : ASCII_REGULAR)[byte - 0x20];
+  if (byte >= 0x80 && byte <= 0x9f) return (bold ? EXTRA_BOLD : EXTRA_REGULAR)[byte - 0x80];
+  if (byte >= 0xa0 && byte <= 0xff) return (bold ? LATIN1_BOLD : LATIN1_REGULAR)[byte - 0xa0];
+  return UNKNOWN_BYTE_WIDTH;
+}
 
 function charWidth(ch: string, size: number, bold: boolean): number {
-  const code = ch.codePointAt(0) ?? 0;
-  if (code >= 32 && code <= 126) {
-    const w = Number(REG.slice((code - 32) * 3, (code - 32) * 3 + 3));
-    return (w / 1000) * size * (bold ? BOLD_SCALE : 1);
-  }
-  return size * (bold ? 0.62 : 0.56);
+  const byte = toWinAnsi(ch).charCodeAt(0);
+  return (byteWidth(byte, bold) / 1000) * size;
 }
 
 export function textWidth(text: string, size: number, bold = false): number {

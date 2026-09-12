@@ -3512,7 +3512,75 @@ function cropMarks(doc: PdfDoc, x: number, y: number, w: number, h: number, colo
   doc.line(x + w, y - m, x + w, y - m + s, color, 0.6);
 }
 
-/** Draw an embedded image fitted (contain) inside a box with uniform padding. */
+// ---------------------------------------------------------------------------
+// Employee identity card (CR80 / ID-1: 85.6 mm x 54 mm)
+//
+// The card is printed on card stock, so both faces are laid out one above the
+// other on a portrait page and cut on crop marks. Every block below is measured
+// rather than pinned to a fixed pitch, so a wrapped name, an extra register
+// field or a missing photograph can never collide with a band or leave the card.
+// ---------------------------------------------------------------------------
+
+/** CR80 card geometry in points (85.6 mm x 54 mm). */
+const ID_CARD_W = 243;
+const ID_CARD_H = 153;
+
+/** Compact ASCII operand for a raw PDF content-stream number. */
+function pdfNum(v: number): string {
+  return String(Math.round(v * 1000) / 1000);
+}
+
+/** Fill colour operator (PDF `rg`). */
+function pdfFill(color: Rgb): string {
+  return `${pdfNum(color[0])} ${pdfNum(color[1])} ${pdfNum(color[2])} rg`;
+}
+
+/** Stroke colour operator (PDF `RG`). */
+function pdfStroke(color: Rgb): string {
+  return `${pdfNum(color[0])} ${pdfNum(color[1])} ${pdfNum(color[2])} RG`;
+}
+
+/** Blend a colour toward white to build the very light security tints. */
+function idCardTint(color: Rgb, amount: number): Rgb {
+  const a = Math.max(0, Math.min(1, amount));
+  return [1 - (1 - color[0]) * a, 1 - (1 - color[1]) * a, 1 - (1 - color[2]) * a];
+}
+
+/** Filled rounded rectangle emitted straight into the content stream. */
+function idCardPill(doc: PdfDoc, x: number, y: number, w: number, h: number, fill: Rgb, radius?: number): void {
+  const r = Math.max(0, Math.min(radius ?? h / 2, h / 2, w / 2));
+  const k = r * 0.5523;
+  const x2 = x + w;
+  const y2 = y + h;
+  doc.op(
+    `q ${pdfFill(fill)} ${pdfNum(x + r)} ${pdfNum(y)} m ${pdfNum(x2 - r)} ${pdfNum(y)} l ` +
+      `${pdfNum(x2 - r + k)} ${pdfNum(y)} ${pdfNum(x2)} ${pdfNum(y + r - k)} ${pdfNum(x2)} ${pdfNum(y + r)} c ` +
+      `${pdfNum(x2)} ${pdfNum(y2 - r)} l ${pdfNum(x2)} ${pdfNum(y2 - r + k)} ${pdfNum(x2 - r + k)} ${pdfNum(y2)} ${pdfNum(x2 - r)} ${pdfNum(y2)} c ` +
+      `${pdfNum(x + r)} ${pdfNum(y2)} l ${pdfNum(x + r - k)} ${pdfNum(y2)} ${pdfNum(x)} ${pdfNum(y2 - r + k)} ${pdfNum(x)} ${pdfNum(y2 - r)} c ` +
+      `${pdfNum(x)} ${pdfNum(y + r)} l ${pdfNum(x)} ${pdfNum(y + r - k)} ${pdfNum(x + r - k)} ${pdfNum(y)} ${pdfNum(x + r)} ${pdfNum(y)} c f Q`
+  );
+}
+
+/** Faint diagonal security tint clipped to a region - a print-safe guilloche stand-in. */
+function idCardSecurityTint(doc: PdfDoc, x: number, y: number, w: number, h: number, color: Rgb, step = 5): void {
+  const lines: string[] = [];
+  for (let offset = -h; offset < w; offset += step) {
+    lines.push(`${pdfNum(x + offset)} ${pdfNum(y)} m ${pdfNum(x + offset + h)} ${pdfNum(y + h)} l S`);
+  }
+  if (!lines.length) return;
+  doc.op(`q ${pdfNum(x)} ${pdfNum(y)} ${pdfNum(w)} ${pdfNum(h)} re W n 0.25 w ${pdfStroke(color)} ${lines.join(' ')} Q`);
+}
+
+/** Microtext thread: the phrase tiled at 2-3pt until the band is full. */
+function idCardMicrotext(doc: PdfDoc, text: string, x: number, y: number, w: number, size: number, color: Rgb): void {
+  const step = textWidth(text, size, false);
+  if (step <= 0) return;
+  const reps = Math.floor(w / step);
+  if (reps < 1) return;
+  doc.rawText(text.repeat(reps), x, y, size, { color, align: 'center', maxWidth: w });
+}
+
+/** Contain-fit: scale an image to sit fully inside a box, centred, aspect preserved. */
 function idCardFitImage(doc: PdfDoc, name: string, x: number, y: number, w: number, h: number, pad: number): void {
   const dims = doc.imageDims(name);
   if (!dims || dims.width <= 0 || dims.height <= 0) return;
@@ -3523,6 +3591,26 @@ function idCardFitImage(doc: PdfDoc, name: string, x: number, y: number, w: numb
   if (ar > boxAr) dh = dw / ar;
   else dw = dh * ar;
   doc.image(name, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+}
+
+/** Cover-fit: crop an image to fill its frame edge to edge, as on a printed ID card. */
+function idCardCoverImage(doc: PdfDoc, name: string, x: number, y: number, w: number, h: number): void {
+  const dims = doc.imageDims(name);
+  if (!dims || dims.width <= 0 || dims.height <= 0 || w <= 0 || h <= 0) return;
+  const ar = dims.width / dims.height;
+  const boxAr = w / h;
+  let dw = w;
+  let dh = h;
+  if (ar > boxAr) dw = h * ar;
+  else dh = w / ar;
+  doc.op(`q ${pdfNum(x)} ${pdfNum(y)} ${pdfNum(w)} ${pdfNum(h)} re W n`);
+  doc.image(name, x - (dw - w) / 2, y - (dh - h) / 2, dw, dh);
+  doc.op('Q');
+}
+
+/** Baseline that optically centres a line of the given size inside a band. */
+function idCardCentreBaseline(bandY: number, bandH: number, size: number): number {
+  return bandY + (bandH - size * 0.72) / 2;
 }
 
 /** Draw a single line, shrinking the size until it fits within maxWidth. */
@@ -3539,6 +3627,30 @@ function idCardFitText(
   const bold = style.bold ?? false;
   while (s > 5 && textWidth(text, s, bold) > maxWidth) s -= 0.5;
   doc.rawText(text, x, y, s, { ...style, maxWidth });
+}
+
+/** Shrink to `floor`, then ellipsize, so a card value can never leave its column. */
+function idCardFitLine(
+  doc: PdfDoc,
+  text: string,
+  x: number,
+  y: number,
+  size: number,
+  style: PdfTextStyle,
+  maxWidth: number,
+  floor: number
+): void {
+  const bold = style.bold ?? false;
+  let s = size;
+  while (s > floor && textWidth(text, s, bold) > maxWidth) s -= 0.25;
+  let value = text;
+  if (textWidth(value, s, bold) > maxWidth) {
+    const room = maxWidth - textWidth('\u2026', s, bold);
+    let cut = value.length;
+    while (cut > 1 && textWidth(value.slice(0, cut), s, bold) > room) cut -= 1;
+    value = value.slice(0, cut).replace(/[\s,;:.\u00b7-]+$/, '') + '\u2026';
+  }
+  doc.rawText(value, x, y, s, { ...style, maxWidth });
 }
 
 function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
@@ -3559,121 +3671,184 @@ function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
   const photoName = data.photo?.bytes ? doc.addImage(data.photo.bytes) : null;
   const qrName = data.qrPng ? doc.addImage(data.qrPng) : null;
   const logoName = preloadLogo(doc, opts.company.logoUrl);
+  const verifyHost = (opts.verifyUrl || opts.company.verifyUrl || opts.company.website || '')
+    .replace(/^https?:\/\//i, '')
+    .split('/')[0];
 
-  const CARD_W = 243;
-  const CARD_H = 153;
+  const CARD_W = ID_CARD_W;
+  const CARD_H = ID_CARD_H;
   const frontX = (PAGE_W - CARD_W) / 2;
   const frontY = PAGE_H - MARGIN - 36 - CARD_H;
-  const backY = frontY - CARD_H - 28;
+  const backY = frontY - CARD_H - 30;
 
-  doc.setMetadata({ title: `Employee ID ${official || data.code}`, author: company, subject: 'Employee identity card' });
-  doc.rawText('EMPLOYEE IDENTITY CARD', MARGIN, PAGE_H - MARGIN, 11, { bold: true, color: brand.navy, maxWidth: TABLE_W });
-  doc.rawText(company, MARGIN, PAGE_H - MARGIN - 14, 8, { color: GRAY, maxWidth: TABLE_W });
-  doc.rawText('Front  ·  CR80 card  ·  cut on crop marks', frontX, frontY + CARD_H + 10, 7, { color: GRAY, maxWidth: CARD_W });
+  doc.setMetadata({
+    title: `Employee ID ${official || data.code}`,
+    author: company,
+    subject: 'Employee identity card',
+    keywords: [official, shortId, fullName, cardNo].filter(Boolean).join(', '),
+    creator: 'HOPE DESIGN ERP',
+  });
 
-  const drawFront = (x: number, y: number) => {
-    const top = y + CARD_H;
-    cropMarks(doc, x, y, CARD_W, CARD_H, brand.navy);
-    doc.rect(x, y, CARD_W, CARD_H, BRAND.white);
-    doc.strokeRect(x, y, CARD_W, CARD_H, brand.navy, 1.4);
-    doc.strokeRect(x + 4, y + 4, CARD_W - 8, CARD_H - 8, BRAND.line, 0.5);
+  // --------------------------------------------------------------- page head
+  doc.rawText('EMPLOYEE IDENTITY CARD', MARGIN, PAGE_H - MARGIN, 12, { bold: true, color: brand.navy, maxWidth: TABLE_W });
+  if (fullName) {
+    idCardFitLine(doc, fullName.toUpperCase(), MARGIN, PAGE_H - MARGIN, 9, { bold: true, color: INK, align: 'right' }, TABLE_W, 6);
+  }
+  if (official) {
+    idCardFitLine(doc, 'Official ID  ' + official, MARGIN, PAGE_H - MARGIN - 11, 7.5, { bold: true, color: brand.teal, align: 'right' }, TABLE_W, 6);
+  }
+  doc.line(MARGIN, PAGE_H - MARGIN - 6, PAGE_W - MARGIN, PAGE_H - MARGIN - 6, brand.teal, 1.1);
+  doc.rawText(`${company}  \u00b7  Human Resources`, MARGIN, PAGE_H - MARGIN - 15, 7.5, { color: GRAY, maxWidth: TABLE_W });
 
-    // Branded header band with company logo
-    doc.rect(x, top - 30, CARD_W, 30, brand.navy);
-    doc.rect(x, top - 32.5, CARD_W, 2.5, brand.teal);
-    let headTx = x + 12;
-    if (logoName) {
-      idCardFitImage(doc, logoName, x + 10, top - 26, 22, 22, 1.5);
-      headTx = x + 38;
-    }
-    doc.rawText(opts.company.name.toUpperCase(), headTx, top - 13, 8, {
-      bold: true,
-      color: BRAND.white,
-      maxWidth: CARD_W - (headTx - x) - 12,
-    });
-    doc.rawText('STAFF IDENTITY CARD', headTx, top - 21, 5.5, {
-      bold: true,
-      color: brand.teal,
-      maxWidth: CARD_W - (headTx - x) - 12,
-    });
-
-    // Photograph with light frame (initials fallback when no photo on file)
-    const photoX = x + 12;
-    const photoTop = top - 112;
-    doc.rect(photoX, photoTop, 58, 76, BRAND.white);
-    doc.strokeRect(photoX, photoTop, 58, 76, brand.navy, 1);
-    if (photoName) {
-      idCardFitImage(doc, photoName, photoX + 2, photoTop + 2, 54, 72, 0);
-    } else {
-      const initials =
-        fullName.split(/\s+/).filter(Boolean).map((p) => p[0]).slice(0, 2).join('').toUpperCase() || '?';
-      doc.rect(photoX + 2, photoTop + 2, 54, 72, BRAND.headerFill);
-      doc.rawText(initials, photoX + 2, photoTop + 42, 18, { bold: true, color: brand.navy, align: 'center', maxWidth: 54 });
-      doc.rawText('PHOTO ON FILE', photoX + 2, photoTop + 16, 4.6, { color: GRAY, align: 'center', maxWidth: 54 });
-    }
-
-    // Identity details (name wraps to a second line when needed)
-    const tx = x + 78;
-    const tw = CARD_W - 78 - 12;
-    const nameLines = wrapText(fullName || 'EMPLOYEE', 12, true, tw).slice(0, 2);
-    nameLines.forEach((line, i) =>
-      doc.rawText(line, tx, top - 38 - i * 15, 12, { bold: true, color: brand.navy, maxWidth: tw })
-    );
-    const nameH = (nameLines.length - 1) * 15;
-    doc.rawText(position || 'Staff', tx, top - 52 - nameH, 8.5, { color: GRAY, maxWidth: tw });
-    doc.rawText(department || '', tx, top - 63 - nameH, 7.5, { color: GRAY, maxWidth: tw });
-    doc.line(tx, top - 70 - nameH, x + CARD_W - 12, top - 70 - nameH, BRAND.line, 0.5);
-    doc.rawText('EMPLOYEE ID', tx, top - 77 - nameH, 5.5, { bold: true, color: brand.teal, maxWidth: tw });
-    idCardFitText(doc, official || 'ID PENDING', tx, top - 90 - nameH, 13, { bold: true, color: brand.navy }, tw);
-    if (shortId) doc.rawText('Badge  ' + shortId, tx, top - 103 - nameH, 6.5, { color: INK, maxWidth: tw });
-
-    // Status chip, top-right
-    if (status) {
-      const chipW = 44;
-      const chipX = x + CARD_W - 12 - chipW;
-      doc.rect(chipX, top - 50, chipW, 12, brand.teal);
-      idCardFitText(doc, status.toUpperCase(), chipX, top - 42.5, 5.5, { bold: true, color: BRAND.white, align: 'center' }, chipW - 4);
-    }
-
-    // Validity row above the footer band
-    const validity = ['Issued ' + issued, expires ? 'Expires ' + expires : ''].filter(Boolean).join('   \u00b7   ');
-    if (validity) doc.rawText(validity, x + 10, y + 28, 5.8, { color: GRAY, align: 'center', maxWidth: CARD_W - 20 });
-
-    // Footer band
-    doc.rect(x, y, CARD_W, 20, brand.navy);
-    idCardFitText(doc, 'Property of ' + company + '  \u00b7  Return to Human Resources', x + 10, y + 11, 5.3, {
-      bold: true,
-      color: BRAND.white,
-      align: 'center',
-    }, CARD_W - 20);
+  const cardLabel = (label: string, note: string, y: number): void => {
+    doc.rawText(label, frontX, y, 7.5, { bold: true, color: brand.navy, maxWidth: CARD_W });
+    if (note) doc.rawText(note, frontX, y, 7, { color: GRAY, align: 'right', maxWidth: CARD_W });
   };
 
-  const drawBack = (x: number, y: number) => {
+  // ----------------------------------------------------------- front (face)
+  const drawFront = (x: number, y: number): void => {
     const top = y + CARD_H;
+    const HDR = 30;
+    const KEY = 2.5;
+    const FTR = 16;
+    const VAL = 12;
+    const PAD = 12;
+    const bodyTop = top - HDR - KEY;
+    const right = x + CARD_W - PAD;
+
     cropMarks(doc, x, y, CARD_W, CARD_H, brand.navy);
     doc.rect(x, y, CARD_W, CARD_H, BRAND.white);
+    idCardSecurityTint(doc, x + 1, y + 1, CARD_W - 2, CARD_H - 2, idCardTint(brand.navy, 0.05));
     doc.strokeRect(x, y, CARD_W, CARD_H, brand.navy, 1.4);
     doc.strokeRect(x + 4, y + 4, CARD_W - 8, CARD_H - 8, BRAND.line, 0.5);
 
-    doc.rect(x, top - 30, CARD_W, 30, brand.navy);
-    doc.rect(x, top - 32.5, CARD_W, 2.5, brand.teal);
-    doc.rawText('EMPLOYEE IDENTIFICATION', x, top - 13, 8, { bold: true, color: BRAND.white, align: 'center', maxWidth: CARD_W });
-    doc.rawText('Return this card to Human Resources if found', x, top - 21, 5.5, { bold: true, color: brand.teal, align: 'center', maxWidth: CARD_W });
-
-    // Verification QR with framed quiet zone
-    const qrX = x + 14;
-    const qrTop = top - 104;
-    doc.rect(qrX, qrTop, 56, 56, BRAND.white);
-    doc.strokeRect(qrX, qrTop, 56, 56, brand.navy, 0.8);
-    if (qrName) {
-      idCardFitImage(doc, qrName, qrX + 3, qrTop + 3, 50, 50, 0);
-      doc.rawText('SCAN TO VERIFY', qrX, top - 56, 5.5, { bold: true, color: brand.teal, align: 'center', maxWidth: 56 });
-    } else {
-      doc.rawText('NO QR CODE', qrX, top - 76, 6, { color: GRAY, align: 'center', maxWidth: 56 });
-      doc.rawText('VERIFICATION PENDING', qrX, top - 88, 4.8, { color: GRAY, align: 'center', maxWidth: 56 });
+    // Header band carrying the lockup and the status pill, then the brand keyline.
+    doc.rect(x, top - HDR, CARD_W, HDR, brand.navy);
+    doc.rect(x, top - HDR - KEY, CARD_W, KEY, brand.teal);
+    let headRight = right;
+    if (status) {
+      const label = status.toUpperCase();
+      const size = 5.4;
+      const pillW = Math.min(92, textWidth(label, size, true) + 15);
+      const pillH = 12;
+      const pillX = right - pillW;
+      const pillY = top - HDR / 2 - pillH / 2;
+      idCardPill(doc, pillX, pillY, pillW, pillH, brand.teal);
+      idCardFitText(doc, label, pillX + 4, idCardCentreBaseline(pillY, pillH, size), size, { bold: true, color: BRAND.white, align: 'center' }, pillW - 8);
+      headRight = pillX - 6;
     }
+    let headTx = x + PAD;
+    if (logoName) {
+      idCardPill(doc, x + 8, top - HDR + 4, 22, 22, BRAND.white, 2.5);
+      idCardFitImage(doc, logoName, x + 9, top - HDR + 5, 20, 20, 1);
+      headTx = x + 36;
+    }
+    const headW = Math.max(46, headRight - headTx);
+    idCardFitText(doc, opts.company.name.toUpperCase(), headTx, top - 11.5, 9, { bold: true, color: BRAND.white }, headW);
+    idCardFitText(doc, 'STAFF IDENTITY CARD', headTx, top - 21.5, 5.4, { bold: true, color: brand.teal }, headW);
 
-    // Field register with hairline separators
+    // Photograph: cover-fit inside a white matte so the frame is always filled.
+    const photoW = 62;
+    const photoH = 80;
+    const photoX = x + PAD;
+    const photoY = bodyTop - 4 - photoH;
+    const inset = 1.5;
+    const ix = photoX + inset;
+    const iy = photoY + inset;
+    const iw = photoW - inset * 2;
+    const ih = photoH - inset * 2;
+    doc.rect(photoX, photoY, photoW, photoH, BRAND.white);
+    doc.rect(ix, iy, iw, ih, BRAND.headerFill);
+    if (photoName) {
+      idCardCoverImage(doc, photoName, ix, iy, iw, ih);
+    } else {
+      const initials = (fullName || '?').split(/\s+/).filter(Boolean).map((p) => p[0]).slice(0, 2).join('').toUpperCase() || '?';
+      doc.rawText(initials, ix, idCardCentreBaseline(iy, ih, 20) + 6, 20, { bold: true, color: brand.navy, align: 'center', maxWidth: iw });
+      doc.rawText('PHOTO ON FILE', ix, iy + 8, 4.6, { color: GRAY, align: 'center', maxWidth: iw });
+    }
+    doc.strokeRect(photoX, photoY, photoW, photoH, brand.navy, 1);
+    doc.strokeRect(ix, iy, iw, ih, BRAND.line, 0.4);
+
+    // Identity details. The name sits on a fixed grid so a one-line and a two-line
+    // name share the same rhythm, and the credential plate is anchored to the foot
+    // of the column so every card produced in a batch reads identically.
+    const colL = x + 76;
+    const colR = x + 236;
+    const tx = colL + 8;
+    const tw = colR - 8 - tx;
+    doc.line(colL, y + 30, colL, bodyTop - 2, BRAND.line, 0.6);
+    const PLATE_TOP = y + 66.5;
+    const PLATE_BOTTOM = y + 36.5;
+    const nameLines = wrapText(fullName || 'EMPLOYEE', 12, true, tw).slice(0, 2);
+    const nameSlots = nameLines.length > 1 ? [y + 110, y + 93] : [y + 93];
+    nameLines.forEach((line, i) => idCardFitLine(doc, line, tx, nameSlots[i], 12, { bold: true, color: brand.navy }, tw, 8));
+    idCardFitLine(doc, position || 'Staff', tx, y + 80.5, 8, { color: INK }, tw, 5.5);
+    if (department) idCardFitLine(doc, department, tx, y + 71, 6.6, { color: GRAY }, tw, 5.5);
+
+    // Credential plate: a light panel that anchors the official identity number.
+    doc.rect(colL, PLATE_BOTTOM, colR - colL, PLATE_TOP - PLATE_BOTTOM, idCardTint(brand.teal, 0.09));
+    doc.line(colL, PLATE_TOP, colR, PLATE_TOP, BRAND.line, 0.6);
+    const idLabel = 'EMPLOYEE ID';
+    const idLabelW = textWidth(idLabel, 5.4, true);
+    doc.rawText(idLabel, tx, y + 58, 5.4, { bold: true, color: brand.teal, maxWidth: tw });
+    if (shortId) {
+      const badge = 'BADGE  ' + shortId.toUpperCase();
+      idCardFitLine(doc, badge, tx + idLabelW + 6, y + 58, 5.4, { bold: true, color: GRAY, align: 'right' }, tw - idLabelW - 6, 4.5);
+    }
+    idCardFitLine(doc, official || 'ID PENDING', tx, y + 42.5, 13, { bold: true, color: brand.navy }, tw, 8);
+
+    // Validity strip, then the property footer.
+    doc.rect(x, y + FTR, CARD_W, VAL, idCardTint(brand.navy, 0.07));
+    doc.line(x, y + FTR + VAL, x + CARD_W, y + FTR + VAL, BRAND.line, 0.5);
+    const validityBits = [issued ? 'Issued ' + issued : '', expires ? 'Expires ' + expires : ''].filter(Boolean);
+    const notice = 'Valid only with the holder\u2019s photograph';
+    const validity = validityBits.length ? validityBits.join('   \u00b7   ') + '   \u00b7   ' + notice : notice;
+    idCardFitText(doc, validity, x + PAD, idCardCentreBaseline(y + FTR, VAL, 5.8), 5.8, { color: INK, align: 'center' }, CARD_W - PAD * 2);
+    doc.rect(x, y, CARD_W, FTR, brand.navy);
+    idCardFitText(doc, 'Property of ' + company + '   \u00b7   Return to Human Resources', x + PAD, idCardCentreBaseline(y, FTR, 5.2), 5.2, { bold: true, color: BRAND.white, align: 'center' }, CARD_W - PAD * 2);
+  };
+
+  // -------------------------------------------------------- back (reverse)
+  const drawBack = (x: number, y: number): void => {
+    const top = y + CARD_H;
+    const HDR = 28;
+    const KEY = 2.5;
+    const FTR = 16;
+    const BAND = 8.5;
+    const PAD = 12;
+    const bodyTop = top - HDR - KEY;
+    const right = x + CARD_W - PAD;
+
+    cropMarks(doc, x, y, CARD_W, CARD_H, brand.navy);
+    doc.rect(x, y, CARD_W, CARD_H, BRAND.white);
+    idCardSecurityTint(doc, x + 1, y + 1, CARD_W - 2, CARD_H - 2, idCardTint(brand.navy, 0.05));
+    doc.strokeRect(x, y, CARD_W, CARD_H, brand.navy, 1.4);
+    doc.strokeRect(x + 4, y + 4, CARD_W - 8, CARD_H - 8, BRAND.line, 0.5);
+
+    doc.rect(x, top - HDR, CARD_W, HDR, brand.navy);
+    doc.rect(x, top - HDR - KEY, CARD_W, KEY, brand.teal);
+    idCardFitText(doc, 'EMPLOYEE IDENTIFICATION', x + PAD, top - 11.5, 8.5, { bold: true, color: BRAND.white, align: 'center' }, CARD_W - PAD * 2);
+    idCardFitText(doc, 'Return this card to Human Resources if found', x + PAD, top - 21, 5.4, { bold: true, color: brand.teal, align: 'center' }, CARD_W - PAD * 2);
+
+    // Verification QR above the holder's signature, in the left column.
+    const qrSize = 60;
+    const qrX = x + PAD;
+    const qrY = bodyTop - 2.5 - qrSize;
+    doc.rect(qrX, qrY, qrSize, qrSize, BRAND.white);
+    doc.strokeRect(qrX, qrY, qrSize, qrSize, brand.navy, 0.9);
+    if (qrName) {
+      idCardFitImage(doc, qrName, qrX + 3, qrY + 3, qrSize - 6, qrSize - 6, 0);
+      idCardFitText(doc, 'SCAN TO VERIFY', qrX, qrY - 8.5, 5.4, { bold: true, color: brand.teal, align: 'center' }, qrSize);
+    } else {
+      doc.rawText('NO QR CODE', qrX, qrY + qrSize / 2 + 1.5, 6, { color: GRAY, align: 'center', maxWidth: qrSize });
+      doc.rawText('VERIFICATION PENDING', qrX, qrY + qrSize / 2 - 7.5, 4.6, { color: GRAY, align: 'center', maxWidth: qrSize });
+    }
+    if (verifyHost) idCardFitText(doc, verifyHost, qrX, qrY - 17, 4.6, { color: GRAY, align: 'center' }, qrSize);
+    doc.line(qrX, y + 37, qrX + qrSize, y + 37, brand.navy, 0.7);
+    idCardFitText(doc, 'HOLDER\u2019S SIGNATURE', qrX, y + 31.5, 4.6, { color: GRAY, align: 'center' }, qrSize);
+
+    // Register of the values printed on the card, with a measured row pitch so
+    // the block always clears both the header and the footer bands.
     const rows: Array<[string, string]> = [
       ['Official ID', official],
       ['Badge', shortId],
@@ -3682,39 +3857,65 @@ function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
       ['Issued', issued],
       ['Expires', expires],
     ].filter(([, v]) => Boolean(v)) as Array<[string, string]>;
-    const fx = x + 82;
-    const fw = CARD_W - 82 - 12;
-    rows.forEach(([k, v], i) => {
-      const baseline = top - 36 - i * 15;
-      doc.rawText(k.toUpperCase(), fx, baseline, 5.5, { bold: true, color: GRAY, maxWidth: 62 });
-      idCardFitText(doc, v, fx + 66, baseline, 7.5, { bold: true, color: INK }, fw - 66);
-      doc.line(fx, baseline - 5.5, x + CARD_W - 12, baseline - 5.5, BRAND.line, 0.4);
-    });
+    const fx = x + 84;
+    const fw = right - fx;
+    const labelW = 58;
+    if (rows.length) {
+      const regTop = bodyTop - 6;
+      const regBottom = y + 34;
+      const pitch = Math.min(15, Math.max(9, (regTop - regBottom) / rows.length));
+      rows.forEach(([k, v], i) => {
+        const baseline = regTop - i * pitch;
+        doc.rawText(k.toUpperCase(), fx, baseline, 5.2, { bold: true, color: GRAY, maxWidth: labelW });
+        idCardFitText(doc, v, fx + labelW + 4, baseline, 7.6, { bold: true, color: INK }, fw - labelW - 4);
+        doc.line(fx, baseline - 4.8, right, baseline - 4.8, BRAND.line, 0.4);
+      });
+    }
 
-    // Terms + footer band
-    doc.rawText('This card is not transferable and must be surrendered on separation from service.', x + 10, y + 26, 5.3, {
-      color: GRAY,
-      align: 'center',
-      maxWidth: CARD_W - 20,
-    });
-    doc.rect(x, y, CARD_W, 20, brand.navy);
-    idCardFitText(doc, 'IF FOUND  \u00b7  RETURN TO ' + company.toUpperCase(), x + 10, y + 11, 5.3, {
-      bold: true,
-      color: BRAND.white,
-      align: 'center',
-    }, CARD_W - 20);
+    // Microtext security thread, then the two-line footer.
+    doc.rect(x, y + FTR, CARD_W, BAND, idCardTint(brand.navy, 0.07));
+    doc.line(x, y + FTR + BAND, x + CARD_W, y + FTR + BAND, BRAND.line, 0.5);
+    idCardMicrotext(
+      doc,
+      opts.company.name.toUpperCase() + '  \u00b7  OFFICIAL EMPLOYEE IDENTITY DOCUMENT  \u00b7  ',
+      x + PAD,
+      y + FTR + 2.6,
+      CARD_W - PAD * 2,
+      2.6,
+      idCardTint(brand.navy, 0.42)
+    );
+    doc.rect(x, y, CARD_W, FTR, brand.navy);
+    idCardFitText(doc, 'IF FOUND   \u00b7   RETURN TO ' + company.toUpperCase(), x + PAD, y + 9.2, 5.2, { bold: true, color: BRAND.white, align: 'center' }, CARD_W - PAD * 2);
+    idCardFitText(doc, 'NOT TRANSFERABLE   \u00b7   SURRENDER ON SEPARATION', x + PAD, y + 3.4, 4.4, { color: idCardTint(brand.teal, 0.75), align: 'center' }, CARD_W - PAD * 2);
   };
 
   drawFront(frontX, frontY);
-  doc.rawText('Back', frontX, backY + CARD_H + 10, 7, { color: GRAY, maxWidth: CARD_W });
+  cardLabel('Front', 'CR80  \u00b7  85.6 \u00d7 54 mm', frontY + CARD_H + 11);
   drawBack(frontX, backY);
-  doc.rawText(
-    'Issued by ' + opts.issuedBy + ' on ' + formatDocDateTime(opts.issuedAt),
-    MARGIN,
-    28,
-    7,
-    { color: GRAY, maxWidth: TABLE_W }
-  );
+  cardLabel('Back', 'Print at 100% - do not scale to fit', backY + CARD_H + 11);
+
+  // Printing and issue notes, so HR can produce the card without guesswork.
+  const notesTop = backY - 20;
+  doc.rawText('PRINTING & ISSUE', MARGIN, notesTop, 8, { bold: true, color: brand.navy, maxWidth: TABLE_W });
+  doc.line(MARGIN, notesTop - 4, PAGE_W - MARGIN, notesTop - 4, BRAND.line, 0.5);
+  const notes = [
+    'Print both faces at 100% scale on CR80 card stock (85.6 \u00d7 54 mm) and cut on the crop marks - do not use fit to page.',
+    'The holder signs the reverse before the card is laminated. A card without a photograph or signature is not valid.',
+    'The official employee ID printed on the front is permanent: reissue the card, not the ID, if it is lost, damaged or the photograph changes.',
+  ];
+  let noteY = notesTop - 12;
+  notes.forEach((note) => {
+    wrapText(note, 6.6, false, TABLE_W - 8).forEach((line, i) => {
+      doc.rawText((i === 0 ? '\u2022  ' : '    ') + line, MARGIN, noteY, 6.6, { color: GRAY, maxWidth: TABLE_W });
+      noteY -= 9;
+    });
+    noteY -= 1.5;
+  });
+
+  const trailer = ['Issued by ' + opts.issuedBy + ' on ' + formatDocDateTime(opts.issuedAt)];
+  if (opts.verifyUrl) trailer.push('Verify this identity card at ' + opts.verifyUrl);
+  trailer.forEach((line, i) => doc.rawText(line, MARGIN, 52 - i * 8.5, 6.6, { color: GRAY, maxWidth: TABLE_W }));
+
   return doc.build();
 }
 
