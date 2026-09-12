@@ -136,7 +136,33 @@ export function pathForEntity(entityType: string, id: number): string {
     if (resource === 'requisitions') return `/buy/requisitions/${id}`;
     if (resource === 'goods_receipts') return `/buy/receipts/${id}`;
     if (resource === 'supplier_invoices') return `/buy/invoices/${id}`;
+    if (resource === 'payments') return `/buy/payments/${id}`;
     if (resource === 'rfqs') return `/buy/rfqs/${id}`;
+  }
+  if (module === 'finance') {
+    if (resource === 'journal_entries' || resource === 'journals') return `/finance/journals/${id}`;
+    if (resource === 'expenses' || resource === 'expense_transactions') return `/finance/expenses/${id}`;
+    if (resource === 'budgets') return `/finance/budgets/${id}`;
+    if (resource === 'bank_accounts') return `/finance/banks/${id}`;
+    if (resource === 'chart_of_accounts' || resource === 'accounts') return '/finance/accounts';
+    if (resource === 'advances' || resource === 'cash_advances') return `/finance/advances/${id}`;
+    return '/finance';
+  }
+  if (module === 'ops') {
+    if (resource === 'requisitions') return `/spend/requisitions/${id}`;
+    if (resource === 'expenses' || resource === 'expense_transactions') return `/spend/expenses/${id}`;
+    if (resource === 'claims') return `/spend/claims/${id}`;
+    // A replenishment id is not a fund id, so open the petty cash desk itself.
+    if (resource === 'replenishments') return '/spend/petty-cash';
+    if (resource === 'daily_closings') return '/spend/close';
+  }
+  if (module === 'assets') {
+    if (resource === 'register') return `/assets/register/${id}`;
+    if (resource === 'transfers') return '/assets/transfers';
+    if (resource === 'disposals') return '/assets/disposals';
+    if (resource === 'impairments') return '/assets/impairments';
+    if (resource === 'audits') return '/assets/audits';
+    if (resource === 'maintenance') return '/assets/maintenance';
   }
   return `/records/${module}/${resource}/${id}`;
 }

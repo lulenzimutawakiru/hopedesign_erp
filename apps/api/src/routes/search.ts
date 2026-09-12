@@ -44,6 +44,15 @@ const TARGETS: SearchTarget[] = [
   { table: 'documents', label: 'Document', columns: ['doc_no', 'title'], permission: 'documents.documents.view' },
   { table: 'security_jobs', label: 'Security Job', columns: ['job_no'], permission: 'security_printing.jobs.view' },
   { table: 'payrolls', label: 'Payroll', columns: ['payroll_no'], permission: 'hr.payrolls.view', projection: ['payroll_no', 'period_start', 'period_end', 'status'] },
+  // --- Finance & accounting ---
+  { table: 'chart_of_accounts', label: 'GL Account', columns: ['code', 'name'], permission: 'finance.chart_of_accounts.view', projection: ['id', 'code', 'name', 'account_type', 'is_active'] },
+  { table: 'journal_entries', label: 'Journal Entry', columns: ['entry_no', 'reference_code', 'description'], permission: 'finance.journals.view', projection: ['id', 'entry_no', 'entry_date', 'journal_type', 'description', 'reference_code', 'total_debit', 'total_credit', 'status'] },
+  { table: 'expenses', label: 'Expense', columns: ['expense_no', 'reference', 'vendor', 'category'], permission: 'finance.expenses.view', projection: ['id', 'expense_no', 'expense_date', 'category', 'vendor', 'amount', 'status'] },
+  { table: 'budgets', label: 'Budget', columns: ['budget_no'], permission: 'finance.budgets.view', projection: ['id', 'budget_no', 'period_start', 'period_end', 'amount', 'status'] },
+  { table: 'bank_accounts', label: 'Bank Account', columns: ['code', 'name', 'bank_name', 'account_no'], permission: 'finance.banks.view', projection: ['id', 'code', 'name', 'bank_name', 'account_no', 'currency'] },
+  { table: 'cost_centres', label: 'Cost Centre', columns: ['code', 'name'], permission: 'finance.cost_centres.view', projection: ['id', 'code', 'name', 'status'] },
+  { table: 'profit_centres', label: 'Profit Centre', columns: ['code', 'name'], permission: 'finance.profit_centres.view', projection: ['id', 'code', 'name', 'status'] },
+  { table: 'efris_documents', label: 'EFRIS Receipt', columns: ['fdn', 'verification_code', 'erp_doc_no'], permission: 'finance.efris.view', projection: ['id', 'erp_doc_no', 'fdn', 'verification_code', 'fiscalized_at'] },
 ];
 
 function hasPermission(userPerms: string[], required: string): boolean {
@@ -101,17 +110,27 @@ searchRouter.get(
     const out: { label: string; table: string; matches: Record<string, unknown>[] }[] = [];
     const perms = req.auth!.permissions;
 
-    for (const target of TARGETS) {
-      if (!hasPermission(perms, target.permission)) continue;
-      const scope = await dynamicScope(target.table, req.ctx, perms);
-      const ors = target.columns.map((c) => `t.${c}::text ILIKE $1`);
-      const proj = target.projection ? target.projection.map((c) => `t.${c}`).join(', ') : 't.*';
-      const sql = `SELECT ${proj} FROM ${target.table} t WHERE (${ors.join(' OR ')}) AND ${scope} ORDER BY t.id DESC LIMIT $2`;
-      const res2 = await query(sql, [`%${q}%`, limit], req.ctx);
-      if (res2.rows.length > 0) {
-        out.push({ label: target.label, table: target.table, matches: res2.rows as unknown as Record<string, unknown>[] });
-      }
+    const permitted = TARGETS.filter((target) => hasPermission(perms, target.permission));
+    // Targets are independent, so they run with bounded concurrency rather than one
+    // round trip at a time. Fanning out sequentially across ~34 tables dominated
+    // global search latency; the wave size stays below the pool size so a search
+    // cannot starve the rest of the API.
+    const SEARCH_WAVE = 8;
+    const groups: ({ label: string; table: string; matches: Record<string, unknown>[] } | null)[] = [];
+    for (let i = 0; i < permitted.length; i += SEARCH_WAVE) {
+      const wave = permitted.slice(i, i + SEARCH_WAVE).map(async (target) => {
+        const scope = await dynamicScope(target.table, req.ctx, perms);
+        const ors = target.columns.map((c) => `t.${c}::text ILIKE $1`);
+        const proj = target.projection ? target.projection.map((c) => `t.${c}`).join(', ') : 't.*';
+        const sql = `SELECT ${proj} FROM ${target.table} t WHERE (${ors.join(' OR ')}) AND ${scope} ORDER BY t.id DESC LIMIT $2`;
+        const res2 = await query(sql, [`%${q}%`, limit], req.ctx);
+        return res2.rows.length > 0
+          ? { label: target.label, table: target.table, matches: res2.rows as unknown as Record<string, unknown>[] }
+          : null;
+      });
+      for (const g of await Promise.all(wave)) groups.push(g);
     }
+    for (const g of groups) if (g) out.push(g);
     res.json({ data: out, query: q });
   })
 );

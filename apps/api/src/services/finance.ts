@@ -910,7 +910,7 @@ const JOURNAL_SORT_COLUMNS: Record<string, string> = {
 export async function listJournals(
   client: pg.PoolClient,
   ctx: Ctx,
-  filters: { q?: string; status?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }
+  filters: { q?: string; status?: string; journalType?: string | string[]; costCentreId?: number; profitCentreId?: number; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 40));
@@ -924,6 +924,29 @@ export async function listJournals(
     params.push(filters.status);
     where.push(`je.status = $${params.length}`);
   }
+  if (filters.journalType) {
+    // Accepts one type or many (`?journalType=PAYROLL`, or repeated params) so a
+    // screen can scope the register to a single posting stream. Values are
+    // upper-cased because journal_type is stored upper-cased.
+    const types = (Array.isArray(filters.journalType) ? filters.journalType : [filters.journalType])
+      .map((t) => String(t).trim().toUpperCase())
+      .filter(Boolean);
+    if (types.length) {
+      params.push(types);
+      where.push(`je.journal_type = ANY($${params.length}::text[])`);
+    }
+  }
+  // Centre filters match on the *lines*, not the header, so one entry that
+  // splits across several centres still appears under each of them.
+  if (filters.costCentreId) {
+    params.push(filters.costCentreId);
+    where.push(`EXISTS (SELECT 1 FROM journal_lines jl WHERE jl.entry_id = je.id AND jl.cost_centre_id = $${params.length})`);
+  }
+  if (filters.profitCentreId) {
+    params.push(filters.profitCentreId);
+    where.push(`EXISTS (SELECT 1 FROM journal_lines jl WHERE jl.entry_id = je.id AND jl.profit_centre_id = $${params.length})`);
+  }
+
   const orderBy = `${JOURNAL_SORT_COLUMNS[filters.sortBy ?? ''] ?? 'je.id'} ${filters.sortDir === 'asc' ? 'ASC' : 'DESC'}`;
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
@@ -1043,15 +1066,17 @@ export async function trialBalance(client: pg.PoolClient, ctx: Ctx, from?: strin
   }
   const res = await client.query(
     `SELECT a.id, a.code, a.name, a.account_type, a.opening_balance,
-            COALESCE(sum(jl.debit),0)::numeric AS debit,
-            COALESCE(sum(jl.credit),0)::numeric AS credit,
-            (a.opening_balance + COALESCE(sum(jl.debit - jl.credit),0))::numeric AS balance
+            COALESCE(sum(jl.debit) FILTER (WHERE je.id IS NOT NULL),0)::numeric AS debit,
+            COALESCE(sum(jl.credit) FILTER (WHERE je.id IS NOT NULL),0)::numeric AS credit,
+            (a.opening_balance + COALESCE(sum(jl.debit - jl.credit) FILTER (WHERE je.id IS NOT NULL),0))::numeric AS balance
      FROM chart_of_accounts a
      LEFT JOIN journal_lines jl ON jl.account_id = a.id
      LEFT JOIN journal_entries je ON je.id = jl.entry_id AND je.status = 'POSTED' AND je.tenant_id = $1 ${dateFilter}
      WHERE a.tenant_id = $1 AND a.company_id = $2 AND a.is_active = true
      GROUP BY a.id
-     HAVING a.opening_balance <> 0 OR COALESCE(sum(jl.debit),0) <> 0 OR COALESCE(sum(jl.credit),0) <> 0
+     HAVING a.opening_balance <> 0
+         OR COALESCE(sum(jl.debit) FILTER (WHERE je.id IS NOT NULL),0) <> 0
+         OR COALESCE(sum(jl.credit) FILTER (WHERE je.id IS NOT NULL),0) <> 0
      ORDER BY a.code`,
     params
   );
@@ -1093,27 +1118,44 @@ export async function profitAndLoss(client: pg.PoolClient, ctx: Ctx, from: strin
 export async function balanceSheet(client: pg.PoolClient, ctx: Ctx, asOf: string) {
   const res = await client.query(
     `SELECT a.id, a.code, a.name, a.account_type,
-            (a.opening_balance + COALESCE(sum(jl.debit - jl.credit),0))::numeric AS raw
+            (a.opening_balance + COALESCE(sum(jl.debit - jl.credit) FILTER (WHERE je.id IS NOT NULL),0))::numeric AS raw
      FROM chart_of_accounts a
      LEFT JOIN journal_lines jl ON jl.account_id = a.id
      LEFT JOIN journal_entries je ON je.id = jl.entry_id AND je.status = 'POSTED' AND je.entry_date <= $3::date
      WHERE a.tenant_id = $1 AND a.company_id = $2 AND a.is_active = true
        AND a.account_type IN ('ASSET','LIABILITY','EQUITY','CONTRA_ASSET','CONTRA_LIABILITY','CONTRA_EQUITY')
      GROUP BY a.id
-     HAVING a.opening_balance <> 0 OR COALESCE(sum(jl.debit),0) <> 0 OR COALESCE(sum(jl.credit),0) <> 0
+     HAVING a.opening_balance <> 0
+         OR COALESCE(sum(jl.debit) FILTER (WHERE je.id IS NOT NULL),0) <> 0
+         OR COALESCE(sum(jl.credit) FILTER (WHERE je.id IS NOT NULL),0) <> 0
      ORDER BY a.code`,
     [ctx.tenantId, ctx.companyId, asOf]
   );
   const rows = toCamelRows(res.rows).map((r) => {
     const raw = n(r.raw);
     const type = String(r.accountType);
-    const amount = type === 'ASSET' || type === 'CONTRA_LIABILITY' || type === 'CONTRA_EQUITY' ? raw : -raw;
+    const assetSide = type === 'ASSET' || type === 'CONTRA_ASSET';
+    const amount = assetSide ? raw : -raw;
     return { id: r.id, code: r.code, name: r.name, accountType: type, amount };
   });
-  const assets = rows.filter((r) => r.accountType === 'ASSET').reduce((s, r) => s + r.amount, 0);
-  const liabilities = rows.filter((r) => r.accountType === 'LIABILITY').reduce((s, r) => s + r.amount, 0);
-  const equity = rows.filter((r) => r.accountType === 'EQUITY').reduce((s, r) => s + r.amount, 0);
-  return { rows, assets, liabilities, equity, totalLAndE: liabilities + equity, asOf };
+  const assets = rows.filter((r) => r.accountType === 'ASSET' || r.accountType === 'CONTRA_ASSET').reduce((s, r) => s + r.amount, 0);
+  const liabilities = rows.filter((r) => r.accountType === 'LIABILITY' || r.accountType === 'CONTRA_LIABILITY').reduce((s, r) => s + r.amount, 0);
+  const postedEquity = rows.filter((r) => r.accountType === 'EQUITY' || r.accountType === 'CONTRA_EQUITY').reduce((s, r) => s + r.amount, 0);
+  // Revenue and expense accounts are not closed into equity until year end, so
+  // the statement only balances once their running result is carried across.
+  const result = await client.query(
+    `SELECT COALESCE(sum(jl.debit - jl.credit),0)::numeric AS raw
+       FROM chart_of_accounts a
+       JOIN journal_lines jl ON jl.account_id = a.id
+       JOIN journal_entries je ON je.id = jl.entry_id AND je.status = 'POSTED' AND je.tenant_id = $1
+      WHERE a.tenant_id = $1 AND a.company_id = $2
+        AND a.account_type IN ('REVENUE','CONTRA_REVENUE','EXPENSE','CONTRA_EXPENSE')
+        AND je.entry_date <= $3::date`,
+    [ctx.tenantId, ctx.companyId, asOf]
+  );
+  const currentResult = -n(result.rows[0]?.raw);
+  const equity = postedEquity + currentResult;
+  return { rows, assets, liabilities, equity, postedEquity, currentResult, totalLAndE: liabilities + equity, asOf };
 }
 
 export const AGING_BUCKETS = ['CURRENT', 'AGING_1_30', 'AGING_31_60', 'AGING_61_90', 'AGING_91_120', 'AGING_120_PLUS'] as const;
@@ -1162,7 +1204,8 @@ export async function apLedger(client: pg.PoolClient, ctx: Ctx, opts: { bucket?:
   }
   const res = await client.query(
     `SELECT id, supplier_invoice_no, supplier_id, supplier_name, invoice_date, due_date,
-            total, amount_paid, balance, bucket, days_overdue, is_overdue
+            total, amount_paid, balance, bucket, days_overdue, is_overdue,
+            po_id, grn_id, po_no, grn_no, document_status, three_way_matched, supplier_document_no
      FROM v_ap_aging
      WHERE ${where.join(' AND ')}
      ORDER BY due_date NULLS LAST, supplier_invoice_no`,
@@ -1240,57 +1283,267 @@ export async function taxSummary(client: pg.PoolClient, ctx: Ctx, from: string, 
   return { from, to, outputVat, inputVat, netVat: outputVat - inputVat };
 }
 
+function pctChange(current: number, prior: number): number | null {
+  if (!prior) return null;
+  return Number((((current - prior) / Math.abs(prior)) * 100).toFixed(1));
+}
+
+function bucketsFromJson(value: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const b of AGING_BUCKETS) out[b] = 0;
+  if (value && typeof value === 'object') {
+    for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+      if (key in out) out[key] = n(raw);
+    }
+  }
+  return out;
+}
+
+// Finance Command Center payload. Every figure here resolves to a posted or
+// pending row - there are no derived or invented numbers. The aging summaries
+// are aggregated in SQL rather than by loading AR/AP row sets, so the dashboard
+// stays fast as the ledgers grow.
 export async function financeSummary(client: pg.PoolClient, ctx: Ctx) {
   const asOf = new Date().toISOString().slice(0, 10);
-  const monthStart = asOf.slice(0, 8) + '01';
-  const [tb, pl, ar, ap, banks, extras] = await Promise.all([
+  const monthStart = `${asOf.slice(0, 8)}01`;
+  const prevAnchor = new Date(`${monthStart}T00:00:00Z`);
+  prevAnchor.setUTCMonth(prevAnchor.getUTCMonth() - 1);
+  const prevStart = prevAnchor.toISOString().slice(0, 10);
+  const prevEnd = new Date(Date.UTC(prevAnchor.getUTCFullYear(), prevAnchor.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+
+  const [tb, pl, priorPl, banks, extras, trend, queue, recent, period] = await Promise.all([
     trialBalance(client, ctx),
     profitAndLoss(client, ctx, monthStart, asOf),
-    arLedger(client, ctx),
-    apLedger(client, ctx),
+    profitAndLoss(client, ctx, prevStart, prevEnd),
     bankPosition(client, ctx),
     client.query(
       `SELECT
          (SELECT count(*)::int FROM journal_entries
            WHERE tenant_id = $1 AND company_id = $2 AND status IN ('DRAFT','SUBMITTED','PENDING_APPROVAL')) AS draft_journals,
          (SELECT COALESCE(SUM(balance),0)::numeric FROM v_ar_aging
+           WHERE tenant_id = $1 AND company_id = $2 AND balance > 0) AS ar_total,
+         (SELECT COALESCE(SUM(balance),0)::numeric FROM v_ar_aging
+           WHERE tenant_id = $1 AND company_id = $2 AND balance > 0 AND is_overdue) AS ar_overdue,
+         (SELECT count(*)::int FROM v_ar_aging
+           WHERE tenant_id = $1 AND company_id = $2 AND balance > 0 AND is_overdue) AS ar_overdue_count,
+         (SELECT COALESCE(SUM(balance),0)::numeric FROM v_ar_aging
            WHERE tenant_id = $1 AND company_id = $2 AND balance > 0
              AND due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 7) AS ar_due_7,
+         (SELECT COALESCE(jsonb_object_agg(bucket, total), '{}'::jsonb) FROM (
+            SELECT bucket, SUM(balance)::numeric AS total FROM v_ar_aging
+            WHERE tenant_id = $1 AND company_id = $2 AND balance > 0 GROUP BY bucket) s) AS ar_buckets,
+         (SELECT COALESCE(SUM(balance),0)::numeric FROM v_ap_aging
+           WHERE tenant_id = $1 AND company_id = $2 AND balance > 0) AS ap_total,
+         (SELECT COALESCE(SUM(balance),0)::numeric FROM v_ap_aging
+           WHERE tenant_id = $1 AND company_id = $2 AND balance > 0 AND is_overdue) AS ap_overdue,
+         (SELECT count(*)::int FROM v_ap_aging
+           WHERE tenant_id = $1 AND company_id = $2 AND balance > 0 AND is_overdue) AS ap_overdue_count,
          (SELECT COALESCE(SUM(balance),0)::numeric FROM v_ap_aging
            WHERE tenant_id = $1 AND company_id = $2 AND balance > 0
              AND due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 7) AS ap_due_7,
+         (SELECT COALESCE(jsonb_object_agg(bucket, total), '{}'::jsonb) FROM (
+            SELECT bucket, SUM(balance)::numeric AS total FROM v_ap_aging
+            WHERE tenant_id = $1 AND company_id = $2 AND balance > 0 GROUP BY bucket) s) AS ap_buckets,
          (SELECT CASE WHEN COALESCE(SUM(balance),0) > 0
             THEN round(SUM(balance * GREATEST(CURRENT_DATE - invoice_date, 0)) / SUM(balance), 1)
             ELSE 0 END
-          FROM v_ar_aging WHERE tenant_id = $1 AND company_id = $2 AND balance > 0) AS dso,
+           FROM v_ar_aging WHERE tenant_id = $1 AND company_id = $2 AND balance > 0) AS dso,
          (SELECT CASE WHEN COALESCE(SUM(balance),0) > 0
             THEN round(SUM(balance * GREATEST(CURRENT_DATE - invoice_date, 0)) / SUM(balance), 1)
             ELSE 0 END
-          FROM v_ap_aging WHERE tenant_id = $1 AND company_id = $2 AND balance > 0) AS dpo`,
+           FROM v_ap_aging WHERE tenant_id = $1 AND company_id = $2 AND balance > 0) AS dpo,
+         (SELECT count(*)::int FROM expenses
+           WHERE tenant_id = $1 AND company_id = $2 AND status = 'SUBMITTED') AS expenses_pending,
+         (SELECT COALESCE(SUM(amount),0)::numeric FROM expenses
+           WHERE tenant_id = $1 AND company_id = $2 AND status = 'SUBMITTED') AS expenses_pending_amount,
+         (SELECT count(*)::int FROM budgets
+           WHERE tenant_id = $1 AND company_id = $2 AND status = 'SUBMITTED') AS budgets_pending,
+         (SELECT COALESCE(SUM(amount),0)::numeric FROM budgets
+           WHERE tenant_id = $1 AND company_id = $2 AND status = 'SUBMITTED') AS budgets_pending_amount`,
+      [ctx.tenantId, ctx.companyId]
+    ),
+    client.query(
+      `SELECT to_char(date_trunc('month', je.entry_date), 'YYYY-MM') AS month,
+              COALESCE(SUM(CASE WHEN a.account_type = 'REVENUE' THEN jl.credit - jl.debit ELSE 0 END),0)::numeric AS revenue,
+              COALESCE(SUM(CASE WHEN a.account_type = 'EXPENSE' THEN jl.debit - jl.credit ELSE 0 END),0)::numeric AS expense
+       FROM journal_entries je
+       JOIN journal_lines jl ON jl.entry_id = je.id
+       JOIN chart_of_accounts a ON a.id = jl.account_id
+       WHERE je.tenant_id = $1 AND je.company_id = $2 AND je.status = 'POSTED'
+         AND a.account_type IN ('REVENUE','EXPENSE')
+         AND je.entry_date >= date_trunc('month', CURRENT_DATE) - interval '5 months'
+         AND je.entry_date < date_trunc('month', CURRENT_DATE) + interval '1 month'
+       GROUP BY 1 ORDER BY 1`,
+      [ctx.tenantId, ctx.companyId]
+    ),
+    client.query(
+      `SELECT 'JOURNAL' AS kind, je.id, je.entry_no AS ref, COALESCE(je.description,'') AS label,
+              je.total_debit AS amount, je.status, je.entry_date AS doc_date
+       FROM journal_entries je
+       WHERE je.tenant_id = $1 AND je.company_id = $2 AND je.status IN ('DRAFT','SUBMITTED','PENDING_APPROVAL')
+       UNION ALL
+       SELECT 'EXPENSE', e.id, e.expense_no, COALESCE(e.vendor,''), e.amount, e.status, e.expense_date
+       FROM expenses e
+       WHERE e.tenant_id = $1 AND e.company_id = $2 AND e.status = 'SUBMITTED'
+       UNION ALL
+       SELECT 'BUDGET', b.id, b.budget_no,
+              to_char(b.period_start,'DD Mon YYYY') || ' to ' || to_char(b.period_end,'DD Mon YYYY'),
+              b.amount, b.status, b.created_at::date
+       FROM budgets b
+       WHERE b.tenant_id = $1 AND b.company_id = $2 AND b.status = 'SUBMITTED'
+       ORDER BY doc_date DESC NULLS LAST
+       LIMIT 12`,
+      [ctx.tenantId, ctx.companyId]
+    ),
+    client.query(
+      `SELECT je.id, je.entry_no, je.entry_date, je.journal_type, je.description,
+              je.total_debit, je.total_credit, je.status, je.reference_code
+       FROM journal_entries je
+       WHERE je.tenant_id = $1 AND je.company_id = $2
+       ORDER BY je.entry_date DESC, je.id DESC
+       LIMIT 8`,
+      [ctx.tenantId, ctx.companyId]
+    ),
+    client.query(
+      `SELECT id, code, name, start_date, end_date, status FROM financial_periods
+       WHERE tenant_id = $1 AND company_id = $2
+         AND start_date <= CURRENT_DATE AND end_date >= CURRENT_DATE
+       ORDER BY start_date DESC LIMIT 1`,
       [ctx.tenantId, ctx.companyId]
     ),
   ]);
+
   const x = extras.rows[0] ?? {};
+  const trialBalanceOk = Math.round(n(tb.totals.debit) * 100) === Math.round(n(tb.totals.credit) * 100);
+
+  // Pad the trend to six calendar months so the sparkline never has gaps.
+  const monthKeys: string[] = [];
+  for (let i = 5; i >= 0; i -= 1) {
+    const d = new Date(Date.UTC(Number(monthStart.slice(0, 4)), Number(monthStart.slice(5, 7)) - 1 - i, 1));
+    monthKeys.push(d.toISOString().slice(0, 7));
+  }
+  const trendByMonth = new Map(trend.rows.map((r) => [String(r.month), r]));
+  const history = monthKeys.map((key) => {
+    const row = trendByMonth.get(key);
+    const revenue = row ? n(row.revenue) : 0;
+    const expense = row ? n(row.expense) : 0;
+    return { month: key, revenue, expense, profit: revenue - expense };
+  });
+
+  const arTotal = n(x.ar_total);
+  const apTotal = n(x.ap_total);
+  const arOverdue = n(x.ar_overdue);
+  const apOverdue = n(x.ap_overdue);
+  const arOverdueCount = n(x.ar_overdue_count);
+  const apOverdueCount = n(x.ap_overdue_count);
+  const unreconciledBanks = banks.unreconciled;
+  const draftJournals = n(x.draft_journals);
+  const expensesPending = n(x.expenses_pending);
+  const budgetsPending = n(x.budgets_pending);
+  const currentPeriod = period.rows[0] ? toCamelRow(period.rows[0]) : null;
+
+  type Attention = {
+    id: string; severity: 'critical' | 'warning' | 'info';
+    title: string; detail: string; count: number; amount: number | null; href: string;
+  };
+  const attention: Attention[] = [];
+  if (!trialBalanceOk) {
+    attention.push({
+      id: 'trial-balance', severity: 'critical', title: 'Trial balance is out of balance',
+      detail: 'Debits and credits do not agree. Posting must stop until this is corrected.',
+      count: 1, amount: null, href: '/finance/trial-balance',
+    });
+  }
+  if (!currentPeriod) {
+    attention.push({
+      id: 'no-period', severity: 'critical', title: 'No accounting period covers today',
+      detail: 'Journals cannot be posted until an open period covers the current date.',
+      count: 1, amount: null, href: '/finance/periods',
+    });
+  }
+  if (arOverdueCount > 0) {
+    attention.push({
+      id: 'ar-overdue', severity: 'warning', title: `${arOverdueCount} customer invoice${arOverdueCount === 1 ? '' : 's'} overdue`,
+      detail: 'Past due date with an outstanding balance. Chasing these is the fastest cash lever.',
+      count: arOverdueCount, amount: arOverdue, href: '/finance/ar',
+    });
+  }
+  if (apOverdueCount > 0) {
+    attention.push({
+      id: 'ap-overdue', severity: 'warning', title: `${apOverdueCount} supplier invoice${apOverdueCount === 1 ? '' : 's'} overdue`,
+      detail: 'Past due date and unpaid. Late settlement risks supply and supplier terms.',
+      count: apOverdueCount, amount: apOverdue, href: '/finance/ap',
+    });
+  }
+  if (unreconciledBanks > 0) {
+    attention.push({
+      id: 'bank-recon', severity: 'warning', title: `${unreconciledBanks} unreconciled bank line${unreconciledBanks === 1 ? '' : 's'}`,
+      detail: 'Statement lines are not yet matched to ERP transactions.',
+      count: unreconciledBanks, amount: null, href: '/finance/banks',
+    });
+  }
+  if (expensesPending > 0) {
+    attention.push({
+      id: 'expenses-pending', severity: 'info', title: `${expensesPending} expense${expensesPending === 1 ? '' : 's'} awaiting approval`,
+      detail: 'Submitted and not yet approved or posted to the ledger.',
+      count: expensesPending, amount: n(x.expenses_pending_amount), href: '/finance/expenses',
+    });
+  }
+  if (budgetsPending > 0) {
+    attention.push({
+      id: 'budgets-pending', severity: 'info', title: `${budgetsPending} budget${budgetsPending === 1 ? '' : 's'} awaiting approval`,
+      detail: 'Submitted budgets are not enforced against spend until approved.',
+      count: budgetsPending, amount: n(x.budgets_pending_amount), href: '/finance/budgets',
+    });
+  }
+  if (draftJournals > 0) {
+    attention.push({
+      id: 'draft-journals', severity: 'info', title: `${draftJournals} journal${draftJournals === 1 ? '' : 's'} not yet posted`,
+      detail: 'Drafts and submissions have no effect on the ledger until posted.',
+      count: draftJournals, amount: null, href: '/finance/journals',
+    });
+  }
+
+  const approvals = toCamelRows(queue.rows);
+
   return {
-    trialBalanceOk: Math.round(n(tb.totals.debit) * 100) === Math.round(n(tb.totals.credit) * 100),
+    asOf,
+    monthStart,
+    period: currentPeriod,
+    prior: { from: prevStart, to: prevEnd, revenue: priorPl.revenue, expense: priorPl.expense, profit: priorPl.profit },
+    delta: {
+      revenue: pctChange(pl.revenue, priorPl.revenue),
+      expense: pctChange(pl.expense, priorPl.expense),
+      profit: pctChange(pl.profit, priorPl.profit),
+    },
+    trend: history,
+    trialBalanceOk,
     monthRevenue: pl.revenue,
     monthExpense: pl.expense,
     monthProfit: pl.profit,
-    ar: ar.total,
-    arOverdue: ar.overdue,
+    ar: arTotal,
+    arOverdue,
+    arOverdueCount,
     arDue7: n(x.ar_due_7),
-    ap: ap.total,
-    apOverdue: ap.overdue,
+    arBuckets: bucketsFromJson(x.ar_buckets),
+    ap: apTotal,
+    apOverdue,
+    apOverdueCount,
     apDue7: n(x.ap_due_7),
+    apBuckets: bucketsFromJson(x.ap_buckets),
     cash: banks.cash,
-    unreconciledBanks: banks.unreconciled,
-    draftJournals: n(x.draft_journals),
+    cashRows: banks.rows,
+    unreconciledBanks,
+    draftJournals,
     dso: n(x.dso),
     dpo: n(x.dpo),
     journals: tb.rows.length,
+    approvals,
+    approvalCount: approvals.length,
+    recent: toCamelRows(recent.rows),
+    attention,
   };
 }
-
 export async function postExpense(
   client: pg.PoolClient,
   ctx: Ctx,

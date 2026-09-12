@@ -846,6 +846,135 @@ export async function checkBudget(
   return { ...pos, result, requested: amount };
 }
 
+// ---------- 5b. Cost & profit centre activity ----------
+//
+// Cost and profit centres are both carried on journal lines, so centre
+// reporting is a straight aggregation of posted lines rather than a parallel
+// figure maintained by hand. Charges (debit) and recoveries (credit) are kept
+// apart so a centre can read either as a cost collector or as a revenue owner,
+// and every centre is returned even with no activity, so an idle centre shows
+// up instead of quietly disappearing from the report.
+
+export interface CentreActivityFilters { from?: string; to?: string }
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+function centreWindow(filters: CentreActivityFilters) {
+  const to = filters.to && ISO_DAY.test(filters.to) ? filters.to : new Date().toISOString().slice(0, 10);
+  const from = filters.from && ISO_DAY.test(filters.from) ? filters.from : to.slice(0, 4) + '-01-01';
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+export type CentreRow = {
+  id: number; code: string; name: string; status: string;
+  debit: number; credit: number; net: number; entries: number; budget: number | null;
+};
+
+function centreTotals(rows: CentreRow[]) {
+  return rows.reduce(
+    (acc, r) => ({
+      debit: round2(acc.debit + r.debit), credit: round2(acc.credit + r.credit),
+      net: round2(acc.net + r.net), budget: round2(acc.budget + (r.budget ?? 0)),
+      entries: acc.entries + r.entries,
+    }),
+    { debit: 0, credit: 0, net: 0, budget: 0, entries: 0 }
+  );
+}
+
+/**
+ * Sum posted journal lines by dimension. Lines carrying no dimension come back
+ * separately as "unallocated" so a centre report never silently absorbs them.
+ */
+async function dimensionActivity(
+  client: pg.PoolClient, ctx: Ctx,
+  column: 'cost_centre_id' | 'profit_centre_id', from: string, to: string
+) {
+  const scoped = 'FROM journal_lines jl\n'
+    + '       JOIN journal_entries je ON je.id = jl.entry_id\n'
+    + "      WHERE je.tenant_id = $1 AND je.company_id = $2 AND je.status = 'POSTED'\n"
+    + '        AND je.entry_date BETWEEN $3::date AND $4::date';
+  const params = [ctx.tenantId, ctx.companyId, from, to];
+  const [grouped, unallocated] = await Promise.all([
+    client.query(
+      'SELECT jl.' + column + ' AS centre_id,\n'
+      + '              COALESCE(sum(jl.debit), 0)::numeric  AS debit,\n'
+      + '              COALESCE(sum(jl.credit), 0)::numeric AS credit,\n'
+      + '              count(DISTINCT jl.entry_id)::int     AS entries\n'
+      + scoped + ' AND jl.' + column + ' IS NOT NULL\n'
+      + '       GROUP BY jl.' + column,
+      params
+    ),
+    client.query(
+      'SELECT COALESCE(sum(jl.debit), 0)::numeric  AS debit,\n'
+      + '              COALESCE(sum(jl.credit), 0)::numeric AS credit,\n'
+      + '              count(DISTINCT jl.entry_id)::int     AS entries\n'
+      + scoped + ' AND jl.' + column + ' IS NULL',
+      params
+    ),
+  ]);
+  const byId = new Map<number, { debit: number; credit: number; entries: number }>();
+  for (const r of grouped.rows) {
+    byId.set(Number(r.centre_id), { debit: n(r.debit), credit: n(r.credit), entries: n(r.entries) });
+  }
+  const u = unallocated.rows[0] ?? {};
+  return {
+    byId,
+    unallocated: { debit: n(u.debit), credit: n(u.credit), net: n(u.debit) - n(u.credit), entries: n(u.entries) },
+  };
+}
+
+export async function costCentreActivity(client: pg.PoolClient, ctx: Ctx, filters: CentreActivityFilters = {}) {
+  const { from, to } = centreWindow(filters);
+  const [centres, activity, budgetRes] = await Promise.all([
+    client.query(
+      `SELECT id, code, name, status FROM cost_centres
+        WHERE tenant_id = $1 AND company_id = $2 ORDER BY code`,
+      [ctx.tenantId, ctx.companyId]
+    ),
+    dimensionActivity(client, ctx, 'cost_centre_id', from, to),
+    client.query(
+      `SELECT cost_centre_id, COALESCE(sum(amount), 0)::numeric AS amount
+         FROM budgets
+        WHERE tenant_id = $1 AND company_id = $2 AND cost_centre_id IS NOT NULL
+          AND status IN ('APPROVED', 'ACTIVE')
+          AND period_start <= $4::date AND period_end >= $3::date
+        GROUP BY cost_centre_id`,
+      [ctx.tenantId, ctx.companyId, from, to]
+    ),
+  ]);
+  const budgets = new Map<number, number>();
+  for (const r of budgetRes.rows) budgets.set(Number(r.cost_centre_id), n(r.amount));
+  const rows: CentreRow[] = centres.rows.map((c) => {
+    const a = activity.byId.get(Number(c.id)) ?? { debit: 0, credit: 0, entries: 0 };
+    return {
+      id: Number(c.id), code: String(c.code), name: String(c.name), status: String(c.status),
+      debit: round2(a.debit), credit: round2(a.credit), net: round2(a.debit - a.credit),
+      entries: a.entries, budget: budgets.has(Number(c.id)) ? round2(budgets.get(Number(c.id))!) : null,
+    };
+  });
+  return { from, to, rows, totals: centreTotals(rows), unallocated: activity.unallocated };
+}
+
+export async function profitCentreActivity(client: pg.PoolClient, ctx: Ctx, filters: CentreActivityFilters = {}) {
+  const { from, to } = centreWindow(filters);
+  const [centres, activity] = await Promise.all([
+    client.query(
+      `SELECT id, code, name, status FROM profit_centres
+        WHERE tenant_id = $1 AND company_id = $2 ORDER BY code`,
+      [ctx.tenantId, ctx.companyId]
+    ),
+    dimensionActivity(client, ctx, 'profit_centre_id', from, to),
+  ]);
+  const rows: CentreRow[] = centres.rows.map((c) => {
+    const a = activity.byId.get(Number(c.id)) ?? { debit: 0, credit: 0, entries: 0 };
+    return {
+      id: Number(c.id), code: String(c.code), name: String(c.name), status: String(c.status),
+      debit: round2(a.debit), credit: round2(a.credit), net: round2(a.debit - a.credit),
+      entries: a.entries, budget: null,
+    };
+  });
+  return { from, to, rows, totals: centreTotals(rows), unallocated: activity.unallocated };
+}
 // ---------- 6. Manufacturing costing: allocation rules, production cost, WIP ----------
 export async function listAllocationRules(client: pg.PoolClient, ctx: Ctx) {
   const res = await client.query(
@@ -1419,7 +1548,7 @@ export async function listFinancialAudit(
   if (filters.docType) { params.push(filters.docType); where += ` AND fal.doc_type = $${params.length}`; }
   params.push(limit);
   const res = await client.query(
-    `SELECT fal.*, u.name AS user_name, u.email AS user_email
+    `SELECT fal.*, u.first_name || ' ' || u.last_name AS user_name, u.email AS user_email
      FROM financial_audit_logs fal
      LEFT JOIN users u ON u.id = fal.user_id
      ${where} ORDER BY fal.created_at DESC, fal.id DESC LIMIT $${params.length}`, params

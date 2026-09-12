@@ -21,6 +21,10 @@ export interface NavChild {
   label: string;
   href: string;
   perm?: string;
+  /** Optional section heading. When any sibling sets it, ModuleNav renders grouped. */
+  group?: string;
+  /** Extra search terms for the command palette. */
+  keywords?: string;
 }
 
 export interface NavItem {
@@ -271,29 +275,43 @@ export const NAV_GROUPS: NavGroup[] = [
         id: 'finance', label: 'Accounting', href: '/finance', perm: 'finance.journals.view', module: 'finance', accent: 'fin',
         keywords: 'journal bank cash books',
         children: [
-          { id: 'overview', label: 'Overview', href: '/finance', perm: 'finance.journals.view' },
-          { id: 'journals', label: 'Journals', href: '/finance/journals', perm: 'finance.journals.view' },
-          { id: 'expenses', label: 'Expenses', href: '/finance/expenses', perm: 'finance.expenses.view' },
-          { id: 'budgets', label: 'Budgets', href: '/finance/budgets', perm: 'finance.budgets.view' },
-          { id: 'tb', label: 'Trial Balance', href: '/finance/trial-balance', perm: 'finance.journals.view' },
-          { id: 'pl', label: 'Profit & Loss', href: '/finance/profit-loss', perm: 'finance.journals.view' },
-          { id: 'bs', label: 'Balance Sheet', href: '/finance/balance-sheet', perm: 'finance.journals.view' },
-          { id: 'ar', label: 'Receivables', href: '/finance/ar', perm: 'finance.journals.view' },
-          { id: 'ap', label: 'Payables', href: '/finance/ap', perm: 'finance.journals.view' },
-          { id: 'banks', label: 'Banking', href: '/finance/banks', perm: 'finance.banks.view' },
-          { id: 'transfers', label: 'Transfers', href: '/finance/transfers', perm: 'finance.banks.view' },
-          { id: 'advances', label: 'Advances', href: '/finance/advances', perm: 'finance.advances.view' },
-          { id: 'periods', label: 'Periods', href: '/finance/periods', perm: 'finance.periods.view' },
-          { id: 'tax', label: 'VAT', href: '/finance/tax', perm: 'finance.taxes.view' },
-          { id: 'coa', label: 'Chart of Accounts', href: '/finance/accounts', perm: 'finance.chart_of_accounts.view' },
-          { id: 'advanced', label: 'Advanced', href: '/finance/advanced', perm: 'finance.journals.view' },
-          { id: 'posting-rules', label: 'Posting Rules', href: '/finance/posting-rules', perm: 'finance.posting_rules.view' },
-          { id: 'efris', label: 'EFRIS', href: '/finance/efris', perm: 'finance.efris.view' },
-          { id: 'tax-compliance', label: 'Tax Compliance', href: '/finance/tax-compliance', perm: 'finance.tax_transactions.view' },
-          { id: 'costing', label: 'Manufacturing Costing', href: '/finance/costing', perm: 'finance.production_costs.view' },
-          { id: 'consolidation', label: 'Consolidation', href: '/finance/consolidation', perm: 'finance.consolidation.view' },
-          { id: 'close', label: 'Period Close', href: '/finance/close', perm: 'finance.close_tasks.view' },
-          { id: 'audit', label: 'Audit Trail', href: '/finance/audit', perm: 'finance.audit.view' },
+          { id: 'finance-approvals', label: 'Approvals', href: '/finance/approvals', perm: 'workflows.instances.view', group: 'Approvals', keywords: 'approve reject return inbox decisions payment voucher journal budget request queue' },
+          { id: 'finance', label: 'Command Center', href: '/finance', perm: 'finance.journals.view', group: 'Command Center', keywords: 'financial overview dashboard kpi month end close cockpit' },
+          { id: 'finance-accounts', label: 'Chart of Accounts', href: '/finance/accounts', perm: 'finance.chart_of_accounts.view', group: 'General Ledger', keywords: 'coa gl accounts ledger codes posting' },
+          { id: 'finance-journals', label: 'Journal Entries', href: '/finance/journals', perm: 'finance.journals.view', group: 'General Ledger', keywords: 'journal entry double entry debit credit batch' },
+          { id: 'finance-trial-balance', label: 'Trial Balance', href: '/finance/trial-balance', perm: 'finance.journals.view', group: 'General Ledger', keywords: 'trial balance debit credit integrity' },
+          { id: 'finance-ar', label: 'AR Aging', href: '/finance/ar', perm: 'finance.journals.view', group: 'Receivables', keywords: 'receivable customer debtors aging overdue dso' },
+          { id: 'sales-invoices', label: 'Customer Invoices', href: '/sales/invoices', perm: 'sales.invoices.view', group: 'Receivables', keywords: 'invoice customer billing sales' },
+          { id: 'sales-receipts', label: 'Receipts', href: '/sales/receipts', perm: 'sales.receipts.view', group: 'Receivables', keywords: 'receipt collection customer payment' },
+          { id: 'sales-credit_notes', label: 'Credit Notes', href: '/sales/credit_notes', perm: 'sales.credit_notes.view', group: 'Receivables', keywords: 'credit note customer refund adjustment' },
+          { id: 'crm-customers', label: 'Customers', href: '/crm/customers', perm: 'crm.customers.view', group: 'Receivables', keywords: 'customer client account master' },
+          { id: 'finance-ap', label: 'AP Aging', href: '/finance/ap', perm: 'finance.journals.view', group: 'Payables', keywords: 'payable supplier creditors aging overdue dpo' },
+          { id: 'buy-invoices', label: 'Supplier Invoices', href: '/buy/invoices', perm: 'procurement.supplier_invoices.view', group: 'Payables', keywords: 'supplier invoice three way match po grn' },
+          { id: 'buy-payments', label: 'Payments', href: '/buy/payments', perm: 'procurement.payments.view', group: 'Payables', keywords: 'payment voucher supplier pay run' },
+          { id: 'sales-debit_notes', label: 'Debit Notes', href: '/sales/debit_notes', perm: 'sales.debit_notes.view', group: 'Payables', keywords: 'debit note supplier adjustment' },
+          { id: 'records-procurement-suppliers', label: 'Suppliers', href: '/records/procurement/suppliers', perm: 'procurement.suppliers.view', group: 'Payables', keywords: 'supplier vendor master account' },
+          { id: 'finance-banks', label: 'Bank & Cash', href: '/finance/banks', perm: 'finance.banks.view', group: 'Cash & Bank', keywords: 'bank cash account cashbook liquidity balance' },
+          { id: 'finance-transfers', label: 'Transfers', href: '/finance/transfers', perm: 'finance.banks.view', group: 'Cash & Bank', keywords: 'transfers bank cash movement internal' },
+          { id: 'finance-advances', label: 'Advances', href: '/finance/advances', perm: 'finance.advances.view', group: 'Cash & Bank', keywords: 'cash advance imprest holder retirement' },
+          { id: 'finance-expenses', label: 'Expenses', href: '/finance/expenses', perm: 'finance.expenses.view', group: 'Spend & Planning', keywords: 'expense claim receipt cost centre' },
+          { id: 'finance-budgets', label: 'Budgets', href: '/finance/budgets', perm: 'finance.budgets.view', group: 'Spend & Planning', keywords: 'budget actual variance commitment planning' },
+          { id: 'assets-register', label: 'Asset Register', href: '/assets/register', perm: 'assets.register.view', group: 'Fixed Assets', keywords: 'fixed assets register far capital' },
+          { id: 'assets-depreciation', label: 'Depreciation', href: '/assets/depreciation', perm: 'assets.depreciation.view', group: 'Fixed Assets', keywords: 'depreciation amortisation fixed asset' },
+          { id: 'finance-tax', label: 'VAT', href: '/finance/tax', perm: 'finance.taxes.view', group: 'Tax & EFRIS', keywords: 'vat tax return output input' },
+          { id: 'finance-efris', label: 'EFRIS', href: '/finance/efris', perm: 'finance.efris.view', group: 'Tax & EFRIS', keywords: 'efris ura fiscalisation fdn verification code' },
+          { id: 'finance-tax-compliance', label: 'Tax Compliance', href: '/finance/tax-compliance', perm: 'finance.tax_transactions.view', group: 'Tax & EFRIS', keywords: 'tax compliance wht withholding filing' },
+          { id: 'finance-cost-centres', label: 'Cost & Profit Centres', href: '/finance/cost-centres', perm: 'finance.cost_centres.view', group: 'Cost Centres', keywords: 'cost centre profit centre allocation dimension' },
+          { id: 'finance-costing', label: 'Manufacturing Costing', href: '/finance/costing', perm: 'finance.production_costs.view', group: 'Cost Centres', keywords: 'production cost wip variance manufacturing' },
+          { id: 'finance-reports', label: 'Financial Reports', href: '/finance/reports', perm: 'finance.journals.view', group: 'Reporting', keywords: 'reports income statement balance sheet cash flow pack' },
+          { id: 'finance-profit-loss', label: 'Profit & Loss', href: '/finance/profit-loss', perm: 'finance.journals.view', group: 'Reporting', keywords: 'income statement profit loss revenue expense' },
+          { id: 'finance-balance-sheet', label: 'Balance Sheet', href: '/finance/balance-sheet', perm: 'finance.journals.view', group: 'Reporting', keywords: 'balance sheet assets liabilities equity' },
+          { id: 'finance-periods', label: 'Periods', href: '/finance/periods', perm: 'finance.periods.view', group: 'Period & Close', keywords: 'accounting period financial year open close lock' },
+          { id: 'finance-close', label: 'Period Close', href: '/finance/close', perm: 'finance.close_tasks.view', group: 'Period & Close', keywords: 'month end close checklist cockpit' },
+          { id: 'finance-advanced', label: 'Advanced Finance', href: '/finance/advanced', perm: 'finance.journals.view', group: 'Administration', keywords: 'advanced templates allocation rules engine' },
+          { id: 'finance-posting-rules', label: 'Posting Rules', href: '/finance/posting-rules', perm: 'finance.posting_rules.view', group: 'Administration', keywords: 'posting rules accounting engine automation' },
+          { id: 'finance-consolidation', label: 'Consolidation', href: '/finance/consolidation', perm: 'finance.consolidation.view', group: 'Administration', keywords: 'consolidation group intercompany' },
+          { id: 'finance-audit', label: 'Audit Trail', href: '/finance/audit', perm: 'finance.audit.view', group: 'Administration', keywords: 'audit trail immutable log history who changed' },
+
         ],
       },
     ],
@@ -868,6 +886,19 @@ export function hrefForSearchHit(table: string, match: Record<string, unknown>):
     case 'purchase_requisitions': return `/buy/requisitions/${id}`;
     case 'goods_receipts': return `/buy/receipts/${id}`;
     case 'supplier_invoices': return `/buy/invoices/${id}`;
+    // --- Finance & accounting ---
+    case 'journal_entries': return `/finance/journals/${id}`;
+    case 'expenses': return `/finance/expenses/${id}`;
+    case 'budgets': return `/finance/budgets/${id}`;
+    case 'bank_accounts': return `/finance/banks/${id}`;
+    case 'chart_of_accounts': return `/finance/accounts/${id}`;
+    case 'cost_centres': return `/finance/cost-centres`;
+    case 'profit_centres': return `/finance/cost-centres`;
+    case 'efris_documents': return `/finance/efris`;
+    case 'receipts': return `/sales/receipts`;
+    case 'credit_notes': return `/sales/credit_notes`;
+    case 'debit_notes': return `/sales/debit_notes`;
+    case 'supplier_payments': return `/buy/payments`;
     default: {
       if (typeof table === 'string' && table.includes('_')) {
         const [mod, ...rest] = table.split('_');
@@ -875,6 +906,34 @@ export function hrefForSearchHit(table: string, match: Record<string, unknown>):
       }
       return `/dashboard`;
     }
+  }
+}
+
+/** Primary/secondary display text for a global search hit, keyed by table. */
+export function labelForSearchHit(table: string, m: Record<string, unknown>): { primary: string; secondary: string } {
+  const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
+  const join = (...parts: string[]) => parts.filter(Boolean).join(' \u00B7 ');
+  switch (table) {
+    case 'journal_entries':
+      return { primary: s(m.entry_no) || s(m.id), secondary: join(s(m.journal_type), s(m.status), s(m.description)) };
+    case 'expenses':
+      return { primary: s(m.expense_no) || s(m.id), secondary: join(s(m.vendor), s(m.category), s(m.status)) };
+    case 'budgets':
+      return { primary: s(m.budget_no) || s(m.id), secondary: join(s(m.period_start), s(m.period_end), s(m.status)) };
+    case 'efris_documents':
+      return { primary: s(m.fdn) || s(m.erp_doc_no) || s(m.id), secondary: join(s(m.erp_doc_no), s(m.verification_code)) };
+    case 'bank_accounts':
+      return { primary: s(m.name) || s(m.code) || s(m.id), secondary: join(s(m.bank_name), s(m.account_no)) };
+    case 'chart_of_accounts':
+      return { primary: join(s(m.code), s(m.name)) || s(m.id), secondary: s(m.account_type) };
+    case 'cost_centres':
+    case 'profit_centres':
+      return { primary: join(s(m.code), s(m.name)) || s(m.id), secondary: s(m.status) };
+    default:
+      return {
+        primary: s(m.code ?? m.order_no ?? m.quotation_no ?? m.name ?? m.entry_no ?? m.id),
+        secondary: '',
+      };
   }
 }
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
 import { useCompanyProfile } from '../company';
@@ -6,6 +7,7 @@ import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, PageLoader, Modal, Pager } from '../components/ui';
 import { ConfirmDialog, EmptyState, Skeleton } from '../components/os';
 import DownloadMenu from '../components/DownloadMenu';
+import { pathForEntity } from '../work';
 
 type Rec = Record<string, unknown>;
 
@@ -23,6 +25,15 @@ const EXPENSE_STATUSES = ['DRAFT', 'SUBMITTED', 'APPROVED', 'POSTED', 'VOID'];
 const ADVANCE_STATUSES = ['POSTED', 'SETTLED', 'VOID'];
 const BUDGET_STATUSES = ['DRAFT', 'SUBMITTED', 'APPROVED', 'ACTIVE', 'CLOSED'];
 const ACCOUNT_TYPES = ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE', 'CONTRA_ASSET', 'CONTRA_LIABILITY', 'CONTRA_EQUITY', 'CONTRA_REVENUE', 'CONTRA_EXPENSE'];
+// Reporting groups for the hierarchical chart of accounts. Contra accounts sit with the
+// class they reduce so their balances read on the same side of the books.
+const COA_GROUPS: [string, string[]][] = [
+  ['Assets', ['ASSET', 'CONTRA_ASSET']],
+  ['Liabilities', ['LIABILITY', 'CONTRA_LIABILITY']],
+  ['Equity', ['EQUITY', 'CONTRA_EQUITY']],
+  ['Revenue', ['REVENUE', 'CONTRA_REVENUE']],
+  ['Expenses', ['EXPENSE', 'CONTRA_EXPENSE']],
+];
 const BANK_TYPES = ['CURRENT', 'SAVINGS', 'MOBILE_MONEY', 'CASH'];
 const TAX_TYPES = ['VAT', 'WHT', 'EXCISE', 'WITHHOLDING_VAT'];
 const PERIOD_STATUSES = ['OPEN', 'LOCKED', 'CLOSED'];
@@ -80,6 +91,7 @@ export default function FinanceFlow({ path }: { path: string }) {
   if (view === 'trial-balance') return <TrialBalance />;
   if (view === 'profit-loss') return <ProfitLoss />;
   if (view === 'balance-sheet') return <BalanceSheet />;
+  if (view === 'reports') return <ReportsHub />;
   if (view === 'ar') return <ArAp kind="ar" />;
   if (view === 'ap') return <ArAp kind="ap" />;
   if (view === 'banks' && id) return <BankRecon bankId={Number(id)} />;
@@ -96,8 +108,10 @@ export default function FinanceFlow({ path }: { path: string }) {
   if (view === 'efris') return <EfrisDesk />;
   if (view === 'tax-compliance') return <TaxCompliance />;
   if (view === 'costing') return <Costing />;
+  if (view === 'cost-centres') return <CostCentres />;
   if (view === 'consolidation' && id) return <ConsolidationDetail id={Number(id)} />;
   if (view === 'consolidation') return <Consolidation />;
+  if (view === 'approvals') return <FinanceApprovalInbox />;
   if (view === 'close') return <PeriodClose />;
   if (view === 'audit') return <FinanceAudit />;
   return <Overview />;
@@ -114,6 +128,195 @@ function StatusSelect({ value, onChange, options, label = 'Filter by status', pl
   );
 }
 
+// ---------------------------------------------------------------------------
+// Finance Command Center
+//
+// The command center is read by accountants, approvers and management, so every
+// widget answers one of four questions: what is the position, what needs
+// attention, what is waiting on me, and what changed. Nothing here is
+// decorative - each figure drills through to the transactions behind it, and no
+// number is shown unless it came from the ledger.
+// ---------------------------------------------------------------------------
+
+type TrendPoint = { month: string; revenue: number; expense: number; profit: number };
+type AttentionItem = { id: string; severity: 'critical' | 'warning' | 'info'; title: string; detail: string; count: number; amount: number | null; href: string };
+type ApprovalItem = { kind: string; id: number; ref: string; label: string; amount: number; status: string; docDate: string };
+type RecentItem = { id: number; entryNo: string; entryDate: string; journalType: string; description: string; totalDebit: number; totalCredit: number; status: string; referenceCode: string | null };
+type CashRow = { id: number; code: string; name: string; bankName: string | null; accountType: string; currency: string; bookBalance: number; unreconciledCount: number };
+type PeriodInfo = { id: number; code: string; name: string; startDate: string; endDate: string; status: string };
+
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const monthLabel = (key: string): string => MONTH_ABBR[Number(String(key).slice(5, 7)) - 1] ?? String(key);
+
+/** Compact date for headers and table cells (no time component). */
+function shortDate(v: unknown): string {
+  if (!v) return '-';
+  const d = new Date(String(v));
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+/** Whole days between two dates, used to rank suggested bank reconciliation matches. */
+function dayGap(a: unknown, b: unknown): number {
+  const x = new Date(String(a)).getTime();
+  const y = new Date(String(b)).getTime();
+  if (Number.isNaN(x) || Number.isNaN(y)) return 9999;
+  return Math.abs(Math.round((x - y) / 86400000));
+}
+
+/** Where a queued document lives, so every approval row can be opened. */
+function hrefForDoc(kind: string, id: number): string {
+  if (kind === 'EXPENSE') return `/finance/expenses/${id}`;
+  if (kind === 'BUDGET') return `/finance/budgets/${id}`;
+  return `/finance/journals/${id}`;
+}
+
+/** Dependency-free sparkline. Keeps the command center fast on large ledgers. */
+function Sparkline({ values, tone = 'ok', width = 120, height = 34 }: { values: number[]; tone?: 'ok' | 'warn' | 'bad'; width?: number; height?: number }) {
+  const pts = values.length > 1 ? values.map(Number) : [0, 0];
+  const max = Math.max(...pts);
+  const min = Math.min(...pts);
+  const span = max - min || 1;
+  const step = width / (pts.length - 1);
+  const y = (v: number) => height - 4 - ((v - min) / span) * (height - 12);
+  const line = pts.map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const stroke = tone === 'bad' ? 'var(--danger)' : tone === 'warn' ? 'var(--warning)' : 'var(--success)';
+  return (
+    <svg className="fin-spark" viewBox={`0 0 ${width} ${height}`} width={width} height={height} aria-hidden="true" focusable="false">
+      <path d={`${line} L${width},${height} L0,${height} Z`} fill={stroke} opacity="0.1" />
+      <path d={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/**
+ * Signed change against the previous month. Shows "no prior period" rather than
+ * a fabricated percentage when the comparison basis is missing.
+ */
+function Delta({ pct, invert = false }: { pct: number | null | undefined; invert?: boolean }) {
+  if (pct === null || pct === undefined || !Number.isFinite(Number(pct))) {
+    return <span className="fin-delta flat" title="No comparable prior period">no prior period</span>;
+  }
+  const up = Number(pct) >= 0;
+  const good = invert ? !up : up;
+  return (
+    <span className={`fin-delta ${good ? 'up' : 'down'}`} title={`${up ? 'Up' : 'Down'} ${Math.abs(Number(pct)).toFixed(1)}% against the previous month`}>
+      {up ? '\u2191' : '\u2193'} {Math.abs(Number(pct)).toFixed(1)}%
+    </span>
+  );
+}
+
+function FinKpi({ label, value, sub, delta, invert, spark, sparkTone, onClick, emphasis }: {
+  label: string; value: string; sub?: string; delta?: number | null; invert?: boolean;
+  spark?: number[]; sparkTone?: 'ok' | 'warn' | 'bad'; onClick: () => void; emphasis?: boolean;
+}) {
+  return (
+    <button className={`fin-kpi${emphasis ? ' fin-kpi-lead' : ''}`} onClick={onClick}>
+      <span className="fin-kpi-head">
+        <span className="fin-kpi-label">{label}</span>
+        {spark && spark.length > 0 && <Sparkline values={spark} tone={sparkTone} />}
+      </span>
+      <span className="fin-kpi-value">{value}</span>
+      <span className="fin-kpi-foot">
+        {delta !== undefined && <Delta pct={delta} invert={invert} />}
+        {sub && <span className="fin-kpi-sub">{sub}</span>}
+      </span>
+    </button>
+  );
+}
+
+/** Six-month revenue vs expense, rendered as paired bars. */
+function TrendBars({ points }: { points: TrendPoint[] }) {
+  const max = Math.max(1, ...points.map((p) => Math.max(Number(p.revenue), Number(p.expense))));
+  return (
+    <div className="fin-trend" role="img" aria-label={`Revenue and expense for the last ${points.length} months`}>
+      {points.map((p) => (
+        <div className="fin-trend-col" key={p.month}>
+          <div className="fin-trend-bars">
+            <span className="fin-bar rev" style={{ height: `${(Math.max(Number(p.revenue), 0) / max) * 100}%` }} title={`Revenue ${fmtMoney(p.revenue)}`} />
+            <span className="fin-bar exp" style={{ height: `${(Math.max(Number(p.expense), 0) / max) * 100}%` }} title={`Expense ${fmtMoney(p.expense)}`} />
+          </div>
+          <span className="fin-trend-label">{monthLabel(p.month)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Canonical aging buckets - single source of truth for every aging view. */
+const AGING_BUCKETS: [string, string, string][] = [
+  ['CURRENT', 'Current', 'Not yet due'],
+  ['AGING_1_30', '1-30 days', '1 to 30 days past due'],
+  ['AGING_31_60', '31-60 days', '31 to 60 days past due'],
+  ['AGING_61_90', '61-90 days', '61 to 90 days past due'],
+  ['AGING_91_120', '91-120 days', '91 to 120 days past due'],
+  ['AGING_120_PLUS', '120+ days', 'More than 120 days past due'],
+];
+
+/** Ageing severity ramp. Tone is always paired with an icon and a label, never colour alone. */
+const AGING_TONE: Record<string, { tone: string; icon: string }> = {
+  CURRENT: { tone: 'badge-green', icon: '\u2713' },
+  AGING_1_30: { tone: 'badge-blue', icon: '\u25CF' },
+  AGING_31_60: { tone: 'badge-amber', icon: '\u25CF' },
+  AGING_61_90: { tone: 'badge-amber', icon: '\u26A0' },
+  AGING_91_120: { tone: 'badge-red', icon: '\u26A0' },
+  AGING_120_PLUS: { tone: 'badge-red', icon: '\u2715' },
+};
+
+/** Canonical label for an ageing bucket key, e.g. AGING_1_30 -> "1-30 days". */
+function agingLabel(bucket: unknown): string {
+  const key = String(bucket ?? '');
+  return AGING_BUCKETS.find(([k]) => k === key)?.[1] ?? key.replace(/_/g, ' ');
+}
+
+/** Ageing chip: canonical label plus a severity tone that always carries an icon. */
+function AgingChip({ bucket }: { bucket: unknown }) {
+  const key = String(bucket ?? '');
+  const meta = AGING_TONE[key] ?? { tone: 'badge-neutral', icon: '\u25CF' };
+  return (
+    <span className={`badge ${meta.tone}`}>
+      <span className="badge-icon" aria-hidden>{meta.icon}</span>
+      {agingLabel(key)}
+    </span>
+  );
+}
+
+/** Proportional aging band. Colour is reinforced by the label, never alone. */
+function AgingBand({ buckets }: { buckets: Rec }) {
+  const keys = AGING_BUCKETS.map(([k]) => k);
+  const sum = keys.reduce((s, k) => s + Number(buckets[k] ?? 0), 0);
+  if (sum <= 0) return null;
+  return (
+    <span className="fin-aging-bar" aria-hidden="true">
+      {keys.filter((k) => Number(buckets[k] ?? 0) > 0).map((k) => (
+        <span key={k} className={`fin-aging-seg seg-${k}`} style={{ width: `${(Number(buckets[k]) / sum) * 100}%` }} />
+      ))}
+    </span>
+  );
+}
+
+function AgingStrip({ buckets, total, onOpen }: { buckets: Rec; total: number; onOpen: () => void }) {
+  const sum = AGING_BUCKETS.reduce((s, [k]) => s + Number(buckets[k] ?? 0), 0);
+  const present = AGING_BUCKETS.filter(([k]) => Number(buckets[k] ?? 0) > 0);
+  if (sum <= 0) {
+    return <p className="muted fin-aging-empty">Nothing outstanding{total > 0 ? ' in the bucket view' : ''}.</p>;
+  }
+  return (
+    <div className="fin-aging">
+      <AgingBand buckets={buckets} />
+      <div className="fin-aging-key">
+        {present.map(([k, label]) => (
+          <button key={k} className="fin-aging-item" onClick={onOpen} title={`${label} - open the aging report`}>
+            <i className={`fin-dot seg-${k}`} aria-hidden="true" />
+            <span>{label}</span>
+            <strong>{fmtMoney(buckets[k])}</strong>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Overview() {
   const company = useCompanyProfile();
   const { user } = useAuth();
@@ -126,88 +329,276 @@ function Overview() {
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader label="Opening the books..." />;
+
+  const num = (v: unknown) => Number(v ?? 0);
+  const period = (data.period ?? null) as PeriodInfo | null;
+  const prior = (data.prior ?? {}) as { revenue: number; expense: number; profit: number };
+  const delta = (data.delta ?? {}) as { revenue: number | null; expense: number | null; profit: number | null };
+  const trend = (Array.isArray(data.trend) ? data.trend : []) as TrendPoint[];
+  const attention = (Array.isArray(data.attention) ? data.attention : []) as AttentionItem[];
+  const approvals = (Array.isArray(data.approvals) ? data.approvals : []) as ApprovalItem[];
+  const recent = (Array.isArray(data.recent) ? data.recent : []) as RecentItem[];
+  const cashRows = (Array.isArray(data.cashRows) ? data.cashRows : []) as CashRow[];
+  const arBuckets = (data.arBuckets ?? {}) as Record<string, number>;
+  const apBuckets = (data.apBuckets ?? {}) as Record<string, number>;
+  const critical = attention.filter((a) => a.severity === 'critical').length;
+  const monthName = new Date(`${String(data.monthStart)}T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const asOfLabel = shortDate(data.asOf);
+
   return (
-    <div className="page">
-      <header className="page-head">
+    <div className="page fin-cc">
+      <header className="fin-head">
         <div>
-          <p className="mod-kicker" data-mod="fin">General ledger</p>
-          <h1>Books of {company.name}</h1>
-          <p className="muted">
-            Double-entry only. {data.trialBalanceOk ? 'Trial balance is in balance.' : 'Trial balance is out of balance - investigate before period close.'}
+          <p className="mod-kicker" data-mod="fin">Finance &amp; Accounting</p>
+          <h1>Financial Command Center</h1>
+          <p className="muted fin-head-sub">
+            <span>{monthName}</span>
+            <span className="fin-sep" aria-hidden="true">{'\u2022'}</span>
+            {period
+              ? <span>Period <strong>{period.code}</strong> ({shortDate(period.startDate)} {'\u2192'} {shortDate(period.endDate)}) <Badge value={period.status} /></span>
+              : <span className="fin-warn-text">No accounting period covers today</span>}
+            <span className="fin-sep" aria-hidden="true">{'\u2022'}</span>
+            <span>As at {asOfLabel}</span>
+            <span className="fin-sep" aria-hidden="true">{'\u2022'}</span>
+            <span>Books of {company.name}</span>
           </p>
         </div>
         <div className="head-actions">
-          {can(user, 'finance.journals.create') && (
-            <button className="btn btn-primary" onClick={() => navigate('/finance/journals/new')}>New journal</button>
-          )}
-          {can(user, 'finance.expenses.create') && (
-            <button className="btn" onClick={() => navigate('/finance/expenses/new')}>Post expense</button>
-          )}
-          {can(user, 'finance.advances.create') && (
-            <button className="btn" onClick={() => navigate('/finance/advances/new')}>Issue advance</button>
-          )}
-          {can(user, 'finance.budgets.create') && (
-            <button className="btn" onClick={() => navigate('/finance/budgets/new')}>New budget</button>
-          )}
+          <button className="btn" onClick={() => navigate('/finance/periods')}>Periods</button>
+          <button className="btn" onClick={() => navigate('/finance/profit-loss')}>Reports</button>
+          {can(user, 'finance.journals.create') && <button className="btn btn-primary" onClick={() => navigate('/finance/journals/new')}>New journal</button>}
         </div>
       </header>
-      <div className="kpi-grid">
-        <button className="kpi-card" onClick={() => navigate('/finance/profit-loss')}>
-          <span className="kpi-label">Month revenue</span>
-          <span className="kpi-value">{fmtMoney(data.monthRevenue)}</span>
-          <span className="kpi-sub">Expense {fmtMoney(data.monthExpense)}</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/finance/profit-loss')}>
-          <span className="kpi-label">Month profit</span>
-          <span className="kpi-value">{fmtMoney(data.monthProfit)}</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/finance/ar')}>
-          <span className="kpi-label">Receivables</span>
-          <span className="kpi-value">{fmtMoney(data.ar)}</span>
-          <span className="kpi-sub">{fmtMoney(data.arOverdue)} overdue · {fmtMoney(data.arDue7)} due in 7 days</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/finance/ap')}>
-          <span className="kpi-label">Payables</span>
-          <span className="kpi-value">{fmtMoney(data.ap)}</span>
-          <span className="kpi-sub">{fmtMoney(data.apOverdue)} overdue · {fmtMoney(data.apDue7)} due in 7 days</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/finance/banks')}>
-          <span className="kpi-label">Cash and bank</span>
-          <span className="kpi-value">{fmtMoney(data.cash)}</span>
-          <span className="kpi-sub">{fmtNum(data.unreconciledBanks)} unreconciled statement lines</span>
-        </button>
-        <button className={`kpi-card ${data.trialBalanceOk ? '' : 'card-warn'}`} onClick={() => navigate('/finance/trial-balance')}>
-          <span className="kpi-label">Trial balance</span>
-          <span className="kpi-value">{data.trialBalanceOk ? 'OK' : 'Break'}</span>
-          <span className="kpi-sub">{fmtNum(data.journals)} accounts with activity</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/finance/journals')}>
-          <span className="kpi-label">Draft journals</span>
-          <span className="kpi-value">{fmtNum(data.draftJournals)}</span>
-          <span className="kpi-sub">Awaiting post or approval</span>
-        </button>
-        <button className="kpi-card" onClick={() => navigate('/finance/ar')}>
-          <span className="kpi-label">DSO / DPO</span>
-          <span className="kpi-value">{fmtNum(data.dso)} / {fmtNum(data.dpo)}</span>
-          <span className="kpi-sub">Weighted days outstanding</span>
-        </button>
+
+      {!data.trialBalanceOk && (
+        <div className="fin-banner fin-banner-critical" role="alert">
+          <strong>{'\u2715'} Trial balance is out of balance.</strong>
+          <span>Debits and credits do not agree. Stop posting and correct the ledger before period close.</span>
+          <button className="btn btn-sm" onClick={() => navigate('/finance/trial-balance')}>Open trial balance</button>
+        </div>
+      )}
+
+      <div className="fin-kpi-grid">
+        <FinKpi
+          label="Revenue" value={fmtMoney(data.monthRevenue)} emphasis
+          sub={`${fmtMoney(prior.revenue)} last month`} delta={delta.revenue}
+          spark={trend.map((t) => t.revenue)}
+          onClick={() => navigate('/finance/profit-loss')}
+        />
+        <FinKpi
+          label="Expenses" value={fmtMoney(data.monthExpense)} invert
+          sub={`${fmtMoney(prior.expense)} last month`} delta={delta.expense}
+          spark={trend.map((t) => t.expense)} sparkTone="warn"
+          onClick={() => navigate('/finance/expenses')}
+        />
+        <FinKpi
+          label="Net position" value={fmtMoney(data.monthProfit)}
+          sub={`${fmtMoney(prior.profit)} last month`} delta={delta.profit}
+          spark={trend.map((t) => t.profit)}
+          sparkTone={num(data.monthProfit) >= 0 ? 'ok' : 'bad'}
+          onClick={() => navigate('/finance/profit-loss')}
+        />
+        <FinKpi
+          label="Cash &amp; bank" value={fmtMoney(data.cash)} emphasis
+          sub={num(data.unreconciledBanks) > 0 ? `${fmtNum(data.unreconciledBanks)} unreconciled statement lines` : 'All statement lines reconciled'}
+          onClick={() => navigate('/finance/banks')}
+        />
       </div>
-      <div className="do-now">
-        <button onClick={() => navigate('/finance/journals')}><strong>Journals</strong><span>Posted double-entry</span></button>
-        <button onClick={() => navigate('/finance/expenses')}><strong>Expenses</strong><span>Record and void</span></button>
-        <button onClick={() => navigate('/finance/advances')}><strong>Advances</strong><span>Staff cash and imprest</span></button>
-        <button onClick={() => navigate('/finance/budgets')}><strong>Budgets</strong><span>Plan and approve</span></button>
-        <button onClick={() => navigate('/finance/trial-balance')}><strong>Trial balance</strong><span>Debit equals credit</span></button>
-        <button onClick={() => navigate('/finance/profit-loss')}><strong>Profit and loss</strong><span>Revenue minus expense</span></button>
-        <button onClick={() => navigate('/finance/balance-sheet')}><strong>Balance sheet</strong><span>Assets equal L + E</span></button>
-        <button onClick={() => navigate('/finance/periods')}><strong>Periods</strong><span>Lock or close</span></button>
-        <button onClick={() => navigate('/finance/tax')}><strong>VAT</strong><span>Output minus input</span></button>
-        <button onClick={() => navigate('/finance/accounts')}><strong>Chart of accounts</strong><span>Master data</span></button>
+
+      <div className="fin-grid fin-grid-2">
+        <section className="card fin-panel">
+          <header className="fin-panel-head">
+            <h2>Revenue &amp; expense</h2>
+            <span className="fin-legend"><i className="fin-dot fin-dot-rev" aria-hidden="true" />Revenue <i className="fin-dot fin-dot-exp" aria-hidden="true" />Expense</span>
+          </header>
+          {trend.length
+            ? <TrendBars points={trend} />
+            : <EmptyState title="No posted activity" body="Post a journal and the six month trend appears here." />}
+          <div className="fin-panel-foot">
+            <button className="btn btn-sm" onClick={() => navigate('/finance/profit-loss')}>Profit &amp; loss</button>
+            <button className="btn btn-sm" onClick={() => navigate('/finance/trial-balance')}>Trial balance</button>
+            <button className="btn btn-sm" onClick={() => navigate('/finance/balance-sheet')}>Balance sheet</button>
+          </div>
+        </section>
+
+        <section className="card fin-panel">
+          <header className="fin-panel-head">
+            <h2>Cash position</h2>
+            <button className="btn btn-sm" onClick={() => navigate('/finance/banks')}>Reconcile</button>
+          </header>
+          <div className="fin-cash-total">
+            <span>Total liquidity</span>
+            <strong>{fmtMoney(data.cash)}</strong>
+          </div>
+          <ul className="fin-cash-list">
+            {cashRows.map((row) => (
+              <li key={row.id}>
+                <button className="fin-cash-row" onClick={() => navigate(`/finance/banks/${row.id}`)}>
+                  <span className="fin-cash-name">
+                    {row.name}
+                    <em>{row.bankName || row.accountType}</em>
+                  </span>
+                  <span className="fin-cash-amt">{fmtMoney(row.bookBalance)}</span>
+                  {num(row.unreconciledCount) > 0 && <span className="fin-chip amber">{fmtNum(row.unreconciledCount)} to match</span>}
+                </button>
+              </li>
+            ))}
+            {!cashRows.length && <li><EmptyState title="No bank or cash accounts" body="Add a bank account to track liquidity and reconcile it." /></li>}
+          </ul>
+        </section>
       </div>
+
+      <div className="fin-grid fin-grid-2">
+        <section className="card fin-panel">
+          <header className="fin-panel-head">
+            <h2>Attention required</h2>
+            {critical > 0 ? <span className="fin-chip red">{critical} critical</span> : <span className="fin-chip green">Clear</span>}
+          </header>
+          {attention.length ? (
+            <ul className="fin-attention">
+              {attention.map((a) => (
+                <li key={a.id} className={`fin-att-row sev-${a.severity}`}>
+                  <button onClick={() => navigate(a.href)}>
+                    <span className="fin-att-icon" aria-hidden="true">{a.severity === 'critical' ? '\u2715' : a.severity === 'warning' ? '\u26A0' : '\u25CF'}</span>
+                    <span className="fin-att-body">
+                      <strong>{a.title}</strong>
+                      <em>{a.detail}</em>
+                    </span>
+                    {a.amount !== null && <span className="fin-att-amt">{fmtMoney(a.amount)}</span>}
+                    <span className="fin-att-go" aria-hidden="true">{'\u2192'}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState title="Nothing needs attention" body="No overdue balances, unreconciled statement lines or unposted journals." />
+          )}
+        </section>
+
+        <section className="card fin-panel">
+          <header className="fin-panel-head">
+            <h2>Approval queue</h2>
+            {approvals.length > 0 ? <span className="fin-chip amber">{approvals.length} waiting</span> : <span className="fin-chip green">Clear</span>}
+          </header>
+          {approvals.length ? (
+            <ul className="fin-approvals">
+              {approvals.map((a) => (
+                <li key={`${a.kind}-${a.id}`}>
+                  <button onClick={() => navigate(hrefForDoc(a.kind, a.id))}>
+                    <span className="fin-ap-kind">{a.kind}</span>
+                    <span className="fin-ap-main">
+                      <strong>{a.ref}</strong>
+                      <em>{a.label || 'No description'}</em>
+                    </span>
+                    <span className="fin-ap-amt">{fmtMoney(a.amount)}</span>
+                    <Badge value={a.status} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState title="Approval queue is clear" body="No journals, expenses or budgets are awaiting a decision." />
+          )}
+          <div className="fin-panel-foot">
+            <button className="btn btn-sm" onClick={() => navigate('/finance/journals', { query: { status: 'SUBMITTED' } })}>Journals</button>
+            <button className="btn btn-sm" onClick={() => navigate('/finance/expenses', { query: { status: 'SUBMITTED' } })}>Expenses</button>
+            <button className="btn btn-sm" onClick={() => navigate('/finance/budgets', { query: { status: 'SUBMITTED' } })}>Budgets</button>
+          </div>
+        </section>
+      </div>
+
+      <div className="fin-grid fin-grid-2">
+        <section className="card fin-panel">
+          <header className="fin-panel-head">
+            <h2>Receivables</h2>
+            <span className="fin-headline">{fmtMoney(data.ar)}</span>
+          </header>
+          <AgingStrip buckets={arBuckets} total={num(data.ar)} onOpen={() => navigate('/finance/ar')} />
+          <div className="fin-stat-row">
+            <span><em>Overdue</em><strong>{fmtMoney(data.arOverdue)}</strong></span>
+            <span><em>Due in 7 days</em><strong>{fmtMoney(data.arDue7)}</strong></span>
+            <span><em>DSO</em><strong>{fmtNum(data.dso)} days</strong></span>
+          </div>
+          <div className="fin-panel-foot">
+            <button className="btn btn-sm" onClick={() => navigate('/finance/ar')}>AR aging</button>
+            <button className="btn btn-sm" onClick={() => navigate('/sales/invoices')}>Customer invoices</button>
+          </div>
+        </section>
+
+        <section className="card fin-panel">
+          <header className="fin-panel-head">
+            <h2>Payables</h2>
+            <span className="fin-headline">{fmtMoney(data.ap)}</span>
+          </header>
+          <AgingStrip buckets={apBuckets} total={num(data.ap)} onOpen={() => navigate('/finance/ap')} />
+          <div className="fin-stat-row">
+            <span><em>Overdue</em><strong>{fmtMoney(data.apOverdue)}</strong></span>
+            <span><em>Due in 7 days</em><strong>{fmtMoney(data.apDue7)}</strong></span>
+            <span><em>DPO</em><strong>{fmtNum(data.dpo)} days</strong></span>
+          </div>
+          <div className="fin-panel-foot">
+            <button className="btn btn-sm" onClick={() => navigate('/finance/ap')}>AP aging</button>
+            <button className="btn btn-sm" onClick={() => navigate('/buy/invoices')}>Supplier invoices</button>
+          </div>
+        </section>
+      </div>
+
+      <section className="card fin-panel">
+        <header className="fin-panel-head">
+          <h2>Recent financial activity</h2>
+          <button className="btn btn-sm" onClick={() => navigate('/finance/journals')}>All journals</button>
+        </header>
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Entry</th><th>Date</th><th>Type</th><th>Description</th>
+                <th style={{ textAlign: 'right' }}>Debit</th><th style={{ textAlign: 'right' }}>Credit</th>
+                <th>Source</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recent.map((r) => (
+                <tr key={r.id} className="row-click" onClick={() => navigate(`/finance/journals/${r.id}`)}>
+                  <td className="cell-mono">{r.entryNo}</td>
+                  <td>{shortDate(r.entryDate)}</td>
+                  <td>{r.journalType}</td>
+                  <td>{r.description || '-'}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtMoney(r.totalDebit)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtMoney(r.totalCredit)}</td>
+                  <td className="cell-mono">{r.referenceCode || '-'}</td>
+                  <td><Badge value={r.status} /></td>
+                </tr>
+              ))}
+              {!recent.length && <tr><td colSpan={8} className="muted">No journals have been posted yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="card fin-panel">
+        <header className="fin-panel-head">
+          <h2>Workspaces</h2>
+          <span className="muted fin-panel-hint">Everything below enforces the same double-entry rules</span>
+        </header>
+        <div className="do-now">
+          <button onClick={() => navigate('/finance/journals')}><strong>Journals</strong><span>Posted double-entry</span></button>
+          <button onClick={() => navigate('/finance/expenses')}><strong>Expenses</strong><span>Record and void</span></button>
+          <button onClick={() => navigate('/finance/advances')}><strong>Advances</strong><span>Staff cash and imprest</span></button>
+          <button onClick={() => navigate('/finance/budgets')}><strong>Budgets</strong><span>Plan and approve</span></button>
+          <button onClick={() => navigate('/finance/trial-balance')}><strong>Trial balance</strong><span>Debit equals credit</span></button>
+          <button onClick={() => navigate('/finance/profit-loss')}><strong>Profit and loss</strong><span>Revenue minus expense</span></button>
+          <button onClick={() => navigate('/finance/balance-sheet')}><strong>Balance sheet</strong><span>Assets equal L + E</span></button>
+          <button onClick={() => navigate('/finance/periods')}><strong>Periods</strong><span>Lock or close</span></button>
+          <button onClick={() => navigate('/finance/tax')}><strong>VAT</strong><span>Output minus input</span></button>
+          <button onClick={() => navigate('/finance/accounts')}><strong>Chart of accounts</strong><span>Master data</span></button>
+          <button onClick={() => navigate('/finance/banks')}><strong>Banking</strong><span>Balances and reconciliation</span></button>
+          <button onClick={() => navigate('/finance/close')}><strong>Period close</strong><span>Checklist to sign-off</span></button>
+        </div>
+      </section>
     </div>
   );
-}
-function JournalList() {
+}function JournalList() {
   const { user } = useAuth();
   const q = useHashQuery();
   const [rows, setRows] = useState<Rec[]>([]);
@@ -221,15 +612,19 @@ function JournalList() {
   const [status, setStatus] = useState(q.get('status') ?? '');
   const committedSearch = q.get('q') ?? '';
   const committedStatus = q.get('status') ?? '';
+  const committedCostCentre = q.get('costCentreId') ?? '';
+  const committedProfitCentre = q.get('profitCentreId') ?? '';
   const sortBy = JOURNAL_SORT_COLUMNS.includes(q.get('sortBy') ?? '') ? (q.get('sortBy') as string) : '';
   const sortDir: 'asc' | 'desc' = q.get('sortDir') === 'asc' ? 'asc' : 'desc';
   const qs = useMemo(() => {
     const p = new URLSearchParams();
     if (committedSearch) p.set('q', committedSearch);
     if (committedStatus) p.set('status', committedStatus);
+    if (committedCostCentre) p.set('costCentreId', committedCostCentre);
+    if (committedProfitCentre) p.set('profitCentreId', committedProfitCentre);
     if (sortBy) { p.set('sortBy', sortBy); p.set('sortDir', sortDir); }
     return p;
-  }, [committedSearch, committedStatus, sortBy, sortDir]);
+  }, [committedSearch, committedStatus, committedCostCentre, committedProfitCentre, sortBy, sortDir]);
   // Single funnel for filter and sort changes: each one returns to page 1 and
   // never drops a search draft typed since the last committed search.
   const writeQuery = (extra: Record<string, string>) => {
@@ -262,6 +657,27 @@ function JournalList() {
   }, [qs, page, pageSize]);
   // Keep the filter drafts in step with back/forward navigation.
   useEffect(() => { setSearch(committedSearch); setStatus(committedStatus); }, [committedSearch, committedStatus]);
+  // A centre filter travels as an id in the URL. Resolve it to its code and
+  // name for the chip when the user may read the centre report; otherwise the
+  // chip shows the id so the filter stays visible and removable.
+  const [centreLabels, setCentreLabels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!committedCostCentre && !committedProfitCentre) return;
+    let alive = true;
+    const load = (kind: 'cost' | 'profit', id: string, endpoint: string, permission: string) => {
+      if (!id || !can(user, permission)) return;
+      api<{ data: { rows: Array<{ id: number; code: string; name: string }> } }>(`/api/ops/finance/${endpoint}`)
+        .then((r) => {
+          if (!alive) return;
+          const hit = (r.data.rows ?? []).find((c) => String(c.id) === id);
+          if (hit) setCentreLabels((m) => ({ ...m, [`${kind}:${id}`]: `${hit.code} - ${hit.name}` }));
+        })
+        .catch(() => { /* filtering still works; only the chip label is unresolved */ });
+    };
+    load('cost', committedCostCentre, 'cost-centres', 'finance.cost_centres.view');
+    load('profit', committedProfitCentre, 'profit-centres', 'finance.profit_centres.view');
+    return () => { alive = false; };
+  }, [committedCostCentre, committedProfitCentre, user]);
   // Filter as the user types instead of only on Enter.
   useEffect(() => {
     if (committedSearch === search) return;
@@ -274,10 +690,12 @@ function JournalList() {
     if (page > pages) setPage(pages);
   }, [total, pageSize, page]);
   const clearAll = () => navigate('/finance/journals', { query: {} });
-  const hasFilters = Boolean(committedSearch || committedStatus);
+  const hasFilters = Boolean(committedSearch || committedStatus || committedCostCentre || committedProfitCentre);
   const activeFilters: Array<{ key: string; label: string; value: string }> = [];
   if (committedSearch) activeFilters.push({ key: 'q', label: 'Search', value: committedSearch });
   if (committedStatus) activeFilters.push({ key: 'status', label: 'Status', value: committedStatus.replace(/_/g, ' ') });
+  if (committedCostCentre) activeFilters.push({ key: 'costCentreId', label: 'Cost centre', value: centreLabels['cost:' + committedCostCentre] ?? ('#' + committedCostCentre) });
+  if (committedProfitCentre) activeFilters.push({ key: 'profitCentreId', label: 'Profit centre', value: centreLabels['profit:' + committedProfitCentre] ?? ('#' + committedProfitCentre) });
   const removeFilter = (key: string) => {
     const next: Record<string, string> = { ...Object.fromEntries(qs) };
     delete next[key];
@@ -1067,6 +1485,7 @@ function BalanceSheet() {
   if (error) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader label="Preparing balance sheet..." />;
   const rows = (data.rows as Rec[]) ?? [];
+  const currentResult = data.currentResult == null ? null : Number(data.currentResult);
   const ok = Math.round(Number(data.assets) * 100) === Math.round(Number(data.totalLAndE) * 100);
   return (
     <div className="page">
@@ -1083,6 +1502,7 @@ function BalanceSheet() {
       <div className="kpi-grid">
         <div className="kpi-card"><span className="kpi-label">Assets</span><span className="kpi-value">{fmtMoney(data.assets)}</span></div>
         <div className="kpi-card"><span className="kpi-label">Liabilities</span><span className="kpi-value">{fmtMoney(data.liabilities)}</span></div>
+        <div className="kpi-card"><span className="kpi-label">Current period result</span><span className="kpi-value">{fmtMoney(currentResult ?? 0)}</span></div>
         <div className="kpi-card"><span className="kpi-label">Equity</span><span className="kpi-value">{fmtMoney(data.equity)}</span></div>
       </div>
       <div className="table-wrap card">
@@ -1097,23 +1517,93 @@ function BalanceSheet() {
                 <td className="cell-num">{fmtMoney(r.amount)}</td>
               </tr>
             ))}
+            {currentResult !== null && (
+              <tr key="current-result">
+                <td className="cell-mono">-</td>
+                <td>Current period result (revenue less expenses)</td>
+                <td>EQUITY</td>
+                <td className="cell-num">{fmtMoney(currentResult)}</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
     </div>
   );
 }
-const AGING_LABELS: [string, string][] = [
-  ['CURRENT', 'Current'],
-  ['AGING_1_30', '1–30'],
-  ['AGING_31_60', '31–60'],
-  ['AGING_61_90', '61–90'],
-  ['AGING_91_120', '91–120'],
-  ['AGING_120_PLUS', '120+'],
-];
 
-function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
-  const { user } = useAuth();
+// ---------------------------------------------------------------------------
+// Three-way match (PO -> GRN -> Invoice)
+//
+// Accounts payable cannot decide whether a supplier invoice is safe to pay
+// without the procurement chain behind it. The subledger carries the
+// provenance (po_id / grn_id / three_way_matched) and this maps it to the one
+// question the payables clerk actually asks: "can this be paid?"
+// ---------------------------------------------------------------------------
+type ApMatchState = 'MATCHED' | 'UNMATCHED' | 'AWAITING_GRN' | 'NO_PO';
+
+const AP_MATCH_ORDER: ApMatchState[] = ['MATCHED', 'UNMATCHED', 'AWAITING_GRN', 'NO_PO'];
+
+const AP_MATCH_META: Record<ApMatchState, { label: string; chip: string; hint: string }> = {
+  MATCHED: { label: 'Matched', chip: 'green', hint: 'Purchase order, goods receipt and invoice agree. Safe to pay.' },
+  UNMATCHED: { label: 'Unmatched', chip: 'amber', hint: 'Goods received, but the invoice has not been matched to the purchase order yet.' },
+  AWAITING_GRN: { label: 'Awaiting GRN', chip: 'red', hint: 'No goods receipt recorded against the purchase order. Do not pay until the goods are received.' },
+  NO_PO: { label: 'No PO', chip: 'amber', hint: 'Raised without a purchase order (non-PO spend). Requires manual review before payment.' },
+};
+
+function apMatchState(r: Rec): ApMatchState {
+  if (r.poId == null) return 'NO_PO';
+  if (r.grnId == null) return 'AWAITING_GRN';
+  return r.threeWayMatched ? 'MATCHED' : 'UNMATCHED';
+}
+
+function ApMatchChip({ r }: { r: Rec }) {
+  const state = apMatchState(r);
+  const meta = AP_MATCH_META[state];
+  return (
+    <span className={`fin-chip ${meta.chip}`} title={meta.hint}>
+      {state === 'MATCHED' ? '\u2713 ' : '\u26A0 '}{meta.label}
+    </span>
+  );
+}
+
+/** PO / GRN / Invoice trail. Fails loudly - an unverifiable link is not a tick. */
+function ApMatchTrail({ invoice, onOpenMatch, canOpenMatch }: { invoice: Rec; onOpenMatch?: () => void; canOpenMatch?: boolean }) {
+  const state = apMatchState(invoice);
+  const steps: { label: string; ref: string | null; ok: boolean }[] = [
+    { label: 'Purchase order', ref: invoice.poNo ? String(invoice.poNo) : null, ok: invoice.poId != null },
+    { label: 'Goods receipt', ref: invoice.grnNo ? String(invoice.grnNo) : null, ok: invoice.grnId != null },
+    { label: 'Invoice', ref: String(invoice.supplierInvoiceNo ?? ''), ok: true },
+  ];
+  return (
+    <div className="fin-panel fin-match" aria-label="Three-way match trail">
+      <div className="fin-panel-head">
+        <h3>Three-way match</h3>
+        <span className={`fin-chip ${AP_MATCH_META[state].chip}`}>{AP_MATCH_META[state].label}</span>
+      </div>
+      <ol className="fin-match-trail">
+        {steps.map((s) => (
+          <li key={s.label} className={s.ok ? 'is-ok' : 'is-missing'}>
+            <span className="fin-match-mark" aria-hidden="true">{s.ok ? '\u2713' : '\u2715'}</span>
+            <span className="fin-match-what">
+              <b>{s.label}</b>
+              <em>{s.ref ?? 'Not linked'}</em>
+            </span>
+            <span className="fin-match-state">{s.ok ? 'Linked' : 'Missing'}</span>
+          </li>
+        ))}
+      </ol>
+      <p className="fin-panel-hint">{AP_MATCH_META[state].hint}</p>
+      {onOpenMatch && canOpenMatch && invoice.poId != null && (
+        <div className="fin-panel-foot">
+          <button className="btn btn-sm btn-ghost" onClick={onOpenMatch}>Open match desk</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ArAp({ kind }: { kind: 'ar' | 'ap' }) {  const { user } = useAuth();
   const q = useHashQuery();
   const [data, setData] = useState<{ rows: Rec[]; total: number; overdue: number; buckets?: Rec } | null>(null);
   const [error, setError] = useState('');
@@ -1123,11 +1613,14 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
   const [sortBy, setSortBy] = useState('');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [collect, setCollect] = useState<Rec | null>(null);
+  const [matchFor, setMatchFor] = useState<Rec | null>(null);
   const [busy, setBusy] = useState(false);
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState('BANK_TRANSFER');
   const [payRef, setPayRef] = useState('');
   const isAr = kind === 'ar';
+  const isAp = kind === 'ap';
+  const [matchFilter, setMatchFilter] = useState(q.get('match') ?? '');
   const path = isAr ? '/finance/ar' : '/finance/ap';
   const load = useCallback(() => {
     const p = new URLSearchParams();
@@ -1141,11 +1634,16 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
   }, [kind, bucket]);
   useEffect(() => { load(); }, [load]);
   // Keep the aging bucket in step with back/forward navigation.
-  useEffect(() => { setBucket(q.get('bucket') ?? ''); }, [q]);
+  useEffect(() => { setBucket(q.get('bucket') ?? ''); setMatchFilter(q.get('match') ?? ''); }, [q]);
   const chooseBucket = (key: string) => {
     const next = bucket === key ? '' : key;
     setBucket(next);
-    navigate(path, { query: next ? { bucket: next } : {} });
+    navigate(path, { query: { ...(next ? { bucket: next } : {}), ...(matchFilter ? { match: matchFilter } : {}) } });
+  };
+  const chooseMatch = (state: string) => {
+    const next = matchFilter === state ? '' : state;
+    setMatchFilter(next);
+    navigate(path, { query: { ...(bucket ? { bucket } : {}), ...(next ? { match: next } : {}) } });
   };
   const openInvoice = (r: Rec) => navigate(isAr ? `/sales/invoices/${r.id}` : `/buy/invoices/${r.id}`);
   const postReceipt = async () => {
@@ -1182,10 +1680,12 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
     amountPaid: (r) => Number(r.amountPaid ?? 0),
     balance: (r) => Number(r.balance ?? 0),
     bucket: (r) => String(r.bucket ?? ''),
+    match: (r) => AP_MATCH_ORDER.indexOf(apMatchState(r)),
   };
   const SORT_LABELS: Record<string, string> = {
     document: 'Document', party: isAr ? 'Customer' : 'Supplier', invoiceDate: 'Date', dueDate: 'Due',
     daysOverdue: 'Days', total: 'Total', amountPaid: 'Paid', balance: 'Balance', bucket: 'Bucket',
+    match: 'Match',
   };
   const term = search.trim().toLowerCase();
   const searched = term
@@ -1194,15 +1694,17 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
         : `${String(r.supplierInvoiceNo ?? '')} ${String(r.supplierName ?? '')}`
       ).toLowerCase().includes(term))
     : data.rows;
-  const rows = sortBy
-    ? [...searched].sort((a, b) => {
+  const matched = isAp && matchFilter
+    ? searched.filter((r) => apMatchState(r) === matchFilter)
+    : searched;
+  const rows = sortBy    ? [...searched].sort((a, b) => {
         const av = SORTS[sortBy](a); const bv = SORTS[sortBy](b);
         const cmp = typeof av === 'number' && typeof bv === 'number'
           ? av - bv
           : String(av).localeCompare(String(bv));
         return sortDir === 'asc' ? cmp : -cmp;
       })
-    : searched;
+    : matched;
   const setSort = (col: string) => {
     if (sortBy !== col) { setSortBy(col); setSortDir('asc'); return; }
     if (sortDir === 'asc') { setSortDir('desc'); return; }
@@ -1212,8 +1714,16 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
   const ariaSort = (col: string): 'ascending' | 'descending' | undefined =>
     sortBy === col ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined;
   const visibleBalance = rows.reduce((sum, r) => sum + Number(r.balance ?? 0), 0);
-  const hasFilters = Boolean(search.trim() || bucket);
-  const clearFilters = () => { setSearch(''); setSortBy(''); setBucket(''); navigate(path, { query: {} }); };
+  const hasFilters = Boolean(search.trim() || bucket || (isAp && matchFilter));
+  const matchCounts = isAp ? AP_MATCH_ORDER.map((state) => ({
+    state,
+    count: data.rows.filter((r) => apMatchState(r) === state).length,
+    amount: data.rows.filter((r) => apMatchState(r) === state).reduce((s, r) => s + Number(r.balance ?? 0), 0),
+  })) : [];
+  const clearFilters = () => {
+    setSearch(''); setSortBy(''); setBucket(''); setMatchFilter('');
+    navigate(path, { query: {} });
+  };
   return (
     <div className="page">
       <header className="page-head">
@@ -1224,21 +1734,76 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
         </div>
       </header>
       {error && <ErrorBanner error={error} />}
-      <div className="aging-row aging-row-6" style={{ marginBottom: 16 }}>
-        {AGING_LABELS.map(([key, label]) => (
-          <button
-            key={key}
-            className={`aging-cell ${bucket === key ? 'aging-cell-active' : ''}`}
-            onClick={() => chooseBucket(key)}
-            aria-pressed={bucket === key}
-            title={bucket === key ? `Stop filtering to ${label}` : `Show only ${label} balances`}
-            style={{ textAlign: 'left', cursor: 'pointer', border: '1px solid var(--line)' }}
-          >
-            <span className="muted">{label}</span>
-            <strong>{fmtMoney(buckets[key] ?? 0)}</strong>
-          </button>
-        ))}
-      </div>
+      <section className="card card-pad fin-aging-panel" aria-label="Ageing profile" style={{ marginBottom: 14 }}>
+        <div className="card-head">
+          <h3>Ageing profile</h3>
+          <span className="muted fin-aging-note" role="status" aria-live="polite">
+            {data.total > 0
+              ? `${Math.round((Number(data.overdue ?? 0) / Number(data.total)) * 100)}% of the open balance is overdue`
+              : 'No open balances'}
+          </span>
+        </div>
+        <AgingBand buckets={buckets} />
+        {(() => {
+          const bucketSum = AGING_BUCKETS.reduce((s, [k]) => s + Number(buckets[k] ?? 0), 0);
+          return (
+            <div className="aging-row aging-row-6" style={{ marginTop: 12 }}>
+              {AGING_BUCKETS.map(([key, label, hint]) => {
+                const amt = Number(buckets[key] ?? 0);
+                const share = bucketSum > 0 ? Math.round((amt / bucketSum) * 100) : 0;
+                const active = bucket === key;
+                return (
+                  <button
+                    key={key}
+                    className={`aging-cell aging-cell-btn${active ? ' aging-cell-active' : ''}`}
+                    onClick={() => chooseBucket(key)}
+                    aria-pressed={active}
+                    title={active ? `Stop filtering to ${label}` : `Show only ${label} balances`}
+                  >
+                    <span className="muted aging-cell-label">{label}</span>
+                    <strong>{fmtMoney(amt)}</strong>
+                    <span className="aging-cell-foot muted" title={hint}>
+                      {bucketSum > 0 ? `${share}% of open` : '\u2014'}
+                      {active && <i className="aging-cell-flag" aria-hidden="true">filtering</i>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })()}
+      </section>
+      {isAp && (
+        <section className="card card-pad fin-match-strip" aria-label="Three-way match status" style={{ marginBottom: 14 }}>
+          <div className="card-head">
+            <h3>Three-way match</h3>
+            <span className="muted fin-aging-note">
+              PO {'\u2192'} GRN {'\u2192'} invoice. Only fully matched invoices are safe to release for payment.
+            </span>
+          </div>
+          <div className="fin-match-cards">
+            {matchCounts.map(({ state, count, amount }) => {
+              const meta = AP_MATCH_META[state];
+              const active = matchFilter === state;
+              return (
+                <button
+                  key={state}
+                  className={`fin-match-card${active ? ' is-active' : ''}`}
+                  onClick={() => chooseMatch(state)}
+                  aria-pressed={active}
+                  disabled={count === 0}
+                  title={count === 0 ? `Nothing ${meta.label.toLowerCase()}` : `${meta.hint} Click to filter.`}
+                >
+                  <span className={`fin-chip ${meta.chip}`}>{meta.label}</span>
+                  <strong>{count.toLocaleString()}</strong>
+                  <span className="muted">{fmtMoney(amount)}</span>
+                  {active && <i className="fin-match-card-flag" aria-hidden="true">filtering</i>}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
       <div className="card card-pad" style={{ marginBottom: 14 }}>
         <div className="toolbar" style={{ marginBottom: hasFilters || sortBy ? 10 : 0 }}>
           <input className="search-input" type="search" value={search} aria-label={isAr ? 'Search receivables' : 'Search payables'}
@@ -1246,8 +1811,14 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
             onChange={(e) => setSearch(e.target.value)} />
           {bucket && (
             <span className="filter-chip">
-              <b>Bucket</b>{`: ${AGING_LABELS.find(([k]) => k === bucket)?.[1] ?? bucket}`}
+              <b>Bucket</b>{`: ${agingLabel(bucket)}`}
               <button type="button" title="Remove filter" aria-label="Remove bucket filter" onClick={() => chooseBucket(bucket)}>{'\u00D7'}</button>
+            </span>
+          )}
+          {isAp && matchFilter && (
+            <span className="filter-chip">
+              <b>Match</b>{`: ${AP_MATCH_META[matchFilter as ApMatchState]?.label ?? matchFilter}`}
+              <button type="button" title="Remove filter" aria-label="Remove match filter" onClick={() => chooseMatch(matchFilter)}>{'\u00D7'}</button>
             </span>
           )}
           {hasFilters && <button className="btn btn-sm btn-ghost" onClick={clearFilters}>Clear filters</button>}
@@ -1294,7 +1865,7 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
                 <div key={`card-${String(r.id)}`} className="record-card" onClick={() => openInvoice(r)}>
                   <div className="record-card-top">
                     <strong className="cell-mono">{String(isAr ? r.invoiceNo : r.supplierInvoiceNo)}</strong>
-                    <Badge value={String(r.bucket).replace('AGING_', '').replace('_PLUS', '+')} />
+                    <AgingChip bucket={r.bucket} />
                   </div>
                   <div className="record-card-meta">
                     <span>{String(isAr ? r.customerName : r.supplierName)}</span>
@@ -1302,6 +1873,12 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
                     <span>{fmtNum(r.daysOverdue)}d</span>
                     <span>{fmtMoney(r.balance)}</span>
                   </div>
+                  {isAp && (
+                    <div className="record-card-foot">
+                      <ApMatchChip r={r} />
+                      {r.poNo != null && <span className="muted cell-mono">{String(r.poNo)}</span>}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1317,6 +1894,7 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
                     <th className="cell-num" aria-sort={ariaSort('total')}><button className="th-btn" title="Sort by invoice total" onClick={() => setSort('total')}>Total{sortMark('total')}</button></th>
                     <th className="cell-num" aria-sort={ariaSort('amountPaid')}><button className="th-btn" title="Sort by amount paid" onClick={() => setSort('amountPaid')}>Paid{sortMark('amountPaid')}</button></th>
                     <th className="cell-num" aria-sort={ariaSort('balance')}><button className="th-btn" title="Sort by balance" onClick={() => setSort('balance')}>Balance{sortMark('balance')}</button></th>
+                    {isAp && <th aria-sort={ariaSort('match')}><button className="th-btn" title="Sort by three-way match status" onClick={() => setSort('match')}>Match{sortMark('match')}</button></th>}
                     <th aria-sort={ariaSort('bucket')}><button className="th-btn" title="Sort by aging bucket" onClick={() => setSort('bucket')}>Bucket{sortMark('bucket')}</button></th>
                     {isAr && <th />}
                   </tr>
@@ -1336,7 +1914,19 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
                       <td className="cell-num">{fmtMoney(r.total)}</td>
                       <td className="cell-num">{fmtMoney(r.amountPaid)}</td>
                       <td className="cell-num">{fmtMoney(r.balance)}</td>
-                      <td><Badge value={String(r.bucket).replace('AGING_', '').replace('_PLUS', '+')} /></td>
+                      {isAp && (
+                        <td>
+                          <button
+                            type="button"
+                            className="th-btn fin-match-cell"
+                            title={`${AP_MATCH_META[apMatchState(r)].hint} Open the match trail.`}
+                            onClick={(e) => { e.stopPropagation(); setMatchFor(r); }}
+                          >
+                            <ApMatchChip r={r} />
+                          </button>
+                        </td>
+                      )}
+                      <td><AgingChip bucket={r.bucket} /></td>
                       {isAr && (
                         <td>
                           {can(user, 'sales.receipts.create') && (
@@ -1363,6 +1953,38 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {
           </>
         )}
       </section>
+      {matchFor && (
+        <Modal
+          title={`Match ${String(matchFor.supplierInvoiceNo)}`}
+          onClose={() => setMatchFor(null)}
+          footer={<button className="btn" onClick={() => setMatchFor(null)}>Close</button>}
+        >
+          <p className="muted" style={{ marginTop: 0 }}>
+            {String(matchFor.supplierName)} {'\u00b7'} {fmtMoney(matchFor.balance)} outstanding
+            {matchFor.supplierDocumentNo ? ` \u00b7 supplier ref ${String(matchFor.supplierDocumentNo)}` : ''}
+          </p>
+          <ApMatchTrail
+            invoice={matchFor}
+            canOpenMatch={can(user, 'procurement.orders.view')}
+            onOpenMatch={() => {
+              const poId = matchFor.poId;
+              setMatchFor(null);
+              if (poId != null) navigate(`/buy/match/${String(poId)}`);
+            }}
+          />
+          <dl className="fin-facts">
+            <div><dt>Invoice document</dt><dd>{String(matchFor.documentStatus ?? '\u2014').replace(/_/g, ' ')}</dd></div>
+            <div><dt>Match flag</dt><dd>{matchFor.threeWayMatched ? 'Recorded as matched' : 'Not matched'}</dd></div>
+            <div><dt>Invoice total</dt><dd>{fmtMoney(matchFor.total)}</dd></div>
+            <div><dt>Already paid</dt><dd>{fmtMoney(matchFor.amountPaid)}</dd></div>
+            <div><dt>Aging bucket</dt><dd>{agingLabel(matchFor.bucket)}</dd></div>
+            <div><dt>Days overdue</dt><dd>{fmtNum(matchFor.daysOverdue)}</dd></div>
+          </dl>
+          <div className="fin-panel-foot">
+            <button className="btn btn-sm btn-ghost" onClick={() => openInvoice(matchFor)}>Open supplier invoice</button>
+          </div>
+        </Modal>
+      )}
       {collect && (
         <Modal title={`Collect ${String(collect.invoiceNo)}`} onClose={() => setCollect(null)} footer={
           <>
@@ -1501,6 +2123,54 @@ function BankRecon({ bankId }: { bankId: number }) {
   const book = (data.book ?? []) as Rec[];
   const matches = (data.matches ?? []) as Rec[];
   const matchByStmt = new Map(matches.map((m) => [Number(m.bankTransactionId), m]));
+  const matchByBook = new Map(
+    matches.filter((m) => m.journalLineId != null).map((m) => [Number(m.journalLineId), m])
+  );
+  const bookMatch = (id: unknown) => matchByBook.get(Number(id));
+  const signed = (t: Rec) => Number(t.debit ?? 0) - Number(t.credit ?? 0);
+  const openStatement = statement.filter((t) => !t.reconciled);
+  const openBook = book.filter((t) => !t.reconciled);
+  const matchedAmount = matches.reduce((sum, m) => sum + Number(m.amount ?? 0), 0);
+  const openStatementAmount = openStatement.reduce((sum, t) => sum + signed(t), 0);
+  const openBookAmount = openBook.reduce((sum, t) => sum + signed(t), 0);
+  const difference = openStatementAmount - openBookAmount;
+  const isReconciled = openStatement.length === 0 && openBook.length === 0;
+  const statedBalance = statementBalance.trim() === '' ? null : Number(statementBalance);
+  const balanceVariance =
+    statedBalance != null && Number.isFinite(statedBalance)
+      ? statedBalance - Number(bank.bookBalance ?? 0)
+      : null;
+  // High-confidence pairings: identical amount, closest date, each cashbook line used once.
+  const suggestTaken = new Set<number>();
+  const suggestions: { stmt: Rec; book: Rec; gap: number }[] = [];
+  for (const s of openStatement) {
+    const target = signed(s);
+    const best = openBook
+      .filter((b) => !suggestTaken.has(Number(b.id)) && Math.abs(signed(b) - target) < 0.005)
+      .map((b) => ({ b, gap: dayGap(s.txnDate, b.entryDate) }))
+      .filter((c) => c.gap <= 10)
+      .sort((a, z) => a.gap - z.gap)[0];
+    if (best) {
+      suggestTaken.add(Number(best.b.id));
+      suggestions.push({ stmt: s, book: best.b, gap: best.gap });
+    }
+  }
+  const matchOne = (statementId: number, journalLineId: number) =>
+    act(`/api/ops/finance/banks/${bankId}/recon/match`, { statementId, journalLineId });
+  const matchSuggestions = async (pairs: { stmt: Rec; book: Rec }[]) => {
+    setBusy(true); setError('');
+    try {
+      for (const p of pairs) {
+        await api(`/api/ops/finance/banks/${bankId}/recon/match`, {
+          method: 'POST',
+          body: JSON.stringify({ statementId: p.stmt.id, journalLineId: p.book.id }),
+        });
+      }
+      setStmtSel(null); setBookSel(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); load(); }
+  };
   const status = String(recon.status ?? 'OPEN');
   const locked = status === 'APPROVED' || status === 'VOID';
   const canRecon = can(user, 'finance.banks.reconcile') && !locked;
@@ -1512,8 +2182,11 @@ function BankRecon({ bankId }: { bankId: number }) {
           <p className="mod-kicker" data-mod="fin">Treasury</p>
           <h1>Reconcile {String(bank.code)} · {String(bank.name)}</h1>
           <p className="muted">
-            Match bank statement lines to posted cashbook journals. {String(recon.reconNo)} · {status}.
-            Unmatched statement {fmtNum(data.unmatchedStatement)} · unmatched book {fmtNum(data.unmatchedBook)}.
+            Match bank statement lines to posted cashbook journals. {String(recon.reconNo)} {'\u00b7'} {status}.
+            {' '}
+            {isReconciled
+              ? 'Every line is matched.'
+              : `${openStatement.length} statement and ${openBook.length} cashbook line(s) still open.`}
           </p>
         </div>
         <div className="head-actions">
@@ -1529,14 +2202,64 @@ function BankRecon({ bankId }: { bankId: number }) {
         </div>
       </header>
       {error && <ErrorBanner error={error} />}
-      <div className="kpi-grid">
-        <div className="kpi-card"><span className="kpi-label">Book balance</span><span className="kpi-value">{fmtMoney(bank.bookBalance)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Unmatched statement</span><span className="kpi-value">{fmtNum(data.unmatchedStatement)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Unmatched cashbook</span><span className="kpi-value">{fmtNum(data.unmatchedBook)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Statement balance</span>
-          <input className="search-input" inputMode="decimal" placeholder="From bank statement" value={statementBalance} onChange={(e) => setStatementBalance(e.target.value)} />
+      <div className="card card-pad fin-recon-summary" style={{ marginBottom: 14 }}>
+        <div className="fin-stat-row" role="group" aria-label="Reconciliation summary">
+          <span><em>Matched</em><strong>{fmtMoney(matchedAmount)}</strong></span>
+          <span><em>Unmatched statement</em><strong>{fmtMoney(openStatementAmount)}</strong></span>
+          <span><em>Unmatched cashbook</em><strong>{fmtMoney(openBookAmount)}</strong></span>
+          <span><em>Difference</em><strong>{fmtMoney(difference)}</strong></span>
+          <span><em>Book balance</em><strong>{fmtMoney(bank.bookBalance)}</strong></span>
+        </div>
+        <div className="fin-recon-verdict">
+          {isReconciled ? (
+            <span className="fin-chip green">{'\u2713'} Reconciled {'\u2014'} every statement line is matched</span>
+          ) : (
+            <span className="fin-chip amber">
+              {'\u26A0'} {openStatement.length} statement {'\u00b7'} {openBook.length} cashbook outstanding
+            </span>
+          )}
+          {balanceVariance != null && (
+            <span className={Math.abs(balanceVariance) < 0.005 ? 'fin-chip green' : 'fin-chip red'}>
+              {Math.abs(balanceVariance) < 0.005
+                ? `${'\u2713'} Statement agrees with book`
+                : `Variance ${fmtMoney(balanceVariance)}`}
+            </span>
+          )}
+        </div>
+        <div className="field fin-recon-balance">
+          <label>Statement balance (from bank)</label>
+          <input className="search-input" inputMode="decimal" placeholder="e.g. 45000000"
+            value={statementBalance} onChange={(e) => setStatementBalance(e.target.value)} />
         </div>
       </div>
+      {canRecon && suggestions.length > 0 && (
+        <div className="card card-pad" style={{ marginBottom: 14 }}>
+          <div className="fin-panel-head">
+            <h2>Suggested matches ({suggestions.length})</h2>
+            <button className="btn btn-sm btn-primary" disabled={busy}
+              onClick={() => void matchSuggestions(suggestions)}>Match all {suggestions.length}</button>
+          </div>
+          <p className="muted fin-panel-hint">
+            Identical amount within 10 days. Matching is reversible {'\u2014'} use Unmatch if a pair is wrong.
+          </p>
+          <ul className="fin-suggest">
+            {suggestions.map((s) => (
+              <li key={`${String(s.stmt.id)}-${String(s.book.id)}`}>
+                <div className="fin-suggest-main">
+                  <strong className="cell-mono">{String(s.stmt.reference ?? s.stmt.description ?? `#${String(s.stmt.id)}`)}</strong>
+                  <em>
+                    {shortDate(s.stmt.txnDate)} {'\u2192'} {String(s.book.entryNo)}
+                    {s.gap === 0 ? ' \u00b7 same day' : ` \u00b7 ${s.gap}d apart`}
+                  </em>
+                </div>
+                <span className="fin-suggest-amt">{fmtMoney(signed(s.stmt))}</span>
+                <button className="btn btn-sm" disabled={busy}
+                  onClick={() => void matchOne(Number(s.stmt.id), Number(s.book.id))}>Match</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="recon-split">
         <div className="table-wrap card">
           <h2 style={{ margin: '12px 16px 0', fontSize: 16 }}>Bank statement</h2>
@@ -1591,7 +2314,18 @@ function BankRecon({ bankId }: { bankId: number }) {
                   <td>{String(t.description ?? t.referenceCode ?? '')}</td>
                   <td className="cell-num">{Number(t.debit) ? fmtMoney(t.debit) : ''}</td>
                   <td className="cell-num">{Number(t.credit) ? fmtMoney(t.credit) : ''}</td>
-                  <td><Badge value={t.reconciled ? 'Matched' : 'Open'} /></td>
+                  <td>
+                    {bookMatch(t.id) ? (
+                      <span className="row-actions">
+                        <Badge value={String(bookMatch(t.id)?.matchMethod)} />
+                        {canRecon && (
+                          <button className="btn btn-sm" disabled={busy} onClick={(e) => { e.stopPropagation(); void act(`/api/ops/finance/banks/${bankId}/recon/unmatch`, { matchId: bookMatch(t.id)?.id }); }}>Unmatch</button>
+                        )}
+                      </span>
+                    ) : (
+                      <Badge value={t.reconciled ? 'Matched' : 'Open'} />
+                    )}
+                  </td>
                 </tr>
               ))}
               {book.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 24 }}>{bank.glAccountId ? 'No posted cashbook lines.' : 'Link a GL account to this bank first.'}</td></tr>}
@@ -2619,6 +3353,8 @@ function Coa() {
   const [activeOnly, setActiveOnly] = useState(false);
   const [sortBy, setSortBy] = useState('');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [layout, setLayout] = useState<'tree' | 'list'>('tree');
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const load = useCallback(() => {
     setLoading(true);
     api<{ data: Rec[] }>('/api/ops/finance/accounts')
@@ -2710,6 +3446,65 @@ function Coa() {
   const canEdit = can(user, 'finance.chart_of_accounts.update');
   const canDelete = can(user, 'finance.chart_of_accounts.delete');
   const openNew = () => { setModal(null); setModalOpen(true); };
+  // Hierarchy: type group -> parent/child forest. A row whose parent is filtered out becomes a root,
+  // so search and type filters never hide an account inside a collapsed branch.
+  const byId = new Map(rows.map((r) => [Number(r.id), r]));
+  const filteredSet = new Set(filtered);
+  const childrenOf = new Map<number, Rec[]>();
+  for (const r of filtered) {
+    const pid = r.parentId == null ? null : Number(r.parentId);
+    const parent = pid == null ? undefined : byId.get(pid);
+    if (parent && filteredSet.has(parent)) {
+      const list = childrenOf.get(pid as number) ?? [];
+      list.push(r);
+      childrenOf.set(pid as number, list);
+    }
+  }
+  const sortByCode = (list: Rec[]) => [...list].sort((a, b) => String(a.code).localeCompare(String(b.code)));
+  const rootsOf = (types: string[]) =>
+    sortByCode(filtered.filter((r) => types.includes(String(r.accountType)) && !(() => {
+      const pid = r.parentId == null ? null : Number(r.parentId);
+      const parent = pid == null ? undefined : byId.get(pid);
+      return Boolean(parent && filteredSet.has(parent));
+    })()));
+  const toggleCollapsed = (key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  const renderNode = (r: Rec, depth: number): ReactNode => {
+    const childRows = sortByCode(childrenOf.get(Number(r.id)) ?? []);
+    const nodeKey = `node:${String(r.id)}`;
+    const open = !collapsed.has(nodeKey);
+    const label = `${String(r.code)} ${String(r.name)}`;
+    return (
+      <div key={String(r.id)} className="fin-tree-node">
+        <div className="fin-tree-row" style={{ paddingLeft: 10 + depth * 22 }}>
+          {childRows.length > 0 ? (
+            <button type="button" className="fin-tree-chev-btn" aria-expanded={open}
+              aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
+              onClick={() => toggleCollapsed(nodeKey)}>{open ? '\u25BE' : '\u25B8'}</button>
+          ) : (
+            <span className="fin-tree-chev-btn is-leaf" aria-hidden="true">{'\u00B7'}</span>
+          )}
+          <span className="cell-mono fin-tree-code">{String(r.code)}</span>
+          <span className="fin-tree-name">{String(r.name)}</span>
+          <span className="fin-tree-badges">
+            {r.isActive === false
+              ? <span className="fin-chip red">Inactive</span>
+              : <span className="fin-chip">{r.isPosting ? 'Posting' : 'Heading'}</span>}
+          </span>
+          <span className="fin-tree-actions row-actions">
+            {canEdit && <button className="btn btn-sm" onClick={() => { setModal(r); setModalOpen(true); }}>Edit</button>}
+            {canDelete && r.isActive !== false && <button className="btn btn-sm" onClick={() => setConfirm(r)}>Deactivate</button>}
+          </span>
+        </div>
+        {open && childRows.map((k) => renderNode(k, depth + 1))}
+      </div>
+    );
+  };
   return (
     <div className="page">
       <header className="page-head">
@@ -2727,11 +3522,15 @@ function Coa() {
             placeholder="Search code, name or subtype..."
             onChange={(e) => setSearch(e.target.value)} />
           <StatusSelect value={typeFilter} onChange={setTypeFilter} options={ACCOUNT_TYPES} label="Filter by account type" placeholder="All types" />
+          <button type="button" className={layout === 'tree' ? 'chip chip-on' : 'chip'} aria-pressed={layout === 'tree'}
+            title="Show the account hierarchy" onClick={() => setLayout('tree')}>Tree</button>
+          <button type="button" className={layout === 'list' ? 'chip chip-on' : 'chip'} aria-pressed={layout === 'list'}
+            title="Show a flat sortable list" onClick={() => setLayout('list')}>List</button>
           <button type="button" className={activeOnly ? 'chip chip-on' : 'chip'} aria-pressed={activeOnly}
             title="Hide deactivated accounts" onClick={() => setActiveOnly(!activeOnly)}>Active only</button>
           {hasFilters && <button className="btn btn-sm btn-ghost" onClick={clearFilters}>Clear filters</button>}
         </div>
-        {(activeFilters.length > 0 || sortBy) && (
+        {(activeFilters.length > 0 || (layout === 'list' && sortBy)) && (
           <div className="filter-chips" style={{ padding: '12px 0 0' }}>
             {activeFilters.map((f) => (
               <span key={f.key} className="filter-chip">
@@ -2739,7 +3538,7 @@ function Coa() {
                 <button type="button" title="Remove filter" aria-label={`Remove ${f.label} filter`} onClick={() => removeFilter(f.key)}>{'\u00D7'}</button>
               </span>
             ))}
-            {sortBy && (
+            {layout === 'list' && sortBy && (
               <span className="filter-chip">
                 <b>Sort</b>{`: ${SORT_LABELS[sortBy] ?? sortBy} ${sortDir === 'asc' ? 'ascending' : 'descending'}`}
                 <button type="button" title="Clear sort" aria-label="Clear sort" onClick={() => setSortBy('')}>{'\u00D7'}</button>
@@ -2757,7 +3556,7 @@ function Coa() {
               {visible.length === rows.length
                 ? `${visible.length.toLocaleString()} accounts`
                 : `${visible.length.toLocaleString()} of ${rows.length.toLocaleString()} shown`}
-              {sortBy ? ` \u00B7 sorted by ${SORT_LABELS[sortBy] ?? sortBy} (${sortDir === 'asc' ? 'ascending' : 'descending'})` : ''}
+              {layout === 'list' && sortBy ? ` \u00B7 sorted by ${SORT_LABELS[sortBy] ?? sortBy} (${sortDir === 'asc' ? 'ascending' : 'descending'})` : ''}
             </span>
           )}
         </div>
@@ -2770,6 +3569,31 @@ function Coa() {
             action="Clear filters" onAction={clearFilters} />
         ) : (
           <>
+            {layout === 'tree' && (
+              <div className="fin-tree">
+                {COA_GROUPS.map(([label, types]) => {
+                  const groupKey = `type:${label}`;
+                  const openGroup = !collapsed.has(groupKey);
+                  const groupRoots = rootsOf(types);
+                  const groupCount = visible.filter((r) => types.includes(String(r.accountType))).length;
+                  return (
+                    <div key={groupKey} className="fin-tree-group">
+                      <button type="button" className="fin-tree-group-head" aria-expanded={openGroup}
+                        onClick={() => toggleCollapsed(groupKey)}>
+                        <span className="fin-tree-chev" aria-hidden="true">{openGroup ? '\u25BE' : '\u25B8'}</span>
+                        <strong>{label}</strong>
+                        <span className="fin-tree-count">{groupCount.toLocaleString()}</span>
+                      </button>
+                      {openGroup && (groupRoots.length === 0
+                        ? <p className="fin-tree-empty muted">No accounts in this group match the filters.</p>
+                        : groupRoots.map((r) => renderNode(r, 0)))}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {layout === 'list' && (
+              <>
             <div className="record-cards mobile-only">
               {visible.map((r) => (
                 <div key={`card-${String(r.id)}`} className="record-card">
@@ -2826,7 +3650,9 @@ function Coa() {
                   ))}
                 </tbody>
               </table>
-            </div>
+                </div>
+              </>
+            )}
           </>
         )}
       </section>
@@ -3865,6 +4691,395 @@ function AdvancedOverview() {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cost & profit centres
+//
+// Both dimensions are carried on journal lines, so this screen reads posted
+// activity directly instead of keeping a parallel figure by hand. Charges
+// (debit) and recoveries (credit) are kept apart so a centre can be read either
+// as a cost collector or as a revenue owner, and every centre is listed even
+// when it is idle. Lines carrying no dimension are surfaced as unallocated: an
+// unattributed amount is never allowed to disappear from the report.
+// ---------------------------------------------------------------------------
+
+type CentreRow = {
+  id: number; code: string; name: string; status: string;
+  debit: number; credit: number; net: number; entries: number; budget: number | null;
+};
+
+type CentreReport = {
+  from: string; to: string;
+  rows: CentreRow[];
+  totals: { debit: number; credit: number; net: number; budget: number; entries: number };
+  unallocated: { debit: number; credit: number; net: number; entries: number };
+};
+
+const EMPTY_TOTALS = { debit: 0, credit: 0, net: 0, budget: 0, entries: 0 };
+const EMPTY_UNALLOCATED = { debit: 0, credit: 0, net: 0, entries: 0 };
+
+/** Start of the current calendar year, the default reporting window. */
+function ytdStart(): string {
+  return `${new Date().getFullYear()}-01-01`;
+}
+
+function isoToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Budget utilisation meter. Says "no budget" instead of drawing an empty bar,
+ * and marks an overspend in words so the state never depends on colour alone.
+ */
+function Utilisation({ spent, budget }: { spent: number; budget: number | null }) {
+  if (budget === null || budget === undefined) return <span className="muted fin-util-none">No budget</span>;
+  if (Number(budget) <= 0) return <span className="muted fin-util-none">Zero budget</span>;
+  const pct = (Number(spent) / Number(budget)) * 100;
+  const over = pct > 100;
+  return (
+    <span className={`fin-util${over ? ' is-over' : ''}`}>
+      <span className="fin-util-bar" aria-hidden="true">
+        <span className="fin-util-fill" style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
+      </span>
+      <span className="fin-util-label">{pct.toFixed(pct >= 100 ? 0 : 1)}%{over ? ' over' : ''}</span>
+      <span className="visually-hidden">{`${fmtMoney(spent)} of ${fmtMoney(budget)} budget`}</span>
+    </span>
+  );
+}
+
+function CostCentres() {
+  const { user } = useAuth();
+  const q = useHashQuery();
+  const canCost = can(user, 'finance.cost_centres.view');
+  const canProfit = can(user, 'finance.profit_centres.view');
+  const [tab, setTab] = useState<'cost' | 'profit'>(() => {
+    const wanted = q.get('tab') === 'profit' ? 'profit' : 'cost';
+    if (wanted === 'cost' && !canCost) return 'profit';
+    if (wanted === 'profit' && !canProfit) return 'cost';
+    return wanted;
+  });
+  const [from, setFrom] = useState(q.get('from') ?? ytdStart());
+  const [to, setTo] = useState(q.get('to') ?? isoToday());
+  const [costReport, setCostReport] = useState<CentreReport | null>(null);
+  const [profitReport, setProfitReport] = useState<CentreReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    setRefreshing(true);
+    setError('');
+    const p = new URLSearchParams({ from, to });
+    const failures: string[] = [];
+    const jobs: Array<Promise<unknown>> = [];
+    if (canCost) {
+      jobs.push(api<{ data: CentreReport }>(`/api/ops/finance/cost-centres?${p}`)
+        .then((r) => { if (alive) setCostReport(r.data); })
+        .catch((e) => { failures.push(e instanceof Error ? e.message : 'Cost centre report failed'); }));
+    }
+    if (canProfit) {
+      jobs.push(api<{ data: CentreReport }>(`/api/ops/finance/profit-centres?${p}`)
+        .then((r) => { if (alive) setProfitReport(r.data); })
+        .catch((e) => { failures.push(e instanceof Error ? e.message : 'Profit centre report failed'); }));
+    }
+    Promise.all(jobs).finally(() => {
+      if (!alive) return;
+      if (failures.length) setError(failures.join(' '));
+      setRefreshing(false);
+      setLoading(false);
+    });
+    return () => { alive = false; };
+  }, [from, to, canCost, canProfit]);
+  if (!canCost && !canProfit) {
+    return <ErrorBanner error="You do not have permission to view cost or profit centre reports." />;
+  }
+  const isCost = tab === 'cost';
+  const report = isCost ? costReport : profitReport;
+  const dimensionId = isCost ? 'costCentreId' : 'profitCentreId';
+  const dimensionName = isCost ? 'cost centre' : 'profit centre';
+  const openCentre = (id: number) => navigate('/finance/journals', { query: { [dimensionId]: String(id) } });
+  const totals = report?.totals ?? EMPTY_TOTALS;
+  const unallocated = report?.unallocated ?? EMPTY_UNALLOCATED;
+  const rows = report?.rows ?? [];
+  const overBudget = rows.filter((r) => r.budget !== null && Number(r.budget) > 0 && Number(r.debit) > Number(r.budget)).length;
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <p className="mod-kicker" data-mod="fin">Cost &amp; profit centres</p>
+          <h1>{isCost ? 'Cost centres' : 'Profit centres'}</h1>
+          <p className="muted">
+            Posted activity by {dimensionName}. Every figure comes from a posted journal line and opens the entries behind it.
+          </p>
+        </div>
+      </header>
+
+      <div className="card card-pad" style={{ marginBottom: 14 }}>
+        <div className="toolbar">
+          <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label={`${dimensionName} report from date`} />
+          <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label={`${dimensionName} report to date`} />
+          {(from !== ytdStart() || to !== isoToday()) && (
+            <button className="btn btn-sm btn-ghost" onClick={() => { setFrom(ytdStart()); setTo(isoToday()); }}>Reset to year to date</button>
+          )}
+          {report && <span className="muted" style={{ fontSize: 12 }}>Reporting {shortDate(report.from)} to {shortDate(report.to)}</span>}
+        </div>
+      </div>
+
+      {canCost && canProfit && (
+        <div className="tabs" style={{ marginBottom: 16 }}>
+          {([['cost', 'Cost centres'], ['profit', 'Profit centres']] as Array<[typeof tab, string]>).map(([t, label]) => (
+            <button key={t} className={tab === t ? 'tab active' : 'tab'} aria-current={tab === t ? 'page' : undefined} onClick={() => setTab(t)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {error && <ErrorBanner error={error} />}
+
+      {loading && !report ? (
+        <PageLoader label="Reading the centre ledger..." />
+      ) : (
+        <>
+          <section className={`card fin-panel${refreshing && !loading ? ' is-refreshing' : ''}`} aria-busy={refreshing && !loading}>
+            <header className="fin-panel-head">
+              <h2>{isCost ? 'Total charged to cost centres' : 'Total contributed by profit centres'}</h2>
+              <span className="fin-headline">{isCost ? fmtMoney(totals.debit) : fmtMoney(totals.net)}</span>
+            </header>
+            <div className="fin-stat-row">
+              <span><em>Charges (debit)</em><strong>{fmtMoney(totals.debit)}</strong></span>
+              <span><em>Recoveries (credit)</em><strong>{fmtMoney(totals.credit)}</strong></span>
+              <span><em>Net</em><strong>{fmtMoney(totals.net)}</strong></span>
+              {isCost && <span><em>Budget</em><strong>{fmtMoney(totals.budget)}</strong></span>}
+              <span><em>Posted entries</em><strong>{fmtNum(totals.entries)}</strong></span>
+            </div>
+            {isCost && overBudget > 0 && (
+              <p className="fin-panel-hint fin-warn-text">{overBudget} {overBudget === 1 ? 'centre is' : 'centres are'} over the approved budget for this window.</p>
+            )}
+            {!rows.length && <p className="muted fin-panel-hint">No {dimensionName}s are defined for this company yet.</p>}
+          </section>
+
+          <div className="table-wrap card">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Code</th><th>Name</th><th>Status</th>
+                  <th className="cell-num">Charges</th><th className="cell-num">Recoveries</th><th className="cell-num">Net</th>
+                  <th className="cell-num">Entries</th>
+                  {isCost && <th className="cell-num">Budget</th>}
+                  {isCost && <th>Utilisation</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const clickable = Number(r.entries) > 0;
+                  return (
+                    <tr
+                      key={r.id}
+                      className={clickable ? 'row-click' : undefined}
+                      title={clickable ? `Open the ${r.entries} posted entries for ${r.code}` : 'No posted activity in this window'}
+                      onClick={clickable ? () => openCentre(r.id) : undefined}
+                    >
+                      <td className="cell-mono">{r.code}</td>
+                      <td>{r.name}</td>
+                      <td><Badge value={r.status} /></td>
+                      <td className="cell-num">{fmtMoney(r.debit)}</td>
+                      <td className="cell-num">{fmtMoney(r.credit)}</td>
+                      <td className="cell-num">{fmtMoney(r.net)}</td>
+                      <td className="cell-num">{fmtNum(r.entries)}</td>
+                      {isCost && <td className="cell-num">{r.budget === null ? <span className="muted">-</span> : fmtMoney(r.budget)}</td>}
+                      {isCost && <td><Utilisation spent={Number(r.debit)} budget={r.budget} /></td>}
+                    </tr>
+                  );
+                })}
+                {!rows.length && (
+                  <tr><td colSpan={isCost ? 9 : 7} className="muted">Nothing to show for this window.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <section className="card fin-panel" style={{ marginTop: 14 }}>
+            <header className="fin-panel-head">
+              <h2>Unallocated</h2>
+              {Number(unallocated.entries) > 0
+                ? <span className="fin-chip amber">{fmtNum(unallocated.entries)} entries</span>
+                : <span className="fin-chip green">Fully allocated</span>}
+            </header>
+            <p className="muted fin-panel-hint">
+              Posted lines carrying no {dimensionName}. They are in the general ledger but belong to no centre above, so they are
+              reported separately rather than absorbed into a centre total.
+            </p>
+            <div className="fin-stat-row">
+              <span><em>Charges</em><strong>{fmtMoney(unallocated.debit)}</strong></span>
+              <span><em>Recoveries</em><strong>{fmtMoney(unallocated.credit)}</strong></span>
+              <span><em>Net</em><strong>{fmtMoney(unallocated.net)}</strong></span>
+            </div>
+            <div className="fin-panel-foot">
+              <button className="btn btn-sm" onClick={() => navigate('/finance/journals', { query: {} })}>Open journals</button>
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Financial Intelligence workspace
+//
+// The hub is deliberately finance-native. It is gated on finance.* grants and
+// never on the analytics (reports.*) grants, because accountants, controllers
+// and the CFO hold finance.journals.view without holding reports.dashboards.view.
+// Only real destinations are listed; the saved-view and schedule registry lives
+// in the Reports workspace and is linked, not duplicated, for those who can
+// actually open it.
+// ---------------------------------------------------------------------------
+
+function ReportsHub() {
+  const { user } = useAuth();
+  const canJournals = can(user, 'finance.journals.view');
+  const canRegistry = canAny(user, ['reports.saved.view', 'reports.dashboards.view', 'reports.builder.view']);
+  const [payroll, setPayroll] = useState<Rec[]>([]);
+  const [payrollLoading, setPayrollLoading] = useState(false);
+  const [payrollError, setPayrollError] = useState('');
+  useEffect(() => {
+    if (!canJournals) return;
+    let alive = true;
+    setPayrollLoading(true);
+    api<{ data: { rows: Rec[] } }>('/api/ops/finance/journals?journalType=PAYROLL&status=POSTED&sortBy=entry_date&sortDir=desc&pageSize=8')
+      .then((r) => { if (alive) setPayroll(r.data.rows ?? []); })
+      .catch((e) => { if (alive) setPayrollError(e instanceof Error ? e.message : 'Payroll postings unavailable'); })
+      .finally(() => { if (alive) setPayrollLoading(false); });
+    return () => { alive = false; };
+  }, [canJournals]);
+  const groups: Array<{ title: string; tiles: FinanceTile[] }> = [
+    {
+      title: 'Financial statements',
+      tiles: [
+        { href: '/finance/trial-balance', label: 'Trial Balance', hint: 'Proof that debits equal credits', perm: 'finance.journals.view' },
+        { href: '/finance/profit-loss', label: 'Income Statement', hint: 'Revenue less expenses for a period', perm: 'finance.journals.view' },
+        { href: '/finance/balance-sheet', label: 'Balance Sheet', hint: 'Assets, liabilities and equity', perm: 'finance.journals.view' },
+        { href: '/finance/accounts', label: 'General Ledger', hint: 'Chart of accounts and balances', perm: 'finance.chart_of_accounts.view' },
+        { href: '/finance/journals', label: 'Journal Register', hint: 'Every posted double entry', perm: 'finance.journals.view' },
+        { href: '/finance/banks', label: 'Cash & Bank', hint: 'Balances, movements and reconciliation', perm: 'finance.banks.view' },
+      ],
+    },
+    {
+      title: 'Analysis',
+      tiles: [
+        { href: '/finance/ar', label: 'AR Aging', hint: 'What customers owe, by age', perm: 'finance.journals.view' },
+        { href: '/finance/ap', label: 'AP Aging', hint: 'What we owe suppliers, by age', perm: 'finance.journals.view' },
+        { href: '/finance/budgets', label: 'Budget vs Actual', hint: 'Approved budgets against spend', perm: 'finance.budgets.view' },
+        { href: '/finance/cost-centres', label: 'Cost & Profit Centres', hint: 'Activity and budget by dimension', perm: 'finance.cost_centres.view', perms: ['finance.cost_centres.view', 'finance.profit_centres.view'] },
+        { href: '/finance/costing', label: 'Manufacturing Costing', hint: 'Production cost and variance', perm: 'finance.production_costs.view' },
+        { href: '/finance/consolidation', label: 'Consolidation', hint: 'Group financial position', perm: 'finance.consolidation.view' },
+      ],
+    },
+    {
+      title: 'Compliance & governance',
+      tiles: [
+        { href: '/finance/tax', label: 'VAT', hint: 'Output less input tax', perm: 'finance.taxes.view' },
+        { href: '/finance/efris', label: 'EFRIS', hint: 'URA fiscalisation status', perm: 'finance.efris.view', perms: ['finance.efris.view', 'efris.transactions.view', 'efris.dashboard.view'] },
+        { href: '/finance/tax-compliance', label: 'Tax Compliance', hint: 'Filings and obligations', perm: 'finance.tax_transactions.view' },
+        { href: '/finance/periods', label: 'Periods', hint: 'Open, lock and close', perm: 'finance.periods.view' },
+        { href: '/finance/close', label: 'Period Close', hint: 'Month-end close checklist', perm: 'finance.close_tasks.view' },
+        { href: '/finance/audit', label: 'Audit Trail', hint: 'Who changed what, and when', perm: 'finance.audit.view' },
+      ],
+    },
+  ];
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <p className="mod-kicker" data-mod="fin">Reporting</p>
+          <h1>Financial reports</h1>
+          <p className="muted">
+            Statements, analysis and compliance reporting drawn from the same posted ledger. Every report opens the
+            transactions behind it. A formal cash flow statement is not built yet; use Cash &amp; Bank for movements.
+          </p>
+        </div>
+        <div className="head-actions">
+          <button className="btn" onClick={() => navigate('/finance')}>Command Center</button>
+        </div>
+      </header>
+
+      {groups.map((g) => {
+        const visible = g.tiles.filter((t) => (t.perms ? canAny(user, t.perms) : can(user, t.perm)));
+        if (!visible.length) return null;
+        return (
+          <section key={g.title} className="card fin-panel" style={{ marginBottom: 14 }}>
+            <header className="fin-panel-head"><h2>{g.title}</h2></header>
+            <div className="kpi-grid">
+              {visible.map((t) => (
+                <button key={t.href} className="kpi-card" onClick={() => navigate(t.href)}>
+                  <span className="kpi-label">{t.label}</span>
+                  <span className="kpi-sub">{t.hint}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        );
+      })}
+
+      <section className="card fin-panel" style={{ marginBottom: 14 }}>
+        <header className="fin-panel-head">
+          <h2>Payroll posting</h2>
+          {payroll.length > 0 && <span className="fin-chip green">{fmtNum(payroll.length)} recent</span>}
+        </header>
+        <p className="muted fin-panel-hint">
+          Payroll runs reach the ledger as PAYROLL journals. Posting happens in Payroll; the resulting entries are read-only here.
+        </p>
+        {payrollError && <ErrorBanner error={payrollError} />}
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Journal</th><th>Date</th><th>Payroll run</th><th>Description</th>
+                <th className="cell-num">Gross debit</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payroll.map((r) => (
+                <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/finance/journals/${r.id}`)}>
+                  <td className="cell-mono">{String(r.entryNo)}</td>
+                  <td>{shortDate(r.entryDate)}</td>
+                  <td className="cell-mono">{r.referenceCode ? String(r.referenceCode) : '-'}</td>
+                  <td>{r.description ? String(r.description) : '-'}</td>
+                  <td className="cell-num">{fmtMoney(r.totalDebit)}</td>
+                  <td><Badge value={r.status} /></td>
+                </tr>
+              ))}
+              {payrollLoading && !payroll.length && <tr><td colSpan={6} className="muted">Loading payroll journals...</td></tr>}
+              {!payrollLoading && !payroll.length && (
+                <tr><td colSpan={6} className="muted">No payroll journals have been posted yet. Posting a payroll run creates one.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="fin-panel-foot">
+          {can(user, 'hr.payrolls.view') && <button className="btn btn-sm" onClick={() => navigate('/people/payrolls')}>Open payroll runs</button>}
+          <button className="btn btn-sm" onClick={() => navigate('/finance/journals')}>All journals</button>
+        </div>
+      </section>
+
+      {canRegistry && (
+        <section className="card fin-panel">
+          <header className="fin-panel-head">
+            <h2>Saved reports &amp; schedules</h2>
+            <span className="muted fin-panel-hint">Analytics workspace</span>
+          </header>
+          <p className="muted fin-panel-hint">
+            Saved views, KPI dashboards, scheduled deliveries and the report builder live in the Reports workspace.
+          </p>
+          <div className="fin-panel-foot">
+            <button className="btn btn-sm" onClick={() => navigate('/reports')}>Open Reports workspace</button>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -6243,3 +7458,564 @@ function FinanceAudit() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Finance approvals - the approver's inbox (spec 17)
+//
+// Read-only on the finance side. Every decision leaves through
+// POST /api/approvals/:taskId/decide, where RBAC, ABAC and segregation of
+// duties are enforced, so nothing here re-implements an approval path.
+// ---------------------------------------------------------------------------
+
+type FinApprovalGroup = 'PAYABLES' | 'RECEIVABLES' | 'SPEND' | 'CASH' | 'PAYROLL' | 'ASSETS';
+type LedgerEffect = 'POSTS_ENTRY' | 'RELEASES_PAYMENT' | 'RECORD_ONLY';
+
+interface BudgetPosition {
+  result: 'NONE' | 'ALLOW' | 'WARNING' | 'BLOCK';
+  approved: number;
+  committed: number;
+  actual: number;
+  available: number;
+  budgetId: number | null;
+  budgetNo: string | null;
+}
+
+interface FinApprovalStep {
+  stepSeq: number | null;
+  stepName: string;
+  status: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  comment: string | null;
+}
+
+interface FinanceApprovalRow {
+  taskId: number;
+  instanceId: number;
+  entityType: string;
+  entityId: number;
+  code: string;
+  label: string;
+  group: FinApprovalGroup;
+  amount: number | null;
+  currency: string | null;
+  docDate: string | null;
+  dateLabel: string;
+  party: string | null;
+  workflowName: string | null;
+  stepName: string;
+  stepSeq: number | null;
+  submittedAt: string | null;
+  requestedBy: string | null;
+  dueAt: string | null;
+  overdue: boolean;
+  daysWaiting: number | null;
+  ledgerEffect: LedgerEffect;
+  ledgerNote: string;
+  glPosted: boolean | null;
+  budget: BudgetPosition | null;
+  linkedBudget: { budgetNo: string; amount: number; status: string } | null;
+  approvals: FinApprovalStep[];
+}
+
+interface FinanceApprovalInboxData {
+  data: FinanceApprovalRow[];
+  count: number;
+  totals: { currency: string; amount: number }[];
+  summary: {
+    waiting: number;
+    overdue: number;
+    dueSoon: number;
+    byGroup: { group: FinApprovalGroup; label: string; count: number; amount: number | null }[];
+    oldestSubmittedAt: string | null;
+  };
+}
+
+/**
+ * Only these finance documents hold scanned supporting documents. Anything
+ * else is reported as having none rather than shown as an empty section.
+ */
+const RECEIPT_REF_TYPES: Record<string, string> = {
+  'ops.expenses': 'EXPENSE',
+  'ops.claims': 'CLAIM',
+  'ops.requisitions': 'REQUISITION',
+  'ops.replenishments': 'REPLENISHMENT',
+  'procurement.supplier_invoices': 'SUPPLIER_INVOICE',
+  'procurement.payments': 'PAYMENT',
+};
+
+const LEDGER_EFFECT_TEXT: Record<LedgerEffect, string> = {
+  POSTS_ENTRY: 'Posts to the ledger',
+  RELEASES_PAYMENT: 'Releases the payment',
+  RECORD_ONLY: 'Record only',
+};
+
+/** Currency-prefixed money. A null amount is an em dash, never a zero. */
+const money = (amount: number | null | undefined, currency: string | null | undefined): string =>
+  amount === null || amount === undefined ? '\u2014' : `${currency ? `${currency} ` : ''}${fmtMoney(amount)}`;
+
+function BudgetChip({ budget }: { budget: BudgetPosition | null }) {
+  if (!budget || budget.result === 'NONE') return <span className="fin-chip">No budget link</span>;
+  if (budget.result === 'BLOCK') return <span className="fin-chip red">Exceeds budget</span>;
+  if (budget.result === 'WARNING') return <span className="fin-chip amber">Near budget limit</span>;
+  return <span className="fin-chip green">Within budget</span>;
+}
+
+function LedgerEffectChip({ effect }: { effect: LedgerEffect }) {
+  const tone = effect === 'RECORD_ONLY' ? '' : 'green';
+  return <span className={`fin-chip${tone ? ` ${tone}` : ''}`}>{LEDGER_EFFECT_TEXT[effect]}</span>;
+}
+
+/** Supporting documents, straight from the expenditure receipt register. */
+function ApprovalDocuments({ entityType, entityId }: { entityType: string; entityId: number }) {
+  const refType = RECEIPT_REF_TYPES[entityType];
+  const [rows, setRows] = useState<Rec[] | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!refType) return;
+    let alive = true;
+    setRows(null);
+    setError('');
+    api<{ data: Rec[] }>(`/api/ops/expenditure/receipts?refType=${refType}&refId=${entityId}`)
+      .then((r) => { if (alive) setRows(Array.isArray(r.data) ? r.data : []); })
+      .catch((e) => { if (alive) setError(e instanceof Error ? e.message : 'Supporting documents failed to load'); });
+    return () => { alive = false; };
+  }, [refType, entityId]);
+  if (!refType) {
+    return <p className="empty-state">This document type does not hold scanned attachments in the ERP.</p>;
+  }
+  if (error) return <ErrorBanner error={error} />;
+  if (rows === null) return <Skeleton rows={2} />;
+  if (rows.length === 0) {
+    return <p className="empty-state">No supporting documents are attached to this record.</p>;
+  }
+  return (
+    <ul className="fin-inbox-docs">
+      {rows.map((d) => (
+        <li key={String(d.id)}>
+          <span className="fin-inbox-doc-main">
+            <strong>{String(d.fileName ?? 'Document')}</strong>
+            <em>
+              {[d.supplier ? String(d.supplier) : '', d.invoiceNo ? `INV ${String(d.invoiceNo)}` : '',
+                d.total != null ? fmtMoney(d.total) : ''].filter(Boolean).join(' \u00B7 ') || 'No supplier or value captured'}
+            </em>
+          </span>
+          <Badge value={d.verified === true || d.verified === 'true' ? 'VERIFIED' : 'UNVERIFIED'} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Who has already acted, and who has not. */
+function ApprovalTrail({ approval }: { approval: FinanceApprovalRow }) {
+  if (approval.approvals.length === 0) {
+    return <p className="empty-state">No approval steps have been recorded for this workflow yet.</p>;
+  }
+  return (
+    <ol className="fin-inbox-trail">
+      {approval.approvals.map((s, i) => {
+        const mine = s.status === 'PENDING';
+        const decided = s.status !== 'PENDING';
+        const tone = s.status === 'APPROVED' ? 'is-ok'
+          : s.status === 'REJECTED' ? 'is-rejected'
+          : mine ? 'is-current' : 'is-other';
+        return (
+          <li key={`${s.stepName}-${i}`} className={tone}>
+            <span className="fin-inbox-trail-mark" aria-hidden="true">
+              {s.status === 'APPROVED' ? '\u2713' : s.status === 'REJECTED' ? '\u2715' : mine ? '\u25CF' : '\u25CB'}
+            </span>
+            <span className="fin-inbox-trail-what">
+              <b>{s.stepSeq != null ? `Step ${s.stepSeq}: ` : ''}{s.stepName}</b>
+              <em>
+                {decided
+                  ? `${s.decidedBy ?? 'Decided'}${s.decidedAt ? ` \u00B7 ${shortDate(s.decidedAt)}` : ''}`
+                  : mine ? 'Awaiting your decision' : 'Not yet reached'}
+              </em>
+              {s.comment && <em className="fin-inbox-trail-comment">&ldquo;{s.comment}&rdquo;</em>}
+            </span>
+            <Badge value={s.status} />
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function ApprovalReview({
+  approval,
+  onClose,
+  onDecided,
+}: {
+  approval: FinanceApprovalRow;
+  onClose: () => void;
+  onDecided: (message: string) => void;
+}) {
+  const { user } = useAuth();
+  const [confirm, setConfirm] = useState<{ decision: 'APPROVED' | 'REJECTED' | 'RETURNED'; title: string; body: string; label: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const target = pathForEntity(approval.entityType, approval.entityId);
+  const canApprove = can(user, 'workflows.instances.approve');
+  const canReject = can(user, 'workflows.instances.reject');
+  const canReturn = can(user, 'workflows.instances.return');
+
+  const decide = (decision: 'APPROVED' | 'REJECTED' | 'RETURNED', comment: string) => {
+    setBusy(true);
+    setActionError('');
+    api(`/api/approvals/${approval.taskId}/decide`, { method: 'POST', body: JSON.stringify({ decision, comment }) })
+      .then(() => { setConfirm(null); onDecided(`${approval.code} ${decision.toLowerCase()}`); })
+      .catch((e) => setActionError(e instanceof Error ? e.message : 'The decision could not be recorded'));
+  };
+
+  return (
+    <>
+      <Modal
+        wide
+        title={`${approval.label} ${approval.code}`}
+        onClose={onClose}
+        footer={(
+          <>
+            <button className="btn" onClick={() => navigate(target)}>Open the record</button>
+            {canReturn && (
+              <button className="btn" disabled={busy} onClick={() => setConfirm({ decision: 'RETURNED', title: 'Return this document?', body: 'The requester gets it back to correct and resubmit. The reason is written to the audit trail.', label: 'Return' })}>Return</button>
+            )}
+            {canReject && (
+              <button className="btn btn-danger" disabled={busy} onClick={() => setConfirm({ decision: 'REJECTED', title: 'Reject this document?', body: 'Rejection ends this approval step. A reason is required for the audit trail.', label: 'Reject' })}>Reject</button>
+            )}
+            {canApprove && (
+              <button className="btn btn-primary" disabled={busy} onClick={() => setConfirm({ decision: 'APPROVED', title: 'Approve this document?', body: approval.ledgerNote, label: 'Approve' })}>Approve</button>
+            )}
+          </>
+        )}
+      >
+        <div className="fin-inbox-review">
+          <section className="fin-inbox-block">
+            <h4>Financial impact</h4>
+            <p className="fin-inbox-amount">{money(approval.amount, approval.currency)}</p>
+            <div className="fin-inbox-chips">
+              <LedgerEffectChip effect={approval.ledgerEffect} />
+              {approval.glPosted === true && <span className="fin-chip green">Posted to the ledger</span>}
+              {approval.glPosted === false && <span className="fin-chip amber">Not yet posted</span>}
+              <BudgetChip budget={approval.budget} />
+            </div>
+            <p className="muted fin-inbox-note">{approval.ledgerNote}</p>
+            <dl className="fin-facts">
+              <div><dt>{approval.dateLabel}</dt><dd>{shortDate(approval.docDate)}</dd></div>
+              <div><dt>Party</dt><dd>{approval.party ?? '\u2014'}</dd></div>
+              <div><dt>Workflow</dt><dd>{approval.workflowName ?? '\u2014'}</dd></div>
+              <div><dt>Current step</dt><dd>{approval.stepName}</dd></div>
+              <div><dt>Requested by</dt><dd>{approval.requestedBy ?? '\u2014'}</dd></div>
+              <div><dt>Submitted</dt><dd>{shortDate(approval.submittedAt)}</dd></div>
+              <div><dt>Waiting</dt><dd>{approval.daysWaiting != null ? `${fmtNum(approval.daysWaiting)} day(s)` : '\u2014'}</dd></div>
+              <div><dt>Due</dt><dd>{approval.dueAt ? shortDate(approval.dueAt) : '\u2014'}</dd></div>
+            </dl>
+          </section>
+
+          <section className="fin-inbox-block">
+            <h4>Budget availability</h4>
+            {approval.budget && approval.budget.result !== 'NONE' ? (
+              <>
+                <dl className="fin-facts">
+                  <div><dt>Approved</dt><dd>{fmtMoney(approval.budget.approved)}</dd></div>
+                  <div><dt>Committed</dt><dd>{fmtMoney(approval.budget.committed)}</dd></div>
+                  <div><dt>Actual to date</dt><dd>{fmtMoney(approval.budget.actual)}</dd></div>
+                  <div><dt>Available</dt><dd className={approval.budget.available < 0 ? 'fin-warn-text' : undefined}>{fmtMoney(approval.budget.available)}</dd></div>
+                </dl>
+                <p className="muted fin-inbox-note">
+                  Approved minus committed minus actual spend for the accounting period covering today.
+                  {approval.budget.budgetNo ? ` Source budget ${approval.budget.budgetNo}.` : ''}
+                </p>
+              </>
+            ) : (
+              <p className="empty-state">No approved or active budget covers this account for the current period.</p>
+            )}
+            {approval.linkedBudget && (
+              <p className="fin-inbox-linked">
+                <span className="fin-chip">{approval.linkedBudget.status}</span>
+                <span>{approval.linkedBudget.budgetNo} \u00B7 {fmtMoney(approval.linkedBudget.amount)}</span>
+              </p>
+            )}
+          </section>
+
+          <section className="fin-inbox-block">
+            <h4>{approval.approvals.some((a) => a.status !== 'PENDING') ? 'Approval history' : 'Approval route'}</h4>
+            <ApprovalTrail approval={approval} />
+          </section>
+
+          <section className="fin-inbox-block">
+            <h4>Supporting documents</h4>
+            <ApprovalDocuments entityType={approval.entityType} entityId={approval.entityId} />
+          </section>
+
+          <section className="fin-inbox-block fin-inbox-block-wide">
+            <h4>Related transactions and audit</h4>
+            <div className="fin-inbox-chips">
+              <button className="btn btn-sm" onClick={() => navigate(target)}>Open {approval.label.toLowerCase()} {approval.code}</button>
+              <button className="btn btn-sm" onClick={() => navigate('/finance/audit')}>Finance audit trail</button>
+              {approval.entityType.startsWith('sales.') && (
+                <button className="btn btn-sm" onClick={() => navigate('/finance/ar')}>AR aging</button>
+              )}
+              {approval.entityType.startsWith('procurement.') && (
+                <button className="btn btn-sm" onClick={() => navigate('/finance/ap')}>AP aging</button>
+              )}
+            </div>
+            <p className="muted fin-inbox-note">
+              Workflow instance #{approval.instanceId}, task #{approval.taskId}. Every decision on this document is
+              written to the immutable audit trail with the approver, the timestamp and the comment.
+            </p>
+          </section>
+        </div>
+        {actionError && <ErrorBanner error={actionError} />}
+      </Modal>
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.label}
+          danger={confirm.decision === 'REJECTED'}
+          onCancel={() => setConfirm(null)}
+          onConfirm={(reason) => decide(confirm.decision, reason)}
+        />
+      )}
+    </>
+  );
+}
+
+function FinanceApprovalInbox() {
+  const q = useHashQuery();
+  const [inbox, setInbox] = useState<FinanceApprovalInboxData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState<FinanceApprovalRow | null>(null);
+  const [flash, setFlash] = useState('');
+  const [scope, setScope] = useState<'' | 'overdue' | 'due-soon'>('');
+  const group = q.get('group') ?? '';
+  const search = q.get('q') ?? '';
+  const [searchDraft, setSearchDraft] = useState(search);
+
+  const load = useCallback(() => {
+    setRefreshing(true);
+    setError('');
+    api<{ data: FinanceApprovalInboxData }>('/api/ops/finance/approvals')
+      .then((r) => setInbox(r.data))
+      .catch((e) => setError(e instanceof Error ? e.message : 'The approval queue failed to load'))
+      .finally(() => { setRefreshing(false); setLoading(false); });
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setSearchDraft(search); }, [search]);
+  useEffect(() => {
+    if (searchDraft === search) return;
+    const t = setTimeout(() => navigate('/finance/approvals', { query: { ...(group ? { group } : {}), ...(searchDraft ? { q: searchDraft } : {}) } }), 300);
+    return () => clearTimeout(t);
+  }, [searchDraft, search, group]);
+
+  const setGroup = (next: string) => navigate('/finance/approvals', { query: { ...(next ? { group: next } : {}), ...(search ? { q: search } : {}) } });
+  const clearFilters = () => { setScope(''); navigate('/finance/approvals', { query: {} }); };
+
+  const rows = inbox?.data ?? [];
+  const term = search.trim().toLowerCase();
+  const visible = useMemo(() => rows.filter((r) => {
+    if (group && r.group !== group) return false;
+    if (scope === 'overdue' && !r.overdue) return false;
+    if (scope === 'due-soon' && !(r.dueAt != null && !r.overdue && new Date(r.dueAt).getTime() - Date.now() < 2 * 86400000)) return false;
+    if (!term) return true;
+    return [r.code, r.label, r.party, r.stepName, r.workflowName, r.requestedBy, r.entityType]
+      .map((v) => String(v ?? '')).join(' ').toLowerCase().includes(term);
+  }), [rows, group, scope, term]);
+
+  const summary = inbox?.summary;
+  const oldest = summary?.oldestSubmittedAt ?? null;
+  const hasFilters = Boolean(group || search || scope);
+  const activeFilters: Array<{ key: string; label: string; value: string }> = [];
+  if (group) activeFilters.push({ key: 'group', label: 'Type', value: group });
+  if (scope) activeFilters.push({ key: 'scope', label: 'Scope', value: scope === 'overdue' ? 'Overdue' : 'Due within 2 days' });
+  if (search) activeFilters.push({ key: 'q', label: 'Search', value: search });
+  const removeFilter = (key: string) => {
+    if (key === 'scope') { setScope(''); return; }
+    navigate('/finance/approvals', { query: { ...(key === 'group' ? {} : group ? { group } : {}), ...(key === 'q' ? {} : search ? { q: search } : {}) } });
+  };
+
+  const totalsText = (inbox?.totals ?? []).length > 0
+    ? inbox!.totals.map((t) => `${t.currency} ${fmtMoney(t.amount)}`).join(' \u00B7 ')
+    : '\u2014';
+
+  return (
+    <div className="page fin-inbox">
+      <header className="fin-head">
+        <div>
+          <p className="mod-kicker" data-mod="fin">Finance &amp; Accounting</p>
+          <h1>Finance approvals</h1>
+          {loading ? (
+            <p className="muted fin-head-sub">Loading the queue...</p>
+          ) : (summary?.waiting ?? 0) > 0 ? (
+            <p className="muted fin-head-sub">
+              <strong>{fmtNum(summary!.waiting)} awaiting your action</strong>
+              <span className="fin-sep" aria-hidden="true">{'\u2022'}</span>
+              <span>{totalsText} committed</span>
+              {oldest && (
+                <>
+                  <span className="fin-sep" aria-hidden="true">{'\u2022'}</span>
+                  <span>Oldest waiting since {shortDate(oldest)}</span>
+                </>
+              )}
+            </p>
+          ) : (
+            <p className="muted fin-head-sub">Nothing is waiting on you.</p>
+          )}
+        </div>
+        <div className="head-actions">
+          <button className="btn" onClick={() => navigate('/inbox')}>All my approvals</button>
+          <button className="btn" onClick={load} disabled={refreshing}>{refreshing ? 'Refreshing...' : 'Refresh'}</button>
+        </div>
+      </header>
+
+      {error && <ErrorBanner error={error} />}
+      {flash && <div className="fin-banner" role="status"><strong>{'\u2713'} {flash}</strong><span>The queue has been reloaded.</span></div>}
+
+      <div className="fin-kpi-grid">
+        <FinKpi
+          label="Awaiting your action" emphasis
+          value={summary ? fmtNum(summary.waiting) : '\u2014'}
+          sub={summary && summary.waiting > 0 ? totalsText : 'Queue is clear'}
+          onClick={() => { setScope(''); setGroup(''); }}
+        />
+        <FinKpi
+          label="Overdue" invert
+          value={summary ? fmtNum(summary.overdue) : '\u2014'}
+          sub={summary && summary.overdue > 0 ? 'Past the workflow due date' : 'Nothing past due'}
+          onClick={() => setScope('overdue')}
+        />
+        <FinKpi
+          label="Due within 2 days"
+          value={summary ? fmtNum(summary.dueSoon) : '\u2014'}
+          sub="Act before the workflow escalates"
+          onClick={() => setScope('due-soon')}
+        />
+        <FinKpi
+          label="Value awaiting approval"
+          value={(inbox?.totals ?? []).length === 1 ? fmtMoney(inbox!.totals[0].amount) : summary ? fmtNum(summary.waiting) : '\u2014'}
+          sub={(inbox?.totals ?? []).length === 1 ? `In ${inbox!.totals[0].currency}` : `${(inbox?.totals ?? []).length || 0} currencies in the queue`}
+          onClick={() => { setScope(''); setGroup(''); }}
+        />
+      </div>
+
+      {(summary?.byGroup ?? []).length > 0 && (
+        <div className="fin-inbox-groups" role="group" aria-label="Filter by document type">
+          <button className={`fin-chip fin-inbox-group${group === '' ? ' is-active' : ''}`} onClick={() => setGroup('')}>
+            All types <strong>{fmtNum(summary!.waiting)}</strong>
+          </button>
+          {summary!.byGroup.map((g) => (
+            <button key={g.group} className={`fin-chip fin-inbox-group${group === g.group ? ' is-active' : ''}`} onClick={() => setGroup(group === g.group ? '' : g.group)}>
+              {g.label} <strong>{fmtNum(g.count)}</strong>{g.amount != null ? ` \u00B7 ${fmtMoney(g.amount)}` : ''}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="card card-pad" style={{ marginBottom: 14 }}>
+        <div className="toolbar" style={{ marginBottom: activeFilters.length > 0 ? 10 : 0 }}>
+          <input className="search-input" type="search" value={searchDraft} aria-label="Search the approval queue"
+            placeholder="Search document, party, requester or workflow..."
+            onChange={(e) => setSearchDraft(e.target.value)} />
+          {hasFilters && <button className="btn btn-sm btn-ghost" onClick={clearFilters}>Clear filters</button>}
+        </div>
+        {activeFilters.length > 0 && (
+          <div className="filter-chips" style={{ padding: '0' }}>
+            {activeFilters.map((f) => (
+              <span key={f.key} className="filter-chip">
+                <b>{f.label}</b>{f.value ? `: ${f.value}` : ''}
+                <button type="button" title="Remove filter" aria-label={`Remove ${f.label} filter`} onClick={() => removeFilter(f.key)}>{'\u00D7'}</button>
+              </span>
+            ))}
+            <button className="btn btn-sm btn-ghost" onClick={clearFilters}>Clear all</button>
+          </div>
+        )}
+      </div>
+
+      <section className={`card card-pad${refreshing && !loading ? ' is-refreshing' : ''}`} aria-busy={refreshing && !loading}>
+        <div className="card-head">
+          <h3>Approval queue ({loading ? '\u2026' : fmtNum(visible.length)})</h3>
+          <span className="muted" style={{ fontSize: 12 }}>Most urgent first: overdue, then longest waiting, then largest value.</span>
+        </div>
+        {loading ? <Skeleton rows={6} /> : rows.length === 0 ? (
+          <EmptyState
+            title="Nothing is waiting on you"
+            body="Documents reach you here once they pass the steps before yours in their workflow."
+            action="Open all my approvals" onAction={() => navigate('/inbox')}
+          />
+        ) : visible.length === 0 ? (
+          <EmptyState title="No documents match these filters" body="Clear the filters to see the whole queue." action="Clear filters" onAction={clearFilters} />
+        ) : (
+          <>
+            <div className="record-cards mobile-only">
+              {visible.map((r) => (
+                <div key={r.taskId} className="record-card" onClick={() => setOpen(r)}>
+                  <div className="record-card-top">
+                    <strong className="cell-mono">{r.code}</strong>
+                    <span className="fin-inbox-flags">
+                      {r.overdue && <span className="fin-chip red">Overdue</span>}
+                      <BudgetChip budget={r.budget} />
+                    </span>
+                  </div>
+                  <div className="record-card-meta">
+                    <span>{r.label}</span>
+                    {r.party && <span>{r.party}</span>}
+                    <span>{shortDate(r.docDate)}</span>
+                    <span>{r.daysWaiting != null ? `${fmtNum(r.daysWaiting)} day(s) waiting` : 'Waiting'}</span>
+                  </div>
+                  <div className="record-card-foot">
+                    <span className="fin-ap-amt">{money(r.amount, r.currency)}</span>
+                    <LedgerEffectChip effect={r.ledgerEffect} />
+                    <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setOpen(r); }}>Review</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="table-wrap desktop-only">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th scope="col">Document</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Party</th>
+                    <th scope="col">Date</th>
+                    <th scope="col" className="cell-num">Amount</th>
+                    <th scope="col">Waiting</th>
+                    <th scope="col">Step</th>
+                    <th scope="col">Decision</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((r) => (
+                    <tr key={r.taskId} className={`row-click${r.overdue ? ' row-overdue' : ''}`} onClick={() => setOpen(r)}>
+                      <td className="cell-mono">
+                        {r.code}
+                        {r.glPosted === true && <span className="fin-chip green" style={{ marginLeft: 6 }}>Posted</span>}
+                      </td>
+                      <td>{r.label}</td>
+                      <td>{r.party ?? '\u2014'}</td>
+                      <td>{shortDate(r.docDate)}</td>
+                      <td className="cell-num">{money(r.amount, r.currency)}</td>
+                      <td>{r.daysWaiting != null ? `${fmtNum(r.daysWaiting)} day(s)` : '\u2014'}</td>
+                      <td>{r.stepName}</td>
+                      <td><button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); setOpen(r); }}>Review</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </section>
+
+      {open && (
+        <ApprovalReview
+          approval={open}
+          onClose={() => setOpen(null)}
+          onDecided={(message) => { setOpen(null); setFlash(message); load(); }}
+        />
+      )}
+    </div>
+  );
+}

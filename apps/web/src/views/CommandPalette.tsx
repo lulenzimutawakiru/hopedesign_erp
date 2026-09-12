@@ -3,7 +3,22 @@ import { api } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { COMMANDS, interpretCommand } from '../work';
-import { hrefForSearchHit, looksLikeQr, track } from '../nav';
+
+interface Destination {
+  id: string;
+  label: string;
+  hint: string;
+  href: string;
+  haystack: string;
+}
+import {
+  NAV_GROUPS,
+  hrefForSearchHit,
+  itemVisible,
+  labelForSearchHit,
+  looksLikeQr,
+  track,
+} from '../nav';
 
 interface SearchHit {
   label: string;
@@ -16,6 +31,47 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [active, setActive] = useState(0);
+
+  // Every navigable destination the signed-in user can reach. This makes the
+  // palette the single search entry point for the whole ERP (Ctrl/Cmd+K).
+  const destinations = useMemo<Destination[]>(() => {
+    const out: Destination[] = [];
+    for (const g of NAV_GROUPS) {
+      for (const item of g.items) {
+        if (itemVisible(user, item)) {
+          out.push({
+            id: `nav-${item.id}`,
+            label: item.label,
+            hint: g.label,
+            href: item.href,
+            haystack: `${item.label} ${item.keywords ?? ''} ${g.label}`.toLowerCase(),
+          });
+        }
+        for (const c of item.children ?? []) {
+          if (!itemVisible(user, { ...c, module: item.module })) continue;
+          out.push({
+            id: `nav-${item.id}-${c.id}`,
+            label: c.label,
+            hint: c.group ? `${item.label} \u00B7 ${c.group}` : item.label,
+            href: c.href,
+            haystack: `${c.label} ${c.keywords ?? ''} ${c.group ?? ''} ${item.label} ${item.keywords ?? ''}`.toLowerCase(),
+          });
+        }
+      }
+    }
+    return out;
+  }, [user]);
+
+  const navMatches = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (s.length < 2) return [];
+    const seen = new Set<string>();
+    return destinations.filter((d) => d.haystack.includes(s)).filter((d) => {
+      if (seen.has(d.href)) return false;
+      seen.add(d.href);
+      return true;
+    }).slice(0, 6);
+  }, [q, destinations]);
 
   const actions = useMemo(
     () => COMMANDS.filter((c) => !c.perm || can(user, c.perm)).filter((c) => {
@@ -55,6 +111,8 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     navigate(href);
   };
 
+  const actionHrefs = new Set(actions.map((x) => x.href));
+  const navOnly = navMatches.filter((d) => !actionHrefs.has(d.href));
   const nl = interpretCommand(q);
   const qrGuess = looksLikeQr(q) ? `/qr/${q.trim()}` : null;
 
@@ -73,7 +131,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               else if (actions[active]) go(actions[active].href);
             }
           }}
-          placeholder="Search or type a command…"
+          placeholder="Search invoice, journal, voucher, supplier, account code…"
           aria-label="Command"
         />
         <div className="cmd-list">
@@ -99,22 +157,33 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               <span>{a.hint}</span>
             </button>
           ))}
+          {navOnly.map((d) => (
+            <button key={d.id} className="cmd-item" onClick={() => go(d.href)}>
+              <strong>{d.label}</strong>
+              <span>{d.hint}</span>
+            </button>
+          ))}
           {hits.map((g) => (
             <div key={g.table}>
               <div className="search-group-label">{g.label}</div>
-              {g.matches.map((m) => (
-                <button
-                  key={`${g.table}-${m.id}`}
-                  className="cmd-item"
-                  onClick={() => go(hrefForSearchHit(String(g.table), m))}
-                >
-                  <strong>{String(m.code ?? m.order_no ?? m.quotation_no ?? m.name ?? m.id)}</strong>
-                  <span>{g.label}</span>
-                </button>
-              ))}
+              {g.matches.map((m) => {
+                const t = labelForSearchHit(String(g.table), m);
+                return (
+                  <button
+                    key={`${g.table}-${m.id}`}
+                    className="cmd-item"
+                    onClick={() => go(hrefForSearchHit(String(g.table), m))}
+                  >
+                    <strong>{t.primary}</strong>
+                    <span>{t.secondary ? `${g.label} \u00B7 ${t.secondary}` : g.label}</span>
+                  </button>
+                );
+              })}
             </div>
           ))}
-          {actions.length === 0 && hits.length === 0 && <div className="search-hint">Nothing matches.</div>}
+          {actions.length === 0 && hits.length === 0 && navOnly.length === 0 && (
+            <div className="search-hint">Nothing matches. Try an invoice, journal, voucher or account code.</div>
+          )}
         </div>
       </div>
     </div>

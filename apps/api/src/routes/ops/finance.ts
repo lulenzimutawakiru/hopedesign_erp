@@ -6,6 +6,7 @@ import { asyncHandler } from '../../utils.js';
 import * as fin from '../../services/finance.js';
 import * as finAdv from '../../services/finance-advanced.js';
 import * as efrisDir from '../../services/efris/directory.js';
+import * as finAppr from '../../services/financeApprovals.js';
 
 export const financeOpsRouter = Router();
 
@@ -36,6 +37,11 @@ financeOpsRouter.get('/accounts', ...runGet('finance.chart_of_accounts.view', (c
 financeOpsRouter.get('/journals', ...runGet('finance.journals.view', (c, ctx, q) => fin.listJournals(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
+  journalType: q.journalType != null
+    ? (Array.isArray(q.journalType) ? q.journalType.map(String) : String(q.journalType))
+    : undefined,
+  costCentreId: q.costCentreId != null ? Number(q.costCentreId) : undefined,
+  profitCentreId: q.profitCentreId != null ? Number(q.profitCentreId) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
   sortBy: q.sortBy != null ? String(q.sortBy) : undefined,
@@ -449,7 +455,16 @@ financeOpsRouter.get('/budget/check', ...runGet('finance.budget_commitments.view
   docType: String(q.docType ?? 'GENERAL'),
   docRefType: q.docRefType != null ? String(q.docRefType) : null,
   docRefId: q.docRefId != null ? Number(q.docRefId) : null,
-})));// ---- Manufacturing costing: allocation rules, production costs, WIP ----
+})));// ---- Cost & profit centres: dimension analysis of posted journal lines ----
+financeOpsRouter.get('/cost-centres', ...runGet('finance.cost_centres.view', (c, ctx, q) => finAdv.costCentreActivity(c, ctx, {
+  from: q.from != null ? String(q.from) : undefined,
+  to: q.to != null ? String(q.to) : undefined,
+})));
+financeOpsRouter.get('/profit-centres', ...runGet('finance.profit_centres.view', (c, ctx, q) => finAdv.profitCentreActivity(c, ctx, {
+  from: q.from != null ? String(q.from) : undefined,
+  to: q.to != null ? String(q.to) : undefined,
+})));
+// ---- Manufacturing costing: allocation rules, production costs, WIP ----
 financeOpsRouter.get('/allocation-rules', ...runGet('finance.allocation_rules.view', (c, ctx) => finAdv.listAllocationRules(c, ctx)));
 financeOpsRouter.post('/allocation-rules', ...run('finance.allocation_rules.create', (c, ctx, b) => finAdv.createAllocationRule(c, ctx, {
   code: String(b.code),
@@ -526,3 +541,14 @@ financeOpsRouter.get('/audit', ...runGet('finance.audit.view', (c, ctx, q) => fi
   module: q.module != null ? String(q.module) : undefined,
   docType: q.docType != null ? String(q.docType) : undefined,
 })));
+
+// ---- Finance approval inbox ----
+/**
+ * The finance slice of the workflow approval queue, enriched with the document
+ * amount, the budget position and the approvals that already happened. The
+ * decision itself stays on POST /api/approvals/:taskId/decide.
+ */
+financeOpsRouter.get(
+  '/approvals',
+  ...runGet('workflows.instances.view', (c, ctx) => finAppr.listFinanceApprovals(c, ctx, Number(ctx.userId)))
+);

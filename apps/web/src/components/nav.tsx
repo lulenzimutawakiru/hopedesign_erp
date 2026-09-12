@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { can, type MeUser } from '../auth';
 import { navigate } from '../router';
 import { listHref } from '../listState';
@@ -6,6 +6,7 @@ import {
   type BadgeKind,
   type Breakpoint,
   type Crumb,
+  type NavChild,
   type NavGroup,
   type NavItem,
   breakpointOf,
@@ -98,19 +99,149 @@ export function Breadcrumbs({ path, extra, tail }: { path: string; extra?: Crumb
 
 export function ModuleNav({ path, user }: { path: string; user: MeUser | null }) {
   const children = moduleChildrenFor(path, user);
+  const navRef = useRef<HTMLElement>(null);
+  const [sectionQuery, setSectionQuery] = useState('');
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // The module root (for example /finance) is itself a child, so a plain prefix test
+  // marked it active on every sub-page and produced two aria-current tabs. Only the
+  // most specific matching child is the current page.
+  const activeHref = children
+    .filter((c) => childActive(c.href, path))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+  const isActive = (href: string) => href === activeHref;
+  const grouped = children.some((c) => c.group);
+  // Large workspaces overflow the strip by 2-4x (Finance has 36 destinations, HR 44),
+  // which strands most of them behind a scroll. Anything this big gets a section
+  // filter, and grouped workspaces additionally collapse into their sections.
+  const filterable = children.length > 12;
+  const collapsible = grouped && filterable;
+  const activeGroup = children.find((c) => c.href === activeHref)?.group ?? '';
+  const needle = sectionQuery.trim().toLowerCase();
+  // Filtering overrides collapse, and the section holding the current page can never
+  // be hidden, so no destination becomes unreachable.
+  const sectionOpen = (group: string) =>
+    !collapsible || !!needle || group === activeGroup || collapsed[group] !== true;
+  const matches = (c: NavChild) =>
+    !needle || `${c.label} ${c.keywords ?? ''}`.toLowerCase().includes(needle);
+  // Drop collapse and filter state when the user moves to another module, otherwise a
+  // collapse made in Finance silently applies to any section name they share.
+  const moduleKey = path.split('/')[1] ?? '';
+  useEffect(() => {
+    setCollapsed({});
+    setSectionQuery('');
+  }, [moduleKey]);
+  // The strip scrolls horizontally and large workspaces such as Finance have more
+  // sections than fit on screen, so bring the current destination into view.
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const el = nav.querySelector(".tab[aria-current='page']") as HTMLElement | null;
+    if (!el) return;
+    const navRect = nav.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    if (elRect.left < navRect.left || elRect.right > navRect.right) {
+      nav.scrollLeft += elRect.left - navRect.left - 12;
+    }
+  }, [activeHref, path, collapsed, sectionQuery]);
   if (children.length < 2) return null;
+  const groups = new Map<string, number>();
+  for (const c of children) {
+    const g = c.group ?? '';
+    groups.set(g, (groups.get(g) ?? 0) + 1);
+  }
+  // A single-item section that restates its own heading adds no orientation,
+  // so the heading is dropped there ("Approvals Approvals" -> "Approvals").
+  const redundantHeading = (g: string, label: string) =>
+    groups.get(g) === 1 && g.trim().toLowerCase() === label.trim().toLowerCase();
+  const groupsWithMatches = new Set(
+    children.filter((c) => matches(c) && sectionOpen(c.group ?? '')).map((c) => c.group ?? ''),
+  );
+  const anyCollapsed = children.some((c) => !sectionOpen(c.group ?? ''));
+  const toggleGroup = (g: string) => setCollapsed((prev) => ({ ...prev, [g]: prev[g] !== true }));
+  let lastGroup = '';
+  const tabs = children.map((c) => {
+    const g = c.group ?? '';
+    const open = sectionOpen(g);
+    const visible = matches(c) && open;
+    const heading =
+      g && g !== lastGroup && groupsWithMatches.has(g) && !redundantHeading(g, c.label) ? g : '';
+    lastGroup = g;
+    return (
+      <Fragment key={c.id}>
+        {heading &&
+          (collapsible ? (
+            <button
+              type="button"
+              className="module-nav-group is-toggle"
+              aria-expanded={open}
+              title={open ? `Collapse ${heading}` : `Expand ${heading}`}
+              onClick={() => toggleGroup(g)}
+            >
+              <span className="module-nav-caret" aria-hidden="true">
+                {open ? '\u25be' : '\u25b8'}
+              </span>
+              {heading}
+            </button>
+          ) : (
+            <span className="module-nav-group" aria-hidden="true">{heading}</span>
+          ))}
+        {visible && (
+          <button
+            className={`tab ${isActive(c.href) ? 'active' : ''}`}
+            aria-current={isActive(c.href) ? 'page' : undefined}
+            onClick={() => { track('module_nav', { href: c.href }); navigate(c.href); }}
+          >
+            {c.label}
+          </button>
+        )}
+      </Fragment>
+    );
+  });
+  const empty = needle && groupsWithMatches.size === 0;
   return (
-    <nav className="module-nav" aria-label="Module">
-      {children.map((c) => (
-        <button
-          key={c.id}
-          className={`tab ${childActive(c.href, path) ? 'active' : ''}`}
-          onClick={() => { track('module_nav', { href: c.href }); navigate(c.href); }}
-        >
-          {c.label}
-        </button>
-      ))}
-    </nav>
+    <div className="module-nav-wrap">
+      {filterable && (
+        <div className="module-nav-tools">
+          <input
+            className="module-nav-filter"
+            type="search"
+            value={sectionQuery}
+            onChange={(e) => setSectionQuery(e.target.value)}
+            placeholder="Filter sections"
+            aria-label="Filter sections"
+          />
+          {collapsible && !needle && (
+            <button
+              type="button"
+              className="module-nav-toggle"
+              onClick={() =>
+                setCollapsed(() =>
+                  anyCollapsed
+                    ? {}
+                    : Object.fromEntries(
+                        [...groups.keys()].filter((g) => g !== activeGroup).map((g) => [g, true]),
+                      ),
+                )
+              }
+            >
+              {anyCollapsed ? 'Expand all' : 'Collapse all'}
+            </button>
+          )}
+        </div>
+      )}
+      <nav
+        ref={navRef}
+        className={`module-nav${grouped ? ' module-nav-grouped' : ''}${needle ? ' is-filtering' : ''}`}
+        aria-label="Module"
+      >
+        {tabs}
+        {empty && (
+          <span className="module-nav-empty" role="status">
+            {`No sections match "${sectionQuery.trim()}"`}
+          </span>
+        )}
+      </nav>
+    </div>
   );
 }
 

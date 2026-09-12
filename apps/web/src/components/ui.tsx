@@ -22,10 +22,10 @@ export function statusMeta(status: string | null | undefined): {
   const raw = String(status ?? '');
   const s = raw.toUpperCase();
   const label = raw.replace(/_/g, ' ');
-  if (['APPROVED', 'COMPLETED', 'POSTED', 'ACTIVE', 'EXECUTED', 'SIGNED', 'RENEWED', 'VARIED', 'DISPATCHED', 'DELIVERED', 'DONE', 'AUTHENTIC', 'RECEIVED', 'PASSED', 'PASS', 'RELEASED', 'RESOLVED', 'VERIFIED', 'OK', 'MATCHED', 'GREEN', 'REGISTERED', 'AVAILABLE', 'IN_STORE', 'IN_USE', 'ASSIGNED'].includes(s)) {
+  if (['APPROVED', 'COMPLETED', 'POSTED', 'ACTIVE', 'EXECUTED', 'SIGNED', 'RENEWED', 'VARIED', 'DISPATCHED', 'DELIVERED', 'DONE', 'AUTHENTIC', 'RECEIVED', 'PASSED', 'PASS', 'RELEASED', 'RESOLVED', 'VERIFIED', 'OK', 'MATCHED', 'GREEN', 'REGISTERED', 'AVAILABLE', 'IN_STORE', 'IN_USE', 'ASSIGNED', 'PAID', 'SETTLED', 'RECONCILED'].includes(s)) {
     return { kind: 'ok', tone: 'badge-green', icon: '✓', label };
   }
-  if (['IN_PROGRESS', 'IN_REVIEW', 'REVIEW', 'PARTIALLY_DISPATCHED', 'PARTIAL', 'VALIDATING', 'SENT_FOR_SIGNATURE', 'PARTIALLY_SIGNED'].includes(s)) {
+  if (['IN_PROGRESS', 'IN_REVIEW', 'REVIEW', 'PARTIALLY_DISPATCHED', 'PARTIAL', 'PARTIALLY_PAID', 'UNDER_REVIEW', 'VALIDATING', 'SENT_FOR_SIGNATURE', 'PARTIALLY_SIGNED'].includes(s)) {
     return { kind: 'progress', tone: 'badge-progress', icon: '●', label };
   }
   if (['PENDING', 'SUBMITTED', 'PENDING_APPROVAL', 'HR_REVIEW', 'MANAGER_REVIEW', 'FINANCE_REVIEW', 'LEGAL_REVIEW', 'WAITING', 'OVERDUE', 'RETURNED', 'LOW', 'NOT_RECEIVED', 'NOT_INVOICED', 'AMBER', 'WARN'].includes(s)) {
