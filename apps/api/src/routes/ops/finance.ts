@@ -38,6 +38,8 @@ financeOpsRouter.get('/journals', ...runGet('finance.journals.view', (c, ctx, q)
   status: q.status != null ? String(q.status) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  sortBy: q.sortBy != null ? String(q.sortBy) : undefined,
+  sortDir: q.sortDir != null ? String(q.sortDir) : undefined,
 })));
 financeOpsRouter.get('/journals/:id', ...runGet('finance.journals.view', (c, ctx, _q, p) => fin.getJournal(c, ctx, Number(p.id))));
 financeOpsRouter.post('/journals', async (req, res, next) => {
@@ -200,6 +202,8 @@ financeOpsRouter.get('/advances', ...runGet('finance.advances.view', (c, ctx, q)
   status: q.status != null ? String(q.status) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  sortBy: q.sortBy != null ? String(q.sortBy) : undefined,
+  sortDir: q.sortDir != null ? String(q.sortDir) : undefined,
 })));
 financeOpsRouter.get('/advances/:id', ...runGet('finance.advances.view', (c, ctx, _q, p) => fin.getCashAdvance(c, ctx, Number(p.id))));
 financeOpsRouter.post('/advances', ...run('finance.advances.create', (c, ctx, b) => fin.createCashAdvance(c, ctx, {
@@ -261,6 +265,8 @@ financeOpsRouter.get('/expenses', ...runGet('finance.expenses.view', (c, ctx, q)
   status: q.status != null ? String(q.status) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  sortBy: q.sortBy != null ? String(q.sortBy) : undefined,
+  sortDir: q.sortDir != null ? String(q.sortDir) : undefined,
 })));
 financeOpsRouter.get('/expenses/:id', ...runGet('finance.expenses.view', (c, ctx, _q, p) => fin.getExpense(c, ctx, Number(p.id))));
 financeOpsRouter.post('/expenses/:id/void', ...run('finance.expenses.void', (c, ctx, b, p) => fin.voidExpense(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : 'Expense voided')));
@@ -271,6 +277,8 @@ financeOpsRouter.get('/budgets', ...runGet('finance.budgets.view', (c, ctx, q) =
   status: q.status != null ? String(q.status) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  sortBy: q.sortBy != null ? String(q.sortBy) : undefined,
+  sortDir: q.sortDir != null ? String(q.sortDir) : undefined,
 })));
 financeOpsRouter.get('/budgets/:id', ...runGet('finance.budgets.view', (c, ctx, _q, p) => fin.getBudget(c, ctx, Number(p.id))));
 financeOpsRouter.post('/budgets', ...run('finance.budgets.create', (c, ctx, b) => fin.createBudget(c, ctx, {

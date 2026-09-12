@@ -895,10 +895,22 @@ export async function listAccounts(client: pg.PoolClient, ctx: Ctx) {
   return toCamelRows(res.rows);
 }
 
+// Server-side sort whitelists. Keys are the only values the client may send;
+// values are literal SQL, so an unknown key can never reach the query text.
+const JOURNAL_SORT_COLUMNS: Record<string, string> = {
+  entry_no: 'je.entry_no',
+  entry_date: 'je.entry_date',
+  journal_type: 'je.journal_type',
+  reference_code: 'je.reference_code',
+  total_debit: 'je.total_debit',
+  total_credit: 'je.total_credit',
+  status: 'je.status',
+};
+
 export async function listJournals(
   client: pg.PoolClient,
   ctx: Ctx,
-  filters: { q?: string; status?: string; page?: number; pageSize?: number }
+  filters: { q?: string; status?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 40));
@@ -912,13 +924,14 @@ export async function listJournals(
     params.push(filters.status);
     where.push(`je.status = $${params.length}`);
   }
+  const orderBy = `${JOURNAL_SORT_COLUMNS[filters.sortBy ?? ''] ?? 'je.id'} ${filters.sortDir === 'asc' ? 'ASC' : 'DESC'}`;
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
     `SELECT je.id, je.entry_no, je.entry_date, je.journal_type, je.description,
             je.reference_type, je.reference_code, je.total_debit, je.total_credit, je.status, je.currency
      FROM journal_entries je
      WHERE ${where.join(' AND ')}
-     ORDER BY je.id DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -2101,10 +2114,22 @@ export async function createCashAdvance(
   return { advanceId, advanceNo, journalId: entryId, advanceDate, employeeId, holderName, bankId, amount, baseAmount, exchangeRate, currency, status: 'POSTED' };
 }
 
+// Same whitelist contract as journals (see JOURNAL_SORT_COLUMNS above).
+const ADVANCE_SORT_COLUMNS: Record<string, string> = {
+  advance_no: 'a.advance_no',
+  advance_date: 'a.advance_date',
+  holder: 'a.holder_name',
+  bank: 'b.code',
+  amount: 'a.base_amount',
+  outstanding: '(a.base_amount - a.settled_amount)',
+  purpose: 'a.purpose',
+  status: 'a.status',
+};
+
 export async function listCashAdvances(
   client: pg.PoolClient,
   ctx: Ctx,
-  filters: { q?: string; status?: string; page?: number; pageSize?: number }
+  filters: { q?: string; status?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 40));
@@ -2118,6 +2143,7 @@ export async function listCashAdvances(
     params.push(filters.status);
     where.push(`a.status = $${params.length}`);
   }
+  const orderBy = `${ADVANCE_SORT_COLUMNS[filters.sortBy ?? ''] ?? 'a.id'} ${filters.sortDir === 'asc' ? 'ASC' : 'DESC'}`;
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
     `SELECT a.*, b.code AS bank_code, b.name AS bank_name,
@@ -2125,7 +2151,7 @@ export async function listCashAdvances(
      FROM cash_advances a
      JOIN bank_accounts b ON b.id = a.bank_id
      WHERE ${where.join(' AND ')}
-     ORDER BY a.id DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -2349,10 +2375,22 @@ export async function updateTax(
 // Expenses
 // ============================================================
 
+// Same whitelist contract as journals (see JOURNAL_SORT_COLUMNS above).
+const EXPENSE_SORT_COLUMNS: Record<string, string> = {
+  expense_no: 'e.expense_no',
+  expense_date: 'e.expense_date',
+  account_code: 'a.code',
+  vendor: 'e.vendor',
+  reference: 'e.reference',
+  amount: 'e.amount',
+  method: 'e.method',
+  status: 'e.status',
+};
+
 export async function listExpenses(
   client: pg.PoolClient,
   ctx: Ctx,
-  filters: { q?: string; status?: string; page?: number; pageSize?: number }
+  filters: { q?: string; status?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 40));
@@ -2366,12 +2404,13 @@ export async function listExpenses(
     params.push(filters.status);
     where.push(`e.status = $${params.length}`);
   }
+  const orderBy = `${EXPENSE_SORT_COLUMNS[filters.sortBy ?? ''] ?? 'e.id'} ${filters.sortDir === 'asc' ? 'ASC' : 'DESC'}`;
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
     `SELECT e.*, a.code AS account_code, a.name AS account_name
      FROM expenses e JOIN chart_of_accounts a ON a.id = e.account_id
      WHERE ${where.join(' AND ')}
-     ORDER BY e.id DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -2476,10 +2515,19 @@ export async function updateJournal(
 // Budgets
 // ============================================================
 
+// Same whitelist contract as journals (see JOURNAL_SORT_COLUMNS above).
+const BUDGET_SORT_COLUMNS: Record<string, string> = {
+  budget_no: 'b.budget_no',
+  period: 'b.period_start',
+  lines: 'line_count',
+  amount: 'lines_total',
+  status: 'b.status',
+};
+
 export async function listBudgets(
   client: pg.PoolClient,
   ctx: Ctx,
-  filters: { q?: string; status?: string; page?: number; pageSize?: number }
+  filters: { q?: string; status?: string; page?: number; pageSize?: number; sortBy?: string; sortDir?: string }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 40));
@@ -2493,6 +2541,7 @@ export async function listBudgets(
     params.push(filters.status);
     where.push(`b.status = $${params.length}`);
   }
+  const orderBy = `${BUDGET_SORT_COLUMNS[filters.sortBy ?? ''] ?? 'b.id'} ${filters.sortDir === 'asc' ? 'ASC' : 'DESC'}`;
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
     `SELECT b.*,
@@ -2501,7 +2550,7 @@ export async function listBudgets(
      FROM budgets b LEFT JOIN budget_lines bl ON bl.budget_id = b.id
      WHERE ${where.join(' AND ')}
      GROUP BY b.id
-     ORDER BY b.id DESC
+     ORDER BY ${orderBy}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );

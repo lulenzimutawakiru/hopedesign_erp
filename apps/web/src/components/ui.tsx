@@ -22,7 +22,7 @@ export function statusMeta(status: string | null | undefined): {
   const raw = String(status ?? '');
   const s = raw.toUpperCase();
   const label = raw.replace(/_/g, ' ');
-  if (['APPROVED', 'COMPLETED', 'POSTED', 'ACTIVE', 'EXECUTED', 'SIGNED', 'RENEWED', 'VARIED', 'DISPATCHED', 'DELIVERED', 'DONE', 'AUTHENTIC', 'RECEIVED', 'PASSED', 'PASS', 'RELEASED', 'RESOLVED', 'VERIFIED', 'OK', 'MATCHED', 'GREEN'].includes(s)) {
+  if (['APPROVED', 'COMPLETED', 'POSTED', 'ACTIVE', 'EXECUTED', 'SIGNED', 'RENEWED', 'VARIED', 'DISPATCHED', 'DELIVERED', 'DONE', 'AUTHENTIC', 'RECEIVED', 'PASSED', 'PASS', 'RELEASED', 'RESOLVED', 'VERIFIED', 'OK', 'MATCHED', 'GREEN', 'REGISTERED', 'AVAILABLE', 'IN_STORE', 'IN_USE', 'ASSIGNED'].includes(s)) {
     return { kind: 'ok', tone: 'badge-green', icon: '✓', label };
   }
   if (['IN_PROGRESS', 'IN_REVIEW', 'REVIEW', 'PARTIALLY_DISPATCHED', 'PARTIAL', 'VALIDATING', 'SENT_FOR_SIGNATURE', 'PARTIALLY_SIGNED'].includes(s)) {
@@ -31,16 +31,16 @@ export function statusMeta(status: string | null | undefined): {
   if (['PENDING', 'SUBMITTED', 'PENDING_APPROVAL', 'HR_REVIEW', 'MANAGER_REVIEW', 'FINANCE_REVIEW', 'LEGAL_REVIEW', 'WAITING', 'OVERDUE', 'RETURNED', 'LOW', 'NOT_RECEIVED', 'NOT_INVOICED', 'AMBER', 'WARN'].includes(s)) {
     return { kind: 'pending', tone: 'badge-amber', icon: '⚠', label };
   }
-  if (['REJECTED', 'TERMINATED', 'FAILED', 'FAIL', 'QUARANTINE', 'QUARANTINED', 'COMPROMISED', 'RECALLED', 'SPOILED', 'DAMAGED', 'LOST', 'DIFFERENCE', 'RED'].includes(s)) {
+  if (['REJECTED', 'TERMINATED', 'FAILED', 'FAIL', 'QUARANTINE', 'QUARANTINED', 'COMPROMISED', 'RECALLED', 'SPOILED', 'DAMAGED', 'LOST', 'MISSING', 'STOLEN', 'DIFFERENCE', 'RED'].includes(s)) {
     return { kind: 'reject', tone: 'badge-red', icon: '✕', label };
   }
   if (['CRITICAL', 'LOCKED'].includes(s)) {
     return { kind: 'critical', tone: 'badge-critical', icon: '✕', label };
   }
-  if (['SUSPENDED', 'ON_HOLD', 'MAINTENANCE', 'REWORK', 'SUSPICIOUS'].includes(s)) {
+  if (['SUSPENDED', 'ON_HOLD', 'MAINTENANCE', 'UNDER_MAINTENANCE', 'UNDER_INSPECTION', 'RESERVED', 'REWORK', 'SUSPICIOUS'].includes(s)) {
     return { kind: 'hold', tone: 'badge-hold', icon: '⚠', label };
   }
-  if (['CANCELLED', 'CANCELED', 'VOID', 'VOIDED', 'DRAFT', 'CLOSED', 'ARCHIVED', 'EXPIRED', 'IDLE', 'OFFLINE', 'UNKNOWN'].includes(s)) {
+  if (['CANCELLED', 'CANCELED', 'VOID', 'VOIDED', 'DRAFT', 'CLOSED', 'ARCHIVED', 'EXPIRED', 'IDLE', 'OFFLINE', 'UNKNOWN', 'DISPOSED', 'RETIRED'].includes(s)) {
     return { kind: 'draft', tone: 'badge-neutral', icon: '–', label };
   }
   if (['OPEN', 'NEW', 'REQUESTED', 'SCHEDULED', 'PLANNED', 'ALREADY_VERIFIED'].includes(s)) {
@@ -124,15 +124,27 @@ export function Pager({
   pageSize,
   total,
   onPage,
+  onPageSize,
+  pageSizes = [25, 50, 100, 200],
 }: {
   page: number;
   pageSize: number;
   total: number;
   onPage: (p: number) => void;
+  onPageSize?: (n: number) => void;
+  pageSizes?: number[];
 }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
   return (
     <div className="pager">
+      {onPageSize && (
+        <label className="pager-size">
+          Rows
+          <select value={pageSize} onChange={(e) => onPageSize(Number(e.target.value))} aria-label="Rows per page">
+            {pageSizes.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+      )}
       <span>
         Page {page} of {pages} · {total.toLocaleString()} records
       </span>

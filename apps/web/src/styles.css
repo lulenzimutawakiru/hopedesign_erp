@@ -651,6 +651,15 @@ table.data th {
 }
 table.data td { padding: 10px 12px; border-bottom: 1px solid var(--line); }
 table.data tr:hover td { background: var(--paper-2); }
+/* Totals footer (e.g. tax transactions). tfoot had no rules, so it rendered unstyled. */
+table.data tfoot th, table.data tfoot td {
+  border-top: 2px solid var(--line-strong);
+  border-bottom: 0;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--paper-2);
+}
+table.data tfoot tr:hover th, table.data tfoot tr:hover td { background: var(--paper-2); }
 table.data .row-click { cursor: pointer; }
 table.data tr.row-detail > td { background: #F7F9FB; border-top: 1px solid var(--line); }
 table.data tr.row-detail:hover td { background: #F7F9FB; }
@@ -743,6 +752,8 @@ table.data .row-detail .data tr:hover td { background: var(--paper-2); }
 .search-group-label, .dropdown-head { padding: 8px 14px; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .search-item, .notif-item { display: flex; flex-direction: column; width: 100%; text-align: left; padding: 8px 14px; background: none; border: 0; cursor: pointer; }
 .search-item:hover, .notif-item:hover { background: var(--paper); }
+.search-item-title { font-size: 13px; color: var(--ink); }
+.search-item-sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
 .search-hint { padding: 12px 14px; color: var(--muted); font-size: 12px; }
 
 /* ---------- Detail / pipeline ---------- */
@@ -1233,7 +1244,28 @@ html[data-theme='dark'] .scan-verified .verify-mark { color: #20C4C4; }
 .dock-scan-orb { font-size: 20px; color: var(--teal); }
 
 .hide-phone { display: inline-flex; }
+
+/* Progressive column disclosure for wide data tables (asset register). */
+@media (max-width: 1023px) { .col-hide-md { display: none !important; } }
+@media (max-width: 767px) { .col-hide-sm { display: none !important; } }
+
+/* Rows-per-page control that Pager renders when onPageSize is supplied. */
+.pager-size { display: inline-flex; align-items: center; gap: 6px; }
+.pager-size select {
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--sheet); color: var(--ink); font-size: 12px;
+}
 .mobile-only { display: none; }
+
+/* Asset register: due-date emphasis, bulk bar layout, and non-blocking refresh. */
+.reg-due-over { color: var(--danger); font-weight: 650; }
+.reg-due-soon { color: var(--warning); font-weight: 650; }
+.bulk-spacer { margin-left: auto; }
+.is-refreshing .table-wrap { opacity: 0.55; }
+.is-refreshing .record-cards { opacity: 0.55; }
+.record-card.is-selected { border-color: var(--mill); background: #F1EDFB; }
+html[data-theme='dark'] .record-card.is-selected { background: #231B36; }
+.table-wrap { transition: opacity 120ms ease; }
 
 .icon-btn { min-width: 40px; min-height: 40px; }
 
@@ -2248,6 +2280,19 @@ a.verify-company-v:hover { color: var(--hope); text-decoration: underline; }
 .kpi-tile-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); display: block; }
 .kpi-tile-value { font-family: var(--serif); font-size: 26px; font-weight: 650; line-height: 1.1; margin-top: 4px; display: block; color: var(--ink); }
 .kpi-tile-sub { font-size: 12px; color: var(--muted); margin-top: 6px; display: block; line-height: 1.35; }
+
+.asset-id-cell { display: flex; flex-direction: column; gap: 2px; min-width: 148px; }
+.asset-id-cell .td-cell-mono { font-size: 11px; color: var(--muted); }
+.asset-place { display: flex; flex-direction: column; gap: 2px; min-width: 110px; }
+.asset-place .sub { font-size: 12px; color: var(--muted); }
+.td-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.due-soon { color: var(--warning); font-weight: 650; }
+.due-over { color: var(--danger); font-weight: 650; }
+.register-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.register-chips .chip { cursor: pointer; }
+.bulk-bar strong { margin-right: auto; }
+.asset-more { position: relative; }
+.desk-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 
 /* ---------- Composer stepper ---------- */
 .cstepper { display: flex; align-items: flex-start; gap: 0; margin: 2px 0 14px; }
