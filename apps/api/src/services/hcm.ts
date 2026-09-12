@@ -10,6 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
 import { parsePdf } from './pdf.js';
+import { mintEmployeeIdentity } from './employeeIdentity.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const ACTIVE_EMPLOYEE_STATUS = "('ACTIVE','PROBATION','ON_LEAVE')";
@@ -1121,7 +1122,13 @@ export async function acceptOffer(
   const pos = posRes.rows[0] ?? null;
   const startDate = str(input.startDate) ?? str(offer.start_date) ?? new Date().toISOString().slice(0, 10);
   const probationMonths = num(offer.probation_months, 0);
-  const employeeNo = str(input.employeeNo) ?? (await nextDoc(client, ctx, 'EMP'));
+  let employeeNo = str(input.employeeNo);
+  let shortEmployeeNo: string | null = null;
+  if (!employeeNo) {
+    const minted = await mintEmployeeIdentity(client, ctx);
+    employeeNo = minted.official;
+    shortEmployeeNo = minted.short;
+  }
   const status = probationMonths > 0 ? 'PROBATION' : 'ACTIVE';
   let probationEnd: string | null = null;
   if (probationMonths > 0) {
@@ -1133,8 +1140,9 @@ export async function acceptOffer(
     `INSERT INTO employees
        (company_id, tenant_id, branch_id, department_id, position_id, division_id, org_unit_id, team_id,
         location_id, job_family_id, job_grade_id, cost_centre_id, employee_no, first_name, last_name,
-        email, phone, position, hire_date, salary_type, base_salary, status, employment_type, probation_end_date)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'MONTHLY',$20,$21,$22,$23)
+        email, phone, position, hire_date, salary_type, base_salary, status, employment_type, probation_end_date,
+        employee_number, short_employee_number)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'MONTHLY',$20,$21,$22,$23,$24,$25)
      RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, pos ? pos.branch_id : ctx.branchId ?? null, pos ? pos.department_id : null,
@@ -1142,7 +1150,7 @@ export async function acceptOffer(
       pos ? pos.location_id : null, pos ? pos.job_family_id : null, pos ? pos.job_grade_id : null, pos ? pos.cost_centre_id : null,
       employeeNo, String(cand.first_name), String(cand.last_name), String(cand.email ?? ''), str(cand.phone),
       pos ? String(pos.title) : null, startDate, Number(offer.base_salary ?? 0), status,
-      contractType(offer.contract_type), probationEnd,
+      contractType(offer.contract_type), probationEnd, employeeNo, shortEmployeeNo,
     ]
   );
   const employeeId = Number(empRes.rows[0].id);

@@ -785,6 +785,18 @@ describe('HR and payroll', () => {
     const employeeId = Number(created.body.data.employeeId);
     const employeeNo = String(created.body.data.employeeNo);
 
+    // A new employee is issued a permanent professional ID (migration 0149), so the
+    // number payroll and every HR surface read is the real one, not a legacy integer.
+    expect(employeeNo).toMatch(/^HDG-EMP-\d{4}-\d{6}$/);
+    const identities = await db(
+      `SELECT identity_type, identity_number FROM employee_identities WHERE employee_id = $1 ORDER BY identity_type`,
+      [employeeId]
+    );
+    const issued = identities.rows as { identity_type: string; identity_number: string }[];
+    expect(issued.map((r) => r.identity_type)).toEqual(['OFFICIAL_EMPLOYEE_ID', 'SHORT_BADGE_ID']);
+    expect(issued[0].identity_number).toBe(employeeNo);
+    expect(issued[1].identity_number).toMatch(/^HDG\d{6}$/);
+
     const patched = await api.patch(`/api/ops/hr/employees/${employeeId}`).set(auth(token)).send({
       firstName: 'Edited',
       lastName: 'Record',

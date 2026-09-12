@@ -101,6 +101,7 @@ const EMPLOYEE_CHILD_TABLES = [
   'employee_competencies',
   'employee_deductions',
   'employee_earnings',
+  'employee_identities',
   'employee_loans',
   'employee_movements',
   'employee_payroll_components',

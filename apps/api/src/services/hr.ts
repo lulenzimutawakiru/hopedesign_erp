@@ -12,6 +12,7 @@ import * as statutory from './statutory.js';
 import * as payrollValidation from './payrollValidation.js';
 import { loadModernPayrollInputs, prorateEmployment, prorateBasic, resolveComponentAmount, emptyVariablePay } from './payrollEngine.js';
 import * as identityLink from './identityLink.js';
+import { mintEmployeeIdentity } from './employeeIdentity.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -77,21 +78,23 @@ export async function createEmployee(
 ) {
   if (!ctx.companyId) throw badRequest('Company context required');
   if (!input.firstName?.trim() || !input.lastName?.trim()) throw badRequest('First and last name are required');
-  const no = await nextDoc(client, ctx, 'EMP');
+  const { official, short } = await mintEmployeeIdentity(client, ctx);
+  const no = official;
   const status = input.status && ['ACTIVE', 'PROBATION'].includes(input.status) ? input.status : 'ACTIVE';
   const ins = await client.query(
     `INSERT INTO employees
        (company_id, tenant_id, branch_id, department_id, employee_no, first_name, last_name,
         phone, email, tin, nssf_no, position, hire_date, salary_type, base_salary,
-        bank_name, bank_account_no, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+        bank_name, bank_account_no, status,
+        employee_number, short_employee_number)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, ctx.branchId ?? null, input.departmentId ?? null, no,
       input.firstName.trim(), input.lastName.trim(), input.phone ?? null, input.email ?? null,
       input.tin ?? null, input.nssfNo ?? null, input.position ?? null,
       input.hireDate ?? new Date().toISOString().slice(0, 10),
       input.salaryType ?? 'MONTHLY', Number(input.baseSalary ?? 0),
-      input.bankName ?? null, input.bankAccountNo ?? null, status,
+      input.bankName ?? null, input.bankAccountNo ?? null, status, official, short,
     ]
   );
   const employeeId = Number(ins.rows[0].id);

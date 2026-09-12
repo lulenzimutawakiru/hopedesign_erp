@@ -27,29 +27,26 @@ async function loadEmployeeForUpdate(client: pg.PoolClient, ctx: Ctx, employeeId
   return res.rows[0];
 }
 
-/** Lock (creating if missing) the per-year ID sequence for a sequence type. */
-async function lockSequence(
+/**
+ * Mint the next permanent employee identifier for the active company.
+ *
+ * Rendering and sequence locking live in SQL (employee_render_id /
+ * employee_next_identity) so the employee_id_sequences row stays the single
+ * source of truth for prefix, pad and format, and so two callers can never be
+ * handed the same number.
+ */
+export async function mintEmployeeIdentity(
   client: pg.PoolClient,
-  ctx: Ctx,
-  seqType: 'OFFICIAL' | 'SHORT',
-  year: number
-) {
-  const prefix = seqType === 'OFFICIAL' ? 'HDG-EMP' : 'HDG';
-  const pad = seqType === 'OFFICIAL' ? 6 : 4;
-  const format = seqType === 'OFFICIAL' ? '{PREFIX}-{YEAR}-{SEQUENCE}' : 'HDG{YY}{SEQUENCE}';
-  await client.query(
-    `INSERT INTO employee_id_sequences (tenant_id, company_id, seq_type, doc_year, prefix, pad, format)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (tenant_id, company_id, seq_type, doc_year) DO NOTHING`,
-    [ctx.tenantId, ctx.companyId, seqType, year, prefix, pad, format]
-  );
-  const res = await client.query(
-    `SELECT * FROM employee_id_sequences
-      WHERE tenant_id = $1 AND company_id = $2 AND seq_type = $3 AND doc_year = $4
-      FOR UPDATE`,
-    [ctx.tenantId, ctx.companyId, seqType, year]
-  );
-  return res.rows[0];
+  ctx: Ctx
+): Promise<{ official: string; short: string }> {
+  requireCompany(ctx);
+  const res = await client.query('SELECT official, short FROM employee_next_identity($1, $2)', [
+    ctx.tenantId,
+    ctx.companyId,
+  ]);
+  const row = res.rows[0] as { official?: unknown; short?: unknown } | undefined;
+  if (!row?.official || !row?.short) throw badRequest('Could not allocate an employee ID');
+  return { official: String(row.official), short: String(row.short) };
 }
 
 export async function generateEmployeeId(
@@ -71,25 +68,18 @@ export async function generateEmployeeId(
     throw badRequest(`Cannot generate an ID for an employee with status ${emp.status}`);
   }
   const year = new Date().getFullYear();
-  const officialSeq = await lockSequence(client, ctx, 'OFFICIAL', year);
-  const shortSeq = await lockSequence(client, ctx, 'SHORT', year);
+  const { official, short } = await mintEmployeeIdentity(client, ctx);
 
-  const nextOfficial = Number(officialSeq.current_sequence) + 1;
-  const nextShort = Number(shortSeq.current_sequence) + 1;
-  const official = `${officialSeq.prefix}-${year}-${String(nextOfficial).padStart(Number(officialSeq.pad), '0')}`;
-  const short = `HDG${String(year).slice(2)}${String(nextShort).padStart(Number(shortSeq.pad), '0')}`;
-
+  // employee_no is the number payroll, payslips and every HR screen read, so
+  // the permanent ID is adopted there too whenever it still holds a legacy
+  // bare integer or an 'EMP-...' document number.
   await client.query(
-    `UPDATE employee_id_sequences SET current_sequence = $1 WHERE id = $2`,
-    [nextOfficial, officialSeq.id]
-  );
-  await client.query(
-    `UPDATE employee_id_sequences SET current_sequence = $1 WHERE id = $2`,
-    [nextShort, shortSeq.id]
-  );
-
-  await client.query(
-    `UPDATE employees SET employee_number = $1, short_employee_number = $2 WHERE id = $3`,
+    `UPDATE employees
+        SET employee_number = $1, short_employee_number = $2,
+            employee_no = CASE
+              WHEN employee_no IS NULL OR employee_no ~ '^[0-9]+$' OR employee_no LIKE 'EMP-%'
+              THEN $1 ELSE employee_no END
+      WHERE id = $3`,
     [official, short, emp.id]
   );
 
