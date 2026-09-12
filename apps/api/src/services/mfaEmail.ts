@@ -150,6 +150,16 @@ export async function issueEmailCode(opts: IssueEmailCodeOptions): Promise<Issue
   });
 
   if (!delivered.ok) {
+    // Routes return a deliberately generic 503, so the provider reason has to
+    // be recorded here or a mail outage is indistinguishable from any other
+    // failed sign-in. Log the reason and the account - never the code or the
+    // recipient address.
+    console.error(
+      '[mfaEmail] code delivery failed',
+      purpose,
+      `user ${opts.userId}`,
+      delivered.error ?? 'unknown error'
+    );
     // Burn the undeliverable code so it can never be guessed into a session.
     await query(
       `UPDATE mfa_email_codes SET consumed_at = now()

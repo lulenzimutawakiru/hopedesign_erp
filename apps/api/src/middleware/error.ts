@@ -17,6 +17,12 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     });
   }
   if (err instanceof ApiError) {
+    // A 5xx ApiError is a server-side fault, so it must leave a server-side
+    // trace. Without this the response is silent and a failed request cannot
+    // be diagnosed in production. 4xx are expected client outcomes.
+    if (err.status >= 500) {
+      console.error(`[error] ${req.method} ${req.originalUrl}`, err.status, err.code, err.message, err.details ?? '');
+    }
     return res.status(err.status).json({
       error: { code: err.code, message: err.message, details: err.details },
     });

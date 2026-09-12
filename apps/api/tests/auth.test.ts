@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { api, PASSWORD, auth, loginAs, db, deleteEmployees } from './helpers.js';
+import { issueEmailCode, verifyEmailCode } from '../src/services/mfaEmail.js';
 
 describe('Authentication', () => {
   it('GET /api/health reports service ok', async () => {
@@ -157,5 +158,94 @@ describe('Administration users', () => {
     expect(Number(autoEmp.body.data.userId)).toBe(Number(autoUser.body.data.user.id));
 
     await deleteEmployees([employeeId, Number(autoEmp.body.data.employeeId)]);
+  });
+});
+
+describe('MFA email one-time codes', () => {
+  const stamp = Date.now();
+
+  /** Throwaway account in tenant 2 so the mail path never touches seeded users. */
+  async function createMailUser() {
+    const { hashPassword } = await import('../src/auth.js');
+    const passwordHash = await hashPassword(PASSWORD);
+    const username = `mail.path.${stamp}.${Math.random().toString(36).slice(2, 8)}`;
+    const email = `${username}@hopedesign.test`;
+    const ins = await db(
+      `INSERT INTO users (tenant_id, company_id, email, username, password_hash, first_name, last_name)
+       VALUES (2, 2, $1, $2, $3, 'Mail', 'Path') RETURNING id`,
+      [email, username, passwordHash]
+    );
+    return { userId: Number(ins.rows[0].id), email };
+  }
+
+  async function dropMailUser(userId: number) {
+    await db(`DELETE FROM mfa_email_codes WHERE user_id = $1`, [userId]);
+    await db(`DELETE FROM users WHERE id = $1`, [userId]);
+  }
+
+  it('issues a single-use code when delivery succeeds', async () => {
+    const { userId, email } = await createMailUser();
+    try {
+      let sent = '';
+      const issued = await issueEmailCode({
+        tenantId: 2,
+        userId,
+        email,
+        name: 'Mail Path',
+        purpose: 'LOGIN',
+        send: async (d) => {
+          sent = d.code;
+          return { ok: true };
+        },
+      });
+      expect(issued.ok).toBe(true);
+      expect(sent).toMatch(/^\d{6}$/);
+
+      const verified = await verifyEmailCode({ tenantId: 2, userId, code: sent });
+      expect(verified.ok).toBe(true);
+      expect(verified.purpose).toBe('LOGIN');
+
+      // One-time: the same code cannot be replayed.
+      const replay = await verifyEmailCode({ tenantId: 2, userId, code: sent });
+      expect(replay.ok).toBe(false);
+      expect(replay.error).toBe('no_active_code');
+    } finally {
+      await dropMailUser(userId);
+    }
+  });
+
+  it('fails closed and burns the code when mail delivery fails', async () => {
+    const { userId, email } = await createMailUser();
+    try {
+      let sent = '';
+      const failed = await issueEmailCode({
+        tenantId: 2,
+        userId,
+        email,
+        name: 'Mail Path',
+        purpose: 'LOGIN',
+        send: async (d) => {
+          sent = d.code;
+          return { ok: false, error: 'Resend not configured (RESEND_API_KEY / RESEND_FROM_EMAIL missing)' };
+        },
+      });
+      expect(failed.ok).toBe(false);
+      expect(String(failed.error)).toMatch(/not configured/i);
+      // The plaintext code must never reach the caller on failure.
+      expect(failed.code).toBeUndefined();
+
+      // Nothing usable survives: even the exact right code is rejected, so an
+      // undelivered code can never be guessed into a session.
+      const open = await db(
+        `SELECT count(*)::int AS n FROM mfa_email_codes WHERE user_id = $1 AND consumed_at IS NULL`,
+        [userId]
+      );
+      expect(Number(open.rows[0].n)).toBe(0);
+      const verified = await verifyEmailCode({ tenantId: 2, userId, code: sent });
+      expect(verified.ok).toBe(false);
+      expect(verified.error).toBe('no_active_code');
+    } finally {
+      await dropMailUser(userId);
+    }
   });
 });
