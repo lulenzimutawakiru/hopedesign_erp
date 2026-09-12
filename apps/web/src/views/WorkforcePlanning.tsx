@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, fmtDate, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
@@ -298,13 +298,55 @@ function sumOrgSeats(node: OrgNodeData): { approved: number; occupied: number } 
   return { approved, occupied };
 }
 
+/** Employee ids already drawn inside a position card, so they are not repeated as loose leaves. */
+function positionedEmployeeIds(doc: Rec): Set<string> {
+  const divisions = (doc.divisions as Rec[]) ?? [];
+  const withoutDivision = (doc.departmentsWithoutDivision as Rec[]) ?? [];
+  const depts = [
+    ...divisions.flatMap((d) => (d.departments as Rec[]) ?? []),
+    ...withoutDivision,
+  ];
+  const ids = new Set<string>();
+  for (const d of depts) {
+    for (const p of (d.positions as Rec[]) ?? []) {
+      for (const e of (p.employees as Rec[]) ?? []) ids.add(String(e.id));
+    }
+  }
+  return ids;
+}
+
+/** Total nodes beneath this one, used for the collapsed expand hint. */
+function countDescendants(node: OrgNodeData): number {
+  let n = 0;
+  const stack = [...node.children];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    n += 1;
+    stack.push(...cur.children);
+  }
+  return n;
+}
+
+/** Short "what is inside" line for a container card. */
+function orgChildSummary(node: OrgNodeData): string {
+  switch (node.kind) {
+    case 'company': return `${fmtNum(node.divisionCount ?? 0)} division${node.divisionCount === 1 ? '' : 's'}`;
+    case 'division': return `${fmtNum(node.deptCount ?? 0)} department${node.deptCount === 1 ? '' : 's'}`;
+    case 'dept': return `${fmtNum(node.posCount ?? 0)} position${node.posCount === 1 ? '' : 's'}`;
+    case 'unit': return `${fmtNum(node.teamCount ?? 0)} team${node.teamCount === 1 ? '' : 's'}`;
+    case 'team': return '';
+    default: return '';
+  }
+}
+
 function buildOrgTree(doc: Rec): OrgNodeData {
   const company = (doc.company ?? {}) as Rec;
   const divisions = (doc.divisions as Rec[]) ?? [];
   const without = (doc.departmentsWithoutDivision as Rec[]) ?? [];
+  const positioned = positionedEmployeeIds(doc);
   const children = [
-    ...divisions.map((div) => buildDivision(div, 1)),
-    ...without.map((d) => buildDepartment(d, 1)),
+    ...divisions.map((div) => buildDivision(div, 1, positioned)),
+    ...without.map((d) => buildDepartment(d, 1, positioned)),
   ];
   return {
     id: 'company',
@@ -321,9 +363,9 @@ function buildOrgTree(doc: Rec): OrgNodeData {
   };
 }
 
-function buildDivision(div: Rec, depth: number): OrgNodeData {
+function buildDivision(div: Rec, depth: number, positioned: Set<string>): OrgNodeData {
   const departments = (div.departments as Rec[]) ?? [];
-  const children = departments.map((d) => buildDepartment(d, depth + 1));
+  const children = departments.map((d) => buildDepartment(d, depth + 1, positioned));
   return {
     id: `div-${String(div.id)}`,
     kind: 'division',
@@ -338,14 +380,14 @@ function buildDivision(div: Rec, depth: number): OrgNodeData {
   };
 }
 
-function buildDepartment(dept: Rec, depth: number): OrgNodeData {
+function buildDepartment(dept: Rec, depth: number, positioned: Set<string>): OrgNodeData {
   const orgUnits = (dept.orgUnits as Rec[]) ?? [];
   const teams = (dept.teams as Rec[]) ?? [];
   const positions = (dept.positions as Rec[]) ?? [];
-  const employees = (dept.employees as Rec[]) ?? [];
+  const employees = ((dept.employees as Rec[]) ?? []).filter((e) => !positioned.has(String(e.id)));
   const children = [
-    ...orgUnits.map((u) => buildOrgUnit(u, depth + 1)),
-    ...teams.map((t) => buildTeam(t, depth + 1)),
+    ...orgUnits.map((u) => buildOrgUnit(u, depth + 1, positioned)),
+    ...teams.map((t) => buildTeam(t, depth + 1, positioned)),
     ...positions.map((p) => buildPosition(p, depth + 1)),
     ...employees.map((e) => buildEmployee(e, depth + 1)),
   ];
@@ -365,11 +407,11 @@ function buildDepartment(dept: Rec, depth: number): OrgNodeData {
   };
 }
 
-function buildOrgUnit(ou: Rec, depth: number): OrgNodeData {
+function buildOrgUnit(ou: Rec, depth: number, positioned: Set<string>): OrgNodeData {
   const teams = (ou.teams as Rec[]) ?? [];
-  const employees = (ou.employees as Rec[]) ?? [];
+  const employees = ((ou.employees as Rec[]) ?? []).filter((e) => !positioned.has(String(e.id)));
   const children = [
-    ...teams.map((t) => buildTeam(t, depth + 1)),
+    ...teams.map((t) => buildTeam(t, depth + 1, positioned)),
     ...employees.map((e) => buildEmployee(e, depth + 1)),
   ];
   return {
@@ -386,8 +428,8 @@ function buildOrgUnit(ou: Rec, depth: number): OrgNodeData {
   };
 }
 
-function buildTeam(team: Rec, depth: number): OrgNodeData {
-  const employees = (team.employees as Rec[]) ?? [];
+function buildTeam(team: Rec, depth: number, positioned: Set<string>): OrgNodeData {
+  const employees = ((team.employees as Rec[]) ?? []).filter((e) => !positioned.has(String(e.id)));
   const children = employees.map((e) => buildEmployee(e, depth + 1));
   return {
     id: `team-${String(team.id)}`,
@@ -471,6 +513,13 @@ function OrgTree() {
   const [legend, setLegend] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['company']));
+  const [layout, setLayout] = useState<'chart' | 'list'>('chart');
+  const [zoom, setZoom] = useState(1);
+  const [focused, setFocused] = useState<string | null>(null);
+  const [stageSize, setStageSize] = useState({ w: 0, h: 0 });
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const autoFitRef = useRef<{ tree: OrgNodeData | null; focused: string | null; layout: string } | null>(null);
 
   useEffect(() => {
     api<{ data: Rec }>('/api/ops/hcm/org-chart')
@@ -479,6 +528,7 @@ function OrgTree() {
         setTree(t);
         setDoc(r.data);
         setExpanded(defaultExpanded(t));
+        setFocused(null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Org chart failed'));
   }, []);
@@ -486,9 +536,11 @@ function OrgTree() {
   const flat = useMemo(() => {
     const nodes: OrgNodeData[] = [];
     const parents = new Map<string, string | null>();
+    const byId = new Map<string, OrgNodeData>();
     const walk = (n: OrgNodeData, parent: string | null) => {
       nodes.push(n);
       parents.set(n.id, parent);
+      byId.set(n.id, n);
       n.children.forEach((c) => walk(c, n.id));
     };
     if (tree) walk(tree, null);
@@ -503,7 +555,7 @@ function OrgTree() {
       }
       descendants.set(n.id, ds);
     }
-    return { nodes, parents, descendants };
+    return { nodes, parents, descendants, byId };
   }, [tree]);
 
   const query = q.trim().toLowerCase();
@@ -537,6 +589,38 @@ function OrgTree() {
     return next;
   }, [expanded, query, revealIds, matchIds]);
 
+  useLayoutEffect(() => {
+    if (layout !== 'chart') return;
+    const el = stageRef.current;
+    if (!el) return;
+    const measure = () =>
+      setStageSize((prev) =>
+        prev.w === el.offsetWidth && prev.h === el.offsetHeight ? prev : { w: el.offsetWidth, h: el.offsetHeight }
+      );
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [layout, tree, focused, activeExpanded, vacantOnly]);
+
+  // Frame the chart when it loads or the focused branch changes: fit to the
+  // viewport when the result stays legible, otherwise keep 1:1 and centre the
+  // scroll on the root card so the chart never opens on an empty corner.
+  useLayoutEffect(() => {
+    if (layout !== 'chart' || !stageSize.w) return;
+    const last = autoFitRef.current;
+    if (last && last.tree === tree && last.focused === focused && last.layout === layout) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    autoFitRef.current = { tree, focused, layout };
+    const avail = canvas.clientWidth - 28;
+    const fitted = Number((avail / stageSize.w).toFixed(2));
+    const next = stageSize.w <= avail / 0.8 ? Math.min(1, fitted) : 1;
+    setZoom(next);
+    canvas.scrollLeft = Math.max(0, (stageSize.w * next - canvas.clientWidth) / 2);
+  }, [layout, tree, focused, stageSize.w]);
+
   if (error && !tree) return <ErrorBanner error={error} />;
   if (!doc || !tree) return <PageLoader label="Building org chart" />;
 
@@ -553,6 +637,21 @@ function OrgTree() {
   const fillPct = seats.approved > 0 ? Math.min(100, Math.round((seats.occupied / seats.approved) * 100)) : 0;
 
   const exportStamp = orgExportStamp(company);
+  const root = (focused ? flat.byId.get(focused) : tree) ?? tree;
+  const crumbs: OrgNodeData[] = [];
+  let cursor = focused;
+  while (cursor) {
+    const n = flat.byId.get(cursor);
+    if (!n) break;
+    crumbs.unshift(n);
+    cursor = flat.parents.get(cursor) ?? null;
+  }
+  const fitZoom = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !stageSize.w) return;
+    const avail = canvas.clientWidth - 28;
+    setZoom(Number(Math.max(0.35, Math.min(1.25, avail / stageSize.w)).toFixed(2)));
+  };
   const exportCsv = () =>
     saveOrgDownload(new Blob([orgCsvText(tree)], { type: 'text/csv;charset=utf-8;' }), 'org-chart-' + exportStamp + '.csv');
   const exportJson = () =>
@@ -608,6 +707,19 @@ function OrgTree() {
             {q && <button type="button" className="org-search-clear" onClick={() => setQ('')} aria-label="Clear search">&times;</button>}
           </label>
           <div className="org-tool-btns">
+            <div className="org-seg" role="group" aria-label="Chart layout">
+              <button type="button" aria-pressed={layout === 'chart'} onClick={() => setLayout('chart')}>Chart</button>
+              <button type="button" aria-pressed={layout === 'list'} onClick={() => setLayout('list')}>List</button>
+            </div>
+            {layout === 'chart' && (
+              <div className="org-zoom" role="group" aria-label="Zoom">
+                <button type="button" aria-label="Zoom out" disabled={zoom <= 0.35} onClick={() => setZoom((z) => Math.max(0.35, Number((z - 0.1).toFixed(2))))}>{'\u2212'}</button>
+                <span className="org-zoom-pct">{Math.round(zoom * 100)}%</span>
+                <button type="button" aria-label="Zoom in" disabled={zoom >= 1.25} onClick={() => setZoom((z) => Math.min(1.25, Number((z + 0.1).toFixed(2))))}>+</button>
+                <button type="button" onClick={fitZoom} title="Fit the chart to the available width">Fit</button>
+                <button type="button" onClick={() => setZoom(1)} title="Reset zoom to 100%">1:1</button>
+              </div>
+            )}
             <button type="button" className={'btn btn-sm' + (vacantOnly ? ' btn-primary' : '')} onClick={() => setVacantOnly((v) => !v)} title="Show only branches that contain open seats">
               {vacantOnly ? 'Show all nodes' : 'Vacancies only'}
             </button>
@@ -646,17 +758,52 @@ function OrgTree() {
             ))}
           </div>
         )}
-        <div className="org-tree">
-          <OrgRow
-            node={tree}
-            expanded={activeExpanded}
-            matchIds={matchIds}
-            query={query}
-            vacantOnly={vacantOnly}
-            onToggle={toggle}
-            onFocus={focusBranch}
-          />
-        </div>
+        {layout === 'chart' ? (
+          <>
+            {crumbs.length > 0 && (
+              <div className="org-crumbs">
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => setFocused(null)}>Full chart</button>
+                {crumbs.map((c) => (
+                  <span key={c.id} className="org-crumb">
+                    <span className="org-crumb-sep" aria-hidden>{'/'}</span>
+                    <button type="button" className="org-crumb-btn" onClick={() => setFocused(c.id)}>{c.name}</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="org-canvas" ref={canvasRef}>
+              <div className="org-canvas-fit" style={{ width: stageSize.w * zoom, height: stageSize.h * zoom }}>
+                <div className="org-canvas-stage" ref={stageRef} style={{ transform: `scale(${zoom})`, transformOrigin: '0 0' }}>
+                  <ul className="org-chart">
+                    <OrgChartNode
+                      node={root}
+                      isRoot
+                      expanded={activeExpanded}
+                      matchIds={matchIds}
+                      revealIds={revealIds}
+                      query={query}
+                      vacantOnly={vacantOnly}
+                      onToggle={toggle}
+                      onFocus={focusBranch}
+                    />
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="org-tree">
+            <OrgRow
+              node={root}
+              expanded={activeExpanded}
+              matchIds={matchIds}
+              query={query}
+              vacantOnly={vacantOnly}
+              onToggle={toggle}
+              onFocus={focusBranch}
+            />
+          </div>
+        )}
       </section>
     </div>
   );
@@ -708,6 +855,153 @@ function OrgRow({ node, expanded, matchIds, query, vacantOnly, onToggle, onFocus
         kids.length > 0
           ? <div className="org-children">{kids.map((k) => <OrgRow key={k.id} node={k} expanded={expanded} matchIds={matchIds} query={query} vacantOnly={vacantOnly} onToggle={onToggle} onFocus={onFocus} />)}</div>
           : <p className="org-note">{orgEmptyNote(node, vacantOnly)}</p>
+      )}
+    </div>
+  );
+}
+
+function OrgChartNode({ node, isRoot = false, expanded, matchIds, revealIds, query, vacantOnly, onToggle, onFocus }: {
+  node: OrgNodeData;
+  isRoot?: boolean;
+  expanded: Set<string>;
+  matchIds: Set<string>;
+  revealIds: Set<string>;
+  query: string;
+  vacantOnly: boolean;
+  onToggle: (id: string) => void;
+  onFocus: (id: string) => void;
+}) {
+  const open = expanded.has(node.id);
+  const matched = !!query && matchIds.has(node.id);
+  const dim = !!query && !matched && !revealIds.has(node.id);
+  const isPosition = node.kind === 'position';
+  const kids = isPosition ? [] : vacantOnly ? node.children.filter((c) => c.hasVacancy) : node.children;
+  const childCount = isPosition ? 0 : node.children.length;
+  return (
+    <li className={'org-chart-node' + (matched ? ' org-match' : '') + (dim ? ' org-dim' : '')} data-tone={node.kind}>
+      <OrgChartCard
+        node={node}
+        open={open}
+        canFocus={!isRoot && node.children.length > 0}
+        childCount={childCount}
+        hiddenCount={countDescendants(node)}
+        onToggle={onToggle}
+        onFocus={onFocus}
+      />
+      {open && !isPosition && node.children.length > 0 && (
+        kids.length > 0 ? (
+          <ul className="org-chart-kids">
+            {kids.map((k) => (
+              <OrgChartNode
+                key={k.id}
+                node={k}
+                expanded={expanded}
+                matchIds={matchIds}
+                revealIds={revealIds}
+                query={query}
+                vacantOnly={vacantOnly}
+                onToggle={onToggle}
+                onFocus={onFocus}
+              />
+            ))}
+          </ul>
+        ) : (
+          <p className="org-note">{orgEmptyNote(node, vacantOnly)}</p>
+        )
+      )}
+    </li>
+  );
+}
+
+function OrgChartCard({ node, open, canFocus, childCount, hiddenCount, onToggle, onFocus }: {
+  node: OrgNodeData;
+  open: boolean;
+  canFocus: boolean;
+  childCount: number;
+  hiddenCount: number;
+  onToggle: (id: string) => void;
+  onFocus: (id: string) => void;
+}) {
+  const emp = node.kind === 'employee' ? (node.emp ?? null) : null;
+  const occupant = node.kind === 'position' ? (node.children[0]?.emp ?? null) : null;
+  const pos = (node.pos ?? {}) as Rec;
+  const approved = Number(pos.approvedHeadcount ?? 0);
+  const occupied = Number(pos.occupied ?? 0);
+  const pct = approved > 0 ? Math.min(100, Math.round((occupied / approved) * 100)) : 0;
+  const empId = emp ? String(emp.id ?? '') : '';
+  const summary = orgChildSummary(node);
+  return (
+    <div
+      className={'org-card' + (empId ? ' org-card-link' : '')}
+      data-tone={node.kind}
+      onClick={empId ? () => navigate(`/people/employees/${empId}`) : undefined}
+    >
+      <div className="org-card-top">
+        <span className="org-card-kind">{ORG_KIND_LABEL[node.kind]}</span>
+        {node.code ? <CodeChip>{node.code}</CodeChip> : null}
+        {canFocus && (
+          <button
+            type="button"
+            className="org-card-focus"
+            title={`Focus ${node.name}`}
+            aria-label={`Focus ${node.name}`}
+            onClick={(e) => { e.stopPropagation(); onFocus(node.id); }}
+          >{'\u2922'}</button>
+        )}
+      </div>
+      <button
+        type="button"
+        className="org-card-title"
+        aria-expanded={childCount > 0 ? open : undefined}
+        onClick={(e) => { e.stopPropagation(); if (childCount > 0) onToggle(node.id); }}
+      >
+        <span className="org-card-name">{node.name}</span>
+      </button>
+      {emp ? (
+        <span className="org-card-stats">
+          <span className="org-stat">{employeeIdOf(emp) || 'No employee no.'}</span>
+          {emp.status ? <Badge value={String(emp.status)} /> : null}
+        </span>
+      ) : node.kind === 'position' ? (
+        <>
+          {occupant ? (
+            <span className="org-card-person">
+              <Avatar name={fullNameOf(occupant)} size="sm" meta={false} />
+              <span className="org-card-person-meta">
+                <span className="org-card-person-name">{fullNameOf(occupant)}</span>
+                <span className="org-card-person-sub">{employeeIdOf(occupant) || 'Assigned'}</span>
+              </span>
+            </span>
+          ) : (
+            <span className="org-card-vacant">Vacant</span>
+          )}
+          <span className="org-fill" title={`${fmtNum(occupied)} of ${fmtNum(approved)} filled`}>
+            <span style={{ width: `${pct}%` }} />
+          </span>
+          <span className="org-card-stats">
+            <span className="org-stat"><b>{fmtNum(occupied)}</b>/{fmtNum(approved)} filled</span>
+            {node.vacancyCount > 0 && <span className="org-stat org-card-vac">{fmtNum(node.vacancyCount)} open</span>}
+            {pos.status ? <Badge value={String(pos.status)} /> : null}
+          </span>
+        </>
+      ) : (
+        <span className="org-card-stats">
+          <span className="org-stat"><b>{fmtNum(node.headcount)}</b> people</span>
+          {summary && <span className="org-stat">{summary}</span>}
+          {node.vacancyCount > 0 && <span className="org-stat org-card-vac">{fmtNum(node.vacancyCount)} open</span>}
+        </span>
+      )}
+      {childCount > 0 && (
+        <button
+          type="button"
+          className={'org-card-toggle' + (open ? ' open' : '')}
+          aria-expanded={open}
+          title={open ? `Collapse ${node.name}` : `Expand ${node.name} - ${hiddenCount} below`}
+          onClick={(e) => { e.stopPropagation(); onToggle(node.id); }}
+        >
+          <span className="org-card-toggle-ico" aria-hidden>{open ? '\u2212' : '+'}</span>
+          {open ? '' : String(childCount)}
+        </button>
       )}
     </div>
   );
