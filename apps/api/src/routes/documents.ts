@@ -18,12 +18,12 @@ const FORMATS = ['pdf', 'xlsx', 'csv', 'json', 'print'];
 documentsRouter.get(
   '/:type/:id',
   (req, res, next) => {
-    const def = DOCUMENT_TYPES[req.params.type];
+    const def = DOCUMENT_TYPES[String(req.params.type)];
     if (!def) return next(notFound('Unknown document type'));
     return requirePermission(def.permission)(req, res, next);
   },
   asyncHandler(async (req, res) => {
-    const def = DOCUMENT_TYPES[req.params.type];
+    const def = DOCUMENT_TYPES[String(req.params.type)];
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw badRequest('Invalid document id');
     const format = String(req.query.format ?? 'pdf').toLowerCase();

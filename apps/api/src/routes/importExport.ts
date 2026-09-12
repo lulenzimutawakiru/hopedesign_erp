@@ -144,7 +144,7 @@ importExportRouter.get(
   '/imports/templates/:table',
   requirePermission('admin.imports.download_template'),
   asyncHandler(async (req, res) => {
-    const table = requireTable(req.params.table);
+    const table = requireTable(String(req.params.table));
     const cols = importableColumns(await columnsOf(table), table);
     const csv = stringify([cols], { header: false });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -308,7 +308,7 @@ importExportRouter.get(
   exportLimiter,
 requirePermission('admin.exports.run'),
   asyncHandler(async (req, res) => {
-    const table = requireTable(req.params.table);
+    const table = requireTable(String(req.params.table));
     const format = String(req.query.format ?? 'csv').toLowerCase();
     if (!['csv', 'xlsx', 'json', 'pdf', 'print'].includes(format)) {
       throw badRequest(`Unsupported format: ${format}`);
