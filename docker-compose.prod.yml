@@ -58,6 +58,12 @@ x-api: &api
     REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.production}@redis:6379/0
   mem_limit: 1024m
   mem_reservation: 256m
+  # The boot entrypoint runs shell helpers before exec'ing node. Node does not
+  # reap orphaned children, so a crashed helper would linger as a zombie; an
+  # init process collects them and forwards SIGTERM, which is what the 60s
+  # stop_grace_period drain depends on.
+  init: true
+  pids_limit: 512
   volumes:
     - uploads:/data/uploads
   security_opt:
@@ -104,6 +110,23 @@ services:
       - log_min_duration_statement=1000
       - -c
       - log_autovacuum_min_duration=250
+    # The one container whose memory the host cannot afford to lose: an
+    # unbounded sort or a runaway autovacuum would otherwise be able to take
+    # the whole 3.9 GB box (and therefore every other container) down with it.
+    # 1536 MB sits comfortably above shared_buffers (512 MB) plus realistic
+    # per-backend and maintenance work, while still leaving well over half of
+    # this 3.9 GB host to the other eight containers. The reservation keeps the
+    # kernel from reclaiming the page cache Postgres depends on. shm_size is
+    # raised from the 64 MB Docker default because parallel query workers
+    # allocate their shared message queues there and fail with "out of shared
+    # memory" under it.
+    mem_limit: 1536m
+    mem_reservation: 512m
+    shm_size: 256m
+    # Postgres forks a backend per connection (max_connections=100) plus
+    # autovacuum and parallel workers; 1024 leaves headroom while still
+    # bounding a fork bomb.
+    pids_limit: 1024
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hopedesign} -d ${POSTGRES_DB:-hopedesign}"]
       interval: 5s
@@ -151,6 +174,15 @@ services:
       - noeviction
     volumes:
       - redisdata:/data
+    # --maxmemory above (128mb) bounds what Redis will *store*, not what the
+    # process reserves; this container limit is what actually protects the
+    # host. Deliberately roomier than maxmemory so that a full queue surfaces
+    # as a Redis write error (noeviction) rather than as an OOM kill.
+    mem_limit: 320m
+    mem_reservation: 96m
+    # Redis is single-threaded; a few threads plus the fork it makes for an
+    # AOF rewrite is all it ever needs.
+    pids_limit: 256
     healthcheck:
       test: ["CMD-SHELL", "redis-cli --no-auth-warning ping | grep -q PONG"]
       interval: 10s
@@ -224,6 +256,11 @@ services:
     # caddy's `depends_on: web: service_healthy` gate is unaffected.
     deploy:
       replicas: 2
+    # nginx is one master plus a small worker pool. Capping it means a request
+    # flood cannot make the frontend the thing that starves the API of memory.
+    mem_limit: 192m
+    mem_reservation: 32m
+    pids_limit: 256
     security_opt:
       - no-new-privileges:true
     logging: *default-log
@@ -264,6 +301,9 @@ services:
       - ./deploy/caddy-live:/etc/caddy/live
       - caddy_data:/data
       - caddy_config:/config
+    mem_limit: 256m
+    mem_reservation: 64m
+    pids_limit: 256
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -292,6 +332,14 @@ services:
     image: louislam/uptime-kuma:1
     container_name: hopedesign-erp-uptime-kuma
     restart: unless-stopped
+    stop_grace_period: 30s
+    # Kuma is a node process that also keeps a headless browser around for
+    # response-time checks, so it needs more room than the API colors - but it
+    # is still capped, because the monitor must never be what takes the box
+    # down.
+    mem_limit: 512m
+    mem_reservation: 128m
+    pids_limit: 512
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
