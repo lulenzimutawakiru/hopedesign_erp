@@ -30,7 +30,16 @@
 
 	handle {
 		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-		reverse_proxy web:80 {
+		# The SPA runs as web.deploy.replicas replicas (docker-compose.prod.yml:
+		# deploy.replicas). Each replica is listed by its stable compose container
+		# name on purpose: Caddy treats a single hostname upstream as ONE target, so
+		# `reverse_proxy web:80` would pool keep-alive connections against whichever
+		# A record Go resolved first and never spread load across the replicas.
+		# Distinct upstreams give lb_policy least_conn something to balance, and let
+		# the health checks eject only the replica that is actually failing.
+		# Keep this list in sync with deploy.replicas; deploy/stack-watchdog.sh
+		# reconciles the replica count.
+		reverse_proxy hopedesign-erp-web-1:80 hopedesign-erp-web-2:80 {
 			lb_policy least_conn
 			health_uri /
 			health_interval 15s
