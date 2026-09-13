@@ -126,6 +126,36 @@ function heartbeatPayload(): string {
   });
 }
 
+/**
+ * Resolve once the control client reports `ready`, or reject after `timeoutMs`.
+ *
+ * ioredis opens its socket asynchronously and `controlClientOptions()` disables
+ * the offline queue. Together those mean a command issued immediately after
+ * construction is rejected outright - "Stream isn't writeable and
+ * enableOfflineQueue options is false" - instead of being buffered until the
+ * handshake completes. The readiness probe therefore has to wait for `ready`
+ * rather than race it.
+ *
+ * Deliberately not fatal on an `error` event: ioredis emits one per failed
+ * reconnect attempt, so treating the first as fatal would turn a momentary blip
+ * during boot into a restart loop. The timeout is the real gate.
+ */
+function waitForReady(client: IORedis, timeoutMs = 15_000): Promise<void> {
+  if (client.status === 'ready') return Promise.resolve();
+
+  return new Promise<void>((resolve, reject) => {
+    const onReady = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      client.off('ready', onReady);
+      reject(new Error(`redis not ready after ${timeoutMs}ms (status: ${client.status})`));
+    }, timeoutMs);
+
+    client.once('ready', onReady);
+  });
+}
 async function main(): Promise<void> {
   if (!isQueueEnabled()) {
     console.error('[worker] no queue configured - refusing to start idle');
@@ -153,6 +183,7 @@ async function main(): Promise<void> {
   const control = new IORedis(controlOptions);
   control.on('error', (err: Error) => console.error('[worker] redis error', err.message));
 
+  await waitForReady(control);
   await control.ping();
   console.log('[worker] redis reachable');
 

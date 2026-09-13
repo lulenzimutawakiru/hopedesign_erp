@@ -20,6 +20,7 @@ import {
 import {
   QUEUE_PREFIX,
   bullConnection,
+  controlClientOptions,
   describeQueueConnection,
   isQueueEnabled,
   redisTarget,
@@ -218,6 +219,25 @@ describe('redis configuration', () => {
     expect(description).not.toContain('sup3rs3cret');
     expect(description).toContain('redis://redis.internal:6380/2');
     expect(description).toContain('auth');
+  });
+
+  it('disables the control client offline queue so liveness fails fast', () => {
+    // The worker's health endpoint must report an unreachable Redis rather than
+    // hang, so its control client rejects commands instead of buffering them.
+    // That is precisely why worker.ts waits for `ready` before its first command:
+    // with the offline queue off, a ping issued while the handshake is still in
+    // flight is rejected outright - "Stream isn't writeable and enableOfflineQueue
+    // options is false" - which crash-looped the worker in production. Do not
+    // flip this to true without also revisiting waitForReady.
+    process.env.REDIS_URL = 'redis://:s3cret@redis.internal:6380/4';
+
+    expect(controlClientOptions()).toMatchObject({
+      host: 'redis.internal',
+      port: 6380,
+      password: 's3cret',
+      db: 4,
+      enableOfflineQueue: false,
+    });
   });
 });
 
