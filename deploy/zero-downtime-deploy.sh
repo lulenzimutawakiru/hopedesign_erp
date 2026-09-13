@@ -9,12 +9,13 @@
 # ACTIVE color via deploy/caddy-live/active.caddy. This script:
 #   1. takes a database backup,
 #   2. fast-forwards the worktree to origin/main,
-#   3. builds fresh api-a/api-b/web images,
-#   4. recreates ONLY the idle color (the active color keeps serving),
-#   5. waits for the new color to become Docker-healthy,
-#   6. rebuilds the web (SPA) replicas so the frontend ships with the API,
-#   7. atomically flips Caddy to the new color (`caddy reload`),
-#   8. health-gates through the public endpoint and flips back on failure.
+#   3. builds fresh api-a/api-b/web/worker images,
+#   4. brings up the queue broker (redis) and the background worker,
+#   5. recreates ONLY the idle color (the active color keeps serving),
+#   6. waits for the new color to become Docker-healthy,
+#   7. rebuilds the web (SPA) replicas so the frontend ships with the API,
+#   8. atomically flips Caddy to the new color (`caddy reload`),
+#   9. health-gates through the public endpoint and flips back on failure.
 # The old color is left running so rollback is instant and the next deploy
 # rebuilds it.
 #############################################################
@@ -99,7 +100,7 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 # 1) Backup first - never roll out on top of the only good copy of the data.
-log "[1/7] database backup"
+log "[1/8] database backup"
 if [[ -x deploy/postgres-backup.sh ]]; then
   ./deploy/postgres-backup.sh || { log "ABORT: pre-deploy backup failed; refusing to deploy."; exit 1; }
 else
@@ -108,22 +109,63 @@ fi
 
 # 2) Update code. deploy/caddy-live/active.caddy is gitignored, so the pull
 #    never touches the live target.
-log "[2/7] pulling origin/main"
+log "[2/8] pulling origin/main"
 git fetch origin main
 git merge --ff-only origin/main
 
-# 3) Build the new images.
-log "[3/7] building api-a/api-b/web images"
-"${compose[@]}" build api-a api-b web
+# 3) Build the new images. `worker` shares the api build target, so it is a
+#    cached re-tag rather than a second compile - but it must be listed, or the
+#    worker service would keep running whatever image it was created with.
+log "[3/8] building api-a/api-b/web/worker images"
+"${compose[@]}" build api-a api-b web worker
 
-# 4) Recreate ONLY the idle color; the active color keeps serving.
+# 4) Broker before colour. The API colors disable their in-process fallback
+#    timers the moment they see REDIS_URL, so Redis and the worker have to be
+#    running *before* the first new color starts - otherwise scheduled work
+#    (report schedules, cron fan-out, the Hikvision drain, EFRIS fiscalization,
+#    notification delivery) would go nowhere until the next deploy.
+#
+#    This runs BEFORE anything is recreated, so a failure here aborts the
+#    rollout while the old colors are still up and still running their own
+#    timers. That is the last cheap abort point.
+log "[4/8] starting the queue broker and background worker"
+"${compose[@]}" up -d --no-deps redis
+REDIS_OK=0
+for _ in $(seq 1 30); do
+  if container_healthy hopedesign-erp-redis-1; then REDIS_OK=1; break; fi
+  sleep 2
+done
+if [[ "$REDIS_OK" != "1" ]]; then
+  log "ABORT: redis did not become healthy; no color has been recreated, so the running deployment is untouched."
+  "${compose[@]}" logs --tail 40 redis 2>&1 | tee -a "$LOG_DIR/deploy.log" || true
+  exit 1
+fi
+log "      redis is healthy"
+
+"${compose[@]}" up -d --no-deps --force-recreate worker
+WORKER_OK=0
+for _ in $(seq 1 24); do
+  if container_healthy hopedesign-erp-worker-1; then WORKER_OK=1; break; fi
+  sleep 5
+done
+if [[ "$WORKER_OK" != "1" ]]; then
+  # Not fatal: the worker retries its own connection, and an unhealthy worker
+  # only delays background work, which deploy/stack-watchdog.sh keeps chasing.
+  # Aborting here would leave the *old* worker image in place for no gain.
+  log "WARNING: worker is not healthy yet; continuing (watchdog will reconcile it)"
+  "${compose[@]}" logs --tail 40 worker 2>&1 | tee -a "$LOG_DIR/deploy.log" || true
+else
+  log "      worker is healthy"
+fi
+
+# 5) Recreate ONLY the idle color; the active color keeps serving.
 ACTIVE="$(current_active)"
 IDLE="$(other_color "$ACTIVE")"
-log "[4/7] active=$ACTIVE idle=$IDLE - recreating idle color with the new image"
+log "[5/8] active=$ACTIVE idle=$IDLE - recreating idle color with the new image"
 "${compose[@]}" up -d --no-deps --force-recreate "api-$IDLE"
 
-# 5) Wait for the idle color to become healthy before it ever sees traffic.
-log "[5/7] waiting for api-$IDLE to become healthy"
+# 6) Wait for the idle color to become healthy before it ever sees traffic.
+log "[6/8] waiting for api-$IDLE to become healthy"
 IDLE_OK=0
 for _ in $(seq 1 60); do
   if api_healthy "$IDLE"; then IDLE_OK=1; break; fi
@@ -141,7 +183,7 @@ log "      api-$IDLE is healthy"
 #    runs against an API that is missing its routes, and the deploy can never
 #    finish with a stale bundle. The gate requires EVERY replica to be healthy -
 #    accepting one would let Caddy keep load-balancing to a stale frontend.
-log "[6/7] rebuilding the web (SPA) containers"
+log "[7/8] rebuilding the web (SPA) containers"
 "${compose[@]}" up -d --no-deps --force-recreate web
 WEB_CONTAINERS="$(docker ps -a \
   --filter 'label=com.docker.compose.project=hopedesign-erp' \
@@ -163,8 +205,8 @@ if [[ "$WEB_OK" != "1" ]]; then
 fi
 log "      web is healthy"
 
-# 7) Atomic flip + public health gate.
-log "[7/7] flipping Caddy to api-$IDLE"
+# 8) Atomic flip + public health gate.
+log "[8/8] flipping Caddy to api-$IDLE"
 if ! flip_to "$IDLE"; then
   log "ABORT: flip failed; active color restored to $ACTIVE"
   exit 1

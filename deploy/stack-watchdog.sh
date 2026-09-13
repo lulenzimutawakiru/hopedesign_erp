@@ -7,7 +7,11 @@
 #   - if the ACTIVE API color dies but the idle color is healthy, it flips
 #     Caddy to the idle color (atomic `caddy reload`) - no downtime;
 #   - if both API colors are down it recreates them;
-#   - missing/unhealthy web/postgres/caddy containers are restarted.
+#   - missing/unhealthy web/postgres/caddy/redis/worker containers are restarted;
+#   - the redis broker and the background worker are reconciled by name, because
+#     a container removed outright is invisible to `docker restart`, and losing
+#     either of them silently stops every scheduled task (the API colors do not
+#     run those timers once REDIS_URL is set).
 # Safe to run repeatedly.
 #############################################################
 set -uo pipefail
@@ -20,6 +24,8 @@ LOG_FILE="$LOG_DIR/watchdog.log"
 LIVE_DIR="$APP_DIR/deploy/caddy-live"
 ACTIVE_FILE="$LIVE_DIR/active.caddy"
 CADDY_CONTAINER="hopedesign-erp-caddy-1"
+REDIS_CONTAINER="hopedesign-erp-redis-1"
+WORKER_CONTAINER="hopedesign-erp-worker-1"
 WEB_REPLICAS=2 # keep in sync with docker-compose.prod.yml (web: deploy.replicas)
 
 mkdir -p "$LOG_DIR" "$LIVE_DIR"
@@ -60,7 +66,7 @@ other_color() { [[ "$1" == "a" ]] && echo b || echo a; }
 #    `web` runs WEB_REPLICAS replicas, so they are discovered by compose label
 #    rather than hardcoding hopedesign-erp-web-1 - a hardcoded name would
 #    silently ignore every replica added by deploy.replicas.
-for c in hopedesign-erp-postgres-1 $(web_containers) "$CADDY_CONTAINER"; do
+for c in hopedesign-erp-postgres-1 "$REDIS_CONTAINER" "$WORKER_CONTAINER" $(web_containers) "$CADDY_CONTAINER"; do
   s="$(status_of "$c")"
   if [[ "$s" != "healthy" && "$s" != "running" ]]; then
     log "restarting unhealthy container $c ($s)"
@@ -77,6 +83,36 @@ if [[ "${web_have:-0}" -lt "$WEB_REPLICAS" ]]; then
   log "web replicas below expected (have=${web_have:-0} want=$WEB_REPLICAS) - reconciling"
   "${compose[@]}" up -d --no-deps web >> "$LOG_FILE" 2>&1 || true
   sleep 5
+fi
+
+# 1c) Reconcile the queue path. The worker is the only thing that runs the
+#     periodic tasks, so a *removed* worker container (not merely an unhealthy
+#     one) means report schedules, cron jobs, the Hikvision drain, EFRIS
+#     fiscalization and notification delivery have all stopped - and the API
+#     colors will not pick them up, because they disable their own fallback
+#     timers as soon as REDIS_URL is set. Both are reconciled by name because
+#     `docker restart` cannot resurrect a container that no longer exists.
+for svc in redis worker; do
+  c="hopedesign-erp-$svc-1"
+  if [[ -z "$(docker inspect -f '{{.Id}}' "$c" 2>/dev/null)" ]]; then
+    log "queue container $c is missing - recreating the $svc service"
+    "${compose[@]}" up -d --no-deps "$svc" >> "$LOG_FILE" 2>&1 || true
+    sleep 5
+  fi
+done
+
+# 1d) Report the worker's Redis heartbeat. This is deliberately observational:
+#     container health already drives the healing above (the worker's /health
+#     returns 503 unless it holds a ready connection AND is consuming), and
+#     acting on the heartbeat too would risk a restart loop on a slow boot.
+#     The key carries a 90s TTL, so a stale or absent key here is the signal a
+#     human needs to know the queue is not moving.
+worker_status="$(status_of "$WORKER_CONTAINER")"
+if [[ "$worker_status" == "healthy" ]]; then
+  hb="$(docker exec "$REDIS_CONTAINER" redis-cli --no-auth-warning EXISTS hopedesign:worker:heartbeat 2>/dev/null || echo unknown)"
+  if [[ "$hb" != "1" ]]; then
+    log "WARNING: $WORKER_CONTAINER is healthy but its heartbeat key is $hb - the queue may not be draining"
+  fi
 fi
 
 # 1b) Guard the "zombie edge" failure mode. The caddy container can report

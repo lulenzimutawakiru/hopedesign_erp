@@ -33,6 +33,7 @@ if (fs.existsSync(dest) && !force) {
 const secret = (bytes = 48) => crypto.randomBytes(bytes).toString('base64url');
 const ownerPass = secret(24);
 const appPass = secret(24);
+const redisPass = secret(24);
 const scheme = httpOnly || domain === ':80' ? 'http' : 'https';
 const publicHost = domain === ':80' ? 'localhost' : domain;
 const publicUrl = `${scheme}://${publicHost}`;
@@ -59,6 +60,12 @@ DATABASE_URL=postgres://hopedesign:${ownerPass}@postgres:5432/hopedesign_erp
 
 POSTGRES_APP_USER=hopedesign_app
 POSTGRES_APP_PASSWORD=${appPass}
+
+# BullMQ broker for the background worker. Only the password is configured here:
+# docker-compose.prod.yml composes REDIS_URL from it, so the API, the worker and
+# the redis service itself can never drift apart. base64url is URL-safe, which
+# matters because this value is interpolated into that URL.
+REDIS_PASSWORD=${redisPass}
 
 JWT_SECRET=${secret()}
 JWT_EXPIRES_IN=8h

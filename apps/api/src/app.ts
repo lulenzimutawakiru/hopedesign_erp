@@ -48,6 +48,7 @@ import { employeeIdentityOpsRouter } from './routes/ops/employeeIdentity.js';
 import { hikvisionEventsRouter, hikvisionWebhookErrorFilter } from './routes/hikvisionEvents.js';
 import { hikvisionOpsRouter, hikvisionAttendanceOpsRouter } from './routes/ops/hikvision.js';
 import { runHikvisionWorkerTick } from './services/hikvision/processor.js';
+import { isQueueEnabled } from './services/queue/connection.js';
 import { runEfrisWorkerTick } from './services/efris/processor.js';
 import { requisitionsOpsRouter } from './routes/ops/requisitions.js';
 import { expenditureOpsRouter } from './routes/ops/expenditure.js';
@@ -204,43 +205,62 @@ mountCrud(app);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// Report schedule worker: run due schedules every minute. Single-flight across
-// replicas so a report is never generated twice when the API is scaled out.
-setInterval(() => {
-  singleFlight(WORKER_LOCKS.REPORT_SCHEDULER, runDueReportSchedules).catch((err: unknown) => {
-    console.error('[reportScheduler]', err instanceof Error ? err.message : err);
-  });
-}, 60_000);
+// ---------------------------------------------------------------------------
+// Periodic background work
+//
+// The schedule itself lives in Redis as BullMQ job schedulers and is executed by
+// the dedicated worker process (apps/api/src/worker.ts). The web process does no
+// scheduling: a redeploy or blue/green flip can no longer interrupt a tick, and
+// each API replica no longer re-checks the same schedules in parallel.
+//
+// The timers below are the fallback for deployments with no broker configured -
+// notably the serverless target, where no long-lived worker process exists.
+// They are skipped whenever REDIS_URL/REDIS_HOST is set, so a schedule never
+// runs from two places at once.
+// ---------------------------------------------------------------------------
+if (isQueueEnabled()) {
+  console.log('[api] background queue configured - scheduled work runs in the worker process');
+} else {
+  console.warn('[api] no queue configured - running in-process fallback timers');
 
-// Cron job worker: run due background jobs every minute (single-flight).
-setInterval(() => {
-  singleFlight(WORKER_LOCKS.CRON_JOBS, runDueCronJobs).catch((err: unknown) => {
-    console.error('[cronJobs]', err instanceof Error ? err.message : err);
-  });
-}, 60_000);
+  // Report schedule worker: run due schedules every minute. Single-flight across
+  // replicas so a report is never generated twice when the API is scaled out.
+  setInterval(() => {
+    singleFlight(WORKER_LOCKS.REPORT_SCHEDULER, runDueReportSchedules).catch((err: unknown) => {
+      console.error('[reportScheduler]', err instanceof Error ? err.message : err);
+    });
+  }, 60_000);
 
-// Hikvision queue worker: drain claimed raw events every 10s (retry policy in
-// SQL). Single-flight so only one replica drains the queue at a time.
-setInterval(() => {
-  singleFlight(WORKER_LOCKS.HIKVISION_QUEUE, runHikvisionWorkerTick).catch((err: unknown) => {
-    console.error('[hikvisionWorker]', err instanceof Error ? err.message : err);
-  });
-}, 10_000);
+  // Cron job worker: run due background jobs every minute (single-flight).
+  setInterval(() => {
+    singleFlight(WORKER_LOCKS.CRON_JOBS, runDueCronJobs).catch((err: unknown) => {
+      console.error('[cronJobs]', err instanceof Error ? err.message : err);
+    });
+  }, 60_000);
 
-// EFRIS fiscalization worker: drain due fiscal transactions every 20s.
-// Single-flight across replicas; DISABLED mode leaves the queue inert until
-// an ACTIVE/TEST configuration exists, so no transaction is ever auto-submitted.
-setInterval(() => {
-  singleFlight(WORKER_LOCKS.EFRIS_WORKER, runEfrisWorkerTick).catch((err: unknown) => {
-    console.error('[efrisWorker]', err instanceof Error ? err.message : err);
-  });
-}, 20_000);
+  // Hikvision queue worker: drain claimed raw events every 10s (retry policy in
+  // SQL). Single-flight so only one replica drains the queue at a time.
+  setInterval(() => {
+    singleFlight(WORKER_LOCKS.HIKVISION_QUEUE, runHikvisionWorkerTick).catch((err: unknown) => {
+      console.error('[hikvisionWorker]', err instanceof Error ? err.message : err);
+    });
+  }, 10_000);
 
-// Notification delivery worker: dispatch queued EMAIL/SMS/WHATSAPP deliveries.
-setInterval(() => {
-  singleFlight(WORKER_LOCKS.NOTIFICATION_DISPATCH, processNotificationDeliveries).catch((err: unknown) => {
-    console.error('[notificationDispatch]', err instanceof Error ? err.message : err);
-  });
-}, 15_000);
+  // EFRIS fiscalization worker: drain due fiscal transactions every 20s.
+  // Single-flight across replicas; DISABLED mode leaves the queue inert until
+  // an ACTIVE/TEST configuration exists, so no transaction is ever auto-submitted.
+  setInterval(() => {
+    singleFlight(WORKER_LOCKS.EFRIS_WORKER, runEfrisWorkerTick).catch((err: unknown) => {
+      console.error('[efrisWorker]', err instanceof Error ? err.message : err);
+    });
+  }, 20_000);
+
+  // Notification delivery worker: dispatch queued EMAIL/SMS/WHATSAPP deliveries.
+  setInterval(() => {
+    singleFlight(WORKER_LOCKS.NOTIFICATION_DISPATCH, processNotificationDeliveries).catch((err: unknown) => {
+      console.error('[notificationDispatch]', err instanceof Error ? err.message : err);
+    });
+  }, 15_000);
+}
 
 export default app;
