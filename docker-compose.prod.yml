@@ -306,6 +306,11 @@ volumes:
   # used when it ran as a bare `docker run` container. Without `name:` compose
   # would create a project-prefixed volume, and the existing admin account and
   # settings would appear to silently vanish.
+  #
+  # Compose then warns on every up that the volume was not created by Docker
+  # Compose. That warning is expected and harmless here; external: true would
+  # silence it but would also fail a fresh bootstrap, where the volume does not
+  # exist yet.
   uptime-kuma:
     name: uptime-kuma
 
