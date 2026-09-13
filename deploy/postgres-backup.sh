@@ -49,5 +49,12 @@ mv "$TMP_FILE" "$BACKUP_FILE"
 chmod 600 "$BACKUP_FILE"
 echo "[$(date)] Backup successfully saved to $BACKUP_FILE"
 
+# Defensive: dumps written before the 0600 hardening (or by an older revision of
+# this script) could still be world-readable. Re-lock anything that is, and keep
+# the directory itself unlistable, so production data is never left exposed
+# between runs. `-perm -o=r` matches "others have read".
+chmod 750 "$BACKUP_DIR" 2>/dev/null || true
+find "$BACKUP_DIR" -maxdepth 1 -type f -name "*.sql.gz" -perm -o=r -exec chmod 600 {} + 2>/dev/null || true
+
 # Delete cron backups older than 30 days
 find "$BACKUP_DIR" -type f -name "cron_db_*.sql.gz" -mtime +30 -delete

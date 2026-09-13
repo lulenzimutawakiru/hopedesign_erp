@@ -54,8 +54,13 @@ fi
 SSH_PORT="${SSH_PORT:-22}"
 
 if command -v ufw >/dev/null 2>&1; then
-  ufw allow OpenSSH || true
-  ufw allow 22/tcp
+  # Open 22 only while it is genuinely reachable. Once sshd has been moved to
+  # $SSH_PORT the 22 rule is dead weight and is retired by
+  # deploy/security-hardening.sh, so do not blindly re-open it every run.
+  if [ "$SSH_PORT" = "22" ] || ss -lnt 2>/dev/null | awk '$4 ~ /:22$/ {found=1} END {exit !found}'; then
+    ufw allow OpenSSH || true
+    ufw allow 22/tcp
+  fi
   if [ "$SSH_PORT" != "22" ]; then
     ufw allow "${SSH_PORT}/tcp"
   fi
