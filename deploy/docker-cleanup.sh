@@ -32,7 +32,7 @@ docker image prune -f
 # Bound the build cache rather than deleting it, so a rollback rebuild stays
 # warm. 2 GB is comfortably under the ~38 GB free on this host.
 echo "[$LOG_TS] trimming build cache to 2GB..."
-docker builder prune -f --keep-storage 2GB
+docker builder prune -f --reserved-space 2GB
 
 # Networks no container is attached to. The compose `internal` bridge is in
 # use, so it is never touched.
