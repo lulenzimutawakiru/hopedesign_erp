@@ -12,7 +12,7 @@
 #   3. builds fresh api-a/api-b/web images,
 #   4. recreates ONLY the idle color (the active color keeps serving),
 #   5. waits for the new color to become Docker-healthy,
-#   6. rebuilds the web (SPA) container so the frontend ships with the API,
+#   6. rebuilds the web (SPA) replicas so the frontend ships with the API,
 #   7. atomically flips Caddy to the new color (`caddy reload`),
 #   8. health-gates through the public endpoint and flips back on failure.
 # The old color is left running so rollback is instant and the next deploy
@@ -136,18 +136,28 @@ if [[ "$IDLE_OK" != "1" ]]; then
 fi
 log "      api-$IDLE is healthy"
 
-# 6) The SPA ships from a single `web` container, so it is recreated here. Doing it
-#    before the flip means the new frontend never runs against an API that is
-#    missing its routes, and the deploy can never finish with a stale bundle.
-log "[6/7] rebuilding the web (SPA) container"
+# 6) The SPA ships from the `web` service (deploy.replicas: 2), so every replica
+#    is recreated here. Doing it before the flip means the new frontend never
+#    runs against an API that is missing its routes, and the deploy can never
+#    finish with a stale bundle. The gate requires EVERY replica to be healthy -
+#    accepting one would let Caddy keep load-balancing to a stale frontend.
+log "[6/7] rebuilding the web (SPA) containers"
 "${compose[@]}" up -d --no-deps --force-recreate web
+WEB_CONTAINERS="$(docker ps -a \
+  --filter 'label=com.docker.compose.project=hopedesign-erp' \
+  --filter 'label=com.docker.compose.service=web' \
+  --format '{{.Names}}' 2>/dev/null || true)"
 WEB_OK=0
 for _ in $(seq 1 24); do
-  if container_healthy hopedesign-erp-web-1; then WEB_OK=1; break; fi
+  all_web_ok=1
+  for c in $WEB_CONTAINERS; do
+    if ! container_healthy "$c"; then all_web_ok=0; break; fi
+  done
+  if [[ -n "$WEB_CONTAINERS" && "$all_web_ok" == "1" ]]; then WEB_OK=1; break; fi
   sleep 5
 done
 if [[ "$WEB_OK" != "1" ]]; then
-  log "ABORT: web container did not become healthy; the API is still on $ACTIVE and untouched."
+  log "ABORT: web container(s) did not become healthy; the API is still on $ACTIVE and untouched."
   "${compose[@]}" ps
   exit 1
 fi

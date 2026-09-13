@@ -121,6 +121,13 @@ services:
       target: web
     restart: unless-stopped
     stop_grace_period: 20s
+    # Stateless static SPA. Runs as multiple replicas so rebuilding or restarting
+    # one replica never interrupts the frontend: Caddy balances the `web` alias
+    # with lb_policy least_conn + active health checks, and Docker's embedded DNS
+    # returns every replica IP for that alias. The image ships a HEALTHCHECK, so
+    # caddy's `depends_on: web: service_healthy` gate is unaffected.
+    deploy:
+      replicas: 2
     security_opt:
       - no-new-privileges:true
     logging: *default-log
