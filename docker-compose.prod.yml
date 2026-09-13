@@ -250,6 +250,12 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env.production (e.g. hopedesign.jorlentech.com or :80)}
       ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
+      # Optional public hostname for the availability monitor UI. Empty (the
+      # default) keeps it reachable only through an SSH tunnel on
+      # 127.0.0.1:3001. When set, Caddy terminates TLS in front of it and
+      # proxies to uptime-kuma:3001 by name over the compose network - no
+      # host port is published either way.
+      KUMA_DOMAIN: ${KUMA_DOMAIN:-}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./deploy/caddy-entrypoint.sh:/etc/caddy/entrypoint.sh:ro
