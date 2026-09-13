@@ -49,3 +49,9 @@
 		}
 	}
 }
+
+# Optional site for the availability monitor. deploy/caddy-entrypoint.sh writes
+# this file at boot: a real site block when KUMA_DOMAIN is set, and a single
+# comment when it is not. The target always exists, so the Caddyfile parses the
+# same either way and this import is a no-op by default.
+import /etc/caddy/live/uptime.caddy

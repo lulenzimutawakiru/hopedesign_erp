@@ -7,7 +7,8 @@
 #   - if the ACTIVE API color dies but the idle color is healthy, it flips
 #     Caddy to the idle color (atomic `caddy reload`) - no downtime;
 #   - if both API colors are down it recreates them;
-#   - missing/unhealthy web/postgres/caddy/redis/worker containers are restarted;
+#   - missing/unhealthy web/postgres/caddy/redis/worker/uptime-kuma containers are
+#     restarted;
 #   - the redis broker and the background worker are reconciled by name, because
 #     a container removed outright is invisible to `docker restart`, and losing
 #     either of them silently stops every scheduled task (the API colors do not
@@ -26,6 +27,7 @@ ACTIVE_FILE="$LIVE_DIR/active.caddy"
 CADDY_CONTAINER="hopedesign-erp-caddy-1"
 REDIS_CONTAINER="hopedesign-erp-redis-1"
 WORKER_CONTAINER="hopedesign-erp-worker-1"
+UPTIME_CONTAINER="hopedesign-erp-uptime-kuma"
 WEB_REPLICAS=2 # keep in sync with docker-compose.prod.yml (web: deploy.replicas)
 
 mkdir -p "$LOG_DIR" "$LIVE_DIR"
@@ -66,7 +68,7 @@ other_color() { [[ "$1" == "a" ]] && echo b || echo a; }
 #    `web` runs WEB_REPLICAS replicas, so they are discovered by compose label
 #    rather than hardcoding hopedesign-erp-web-1 - a hardcoded name would
 #    silently ignore every replica added by deploy.replicas.
-for c in hopedesign-erp-postgres-1 "$REDIS_CONTAINER" "$WORKER_CONTAINER" $(web_containers) "$CADDY_CONTAINER"; do
+for c in hopedesign-erp-postgres-1 "$REDIS_CONTAINER" "$WORKER_CONTAINER" "$UPTIME_CONTAINER" $(web_containers) "$CADDY_CONTAINER"; do
   s="$(status_of "$c")"
   if [[ "$s" != "healthy" && "$s" != "running" ]]; then
     log "restarting unhealthy container $c ($s)"

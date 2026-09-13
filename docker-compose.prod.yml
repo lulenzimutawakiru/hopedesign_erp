@@ -270,12 +270,44 @@ services:
     networks:
       - internal
 
+  # Availability monitor. Deliberately its own image and container rather than a
+  # sidecar on the API: it must stay up when the API is the thing that is broken.
+  #
+  # The UI port is bound to 127.0.0.1 ONLY. It previously ran as a bare
+  # `docker run` container publishing 3001 on 0.0.0.0 over plain HTTP, which put
+  # an admin login on the public internet in cleartext. Loopback keeps it
+  # reachable through an SSH tunnel with nothing exposed:
+  #   ssh -p 2978 -L 3001:127.0.0.1:3001 root@<vps>
+  #
+  # For browser access instead, set KUMA_DOMAIN and Caddy terminates TLS in
+  # front of it (deploy/caddy-entrypoint.sh). That path needs no host port at
+  # all - Caddy reaches this container by name over the compose network.
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: hopedesign-erp-uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - uptime-kuma:/app/data
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-log
+    networks:
+      - internal
+
 volumes:
   pgdata:
   uploads:
   redisdata:
   caddy_data:
   caddy_config:
+  # Pinned by explicit name so compose adopts the volume the monitor already
+  # used when it ran as a bare `docker run` container. Without `name:` compose
+  # would create a project-prefixed volume, and the existing admin account and
+  # settings would appear to silently vanish.
+  uptime-kuma:
+    name: uptime-kuma
 
 networks:
   internal:
