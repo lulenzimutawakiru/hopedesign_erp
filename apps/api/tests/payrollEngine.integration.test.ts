@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { api, auth, loginAs, db, deleteEmployees } from './helpers.js';
 
 const rand = () => Math.floor(Math.random() * 9000) + 1000;
@@ -15,6 +15,21 @@ const parseBreakdown = (raw: unknown): Breakdown =>
   typeof raw === 'string' ? JSON.parse(raw) : (raw as Breakdown);
 
 describe('modern payroll engine', () => {
+  // A red run aborts a test before its inline cleanup, and the run covers
+  // every active employee of the company: a single leaked 'Modern Payroll'
+  // row would then inflate every later run forever. Sweep stale fixtures
+  // (and their leftover run artefacts) before the first test starts.
+  beforeAll(async () => {
+    const stale = await db(
+      `SELECT id FROM employees
+        WHERE (first_name = 'Modern' AND last_name = 'Payroll')
+           OR (first_name = 'Prorated' AND last_name = 'Hire')`
+    );
+    const ids = stale.rows.map((r) => Number(r.id));
+    if (ids.length) await deleteEmployees(ids);
+    await db(`DELETE FROM payrolls WHERE period_start >= '2027-01-01'`);
+    await db(`DELETE FROM payroll_component_definitions WHERE code LIKE 'MOD-%'`);
+  });
   it('calculates a run from components, variable pay, benefits and effective salaries', async () => {
     const { token } = await loginAs('hr.hannah');
     const day = String(10 + Math.floor(Math.random() * 18)).padStart(2, '0');
@@ -181,10 +196,13 @@ describe('modern payroll engine', () => {
     ]);
     expect(breakdown.benefits).toEqual({ employee: 40000, employer: 200000 });
 
-    // Component entries persist so reports can reconstruct the run.
+    // Component entries persist so reports can reconstruct the run. Scoped to
+    // the employee under test: the run covers every active employee in the
+    // company, so an unscoped count also picks up unrelated staff.
     const entries = await db(
-      `SELECT employee_id, component_id, amount FROM payroll_component_entries WHERE payroll_id = $1`,
-      [payrollId]
+      `SELECT employee_id, component_id, amount FROM payroll_component_entries
+        WHERE payroll_id = $1 AND employee_id = $2`,
+      [payrollId, employeeId]
     );
     expect(entries.rows.length).toBe(3);
     const entryTotal = entries.rows.reduce((s: number, r) => s + Number(r.amount), 0);

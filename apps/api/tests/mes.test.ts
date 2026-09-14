@@ -27,6 +27,26 @@ beforeAll(async () => {
        WHERE product_id = (SELECT id FROM products WHERE code = 'BOB-80')
          AND warehouse_id = (SELECT id FROM warehouses WHERE code = 'RAW-MAT') AND batch_id IS NULL`
   );
+  // The demo MES fixtures (today's machine capacity and downtime events) are seeded
+  // relative to the day the database was seeded, so they go stale the moment the
+  // suite runs on a later day and every "today" window reads zero. Re-anchor them
+  // onto today so the command centre and OEE measures always cover the demo shift.
+  await db(
+    `UPDATE machine_capacity mc SET capacity_date = CURRENT_DATE
+       WHERE mc.capacity_date <> CURRENT_DATE
+         AND NOT EXISTS (
+           SELECT 1 FROM machine_capacity x
+            WHERE x.machine_id = mc.machine_id
+              AND x.capacity_date = CURRENT_DATE
+              AND COALESCE(x.shift_code, '') = COALESCE(mc.shift_code, '')
+         )`
+  );
+  await db(
+    `UPDATE downtime_events
+        SET started_at = started_at + make_interval(days => CURRENT_DATE - started_at::date),
+            ended_at = ended_at + make_interval(days => CURRENT_DATE - started_at::date)
+      WHERE started_at::date <> CURRENT_DATE`
+  );
 });
 
 const asNum = (v: unknown): number => {
