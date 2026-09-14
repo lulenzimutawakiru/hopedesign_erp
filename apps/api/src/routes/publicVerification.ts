@@ -129,6 +129,35 @@ publicVerificationRouter.get(
   })
 );
 
+const SECONDARY_LOGO_MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+};
+
+const SECONDARY_LOGO_EXTS = Object.keys(SECONDARY_LOGO_MIME_BY_EXT);
+
+publicVerificationRouter.get(
+  '/branding/secondary-logo',
+  asyncHandler(async (req, res) => {
+    const tenant = String(req.query.tenant ?? '0');
+    const company = String(req.query.company ?? '0');
+    if (!/^\d+$/.test(tenant) || !/^\d+$/.test(company)) throw badRequest('Invalid tenant or company');
+    const dir = path.join(config.storageRoot, 'branding', tenant, company);
+    for (const ext of SECONDARY_LOGO_EXTS) {
+      const filePath = path.join(dir, `secondary-logo${ext}`);
+      if (existsSync(filePath)) {
+        res.set('Content-Type', SECONDARY_LOGO_MIME_BY_EXT[ext]);
+        res.set('Cache-Control', 'public, max-age=31536000, immutable');
+        res.send(readFileSync(filePath));
+        return;
+      }
+    }
+    res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Secondary logo not found' } });
+  })
+);
+
+/** Per-signatory uploaded contract signature: branding/<tenant>/<company>/contract-sig-<contract>-<signer><ext>. */
+
 /** Per-signatory uploaded contract signature: branding/<tenant>/<company>/contract-sig-<contract>-<signer><ext>. */
 publicVerificationRouter.get(
   '/branding/contract-signature',

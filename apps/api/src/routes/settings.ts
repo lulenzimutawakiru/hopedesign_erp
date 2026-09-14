@@ -75,6 +75,19 @@ function footerLogoStorageKey(tenantId: number | null | undefined, companyId: nu
   return path.join('branding', String(tenantId ?? 0), String(companyId ?? 0), `footer-logo${ext}`);
 }
 
+const secondaryLogoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+const SECONDARY_LOGO_MIME_EXT: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+};
+
+const SECONDARY_LOGO_EXTS = ['.png', '.jpg'];
+
+function secondaryLogoStorageKey(tenantId: number | null | undefined, companyId: number | null | undefined, ext: string) {
+  return path.join('branding', String(tenantId ?? 0), String(companyId ?? 0), `secondary-logo${ext}`);
+}
+
 export type SettingType = 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'color' | 'url' | 'tel';
 
 export interface SettingDef {
@@ -103,10 +116,11 @@ export const SETTINGS: Record<string, Record<string, SettingDef>> = {
     company_tagline: { label: 'Company tagline', type: 'text', group: 'Company identity' },
     industry: { label: 'Industry', help: 'Primary industry used for report grouping and compliance defaults.', type: 'select', options: ['Manufacturing', 'Paper & Packaging', 'Security Printing', 'FMCG', 'Pharmaceuticals', 'Agriculture', 'Logistics', 'Retail', 'Other'], default: 'Manufacturing', group: 'Company identity' },
     website: { label: 'Website', help: 'Public company website, linked from branded exports.', type: 'url', group: 'Company identity' },
-    logo_url: { label: 'Primary logo', help: 'Uploaded logo used as the left-hand mark in the app header and on branded documents and exports.', type: 'url', group: 'Company identity' },
+    logo_url: { label: 'Primary logo', help: 'Uploaded logo shown on the left of the app header and of every branded document, export and email. Every mark on a document comes from an uploaded asset - no artwork is hard-coded.', type: 'url', group: 'Company identity' },
+    secondary_logo_url: { label: 'Secondary logo', help: 'Uploaded logo shown on the right of every branded document header and in the app header. Leave blank for a single-logo letterhead.', type: 'url', group: 'Company identity' },
     favicon_url: { label: 'Favicon URL', help: 'Public URL of the browser tab icon (PNG or ICO).', type: 'url', group: 'Company identity' },
     signature_url: { label: 'Signature image URL', help: 'Public URL of the uploaded signature image used on auto-signed documents.', type: 'url', group: 'Company identity' },
-    footer_logo_url: { label: 'Secondary logo', help: 'Uploaded logo used as the right-hand mark in the app header and in the footer of branded documents and exports.', type: 'url', group: 'Company identity' },
+    footer_logo_url: { label: 'Footer logo', help: 'Uploaded logo printed in the footer strip of every page of every branded document and export. This is a separate asset from the two header logos.', type: 'url', group: 'Company identity' },
     brand_color: { label: 'Primary brand colour', help: 'Accent colour used on branded documents and exports.', type: 'color', default: '#1261A0', group: 'Company identity' },
     brand_color_secondary: { label: 'Secondary brand colour', help: 'Secondary accent for highlights and supporting elements.', type: 'color', default: '#00A6A6', group: 'Company identity' },
 
@@ -635,6 +649,7 @@ settingsRouter.post(
     if (!file) throw badRequest('A footer logo file is required (field "file")');
     const ext = FOOTER_LOGO_MIME_EXT[file.mimetype];
     if (!ext) throw badRequest('Unsupported image type. Use PNG or JPG.');
+    assertImageMagic(file.buffer, ext);
 
     const tenantId = req.ctx.tenantId;
     const companyId = req.ctx.companyId ?? null;
@@ -732,6 +747,128 @@ settingsRouter.delete(
           metadata: { removed: true },
           oldValues: { footer_logo_url: prev.rows[0]?.value ?? '' },
           newValues: { footer_logo_url: '' },
+        });
+      },
+      req.ctx
+    );
+
+    const fresh = await query<SettingRow>(STORED_SQL, [tenantId, companyId], req.ctx);
+    const metaRows = await query<CategoryMetaRow>(META_SQL, [tenantId, companyId], req.ctx);
+    const meta = new Map(metaRows.rows.map((m) => [m.category, m]));
+    res.json({
+      data: categoryPayload('general', fresh.rows.filter((r) => r.category === 'general'), meta.get('general')),
+    });
+  })
+);
+
+/** Upload the secondary logo (stored on disk; persisted as general.secondary_logo_url). */
+settingsRouter.post(
+  '/secondary-logo',
+  requirePermission('admin.settings.update'),
+  secondaryLogoUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const file = req.file;
+    if (!file) throw badRequest('A secondary logo file is required (field "file")');
+    const ext = SECONDARY_LOGO_MIME_EXT[file.mimetype];
+    if (!ext) throw badRequest('Unsupported image type. Use PNG or JPG.');
+    assertImageMagic(file.buffer, ext);
+
+    const tenantId = req.ctx.tenantId;
+    const companyId = req.ctx.companyId ?? null;
+    const storageKey = secondaryLogoStorageKey(tenantId, companyId, ext);
+    const absolute = path.join(config.storageRoot, storageKey);
+
+    for (const oldExt of SECONDARY_LOGO_EXTS) {
+      const oldPath = path.join(config.storageRoot, secondaryLogoStorageKey(tenantId, companyId, oldExt));
+      if (existsSync(oldPath)) {
+        try { unlinkSync(oldPath); } catch { /* ignore */ }
+      }
+    }
+
+    mkdirSync(path.dirname(absolute), { recursive: true });
+    writeFileSync(absolute, file.buffer);
+
+    const secondaryLogoUrl = `${config.apiPublicUrl}/api/public/branding/secondary-logo?tenant=${tenantId}&company=${companyId ?? 0}&t=${Date.now()}`;
+
+    await tx(
+      async (client: pg.PoolClient) => {
+        const prev = await client.query<{ value: unknown }>(
+          `SELECT value FROM app_settings
+           WHERE tenant_id = $1 AND (company_id = $2 OR (company_id IS NULL AND $2 IS NULL))
+             AND category = 'general' AND key = 'secondary_logo_url'
+           ORDER BY (company_id IS NOT NULL) DESC
+           LIMIT 1`,
+          [tenantId, companyId]
+        );
+        await client.query(
+          `INSERT INTO app_settings (tenant_id, company_id, category, key, value, is_secret, updated_by)
+           VALUES ($1, $2, 'general', 'secondary_logo_url', $3::jsonb, false, $4)
+           ON CONFLICT (tenant_id, company_id, category, key)
+           DO UPDATE SET value = EXCLUDED.value, is_secret = false,
+                         updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [tenantId, companyId, JSON.stringify(secondaryLogoUrl), req.ctx.userId ?? null]
+        );
+        await logAudit(client, req.ctx, {
+          action: 'update',
+          resource: 'settings.general',
+          recordCode: 'secondary_logo_url',
+          metadata: { uploaded: true, mimeType: file.mimetype, sizeBytes: file.size, storageKey },
+          oldValues: { secondary_logo_url: prev.rows[0]?.value ?? '' },
+          newValues: { secondary_logo_url: secondaryLogoUrl },
+        });
+      },
+      req.ctx
+    );
+
+    const fresh = await query<SettingRow>(STORED_SQL, [tenantId, companyId], req.ctx);
+    const metaRows = await query<CategoryMetaRow>(META_SQL, [tenantId, companyId], req.ctx);
+    const meta = new Map(metaRows.rows.map((m) => [m.category, m]));
+    res.json({
+      data: categoryPayload('general', fresh.rows.filter((r) => r.category === 'general'), meta.get('general')),
+    });
+  })
+);
+
+/** Remove the uploaded secondary logo and clear general.secondary_logo_url. */
+settingsRouter.delete(
+  '/secondary-logo',
+  requirePermission('admin.settings.update'),
+  asyncHandler(async (req, res) => {
+    const tenantId = req.ctx.tenantId;
+    const companyId = req.ctx.companyId ?? null;
+
+    for (const ext of SECONDARY_LOGO_EXTS) {
+      const oldPath = path.join(config.storageRoot, secondaryLogoStorageKey(tenantId, companyId, ext));
+      if (existsSync(oldPath)) {
+        try { unlinkSync(oldPath); } catch { /* ignore */ }
+      }
+    }
+
+    await tx(
+      async (client: pg.PoolClient) => {
+        const prev = await client.query<{ value: unknown }>(
+          `SELECT value FROM app_settings
+           WHERE tenant_id = $1 AND (company_id = $2 OR (company_id IS NULL AND $2 IS NULL))
+             AND category = 'general' AND key = 'secondary_logo_url'
+           ORDER BY (company_id IS NOT NULL) DESC
+           LIMIT 1`,
+          [tenantId, companyId]
+        );
+        await client.query(
+          `INSERT INTO app_settings (tenant_id, company_id, category, key, value, is_secret, updated_by)
+           VALUES ($1, $2, 'general', 'secondary_logo_url', '""'::jsonb, false, $3)
+           ON CONFLICT (tenant_id, company_id, category, key)
+           DO UPDATE SET value = EXCLUDED.value, is_secret = false,
+                         updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [tenantId, companyId, req.ctx.userId ?? null]
+        );
+        await logAudit(client, req.ctx, {
+          action: 'update',
+          resource: 'settings.general',
+          recordCode: 'secondary_logo_url',
+          metadata: { removed: true },
+          oldValues: { secondary_logo_url: prev.rows[0]?.value ?? '' },
+          newValues: { secondary_logo_url: '' },
         });
       },
       req.ctx
@@ -883,7 +1020,7 @@ settingsRouter.post(
 
     await tx(
       async (client: pg.PoolClient) => {
-const preservedUploads = ['logo_url', 'favicon_url', 'signature_url', 'footer_logo_url'];
+const preservedUploads = ['logo_url', 'secondary_logo_url', 'favicon_url', 'signature_url', 'footer_logo_url'];
         const del = all
           ? await client.query(
               `DELETE FROM app_settings

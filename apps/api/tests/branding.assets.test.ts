@@ -9,7 +9,8 @@ import { renderBrandedHtml, type CompanyProfile } from '../src/services/branding
  */
 
 const PRIMARY = 'https://example.com/branding/logo.png';
-const SECONDARY = 'https://example.com/branding/footer-logo.png';
+const SECONDARY = 'https://example.com/branding/secondary-logo.png';
+const FOOTER = 'https://example.com/branding/footer-logo.png';
 
 function profile(overrides: Partial<CompanyProfile> = {}): CompanyProfile {
   return {
@@ -37,6 +38,7 @@ function profile(overrides: Partial<CompanyProfile> = {}): CompanyProfile {
     brandColor: '#1261A0',
     brandColorSecondary: '#FF0000',
     logoUrl: '',
+    secondaryLogoUrl: '',
     footerLogoUrl: '',
     signatureUrl: '',
     autoSignEnabled: false,
@@ -66,7 +68,7 @@ describe('email mark rendering', () => {
 });
 
 describe('branded email header and footer', () => {
-  it('draws both uploaded marks and no built-in artwork', () => {
+  it('draws all three uploaded marks and no built-in artwork', () => {
     const html = renderBrandedEmailHtml({
       subject: 'Ticket created',
       bodyHtml: 'Hello',
@@ -74,13 +76,15 @@ describe('branded email header and footer', () => {
         name: 'Hope Design Group Ltd',
         tagline: 'For your success',
         logoUrl: PRIMARY,
-        footerLogoUrl: SECONDARY,
+        secondaryLogoUrl: SECONDARY,
+        footerLogoUrl: FOOTER,
         brandColor: '#1261A0',
         brandColorSecondary: '#ff0000',
       },
     });
     expect(html).toContain(`src="${PRIMARY}"`);
     expect(html).toContain(`src="${SECONDARY}"`);
+    expect(html).toContain(`src="${FOOTER}"`);
     expect(html).toContain('background:#1261A0');
     expect(html).toContain('background:#ff0000');
     expect(html).not.toContain('>HD<');
@@ -92,7 +96,7 @@ describe('branded email header and footer', () => {
     const html = renderBrandedEmailHtml({
       subject: 'Ticket created',
       bodyHtml: 'Hello',
-      company: { name: 'Hope Design Group Ltd', logoUrl: '', footerLogoUrl: '' },
+      company: { name: 'Hope Design Group Ltd', logoUrl: '', secondaryLogoUrl: '', footerLogoUrl: '' },
     });
     expect(html).not.toContain('<img');
     expect(html).toContain('Hope Design Group Ltd');
@@ -112,15 +116,17 @@ describe('branded print letterhead', () => {
   it('renders no mark at all when nothing has been uploaded', async () => {
     const html = await renderBrandedHtml({ ...base, company: profile() });
     expect(html).not.toContain('class="brand-logo"');
+    expect(html).not.toContain('class="secondary-logo"');
     expect(html).not.toContain('class="foot-logo"');
   });
 
-  it('renders the primary mark in the header and the secondary mark in the footer', async () => {
+  it('renders both header marks and the distinct footer mark', async () => {
     const html = await renderBrandedHtml({
       ...base,
-      company: profile({ logoUrl: PRIMARY, footerLogoUrl: SECONDARY }),
+      company: profile({ logoUrl: PRIMARY, secondaryLogoUrl: SECONDARY, footerLogoUrl: FOOTER }),
     });
     expect(html).toContain(`class="brand-logo" src="${PRIMARY}"`);
-    expect(html).toContain(`class="foot-logo" src="${SECONDARY}"`);
+    expect(html).toContain(`class="secondary-logo" src="${SECONDARY}"`);
+    expect(html).toContain(`class="foot-logo" src="${FOOTER}"`);
   });
 });

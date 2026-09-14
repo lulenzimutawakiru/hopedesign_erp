@@ -37,6 +37,7 @@ import {
   excelNumFmt,
   preloadFooterLogo,
   preloadLogo,
+  preloadSecondaryLogo,
   readStoredBrandingFile,
   toExcelValue,
   type DocBrand,
@@ -3040,11 +3041,12 @@ async function renderContractPdf(data: DocData, opts: DocumentRenderOpts): Promi
   const status = statusOf(data, opts);
   const brand = brandOf(opts.company);
   const logoName = preloadLogo(doc, opts.company.logoUrl);
+  const secondaryLogoName = preloadSecondaryLogo(doc, opts.company.secondaryLogoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
   const head = letterheadMeta(data, opts, status);
-  doc.setNewPageHandler(() => drawRunningHeader(doc, head, brand, logoName));
-  drawLetterhead(doc, head, brand, logoName);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, head, brand, logoName, secondaryLogoName));
+  drawLetterhead(doc, head, brand, logoName, secondaryLogoName);
   drawContractIntro(doc, opts);
 
   const photoName = data.photo?.bytes ? doc.addImage(data.photo.bytes) : null;
@@ -3197,11 +3199,12 @@ async function renderCertificatePdf(data: DocData, opts: DocumentRenderOpts): Pr
   const status = statusOf(data, opts);
   const brand = brandOf(opts.company);
   const logoName = preloadLogo(doc, opts.company.logoUrl);
+  const secondaryLogoName = preloadSecondaryLogo(doc, opts.company.secondaryLogoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
   const head = letterheadMeta(data, opts, status);
-  doc.setNewPageHandler(() => drawRunningHeader(doc, head, brand, logoName));
-  drawLetterhead(doc, head, brand, logoName);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, head, brand, logoName, secondaryLogoName));
+  drawLetterhead(doc, head, brand, logoName, secondaryLogoName);
   drawCertificateStatement(doc, data, brand);
   drawParties(doc, data.parties ?? [], brand);
 
@@ -3454,9 +3457,10 @@ function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
   const photoName = data.photo?.bytes ? doc.addImage(data.photo.bytes) : null;
   const qrName = data.qrPng ? doc.addImage(data.qrPng) : null;
   const logoName = preloadLogo(doc, opts.company.logoUrl);
+  const secondaryLogoName = preloadSecondaryLogo(doc, opts.company.secondaryLogoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
   const cardHead = letterheadMeta(data, opts, status);
-  doc.setNewPageHandler(() => drawRunningHeader(doc, cardHead, brand, logoName));
+  doc.setNewPageHandler(() => drawRunningHeader(doc, cardHead, brand, logoName, secondaryLogoName));
   const verifyHost = (opts.verifyUrl || opts.company.verifyUrl || opts.company.website || '')
     .replace(/^https?:\/\//i, '')
     .split('/')[0];
@@ -3746,9 +3750,20 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
     ? `<img class="qr" src="data:image/png;base64,${data.qrPng.toString('base64')}" alt="QR"/>`
     : '<div class="qr empty">NO QR CODE<br/>VERIFICATION PENDING</div>';
   const company = htmlEsc(opts.company.name);
+  const regLine = [opts.company.tin ? 'TIN ' + opts.company.tin : '', opts.company.vrn ? 'VRN ' + opts.company.vrn : '']
+    .filter(Boolean)
+    .join(' \u00b7 ');
+  const primaryLogoSrc = String(opts.company.logoUrl ?? '').trim();
+  const primaryLogoHtml = /^https?:\/\//i.test(primaryLogoSrc)
+    ? `<img class="hlogo" src="${htmlEsc(primaryLogoSrc)}" alt="${company} logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
+    : '';
+  const secondaryLogoSrc = String(opts.company.secondaryLogoUrl ?? '').trim();
+  const secondaryLogoHtml = /^https?:\/\//i.test(secondaryLogoSrc)
+    ? `<img class="hlogo sec" src="${htmlEsc(secondaryLogoSrc)}" alt="${company} secondary logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
+    : '';
   const footerLogoSrc = String(opts.company.footerLogoUrl ?? '').trim();
   const footerLogoHtml = /^https?:\/\//i.test(footerLogoSrc)
-    ? `<img class="flogo" src="${htmlEsc(footerLogoSrc)}" alt="${htmlEsc(opts.company.name)} footer logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
+    ? `<img class="flogo" src="${htmlEsc(footerLogoSrc)}" alt="${company} footer logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
     : '';
   const validity = ['Issued ' + issued, expires ? 'Expires ' + expires : ''].filter(Boolean).join('  ·  ');
   return `<!doctype html>
@@ -3792,11 +3807,26 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
   .row .k { flex:0 0 21mm; color:#5f6b76; text-transform:uppercase; font-size:2mm; font-weight:700; letter-spacing:.03em; line-height:1.4; }
   .row .v { flex:1; min-width:0; font-weight:700; font-size:2.7mm; line-height:1.4; word-break:break-all; }
   .terms { text-align:center; font-size:2mm; color:#5f6b76; padding:.6mm 2.8mm 1.6mm; }
-  .doc-foot { margin:18px 0 0; padding-top:12px; border-top:2px solid var(--navy); position:relative; display:flex; justify-content:space-between; align-items:center; gap:14px; font-size:11px; color:#5f6b76; }
-  .doc-foot::before { content:''; position:absolute; top:4px; left:0; right:0; height:1.4px; background:var(--teal); }
-  .doc-foot .fl { display:flex; align-items:center; gap:8px; min-width:0; }
-  .doc-foot .flogo { height:26px; width:auto; max-width:120px; object-fit:contain; flex:0 0 auto; }
-  .doc-foot .fr { text-align:right; }
+  .doc-head { position:relative; display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding-bottom:10px; }
+  .doc-head::before { content:''; position:absolute; left:0; right:0; bottom:0; height:2px; background:var(--navy); }
+  .doc-head::after { content:''; position:absolute; left:0; right:0; bottom:-3.4px; height:1.4px; background:var(--teal); }
+  .dh-l { display:flex; align-items:flex-start; gap:12px; min-width:0; }
+  .dh-r { flex:0 0 auto; display:flex; justify-content:flex-end; }
+  .hlogo { height:40px; width:auto; max-width:132px; object-fit:contain; flex:0 0 auto; display:block; }
+  .hlogo.sec { height:34px; max-width:148px; }
+  /* Two-part card footer: identity band over a document-control rail. */
+  .doc-foot { margin:22px 0 0; position:relative; background:#f7fafc; border:1px solid #e4e9ee; font-size:11px; color:#5f6b76; }
+  .doc-foot::before { content:''; position:absolute; top:0; left:0; right:0; height:2.4px; background:var(--navy); }
+  .doc-foot::after { content:''; position:absolute; top:3.6px; left:0; right:0; height:1.2px; background:var(--teal); }
+  .doc-foot .fband { display:flex; align-items:center; gap:18px; padding:14px 18px 12px; }
+  .doc-foot .fmk { flex:0 0 auto; max-width:178px; padding-right:18px; border-right:1px solid #d6dee6; }
+  .doc-foot .flogo { height:34px; width:auto; max-width:152px; object-fit:contain; display:block; }
+  .doc-foot .fi { flex:1 1 auto; min-width:0; }
+  .doc-foot .fi .nm { font-size:11px; font-weight:700; color:var(--navy); text-transform:uppercase; letter-spacing:.07em; }
+  .doc-foot .ln { font-size:10px; color:#5f6b76; line-height:1.5; margin-top:2.5px; }
+  .doc-foot .fstrip { display:flex; align-items:center; gap:14px; padding:6.5px 18px 7px; border-top:1px solid #e4e9ee; background:#fff; }
+  .doc-foot .fstrip .ln { flex:1 1 auto; min-width:0; margin-top:0; }
+  .doc-foot .k { flex:0 0 auto; font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--teal); font-weight:700; }
   @media print {
     body { margin:8mm; }
     .no-print { display:none; }
@@ -3805,8 +3835,16 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
   }
 </style></head>
 <body>
-  <h1>Employee identity card</h1>
-  <p class="muted">${company} · print or save as PDF from this window</p>
+  <header class="doc-head">
+    <div class="dh-l">
+      ${primaryLogoHtml}
+      <div>
+        <h1>Employee identity card</h1>
+        <p class="muted">${company} · print or save as PDF from this window</p>
+      </div>
+    </div>
+    ${secondaryLogoHtml ? `<div class="dh-r">${secondaryLogoHtml}</div>` : ''}
+  </header>
   <div class="sheet">
     <div class="card">
       <div class="head">
@@ -3856,11 +3894,18 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
     </div>
   </div>
   <footer class="doc-foot">
-    <div class="fl">
-      ${footerLogoHtml}
-      <div>${htmlEsc([opts.company.name, opts.company.footerText].filter(Boolean).join(' \u00b7 '))}</div>
+    <div class="fband">
+      ${footerLogoHtml ? `<div class="fmk">${footerLogoHtml}</div>` : ''}
+      <div class="fi">
+        <div class="nm">${htmlEsc(opts.company.legalName || opts.company.name)}</div>
+        ${opts.company.footerText ? `<div class="ln">${htmlEsc(opts.company.footerText)}</div>` : ''}
+        ${regLine ? `<div class="ln">${htmlEsc(regLine)}</div>` : ''}
+      </div>
     </div>
-    <div class="fr">Issued by ${htmlEsc(opts.issuedBy)} on ${htmlEsc(formatDocDateTime(opts.issuedAt))}${opts.verifyUrl ? ` \u00b7 ${htmlEsc(opts.verifyUrl)}` : ''}</div>
+    <div class="fstrip">
+      <span class="k">Document control</span>
+      <div class="ln">Issued by ${htmlEsc(opts.issuedBy)} on ${htmlEsc(formatDocDateTime(opts.issuedAt))}${opts.verifyUrl ? ' \u00b7 ' + htmlEsc(opts.verifyUrl) : ''}</div>
+    </div>
   </footer>
   <script src="/assets/print.js"></script>
 </body></html>`;
@@ -3876,11 +3921,12 @@ async function renderPdf(data: DocData, opts: DocumentRenderOpts): Promise<Buffe
   const status = statusOf(data, opts);
   const brand = brandOf(opts.company);
   const logoName = preloadLogo(doc, opts.company.logoUrl);
+  const secondaryLogoName = preloadSecondaryLogo(doc, opts.company.secondaryLogoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
   const head = letterheadMeta(data, opts, status);
-  doc.setNewPageHandler(() => drawRunningHeader(doc, head, brand, logoName));
-  drawLetterhead(doc, head, brand, logoName);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, head, brand, logoName, secondaryLogoName));
+  drawLetterhead(doc, head, brand, logoName, secondaryLogoName);
 
   doc.text(
     'Issued by ' + opts.issuedBy + ' on ' + formatDocDateTime(opts.issuedAt) + (opts.correlationId ? '  \u00b7  Ref ' + opts.correlationId : ''),
@@ -4177,6 +4223,8 @@ function renderJson(data: DocData, opts: DocumentRenderOpts): string {
           brandColor: c.brandColor,
           brandColorSecondary: c.brandColorSecondary,
           logoUrl: c.logoUrl,
+          secondaryLogoUrl: c.secondaryLogoUrl,
+          footerLogoUrl: c.footerLogoUrl,
           branch: c.branchName
             ? { name: c.branchName, address: c.branchAddress, phone: c.branchPhone, email: c.branchEmail }
             : null,

@@ -271,7 +271,7 @@ export default function Shell() {
           <BrandWordmark
             size="md"
             className="topbar-brand-alt hide-phone"
-            logoUrl={company.footer_logo_url}
+            logoUrl={company.secondary_logo_url}
             title={`${brandCompany.name} logo`}
           />
         </header>

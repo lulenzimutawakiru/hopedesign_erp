@@ -17,7 +17,9 @@ export interface CompanyBrand {
   website?: string;
   /** Uploaded primary logo, rendered at the left of the header. Absolute https URL. */
   logoUrl?: string;
-  /** Uploaded secondary logo, rendered at the far right of the header. */
+  /** Uploaded secondary logo, rendered at the far right of the header band. */
+  secondaryLogoUrl?: string;
+  /** Uploaded footer logo, rendered in the document-control footer. */
   footerLogoUrl?: string;
   /** Primary brand colour for the header band. Falls back to the brand navy. */
   brandColor?: string;
@@ -202,9 +204,14 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
     maxWidth: 220,
     alt: company.name,
   });
-  const rightMark = emailLogoHtml(company.footerLogoUrl, {
-    height: 24,
-    maxWidth: 140,
+  const headerRightMark = emailLogoHtml(company.secondaryLogoUrl, {
+    height: 26,
+    maxWidth: 160,
+    alt: company.name,
+  });
+  const footerMark = emailLogoHtml(company.footerLogoUrl, {
+    height: 26,
+    maxWidth: 150,
     alt: company.name,
   });
   const wordmark = leftMark
@@ -269,6 +276,7 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
                   ${wordmark}
                   ${tagline ? `<div style="font-size:11px;color:${BRAND_COLORS.softMuted};letter-spacing:.5px;margin-top:6px;line-height:1.5;">${tagline}</div>` : ''}
                 </td>
+                <td align="right" style="vertical-align:middle;padding-left:16px;">${headerRightMark}</td>
               </tr>
             </table>
           </td>
@@ -297,7 +305,7 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
                   <div style="font-size:14px;font-weight:800;color:${BRAND_COLORS.navy};letter-spacing:.4px;">${escapeHtml(company.name)}</div>
                   ${tagline ? `<div style="font-size:12px;color:${BRAND_COLORS.muted};margin-top:2px;">${tagline}</div>` : ''}
                 </td>
-                <td align="right" style="vertical-align:middle;">${rightMark}</td>
+                <td align="right" style="vertical-align:middle;">${footerMark}</td>
               </tr>
             </table>
           </td>

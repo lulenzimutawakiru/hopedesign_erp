@@ -205,6 +205,8 @@ export interface ExcelBrandSheet {
 export interface ExcelBrandImages {
   logoId?: number;
   logoAspect?: number;
+  secondaryLogoId?: number;
+  secondaryLogoAspect?: number;
   footerLogoId?: number;
   footerLogoAspect?: number;
 }
@@ -226,7 +228,7 @@ export function applyExcelBrandHeader(
   const merge = (n: number) => ws.mergeCells(`A${n}`, `${last}${n}`);
 
   let logoBandRow = 0;
-  if (images && images.logoId != null) {
+  if (images && (images.logoId != null || images.secondaryLogoId != null)) {
     const band = ws.addRow([]);
     band.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
     band.height = EXCEL_LOGO_BAND_PT;
@@ -292,6 +294,12 @@ export function applyExcelBrandHeader(
       const w = Math.round(Math.max(24, Math.min(150, (images.logoAspect ?? 3) * h)));
       ws.addImage(images.logoId, { tl: { col: 0.06, row: rowOffset(h) }, ext: { width: w, height: h } });
     }
+    if (images.secondaryLogoId != null) {
+      const h = 22;
+      const w = Math.round(Math.max(24, Math.min(130, (images.secondaryLogoAspect ?? 3) * h)));
+      const col = Math.max(0.5, cols - w / 64 - 0.1);
+      ws.addImage(images.secondaryLogoId, { tl: { col, row: rowOffset(h) }, ext: { width: w, height: h } });
+    }
   }
   const spacer = ws.addRow([]);
   return spacer.number + 1;
@@ -349,6 +357,7 @@ export interface CompanyProfile {
   brandColor: string;
   brandColorSecondary: string;
   logoUrl: string;
+  secondaryLogoUrl: string;
   footerLogoUrl: string;
   signatureUrl: string;
   autoSignEnabled: boolean;
@@ -438,6 +447,7 @@ export async function loadCompanyProfile(
     brandColor: hexOf('general.brand_color', '#1261A0'),
     brandColorSecondary: hexOf('general.brand_color_secondary', '#00A6A6'),
     logoUrl: getStr('general.logo_url', ''),
+    secondaryLogoUrl: getStr('general.secondary_logo_url', ''),
     footerLogoUrl: getStr('general.footer_logo_url', ''),
     signatureUrl: getStr('general.signature_url', ''),
     autoSignEnabled: getBool('documents.auto_sign_enabled', true),
@@ -462,6 +472,7 @@ export interface PublicCompanyInfo {
   brand_color: string;
   brand_color_secondary: string;
   logo_url: string;
+  secondary_logo_url: string;
   footer_logo_url: string;
   verify_url: string;
 }
@@ -484,6 +495,7 @@ export function toPublicCompany(p: CompanyProfile): PublicCompanyInfo {
     brand_color: p.brandColor,
     brand_color_secondary: p.brandColorSecondary,
     logo_url: p.logoUrl,
+    secondary_logo_url: p.secondaryLogoUrl,
     footer_logo_url: p.footerLogoUrl,
     verify_url: p.verifyUrl,
   };
@@ -663,17 +675,19 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   const contactHtml = [...companyContactLines(c), ...companyRegLines(c)]
     .map((line) => `<div class="c-line">${esc(line)}</div>`)
     .join('');
-  // Branding is driven entirely by the uploaded brand assets. When no asset has
-  // been uploaded the letterhead degrades to text only - there is no hard-coded
-  // vector mark to fall back to.
+  // Branding is driven entirely by the uploaded brand assets. Three distinct
+  // slots are supported: primary (left of the header), secondary (right of the
+  // header) and footer (the footer strip of every page). A slot with no uploaded
+  // asset is simply omitted - there is no hard-coded vector mark to fall back to.
   const logoSrc = c.logoUrl.trim();
   const brandMarkHtml = /^https?:\/\//i.test(logoSrc)
     ? `<img class="brand-logo" src="${esc(logoSrc)}" alt="${esc(c.name)} logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
     : '';
+  const secondaryLogoSrc = c.secondaryLogoUrl.trim();
+  const secondaryLogoHtml = /^https?:\/\//i.test(secondaryLogoSrc)
+    ? `<img class="secondary-logo" src="${esc(secondaryLogoSrc)}" alt="${esc(c.name)} secondary logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
+    : '';
   const footerLogoSrc = c.footerLogoUrl.trim();
-  // The secondary uploaded asset is the *footer* mark. It is drawn in the
-  // document footer only - the letterhead carries a single primary logo so the
-  // header reads as one lockup on every document.
   const footerLogoHtml = /^https?:\/\//i.test(footerLogoSrc)
     ? `<img class="foot-logo" src="${esc(footerLogoSrc)}" alt="${esc(c.name)} footer logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
     : '';
@@ -721,9 +735,14 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
     )
     .join('') + photoHtml;
 
-  const footLeft = [c.footerText, c.legalName || c.name, c.tin ? `TIN ${c.tin}` : '', c.vrn ? `VRN ${c.vrn}` : '']
+  const footLegal = c.legalName || c.name;
+  // Footer identity block: legal name, the configured footer sentence and the
+  // registration identifiers, each on its own line so nothing breaks mid-token.
+  const footReg = [c.tin ? `TIN ${c.tin}` : '', c.vrn ? `VRN ${c.vrn}` : '', c.code ? `Co. ${c.code}` : '']
     .filter(Boolean)
     .join('  ·  ');
+  // Document-control strip: who issued this document, its reference and the
+  // integrity fingerprint — the audit-facing facts of the exact copy in hand.
   const footRight = [
     stampRaw,
     opts.correlationId ? `Ref ${opts.correlationId}` : '',
@@ -769,6 +788,8 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   .co-tag { color: var(--teal); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin: 2px 0 6px; font-weight: 600; }
   .c-line { color: var(--muted); font-size: 9.5px; line-height: 1.45; }
   .lh-doc { text-align: right; flex: 0 1 auto; max-width: 52%; min-width: 0; border-left: 1px solid var(--line); padding-left: 20px; }
+  .lh-sec { display: flex; justify-content: flex-end; align-items: center; min-height: 30px; margin-bottom: 9px; }
+  .secondary-logo { height: 30px; width: auto; max-width: 150px; object-fit: contain; display: block; }
   .doc-kicker { font-size: 8.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--teal); font-weight: 700; margin-bottom: 4px; }
   .doc-title { font-size: 20px; font-weight: 700; color: var(--navy); letter-spacing: 0.04em; margin: 0; line-height: 1.15; }
   .doc-no { font-weight: 700; color: var(--teal); font-size: 12.5px; margin-top: 4px; letter-spacing: 0.02em; }
@@ -830,11 +851,30 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   .auth-value.mono { font-family: 'IBM Plex Mono', Consolas, Menlo, monospace; font-size: 8px; color: #445; }
   .auth-value.vu { color: var(--blue); text-decoration: none; }
   .auth-note { margin: 4px 0 0; font-size: 8.5px; color: var(--muted); line-height: 1.5; }
-  .foot { position: relative; margin: 18px 32px 0; padding-top: 12px; border-top: 2px solid var(--navy); color: var(--muted); font-size: 8.5px; display: flex; justify-content: space-between; gap: 16px; }
-  .foot .foot-l { display: flex; align-items: center; min-width: 0; }
-  .foot-logo { height: 30px; width: auto; max-width: 130px; object-fit: contain; flex: 0 0 auto; margin-right: 10px; }
-  .foot .r { text-align: right; }
-  .foot::before { content: ''; position: absolute; top: 4px; left: 0; right: 0; height: 1.4px; background: var(--teal); }
+  /* Two-part document footer: an identity band (footer mark + legal identity)
+     sitting on a document-control strip that carries the audit-facing facts.
+     The band is aligned on a shared centre line so the mark and the identity
+     block never look staggered; the strip is a full-bleed white rail. */
+  .foot {
+    position: relative;
+    margin: 26px 32px 0;
+    padding: 0;
+    background: var(--fill);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 8.5px;
+  }
+  .foot::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2.4px; background: var(--navy); }
+  .foot::after { content: ''; position: absolute; top: 2.4px; left: 0; right: 0; height: 1.2px; background: var(--teal); }
+  .foot-inner { display: flex; align-items: center; gap: 18px; padding: 15px 18px 13px; }
+  .foot-mark { flex: 0 0 auto; max-width: 178px; padding-right: 18px; border-right: 1px solid #B9CAD8; }
+  .foot-logo { height: 34px; width: auto; max-width: 152px; object-fit: contain; display: block; }
+  .foot-id { flex: 1 1 auto; min-width: 0; }
+  .foot-id .nm { font-size: 10.5px; font-weight: 700; color: var(--navy); text-transform: uppercase; letter-spacing: 0.07em; }
+  .foot-line { font-size: 8.5px; color: var(--muted); line-height: 1.5; margin-top: 2.5px; }
+  .foot-strip { display: flex; align-items: center; gap: 14px; padding: 6.5px 18px 7px; border-top: 1px solid var(--line); background: #fff; }
+  .foot-strip .foot-line { flex: 1 1 auto; min-width: 0; margin-top: 0; }
+  .foot-k { flex: 0 0 auto; font-size: 7px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
   @page { size: A4; margin: 12mm 12mm 14mm; }
   @media print {
     .sheet { max-width: none; }
@@ -858,6 +898,7 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
         </div>
       </div>
       <div class="lh-doc">
+        ${secondaryLogoHtml ? `<div class="lh-sec">${secondaryLogoHtml}</div>` : ''}
         <div class="doc-kicker">${esc(kicker)}</div>
         <h1 class="doc-title">${esc(opts.title)}</h1>
         ${opts.docNo ? `<div class="doc-no">${esc(opts.docNo)}</div>` : ''}
@@ -895,11 +936,18 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   }
 
   <footer class="foot">
-    <div class="foot-l">
-      ${footerLogoHtml}
-      <div>${esc(footLeft)}</div>
+    <div class="foot-inner">
+      ${footerLogoHtml ? `<div class="foot-mark">${footerLogoHtml}</div>` : ''}
+      <div class="foot-id">
+        <div class="nm">${esc(footLegal)}</div>
+        ${c.footerText ? `<div class="foot-line">${esc(c.footerText)}</div>` : ''}
+        ${footReg ? `<div class="foot-line">${esc(footReg)}</div>` : ''}
+      </div>
     </div>
-    <div class="r">${esc(footRight)}</div>
+    <div class="foot-strip">
+      <span class="foot-k">Document control</span>
+      ${footRight ? `<div class="foot-line">${esc(footRight)}</div>` : ''}
+    </div>
   </footer>
 </div>
 <script src="/assets/print.js"></script>

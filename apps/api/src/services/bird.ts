@@ -84,6 +84,7 @@ export async function resolveEmailBrand(): Promise<CompanyBrand> {
       email: profile.email || undefined,
       website: profile.website || undefined,
       logoUrl: profile.logoUrl || undefined,
+      secondaryLogoUrl: profile.secondaryLogoUrl || undefined,
       footerLogoUrl: profile.footerLogoUrl || undefined,
       brandColor: profile.brandColor || undefined,
       brandColorSecondary: profile.brandColorSecondary || undefined,

@@ -198,6 +198,40 @@ function wrapCellText(text: string, size: number, bold: boolean, maxWidth: numbe
 }
 
 /**
+ * Wrap a footer line so it never runs past the printable width. Segments
+ * separated by a middot are kept whole wherever possible, because a break that
+ * leaves a dangling separator reads as a typo in print; a single over-long
+ * segment is hard-broken like a table cell.
+ */
+function packFooterLine(text: string, size: number, maxWidth: number): string[] {
+  const parts = String(text)
+    .split(/\s*\u00b7\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return [''];
+  if (parts.length === 1) return wrapCellText(parts[0], size, false, maxWidth);
+  const out: string[] = [];
+  let line = '';
+  for (const part of parts) {
+    const candidate = line ? `${line}  \u00b7  ${part}` : part;
+    if (textWidth(candidate, size, false) <= maxWidth) {
+      line = candidate;
+      continue;
+    }
+    if (line) out.push(line);
+    if (textWidth(part, size, false) <= maxWidth) {
+      line = part;
+      continue;
+    }
+    const broken = wrapCellText(part, size, false, maxWidth);
+    for (let i = 0; i < broken.length - 1; i++) out.push(broken[i]);
+    line = broken[broken.length - 1];
+  }
+  if (line) out.push(line);
+  return out.length ? out : [''];
+}
+
+/**
  * Compute per-column widths for a table. Explicit weights win; otherwise the
  * available width is split proportionally to each column's natural text width
  * (header + sampled cell content) so narrow fields stay narrow and long text
@@ -568,26 +602,63 @@ export class PdfDoc {
     const accent: Rgb = opts.accent ?? [0, 0.651, 0.651];
     const ruleY = BOTTOM - 6;
     const logo = opts.logoName ? this.images.find((im) => im.name === opts.logoName) : undefined;
-    // The footer mark is the uploaded secondary brand asset. It is sized from
-    // its own aspect ratio so the wordmark stays legible in print, and it is
-    // vertically centred on the footer text block by matching baselines.
-    const logoH = opts.logoHeight ?? 13;
+    // The footer mark is the dedicated uploaded footer asset (a different
+    // artwork from the two header marks). It is sized from its own aspect ratio
+    // so the wordmark stays legible in print, and it is vertically centred on
+    // the footer text block.
+    const logoH = opts.logoHeight ?? 14;
     const logoW = logo ? Math.min(opts.logoMaxWidth ?? 132, Math.max(20, (logo.width / logo.height) * logoH)) : 0;
-    const textX = MARGIN + (logoW ? logoW + 10 : 0);
-    const lastBaseline = ruleY - 4 - Math.max(lines.length, 1) * size * 1.28;
-    const logoY = Math.min(lastBaseline - 2, ruleY - 2.2 - 4 - logoH);
+    const textX = MARGIN + (logoW ? logoW + 14 : 0);
+    const rightEdge = this.pageW - MARGIN;
+    const logical = lines.map((ln) => String(ln ?? '').trim()).filter((ln) => ln.length > 0);
+    const lineStep = size * 1.32;
+    // Callers pass logical lines - a bold identity line followed by document
+    // control lines - that can be far wider than the space left once the footer
+    // mark is drawn, so each one is wrapped before it is painted. The opening
+    // line also reserves room for the page counter, which is what previously
+    // let a long company line run under the page number.
+    const counterW = textWidth(`Page ${this.pages.length} of ${this.pages.length}`, size, false);
+    const leadMaxW = Math.max(80, rightEdge - textX - counterW - 18);
+    const restMaxW = Math.max(80, rightEdge - textX);
+    const phys: string[] = [];
+    let leadCount = 0;
+    logical.forEach((ln, i) => {
+      const parts = packFooterLine(ln, size, i === 0 ? leadMaxW : restMaxW);
+      if (i === 0) leadCount = parts.length;
+      for (const part of parts) phys.push(part);
+    });
+    const count = Math.max(phys.length, 1);
+    const firstBaseline = ruleY - 5 - lineStep;
+    const lastBaseline = ruleY - 5 - count * lineStep;
+    const blockTop = ruleY - 4;
+    const blockBottom = lastBaseline - 1.6;
+    const logoY = (blockTop + blockBottom) / 2 - logoH / 2;
+    const dividerX = MARGIN + logoW + 7;
+    // Hairline that keeps the registration block visually separate from the
+    // bold identity line above it.
+    const controlRuleY = leadCount < phys.length ? firstBaseline - leadCount * lineStep + lineStep * 0.5 : 0;
     for (let p = 0; p < this.pages.length; p++) {
       const page = this.pages[p];
-      page.push(`q 1.6 w ${rgb(navy, true)} ${fmt(MARGIN)} ${fmt(ruleY)} m ${fmt(this.pageW - MARGIN)} ${fmt(ruleY)} l S Q`);
-      page.push(`q 0.7 w ${rgb(accent, true)} ${fmt(MARGIN)} ${fmt(ruleY - 2.2)} m ${fmt(this.pageW - MARGIN)} ${fmt(ruleY - 2.2)} l S Q`);
+      page.push(`q 1.6 w ${rgb(navy, true)} ${fmt(MARGIN)} ${fmt(ruleY)} m ${fmt(rightEdge)} ${fmt(ruleY)} l S Q`);
+      page.push(`q 0.7 w ${rgb(accent, true)} ${fmt(MARGIN)} ${fmt(ruleY - 2.2)} m ${fmt(rightEdge)} ${fmt(ruleY - 2.2)} l S Q`);
       if (logo) page.push(`q ${fmt(logoW)} 0 0 ${fmt(logoH)} ${fmt(MARGIN)} ${fmt(logoY)} cm /${logo.name} Do Q`);
-      lines.forEach((ln, i) => {
-        const ly = ruleY - 4 - (i + 1) * size * 1.28;
-        page.push(`q ${rgb(color)} BT /F1 ${size} Tf 1 0 0 1 ${fmt(textX)} ${fmt(ly)} Tm ${pdfString(ln)} Tj ET Q`);
+      if (logo) {
+        page.push(`q 0.5 w ${rgb([0.85, 0.88, 0.91], true)} ${fmt(dividerX)} ${fmt(blockBottom)} m ${fmt(dividerX)} ${fmt(blockTop)} l S Q`);
+      }
+      if (controlRuleY) {
+        page.push(`q 0.5 w ${rgb([0.85, 0.88, 0.91], true)} ${fmt(textX)} ${fmt(controlRuleY)} m ${fmt(rightEdge)} ${fmt(controlRuleY)} l S Q`);
+      }
+      phys.forEach((ln, i) => {
+        const ly = ruleY - 5 - (i + 1) * lineStep;
+        const font = i === 0 ? 'F2' : 'F1';
+        const ink: Rgb = i === 0 ? navy : color;
+        page.push(`q ${rgb(ink)} BT /${font} ${size} Tf 1 0 0 1 ${fmt(textX)} ${fmt(ly)} Tm ${pdfString(ln)} Tj ET Q`);
       });
       const pageLabel = `Page ${p + 1} of ${this.pages.length}`;
       const pw = textWidth(pageLabel, size, false);
-      page.push(`q ${rgb(color)} BT /F1 ${size} Tf 1 0 0 1 ${fmt(this.pageW - MARGIN - pw)} ${fmt(ruleY - 4 - size * 1.28)} Tm ${pdfString(pageLabel)} Tj ET Q`);
+      // The opening line always leaves room for the counter, so the two share
+      // the first baseline without ever overlapping.
+      page.push(`q ${rgb(color)} BT /F1 ${size} Tf 1 0 0 1 ${fmt(rightEdge - pw)} ${fmt(firstBaseline)} Tm ${pdfString(pageLabel)} Tj ET Q`);
     }
   }
 

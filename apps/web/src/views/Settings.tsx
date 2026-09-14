@@ -54,7 +54,13 @@ const PHONE_RE = /^\+?[0-9\s().-]{6,}$/;
 const EMAIL_KEY_RE = /_email$/i;
 
 /** Branding file URLs are owned by the upload cards, never typed or sent on PATCH. */
-const UPLOAD_MANAGED_KEYS = new Set(['logo_url', 'favicon_url', 'signature_url', 'footer_logo_url']);
+const UPLOAD_MANAGED_KEYS = new Set([
+  'logo_url',
+  'secondary_logo_url',
+  'favicon_url',
+  'signature_url',
+  'footer_logo_url',
+]);
 
 const errId = (cat: string, key: string) => `${cat}:${key}`;
 
@@ -107,6 +113,9 @@ function CompanyProfilePreview({ drafts }: { drafts: Record<string, Record<strin
   const website = val('website', '');
   const support = val('support_email', '');
   const logo = /^https?:\/\//i.test(val('logo_url', '').trim()) ? val('logo_url', '').trim() : '';
+  const secondaryLogo = /^https?:\/\//i.test(val('secondary_logo_url', '').trim())
+    ? val('secondary_logo_url', '').trim()
+    : '';
   const footerLogo = /^https?:\/\//i.test(val('footer_logo_url', '').trim()) ? val('footer_logo_url', '').trim() : '';
   const contact = [phone, email, website].filter(Boolean).join(' | ');
   return (
@@ -115,7 +124,7 @@ function CompanyProfilePreview({ drafts }: { drafts: Record<string, Record<strin
         <div>
           <h3>Company profile preview</h3>
           <span className="muted" style={{ fontSize: 12 }}>
-            Live preview of how your logo, colours and details appear on branded exports.
+            Live preview of the header marks, document control footer, colours and details used on branded exports.
           </span>
         </div>
         <span className="badge badge-blue">Live</span>
@@ -154,10 +163,10 @@ function CompanyProfilePreview({ drafts }: { drafts: Record<string, Record<strin
               </div>
             </div>
             <div className="brand-preview-doc">
-              {footerLogo ? (
+              {secondaryLogo ? (
                 <img
                   className="brand-preview-logo brand-preview-logo-alt"
-                  src={footerLogo}
+                  src={secondaryLogo}
                   alt={`${name} secondary logo`}
                   referrerPolicy="no-referrer"
                   onError={(e) => {
@@ -182,7 +191,34 @@ function CompanyProfilePreview({ drafts }: { drafts: Record<string, Record<strin
               <i style={{ background: teal }} /> Secondary {teal.toUpperCase()}
             </span>
           </div>
-          <div className="brand-preview-footer" style={{ background: navy }} />
+          <div className="brand-preview-footer">
+            <span className="brand-preview-footer-rule" style={{ background: navy }} />
+            <span className="brand-preview-footer-rule brand-preview-footer-rule-2" style={{ background: teal }} />
+            <div className="brand-preview-footer-band">
+              {footerLogo ? (
+                <img
+                  className="brand-preview-footer-logo"
+                  src={footerLogo}
+                  alt={`${name} footer logo`}
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
+              ) : null}
+              <span className="brand-preview-footer-nm" style={{ color: navy }}>
+                {name}
+              </span>
+            </div>
+            <div className="brand-preview-footer-strip">
+              <span className="brand-preview-footer-k" style={{ color: teal }}>
+                Document control
+              </span>
+              <span className="brand-preview-footer-val">
+                Printed in the footer of every branded document
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -285,6 +321,102 @@ function LogoUploadCard({
   );
 }
 
+function SecondaryLogoUploadCard({
+  editable,
+  secondaryLogoUrl,
+  onApplied,
+  showToast,
+}: {
+  editable: boolean;
+  secondaryLogoUrl: string;
+  onApplied: (data: SettingCategory) => void;
+  showToast: (kind: 'ok' | 'err', text: string) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  const upload = async (file: File) => {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await api<{ data: SettingCategory }>('/api/settings/secondary-logo', { method: 'POST', body: fd });
+      onApplied(r.data);
+      showToast('ok', 'Secondary logo uploaded');
+    } catch (e) {
+      showToast('err', e instanceof Error ? e.message : 'Secondary logo upload failed');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const remove = async () => {
+    setRemoving(true);
+    try {
+      const r = await api<{ data: SettingCategory }>('/api/settings/secondary-logo', { method: 'DELETE' });
+      onApplied(r.data);
+      showToast('ok', 'Secondary logo removed');
+    } catch (e) {
+      showToast('err', e instanceof Error ? e.message : 'Could not remove secondary logo');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <section className="card logo-upload-card">
+      <div className="card-head">
+        <div>
+          <h3>Secondary logo</h3>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Upload a PNG or JPG logo (ideally with transparency). Printed on the right-hand side of the header on
+            every branded document, and shown at the right of the app header. Leave blank for a single-logo header.
+          </span>
+        </div>
+      </div>
+      <div className="card-pad">
+        <div className="logo-upload-row">
+          <div className="logo-upload-preview">
+            {secondaryLogoUrl ? (
+              <img className="brand-preview-logo" src={secondaryLogoUrl} alt="Secondary logo" />
+            ) : (
+              <span className="muted" style={{ fontSize: 12 }}>No secondary logo uploaded</span>
+            )}
+          </div>
+          {editable ? (
+            <div className="logo-upload-actions">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg,.png,.jpg,.jpeg"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) upload(f);
+                }}
+              />
+              <button className="btn btn-sm btn-primary" disabled={uploading} onClick={() => fileRef.current?.click()}>
+                {uploading ? 'Uploading...' : secondaryLogoUrl ? 'Replace secondary logo' : 'Upload secondary logo'}
+              </button>
+              {secondaryLogoUrl && (
+                <button className="btn btn-sm btn-ghost-danger" disabled={removing} onClick={remove}>
+                  {removing ? 'Removing...' : 'Remove'}
+                </button>
+              )}
+            </div>
+          ) : (
+            <span className="muted" style={{ fontSize: 12 }}>
+              You need the "Administer settings" permission to change the secondary logo.
+            </span>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function FooterLogoUploadCard({
   editable,
   footerLogoUrl,
@@ -307,9 +439,9 @@ function FooterLogoUploadCard({
       fd.append('file', file);
       const r = await api<{ data: SettingCategory }>('/api/settings/footer-logo', { method: 'POST', body: fd });
       onApplied(r.data);
-      showToast('ok', 'Secondary logo uploaded');
+      showToast('ok', 'Footer logo uploaded');
     } catch (e) {
-      showToast('err', e instanceof Error ? e.message : 'Secondary logo upload failed');
+      showToast('err', e instanceof Error ? e.message : 'Footer logo upload failed');
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -321,9 +453,9 @@ function FooterLogoUploadCard({
     try {
       const r = await api<{ data: SettingCategory }>('/api/settings/footer-logo', { method: 'DELETE' });
       onApplied(r.data);
-      showToast('ok', 'Secondary logo removed');
+      showToast('ok', 'Footer logo removed');
     } catch (e) {
-      showToast('err', e instanceof Error ? e.message : 'Could not remove secondary logo');
+      showToast('err', e instanceof Error ? e.message : 'Could not remove footer logo');
     } finally {
       setRemoving(false);
     }
@@ -333,10 +465,10 @@ function FooterLogoUploadCard({
     <section className="card logo-upload-card">
       <div className="card-head">
         <div>
-          <h3>Secondary logo</h3>
+          <h3>Footer logo</h3>
           <span className="muted" style={{ fontSize: 12 }}>
-            Upload a PNG or JPG logo (ideally with transparency). Used as the right-hand mark in the app header,
-            and in the footer of branded exports and letterheads.
+            Upload a PNG or JPG mark for the document control footer. It is printed in the footer of every branded
+            document, beneath the navy and teal rules. Leave blank and the footer prints with text only.
           </span>
         </div>
       </div>
@@ -344,9 +476,9 @@ function FooterLogoUploadCard({
         <div className="logo-upload-row">
           <div className="logo-upload-preview">
             {footerLogoUrl ? (
-              <img className="brand-preview-logo" src={footerLogoUrl} alt="Secondary logo" />
+              <img className="brand-preview-logo" src={footerLogoUrl} alt="Footer logo" />
             ) : (
-              <span className="muted" style={{ fontSize: 12 }}>No secondary logo uploaded</span>
+              <span className="muted" style={{ fontSize: 12 }}>No footer logo uploaded</span>
             )}
           </div>
           {editable ? (
@@ -362,7 +494,7 @@ function FooterLogoUploadCard({
                 }}
               />
               <button className="btn btn-sm btn-primary" disabled={uploading} onClick={() => fileRef.current?.click()}>
-                {uploading ? 'Uploading...' : footerLogoUrl ? 'Replace secondary logo' : 'Upload secondary logo'}
+                {uploading ? 'Uploading...' : footerLogoUrl ? 'Replace footer logo' : 'Upload footer logo'}
               </button>
               {footerLogoUrl && (
                 <button className="btn btn-sm btn-ghost-danger" disabled={removing} onClick={remove}>
@@ -372,7 +504,7 @@ function FooterLogoUploadCard({
             </div>
           ) : (
             <span className="muted" style={{ fontSize: 12 }}>
-              You need the "Administer settings" permission to change the secondary logo.
+              You need the "Administer settings" permission to change the footer logo.
             </span>
           )}
         </div>
@@ -722,7 +854,15 @@ export default function Settings() {
       const g = prev.general ?? {};
       const row: Record<string, Draft> = { ...g };
       for (const [key, s] of Object.entries(data.settings)) {
-        if (key === 'logo_url' || key === 'favicon_url' || key === 'signature_url' || key === 'footer_logo_url') row[key] = toDraft(s.value);
+        if (
+          key === 'logo_url' ||
+          key === 'secondary_logo_url' ||
+          key === 'favicon_url' ||
+          key === 'signature_url' ||
+          key === 'footer_logo_url'
+        ) {
+          row[key] = toDraft(s.value);
+        }
       }
       return { ...prev, general: row };
     });
@@ -1143,6 +1283,12 @@ export default function Settings() {
                   <LogoUploadCard
                     editable={editable}
                     logoUrl={/^https?:\/\//i.test(String(drafts.general?.logo_url ?? '').trim()) ? String(drafts.general?.logo_url ?? '').trim() : ''}
+                    onApplied={onLogoApplied}
+                    showToast={showToast}
+                  />
+                  <SecondaryLogoUploadCard
+                    editable={editable}
+                    secondaryLogoUrl={/^https?:\/\//i.test(String(drafts.general?.secondary_logo_url ?? '').trim()) ? String(drafts.general?.secondary_logo_url ?? '').trim() : ''}
                     onApplied={onLogoApplied}
                     showToast={showToast}
                   />

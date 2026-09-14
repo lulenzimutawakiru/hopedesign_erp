@@ -85,6 +85,7 @@ describe('branded document exports', () => {
     await api.delete('/api/settings/favicon').set(auth(token));
     await api.delete('/api/settings/signature').set(auth(token));
     await api.delete('/api/settings/footer-logo').set(auth(token));
+    await api.delete('/api/settings/secondary-logo').set(auth(token));
     await api.post('/api/settings/reset').set(auth(token)).send({ category: 'general' });
 
     const plain = await api.get('/api/reports/inventory-summary?format=print').set(auth(token));
@@ -92,6 +93,7 @@ describe('branded document exports', () => {
     expect(plain.text).toContain('--navy: #1261A0');
     expect(plain.text).toContain('--teal: #00A6A6');
     expect(plain.text).not.toContain('class="brand-logo"');
+    expect(plain.text).not.toContain('class="secondary-logo"');
     expect(plain.text).not.toContain('class="foot-logo"');
     // Nothing is drawn from built-in artwork: the only vector mark left is the
     // 16px authenticity icon stamped on the verification block.
@@ -104,6 +106,7 @@ describe('branded document exports', () => {
         brand_color: '#123456',
         brand_color_secondary: '#654321',
         logo_url: 'https://example.com/hope-logo.png',
+        secondary_logo_url: 'https://example.com/hope-secondary-logo.png',
         footer_logo_url: 'https://example.com/hope-footer-logo.png',
       },
     });
@@ -115,6 +118,7 @@ describe('branded document exports', () => {
     expect(json.body.meta.company.brandColor).toBe('#123456');
     expect(json.body.meta.company.brandColorSecondary).toBe('#654321');
     expect(json.body.meta.company.logoUrl).toBe('https://example.com/hope-logo.png');
+    expect(json.body.meta.company.secondaryLogoUrl).toBe('https://example.com/hope-secondary-logo.png');
 
     const print = await api.get('/api/reports/inventory-summary?format=print').set(auth(token));
     expect(print.status).toBe(200);
@@ -122,11 +126,14 @@ describe('branded document exports', () => {
     expect(print.text).toContain('--teal: #654321');
     expect(print.text).toContain('class="brand-logo"');
     expect(print.text).toContain('hope-logo.png');
+    expect(print.text).toContain('class="secondary-logo"');
+    expect(print.text).toContain('hope-secondary-logo.png');
     expect(print.text).toContain('class="foot-logo"');
     expect(print.text).toContain('hope-footer-logo.png');
 
     await api.post('/api/settings/reset').set(auth(token)).send({ category: 'general' });
     await api.delete('/api/settings/logo').set(auth(token));
+    await api.delete('/api/settings/secondary-logo').set(auth(token));
     await api.delete('/api/settings/footer-logo').set(auth(token));
   });
 });

@@ -17,6 +17,7 @@ export interface CompanyProfile {
   brand_color: string;
   brand_color_secondary: string;
   logo_url: string;
+  secondary_logo_url: string;
   footer_logo_url: string;
   verify_url: string;
 }
@@ -38,6 +39,7 @@ export const FALLBACK_COMPANY: CompanyProfile = {
   brand_color: '#1261A0',
   brand_color_secondary: '#00A6A6',
   logo_url: '',
+  secondary_logo_url: '',
   footer_logo_url: '',
   verify_url: '/verify',
 };

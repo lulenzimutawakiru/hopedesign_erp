@@ -172,6 +172,7 @@ describe('app settings: catalogue, upsert, audit, reset and RBAC', () => {
       category: 'general',
       values: {
         logo_url: 'https://example.com/logo.png',
+        secondary_logo_url: 'https://example.com/secondary-logo.png',
         favicon_url: 'https://example.com/favicon.ico',
         signature_url: 'https://example.com/signature.png',
         footer_logo_url: 'https://example.com/footer-logo.png',
@@ -185,6 +186,8 @@ describe('app settings: catalogue, upsert, audit, reset and RBAC', () => {
     const general = res.body.data.find((c: SettingPayload) => c.category === 'general');
     expect(general!.settings.logo_url.value).toBe('https://example.com/logo.png');
     expect(general!.settings.logo_url.saved).toBe(true);
+    expect(general!.settings.secondary_logo_url.value).toBe('https://example.com/secondary-logo.png');
+    expect(general!.settings.secondary_logo_url.saved).toBe(true);
     expect(general!.settings.favicon_url.value).toBe('https://example.com/favicon.ico');
     expect(general!.settings.favicon_url.saved).toBe(true);
     expect(general!.settings.signature_url.value).toBe('https://example.com/signature.png');
@@ -194,6 +197,7 @@ describe('app settings: catalogue, upsert, audit, reset and RBAC', () => {
     expect(general!.settings.company_tagline.saved).toBe(false);
 
     await api.delete('/api/settings/logo').set(auth(token));
+    await api.delete('/api/settings/secondary-logo').set(auth(token));
     await api.delete('/api/settings/favicon').set(auth(token));
     await api.delete('/api/settings/signature').set(auth(token));
     await api.delete('/api/settings/footer-logo').set(auth(token));

@@ -82,7 +82,7 @@ export function BrandMark({
   );
 }
 
-/** Secondary brand mark for the right-hand header slot, from the uploaded `footer_logo_url`. */
+/** Secondary brand mark for the right-hand header slot, from the uploaded `secondary_logo_url`. */
 export function BrandWordmark({
   size = 'md',
   title,

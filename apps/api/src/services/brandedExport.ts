@@ -258,6 +258,11 @@ function readStoredFooterLogo(footerLogoUrl: string): { bytes: Buffer; ext: stri
   return readStoredBrandingFile(footerLogoUrl, 'footer-logo');
 }
 
+/** Read the uploaded secondary (header-right) logo for a tenant/company from local storage. */
+function readStoredSecondaryLogo(secondaryLogoUrl: string): { bytes: Buffer; ext: string } | null {
+  return readStoredBrandingFile(secondaryLogoUrl, 'secondary-logo');
+}
+
 /** Preload the stored company logo into the PDF and return its XObject name. */
 export function preloadLogo(doc: PdfDoc, logoUrl: string): string | undefined {
   if (!logoUrl) return undefined;
@@ -269,6 +274,13 @@ export function preloadLogo(doc: PdfDoc, logoUrl: string): string | undefined {
 export function preloadFooterLogo(doc: PdfDoc, footerLogoUrl: string): string | undefined {
   if (!footerLogoUrl) return undefined;
   const file = readStoredFooterLogo(footerLogoUrl);
+  return file ? doc.addImage(file.bytes) ?? undefined : undefined;
+}
+
+/** Preload the stored secondary (header-right) logo and return its XObject name. */
+export function preloadSecondaryLogo(doc: PdfDoc, secondaryLogoUrl: string): string | undefined {
+  if (!secondaryLogoUrl) return undefined;
+  const file = readStoredSecondaryLogo(secondaryLogoUrl);
   return file ? doc.addImage(file.bytes) ?? undefined : undefined;
 }
 
@@ -291,14 +303,14 @@ export interface ExcelImageWorkbook {
 
 export function excelBrandImages(
   wb: unknown,
-  company: { logoUrl: string; footerLogoUrl: string }
+  company: { logoUrl: string; secondaryLogoUrl?: string; footerLogoUrl: string }
 ): ExcelBrandImages {
   const out: ExcelBrandImages = {};
   const book = wb as ExcelImageWorkbook | null | undefined;
   if (!book || typeof book.addImage !== 'function') return out;
   const register = (
     file: { bytes: Buffer; ext: string } | null,
-    slot: 'logo' | 'footerLogo'
+    slot: 'logo' | 'secondaryLogo' | 'footerLogo'
   ): void => {
     if (!file) return;
     const size = imagePixelSize(file.bytes);
@@ -308,12 +320,16 @@ export function excelBrandImages(
     if (slot === 'logo') {
       out.logoId = id;
       out.logoAspect = aspect;
+    } else if (slot === 'secondaryLogo') {
+      out.secondaryLogoId = id;
+      out.secondaryLogoAspect = aspect;
     } else {
       out.footerLogoId = id;
       out.footerLogoAspect = aspect;
     }
   };
   register(company.logoUrl ? readStoredLogo(company.logoUrl) : null, 'logo');
+  register(company.secondaryLogoUrl ? readStoredSecondaryLogo(company.secondaryLogoUrl) : null, 'secondaryLogo');
   register(company.footerLogoUrl ? readStoredFooterLogo(company.footerLogoUrl) : null, 'footerLogo');
   return out;
 }
@@ -323,8 +339,19 @@ export function drawTopBar(doc: PdfDoc, brand: DocBrand): void {
   doc.rect(0, doc.pageHeight - 11, doc.pageWidth, 3, brand.teal);
 }
 
-/** Compact branded header used on every continuation page. */
-export function drawRunningHeader(doc: PdfDoc, opts: LetterheadMeta, brand: DocBrand, logoName?: string): void {
+/**
+ * Compact branded header used on every continuation page. Carries the same two
+ * uploaded marks as the page-one letterhead - primary at the left margin,
+ * secondary flush with the right margin - so a multi-page document reads as one
+ * continuous letterhead.
+ */
+export function drawRunningHeader(
+  doc: PdfDoc,
+  opts: LetterheadMeta,
+  brand: DocBrand,
+  logoName?: string,
+  secondaryLogoName?: string
+): void {
   drawTopBar(doc, brand);
   const top = doc.pageHeight - 18;
   const mark = 16;
@@ -334,15 +361,23 @@ export function drawRunningHeader(doc: PdfDoc, opts: LetterheadMeta, brand: DocB
     doc.image(logoName, MARGIN, top - mark, logoW, mark);
     textX = MARGIN + logoW + 8;
   }
+  const halfW = doc.contentWidth * 0.5;
+  const secH = 14;
+  const secW = brandImageWidth(doc, secH, 92, secondaryLogoName);
+  let labelW = Math.max(60, halfW);
+  if (secW && secondaryLogoName) {
+    doc.image(secondaryLogoName, MARGIN + doc.contentWidth - secW, top - secH, secW, secH);
+    labelW = Math.max(60, Math.min(halfW, doc.contentWidth - secW - 12));
+  }
   doc.rawText(opts.company.name, textX, top - 5, 8, {
     bold: true,
     color: brand.navy,
-    maxWidth: Math.max(60, doc.contentWidth * 0.5),
+    maxWidth: Math.max(60, doc.contentWidth - (textX - MARGIN) - labelW - 8),
   });
   const right = `${opts.title.toUpperCase()}${opts.docNo ? `  ${opts.docNo}` : ''}`;
-  doc.rawText(right, MARGIN, top - 5, 8, {
+  doc.rawText(right, MARGIN + doc.contentWidth - labelW, top - 5, 8, {
     align: 'right',
-    maxWidth: Math.max(60, doc.contentWidth * 0.5),
+    maxWidth: labelW,
     color: GRAY,
     bold: true,
   });
@@ -351,8 +386,18 @@ export function drawRunningHeader(doc: PdfDoc, opts: LetterheadMeta, brand: DocB
   doc.cursorY = top - 34;
 }
 
-/** Full letterhead used on page one of every branded document. */
-export function drawLetterhead(doc: PdfDoc, opts: LetterheadMeta, brand: DocBrand, logoName?: string): void {
+/**
+ * Full letterhead used on page one of every branded document: the uploaded
+ * primary mark at the left margin, the uploaded secondary mark flush with the
+ * right margin, and the document identity block beneath the secondary mark.
+ */
+export function drawLetterhead(
+  doc: PdfDoc,
+  opts: LetterheadMeta,
+  brand: DocBrand,
+  logoName?: string,
+  secondaryLogoName?: string
+): void {
   const c = opts.company;
   drawTopBar(doc, brand);
   const logoSize = 30;
@@ -375,7 +420,15 @@ export function drawLetterhead(doc: PdfDoc, opts: LetterheadMeta, brand: DocBran
   for (const ln of [...companyContactLines(c), ...companyRegLines(c)].slice(0, 2)) {
     doc.text(ln, textX, 6.4, { color: GRAY, maxWidth: leftW });
   }
+  // Secondary mark sits at the top-right of the header. The document identity
+  // block starts below it so the two never overlap on a narrow letterhead.
   let ry = top - 4;
+  const secH = 22;
+  const secW = brandImageWidth(doc, secH, Math.min(132, rightW), secondaryLogoName);
+  if (secW && secondaryLogoName) {
+    doc.image(secondaryLogoName, MARGIN + doc.contentWidth - secW, top - secH - 1, secW, secH);
+    ry = top - secH - 11;
+  }
   doc.rawText((opts.kicker ?? 'Official document').toUpperCase(), rightX, ry, 6.2, {
     align: 'right',
     maxWidth: rightW,
@@ -484,10 +537,11 @@ export async function renderTablePdf(opts: BrandedTableOpts): Promise<Buffer> {
   const classification = opts.classification ?? 'Internal';
   const brand = brandOf(opts.company);
   const logoName = preloadLogo(doc, opts.company.logoUrl);
+  const secondaryLogoName = preloadSecondaryLogo(doc, opts.company.secondaryLogoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
-  doc.setNewPageHandler(() => drawRunningHeader(doc, opts, brand, logoName));
-  drawLetterhead(doc, opts, brand, logoName);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, opts, brand, logoName, secondaryLogoName));
+  drawLetterhead(doc, opts, brand, logoName, secondaryLogoName);
 
   doc.text(
     'Issued by ' +
