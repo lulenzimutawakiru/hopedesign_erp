@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { api, PASSWORD, auth, loginAs, db, deleteEmployees } from './helpers.js';
 import { issueEmailCode, verifyEmailCode } from '../src/services/mfaEmail.js';
 import { hashToken } from '../src/auth.js';
+import { authenticator } from 'otplib';
 
 // A reset link only ever leaves the building by email, so the sender is captured
 // here. That lets the suite start a reset through the real public endpoint and
@@ -480,6 +481,128 @@ describe('Self-service password reset', () => {
       expect((await api.post('/api/auth/login').send({ identifier: username, password: 'Eight888' })).status).toBe(200);
     } finally {
       await dropResetUser(userId);
+    }
+  });
+});
+
+describe('Second-factor readiness', () => {
+  const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+  /** Throwaway account in tenant 2, so seeded users keep their own MFA state. */
+  async function createMfaUser() {
+    const { hashPassword } = await import('../src/auth.js');
+    const username = `mfa.${tag}`;
+    const email = `${username}@hopedesign.test`;
+    const ins = await db(
+      `INSERT INTO users (tenant_id, company_id, branch_id, email, username, password_hash, first_name, last_name, status)
+       VALUES (2, 2, 2, $1, $2, $3, 'Second', 'Factor', 'ACTIVE') RETURNING id`,
+      [email, username, await hashPassword(PASSWORD)]
+    );
+    return { userId: Number(ins.rows[0].id), email, username };
+  }
+
+  /** mfa_methods rows cascade with the account; sessions hold a plain FK. */
+  async function dropMfaUser(userId: number) {
+    await db(`DELETE FROM mfa_email_codes WHERE user_id = $1`, [userId]);
+    await db(`DELETE FROM sessions WHERE user_id = $1`, [userId]);
+    await db(`DELETE FROM users WHERE id = $1`, [userId]);
+  }
+
+  /** TOTP is time-based; retry once so a 30s rollover is not read as a failure. */
+  async function verifyTotpChallenge(loginToken: string, secret: string) {
+    const attempt = async () =>
+      api.post('/api/auth/mfa/verify').send({ loginToken, code: authenticator.generate(secret) });
+    let res = await attempt();
+    if (res.status !== 200) {
+      await new Promise((r) => setTimeout(r, 1100));
+      res = await attempt();
+    }
+    return res;
+  }
+
+  it('offers enrolment instead of an unanswerable challenge, and accepts the account once paired', async () => {
+    const { userId, username } = await createMfaUser();
+    try {
+      const { generateTotpSecret } = await import('../src/auth.js');
+      const abandoned = generateTotpSecret();
+      // The production dead end: flagged TOTP with a secret left behind by an
+      // enrolment that started and never finished, so no verified method row.
+      await db(`UPDATE users SET mfa_enabled=true, mfa_method='TOTP', mfa_secret=$1 WHERE id=$2`, [abandoned, userId]);
+
+      const blocked = await api.post('/api/auth/login').send({ identifier: username, password: PASSWORD });
+      expect(blocked.status).toBe(200);
+      expect(blocked.body.enrollmentRequired).toBe(true);
+      expect(blocked.body.method).toBe('email');
+
+      // A challenge for an unpaired authenticator must say so, not loop the
+      // holder on codes their account can never match.
+      const stale = await api
+        .post('/api/auth/mfa/verify')
+        .send({ loginToken: blocked.body.loginToken, code: authenticator.generate(abandoned) });
+      expect(stale.status).toBe(400);
+      expect(String(stale.body.error.message)).toContain('No authenticator app is paired');
+
+      // Repair through the enrolment screen the login response pointed at.
+      const start = await api.post('/api/auth/mfa/enroll-start').send({ loginToken: blocked.body.loginToken });
+      expect(start.status).toBe(200);
+      const secret = String(start.body.secret ?? '');
+      expect(secret).toBeTruthy();
+      const paired = await api
+        .post('/api/auth/mfa/enroll-verify')
+        .send({ loginToken: blocked.body.loginToken, code: authenticator.generate(secret), secret });
+      expect(paired.status).toBe(200);
+      expect(typeof paired.body.accessToken).toBe('string');
+
+      // Pairing is recorded, so the account is no longer "protected" on paper only.
+      const methods = await db(`SELECT method, verified_at, is_active FROM mfa_methods WHERE user_id=$1`, [userId]);
+      expect(methods.rows).toHaveLength(1);
+      expect(methods.rows[0].method).toBe('TOTP');
+      expect(methods.rows[0].verified_at).toBeTruthy();
+      expect(methods.rows[0].is_active).toBe(true);
+
+      // The same password now reaches the paired factor instead of enrolment.
+      const challenge = await api.post('/api/auth/login').send({ identifier: username, password: PASSWORD });
+      expect(challenge.body.mfaRequired).toBe(true);
+      expect(challenge.body.enrollmentRequired).toBeFalsy();
+      expect(challenge.body.method).toBe('totp');
+      const done = await verifyTotpChallenge(String(challenge.body.loginToken), secret);
+      expect(done.status).toBe(200);
+      expect(typeof done.body.accessToken).toBe('string');
+
+      // A paired factor carries the account; the stale secret was replaced.
+      const row = await db(`SELECT mfa_secret FROM users WHERE id=$1`, [userId]);
+      expect(String(row.rows[0].mfa_secret)).toBe(secret);
+      expect(String(row.rows[0].mfa_secret)).not.toBe(abandoned);
+    } finally {
+      await dropMfaUser(userId);
+    }
+  });
+
+  it('refuses to re-enrol an account whose factor already works', async () => {
+    const { userId, username } = await createMfaUser();
+    try {
+      const { generateTotpSecret } = await import('../src/auth.js');
+      const secret = generateTotpSecret();
+      // A completed pairing: the secret and the verified method row it writes.
+      await db(
+        `UPDATE users SET mfa_enabled=true, mfa_method='TOTP', mfa_secret=$1 WHERE id=$2`,
+        [secret, userId]
+      );
+      await db(
+        `INSERT INTO mfa_methods (tenant_id, user_id, method, verified_at, is_active)
+         VALUES (2, $1, 'TOTP', now(), true)`,
+        [userId]
+      );
+      const challenge = await api.post('/api/auth/login').send({ identifier: username, password: PASSWORD });
+      expect(challenge.body.mfaRequired).toBe(true);
+      expect(challenge.body.enrollmentRequired).toBeFalsy();
+      expect(challenge.body.method).toBe('totp');
+
+      const start = await api.post('/api/auth/mfa/enroll-start').send({ loginToken: challenge.body.loginToken });
+      expect(start.status).toBe(400);
+      expect(String(start.body.error.message)).toContain('already set up');
+    } finally {
+      await dropMfaUser(userId);
     }
   });
 });

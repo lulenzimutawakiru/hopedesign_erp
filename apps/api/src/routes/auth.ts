@@ -102,6 +102,45 @@ async function userHoldsPrivilegedPermission(userId: number, tenantId: number): 
   });
 }
 
+/**
+ * True when a verified `mfa_methods` row records an authenticator app that was
+ * actually paired with this account.
+ */
+async function totpFactorPaired(userId: number, tenantId: number): Promise<boolean> {
+  const res = await query(
+    `SELECT 1 FROM mfa_methods
+      WHERE user_id = $1 AND method = 'TOTP' AND verified_at IS NOT NULL AND is_active
+      LIMIT 1`,
+    [userId],
+    { tenantId, userId }
+  );
+  return res.rows.length > 0;
+}
+
+/**
+ * AUTH-004: the second factor described by a user row is only usable when its
+ * holder can actually satisfy it.
+ *
+ * A TOTP secret is written when enrolment *starts*, so an abandoned attempt
+ * leaves a secret behind, and treating that secret as a live factor strands the
+ * holder behind a code they have never been able to generate - the account
+ * looks protected while being impossible to sign in to. A code can only be
+ * produced once the authenticator has been paired, which is what a verified
+ * `mfa_methods` row records. Email needs a delivered address.
+ *
+ * Returns the factor that can be challenged, or null when the account has none
+ * and must be offered enrolment instead of a challenge it cannot pass.
+ */
+async function secondFactorUsable(user: Record<string, unknown>): Promise<'email' | 'totp' | null> {
+  if (!Boolean(user.mfa_enabled)) return null;
+  const method = String(user.mfa_method ?? '').toUpperCase();
+  if (method === 'EMAIL' && String(user.personal_email ?? '').trim().length > 0) return 'email';
+  if (String(user.mfa_secret ?? '').trim().length > 0 && (await totpFactorPaired(Number(user.id), Number(user.tenant_id)))) {
+    return 'totp';
+  }
+  return null;
+}
+
 export const authRouter = Router();
 
 authRouter.post(
@@ -162,13 +201,15 @@ authRouter.post(
     // AUTH-001 / MFA-002: a second factor must be satisfied before a session is
     // issued. `mfa_method` selects the challenge:
     //   EMAIL -> a six-digit code mailed to the holder's personal address
-    //   TOTP  -> the authenticator-app code, retained for already-enrolled users
+    //   TOTP  -> the authenticator-app code, retained for already-paired users
     // Accounts with no usable second factor that hold privileged permissions are
     // routed to enrollment instead of straight into a session.
     const personalEmail = String(user.personal_email ?? '').trim();
     const mfaMethod = String(user.mfa_method ?? '').toUpperCase();
     const emailMfaReady = Boolean(user.mfa_enabled) && mfaMethod === 'EMAIL' && personalEmail.length > 0;
-    const totpMfaReady = Boolean(user.mfa_enabled) && Boolean(String(user.mfa_secret ?? ''));
+    // AUTH-004: `mfa_secret` alone is not proof of a usable factor, so a stale
+    // or abandoned enrolment falls through to the enrollment branch below.
+    const totpMfaReady = (await secondFactorUsable(user)) === 'totp';
 
     if (emailMfaReady || totpMfaReady) {
       if (emailMfaReady) {
@@ -571,6 +612,10 @@ authRouter.post(
       if (!verified.ok) throw badRequest('Invalid MFA code');
       await clearEmailCodes(tenantId, userId);
     } else {
+      // AUTH-004: never loop the holder on a code their account cannot produce.
+      if (!(await totpFactorPaired(userId, tenantId))) {
+        throw badRequest('No authenticator app is paired with this account. Start the sign-in again to set one up.');
+      }
       const secret = String(user.mfa_secret ?? '');
       if (!secret || !verifyTotp(secret, code)) throw badRequest('Invalid MFA code');
     }
@@ -735,7 +780,9 @@ authRouter.post(
     const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid], { tenantId: payload.tid, userId: payload.sub });
     const user = userRes.rows[0] as Record<string, unknown> | undefined;
     if (!user) throw unauthorized('User not found');
-    if (Boolean(user.mfa_enabled)) throw badRequest('MFA is already enabled');
+    // AUTH-004: a factor that cannot be satisfied is repaired here rather than
+    // blocking sign-in, so an abandoned enrolment is recoverable self-service.
+    if ((await secondFactorUsable(user)) !== null) throw badRequest('Two-step verification is already set up for this account');
     const secret = generateTotpSecret();
     await query(`UPDATE users SET mfa_secret=$1, mfa_method='TOTP' WHERE id=$2`, [secret, Number(user.id)], { tenantId: payload.tid, userId: Number(user.id) });
     res.json(await totpEnrollmentPayload(String(user.email), secret));
@@ -759,12 +806,19 @@ authRouter.post(
     const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid], { tenantId: payload.tid, userId: payload.sub });
     const user = userRes.rows[0] as Record<string, unknown> | undefined;
     if (!user) throw unauthorized('User not found');
-    if (Boolean(user.mfa_enabled)) throw badRequest('MFA is already enabled');
+    if ((await secondFactorUsable(user)) !== null) throw badRequest('Two-step verification is already set up for this account');
     const stored = secret || String(user.mfa_secret ?? '');
     if (!stored || !verifyTotp(stored, code)) throw badRequest('Invalid MFA code');
     const userId = Number(user.id);
     const tenantId = Number(user.tenant_id);
-    await query(`UPDATE users SET mfa_enabled=true, mfa_secret=$1 WHERE id=$2`, [stored, userId], { tenantId, userId });
+    await query(`UPDATE users SET mfa_enabled=true, mfa_secret=$1, mfa_method='TOTP' WHERE id=$2`, [stored, userId], { tenantId, userId });
+    await query(
+      `INSERT INTO mfa_methods (tenant_id, user_id, method, verified_at, is_active)
+       VALUES ($1,$2,'TOTP',now(),true)
+       ON CONFLICT (user_id, method) DO UPDATE SET verified_at = now(), is_active = true, updated_at = now()`,
+      [tenantId, userId],
+      { tenantId, userId }
+    );
     const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, true);
     const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
     await tx(async (client) => {
@@ -799,7 +853,14 @@ authRouter.post(
     const stored = await query(`SELECT mfa_secret FROM users WHERE id=$1`, [user.id], { tenantId: user.tenant_id, userId: user.id });
     const s = secret || String(stored.rows[0]?.mfa_secret ?? '');
     if (!s || !verifyTotp(s, code)) throw badRequest('Invalid MFA code');
-    await query(`UPDATE users SET mfa_enabled=true, mfa_secret=$1 WHERE id=$2`, [s, user.id], { tenantId: user.tenant_id, userId: user.id });
+    await query(`UPDATE users SET mfa_enabled=true, mfa_secret=$1, mfa_method='TOTP' WHERE id=$2`, [s, user.id], { tenantId: user.tenant_id, userId: user.id });
+    await query(
+      `INSERT INTO mfa_methods (tenant_id, user_id, method, verified_at, is_active)
+       VALUES ($1,$2,'TOTP',now(),true)
+       ON CONFLICT (user_id, method) DO UPDATE SET verified_at = now(), is_active = true, updated_at = now()`,
+      [user.tenant_id, user.id],
+      { tenantId: user.tenant_id, userId: user.id }
+    );
     res.json({ mfaEnabled: true });
   })
 );
