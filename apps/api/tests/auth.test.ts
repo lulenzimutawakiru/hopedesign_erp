@@ -179,6 +179,64 @@ describe('Administration users', () => {
 
     await deleteEmployees([employeeId, Number(autoEmp.body.data.employeeId)]);
   });
+
+  it('lets an administrator correct a user sign-in email', async () => {
+    const { token } = await loginAs('admin');
+    const stamp = Date.now();
+    const created = await api.post('/api/admin/users').set(auth(token)).send({
+      first_name: 'Email',
+      last_name: `Edit${stamp}`,
+      email: `email.edit.${stamp}@hopedesign.test`,
+      username: `emailedit${stamp}`,
+    });
+    expect(created.status).toBe(200);
+    const userId = Number(created.body.data.user.id);
+
+    // A mistyped address is the commonest reason an employee cannot sign in, so
+    // correcting it is the point of the edit: prove the new value sticks and is
+    // returned by the detail read rather than only echoed back.
+    const next = `email.fixed.${stamp}@hopedesign.test`;
+    const patched = await api.patch(`/api/admin/users/${userId}`).set(auth(token)).send({
+      email: next,
+      job_title: 'Storekeeper',
+    });
+    expect(patched.status).toBe(200);
+    expect(patched.body.data.email).toBe(next);
+    expect(patched.body.data.jobTitle).toBe('Storekeeper');
+
+    const detail = await api.get(`/api/admin/users/${userId}`).set(auth(token));
+    expect(detail.body.data.user.email).toBe(next);
+
+    // Resubmitting an untouched form must succeed quietly; the API writes only
+    // values that actually move, so this must not be an error either.
+    const noop = await api.patch(`/api/admin/users/${userId}`).set(auth(token)).send({ email: next });
+    expect(noop.status).toBe(200);
+
+    // An address another account already signs in with would leave one of the
+    // two unreachable, so the write is refused instead of silently applied.
+    const taken = await api.post('/api/admin/users').set(auth(token)).send({
+      first_name: 'Taken',
+      last_name: `Login${stamp}`,
+      email: `email.taken.${stamp}@hopedesign.test`,
+      username: `emailtaken${stamp}`,
+    });
+    expect(taken.status).toBe(200);
+    const exact = await api.patch(`/api/admin/users/${userId}`).set(auth(token)).send({
+      email: `email.taken.${stamp}@hopedesign.test`,
+    });
+    expect(exact.status).toBe(409);
+
+    // The resolver folds spaces, dots, underscores and hyphens, so a handle that
+    // is merely a dotted spelling of another account's username still collides.
+    const near = await api.patch(`/api/admin/users/${userId}`).set(auth(token)).send({
+      username: `email.taken.${stamp}`,
+    });
+    expect(near.status).toBe(409);
+
+    // A blank name would leave the account with no display name.
+    const blank = await api.patch(`/api/admin/users/${userId}`).set(auth(token)).send({ first_name: '   ' });
+    expect(blank.status).toBe(400);
+  });
 });
 
 describe('MFA email one-time codes', () => {

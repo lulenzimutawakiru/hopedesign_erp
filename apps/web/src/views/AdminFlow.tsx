@@ -576,6 +576,7 @@ function UserDrawer({ id, onClose, onChanged }: { id: number; onClose: () => voi
   const [confirm, setConfirm] = useState<{ action: string; title: string; body: string } | null>(null);
   const [showReset, setShowReset] = useState(false);
   const [resetToken, setResetToken] = useState<Rec | null>(null);
+  const [showEdit, setShowEdit] = useState(false);
   const [roleOptions, setRoleOptions] = useState<Rec[]>([]);
   const [addRoleId, setAddRoleId] = useState('');
 
@@ -663,6 +664,7 @@ function UserDrawer({ id, onClose, onChanged }: { id: number; onClose: () => voi
   const canActivate = can(me, 'admin.users.activate');
   const canSuspend = can(me, 'admin.users.suspend');
   const canReset = can(me, 'admin.users.reset_password');
+  const canEdit = can(me, 'admin.users.update');
 
   return (
     <Drawer
@@ -670,6 +672,7 @@ function UserDrawer({ id, onClose, onChanged }: { id: number; onClose: () => voi
       onClose={onClose}
       footer={
         <div className="btn-row">
+          {canEdit && <button className="btn" disabled={!!busy} onClick={() => setShowEdit(true)}>Edit details</button>}
           {canSuspend && status === 'ACTIVE' && (
             <button className="btn" disabled={!!busy} onClick={() => setConfirm({ action: 'suspend', title: 'Suspend account', body: `Suspend ${s(u.email)}? The user will be signed out and blocked from logging in.` })}>Suspend</button>
           )}
@@ -804,6 +807,14 @@ function UserDrawer({ id, onClose, onChanged }: { id: number; onClose: () => voi
         </Modal>
       )}
 
+      {showEdit && (
+        <UserEditModal
+          user={u}
+          onClose={() => setShowEdit(false)}
+          onSaved={() => { setShowEdit(false); setNotice('User details updated'); load(); onChanged?.(); }}
+        />
+      )}
+
       {confirm && (
         <ConfirmDialog
           title={confirm.title}
@@ -815,6 +826,86 @@ function UserDrawer({ id, onClose, onChanged }: { id: number; onClose: () => voi
         />
       )}
     </Drawer>
+  );
+}
+
+function UserEditModal({ user, onClose, onSaved }: { user: Rec; onClose: () => void; onSaved: () => void }) {
+  const [firstName, setFirstName] = useState(s(user.firstName));
+  const [lastName, setLastName] = useState(s(user.lastName));
+  const [email, setEmail] = useState(s(user.email));
+  const [username, setUsername] = useState(s(user.username));
+  const [jobTitle, setJobTitle] = useState(s(user.jobTitle));
+  const [phone, setPhone] = useState(s(user.phone));
+  const [departmentId, setDepartmentId] = useState(s(user.departmentId));
+  const [depts, setDepts] = useState<Rec[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api<{ data: Rec[] }>('/api/ops/hr/departments').then((r) => setDepts(r.data ?? [])).catch(() => undefined);
+  }, []);
+
+  const save = async () => {
+    const first = firstName.trim();
+    const last = lastName.trim();
+    const mail = email.trim();
+    if (!first || !last) { setError('First name and last name are required'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) { setError('A valid email address is required'); return; }
+    const body: Rec = {};
+    if (first !== s(user.firstName)) body.first_name = first;
+    if (last !== s(user.lastName)) body.last_name = last;
+    if (mail.toLowerCase() !== s(user.email).toLowerCase()) body.email = mail;
+    if (username.trim() !== s(user.username)) body.username = username.trim();
+    if (jobTitle.trim() !== s(user.jobTitle)) body.job_title = jobTitle.trim();
+    if (phone.trim() !== s(user.phone)) body.phone = phone.trim();
+    if (departmentId !== s(user.departmentId)) body.department_id = departmentId ? Number(departmentId) : null;
+    if (Object.keys(body).length === 0) { setError('Change at least one field before saving.'); return; }
+    setBusy(true); setError('');
+    try {
+      await api(`/api/admin/users/${s(user.id)}`, { method: 'PATCH', body: JSON.stringify(body) });
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update the user');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const emailChanged = email.trim() !== '' && email.trim().toLowerCase() !== s(user.email).toLowerCase();
+
+  return (
+    <Modal title="Edit user details" onClose={onClose} wide>
+      <div className="stack">
+        {error && <ErrorBanner error={error} />}
+        <div className="grid-2">
+          <div className="field"><label className="field-required">First name</label><input value={firstName} onChange={(e) => setFirstName(e.target.value)} /></div>
+          <div className="field"><label className="field-required">Last name</label><input value={lastName} onChange={(e) => setLastName(e.target.value)} /></div>
+        </div>
+        <div className="grid-2">
+          <div className="field"><label className="field-required">Email</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+          <div className="field"><label>Username</label><input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Blank signs in by email only" /></div>
+        </div>
+        {emailChanged && (
+          <div className="notice-banner">This is the sign-in address. It changes immediately, so the user must be told before they next sign in.</div>
+        )}
+        <div className="grid-2">
+          <div className="field"><label>Job title</label><input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} /></div>
+          <div className="field"><label>Phone</label><input value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+        </div>
+        <div className="field">
+          <label>Department</label>
+          <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
+            <option value="">None selected</option>
+            {depts.map((d) => <option key={s(d.id)} value={s(d.id)}>{s(d.code)} - {s(d.name)}</option>)}
+          </select>
+        </div>
+        <p className="muted">Company and branch placement are managed elsewhere and are not changed here.</p>
+        <div className="btn-row">
+          <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving...' : 'Save changes'}</button>
+          <button className="btn" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

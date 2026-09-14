@@ -9,6 +9,7 @@ import { hashPassword, hashToken, maskEmail } from '../auth.js';
 import { EMAIL_RE } from '../services/mfaEmail.js';
 import { SETTINGS, SETTING_CATEGORIES } from './settings.js';
 import * as identityLink from '../services/identityLink.js';
+import { createNotification } from '../services/notifications.js';
 
 export const adminRouter = Router();
 
@@ -55,6 +56,60 @@ const USER_LIST_SQL = `
   LEFT JOIN departments d ON d.id = u.department_id
   LEFT JOIN employees emp ON emp.id = u.employee_id
 `;
+
+/**
+ * AUTH-005: sign-in resolves one identifier against both `email` and
+ * `username`, and 0159 additionally folds spaces, dots, underscores and
+ * hyphens together. Two accounts that share a normalised key are therefore
+ * indistinguishable at login: the resolver hands back whichever row it reads
+ * first and the other holder is told their correct details are wrong. Every
+ * write that can move an identifier (create, update) claims the key against
+ * every other account in the tenant first. The predicate below is the
+ * resolver's own WHERE clause turned onto a candidate value.
+ *
+ * `exceptUserId` is the row being edited; pass 0 when creating (serial keys
+ * start at 1, so no existing row is excluded).
+ */
+async function findIdentifierClash(
+  client: pg.PoolClient,
+  tenantId: number | null | undefined,
+  exceptUserId: number,
+  candidate: string
+): Promise<{ id: number; email: string; username: string | null } | undefined> {
+  const res = await client.query(
+    `SELECT id, email, username FROM users
+      WHERE tenant_id = $1
+        AND id <> $2
+        AND (
+          lower(email) = lower(btrim($3))
+          OR lower(COALESCE(username, '')) = lower(btrim($3))
+          OR (
+            regexp_replace(lower(btrim($3)), '[\\s._-]+', '', 'g') <> ''
+            AND regexp_replace(lower(btrim(COALESCE(username, ''))), '[\\s._-]+', '', 'g')
+              = regexp_replace(lower(btrim($3)), '[\\s._-]+', '', 'g')
+          )
+        )
+      LIMIT 1`,
+    [tenantId, exceptUserId, candidate]
+  );
+  return res.rows[0] as { id: number; email: string; username: string | null } | undefined;
+}
+
+/** Conflict copy for an identifier clash, naming the field the administrator edited. */
+function identifierClashMessage(
+  kind: 'email' | 'username',
+  candidate: string,
+  clash: { email: string; username: string | null }
+): string {
+  const wanted = candidate.trim().toLowerCase();
+  const exact = kind === 'email'
+    ? String(clash.email ?? '').toLowerCase() === wanted
+    : String(clash.username ?? '').toLowerCase() === wanted;
+  const label = kind === 'email' ? 'Email' : 'Username';
+  return exact
+    ? `${label} ${candidate} is already in use`
+    : `${label} ${candidate} is too similar to the sign-in name of another account. Choose a different email or username.`;
+}
 
 async function recordStatusChange(
   client: pg.PoolClient,
@@ -201,14 +256,17 @@ adminRouter.post('/users', ...run('admin.users.create', async (c, ctx, body) => 
   const lastName = String(body.last_name ?? '').trim();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw badRequest('A valid email address is required');
   if (!firstName || !lastName) throw badRequest('First and last name are required');
-  const existing = await c.query('SELECT id FROM users WHERE tenant_id = $1 AND lower(email) = $2', [ctx.tenantId, email]);
-  if (existing.rows.length > 0) throw conflict(`A user with email ${email} already exists`);
   const username =
     body.username != null && String(body.username).trim() !== ''
       ? String(body.username).trim()
       : email.split('@')[0];
-  const uname = await c.query('SELECT id FROM users WHERE tenant_id = $1 AND lower(username) = $2', [ctx.tenantId, username.toLowerCase()]);
-  if (uname.rows.length > 0) throw conflict(`Username ${username} is already taken`);
+  // AUTH-005: the login resolver matches either column and folds separators, so
+  // an email or a derived username that is merely *similar* to an existing one
+  // would leave one of the two accounts unreachable. Claim both keys first.
+  const emailClash = await findIdentifierClash(c, ctx.tenantId, 0, email);
+  if (emailClash) throw conflict(identifierClashMessage('email', email, emailClash));
+  const usernameClash = await findIdentifierClash(c, ctx.tenantId, 0, username);
+  if (usernameClash) throw conflict(identifierClashMessage('username', username, usernameClash));
   const inviteMode = b(body.invite) || String(body.status ?? '').toUpperCase() === 'INVITED';
   const rawStatus = inviteMode ? 'INVITED' : String(body.status ?? 'ACTIVE').toUpperCase();
   if (!USER_STATUSES.includes(rawStatus)) throw badRequest(`Invalid status ${rawStatus}`);
@@ -331,65 +389,93 @@ adminRouter.patch('/users/:id', ...run('admin.users.update', async (c, ctx, body
   const params: unknown[] = [userId, ctx.tenantId];
   const oldVals: Record<string, unknown> = {};
   const newVals: Record<string, unknown> = {};
-  const textCols: [string, string][] = [
-    ['first_name', 'first_name'],
-    ['last_name', 'last_name'],
-    ['job_title', 'job_title'],
-    ['phone', 'phone'],
-  ];
-  const idCols: [string, string][] = [
-    ['company_id', 'company_id'],
-    ['branch_id', 'branch_id'],
-    ['department_id', 'department_id'],
-  ];
-  for (const [k, col] of textCols) {
-    if (body[k] !== undefined) {
-      const val = s(body[k]);
-      fields.push(`${col} = $${params.length + 1}`);
-      params.push(val);
-      oldVals[col] = prevRow[col] ?? null;
-      newVals[col] = val;
+  // Only values that actually move are written: the audit trail then records a
+  // real change rather than the resubmission of an untouched form. A blank name
+  // would leave the account with no display name, so it is rejected instead.
+  const applyText = (col: string, raw: unknown, requiredLabel: string | null) => {
+    const val = raw === null || raw === undefined ? null : String(raw).trim();
+    if (requiredLabel && !val) throw badRequest(`${requiredLabel} is required`);
+    const before = prevRow[col] === null || prevRow[col] === undefined ? null : String(prevRow[col]);
+    if (val === before) return;
+    fields.push(`${col} = $${params.length + 1}`);
+    params.push(val);
+    oldVals[col] = before;
+    newVals[col] = val;
+  };
+  const applyId = (col: string, raw: unknown) => {
+    const val = n(raw);
+    if (raw !== null && raw !== undefined && raw !== '' && !Number.isFinite(val)) {
+      throw badRequest('That organisation selection is not valid');
     }
-  }
-  for (const [k, col] of idCols) {
-    if (body[k] !== undefined) {
-      const val = n(body[k]);
-      fields.push(`${col} = $${params.length + 1}`);
-      params.push(val);
-      oldVals[col] = prevRow[col] ?? null;
-      newVals[col] = val;
-    }
-  }
+    const before = prevRow[col] === null || prevRow[col] === undefined ? null : Number(prevRow[col]);
+    if (val === before) return;
+    fields.push(`${col} = $${params.length + 1}`);
+    params.push(val);
+    oldVals[col] = before;
+    newVals[col] = val;
+  };
+  if (body.first_name !== undefined) applyText('first_name', body.first_name, 'First name');
+  if (body.last_name !== undefined) applyText('last_name', body.last_name, 'Last name');
+  if (body.job_title !== undefined) applyText('job_title', body.job_title, null);
+  if (body.phone !== undefined) applyText('phone', body.phone, null);
+  if (body.company_id !== undefined) applyId('company_id', body.company_id);
+  if (body.branch_id !== undefined) applyId('branch_id', body.branch_id);
+  if (body.department_id !== undefined) applyId('department_id', body.department_id);
   if (body.email !== undefined) {
     const email = String(body.email).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw badRequest('A valid email address is required');
-    const dup = await c.query('SELECT id FROM users WHERE tenant_id = $1 AND lower(email) = $2 AND id <> $3', [ctx.tenantId, email, userId]);
-    if (dup.rows.length > 0) throw conflict(`Email ${email} is already in use`);
-    fields.push(`email = $${params.length + 1}`);
-    params.push(email);
-    oldVals.email = prevRow.email ?? null;
-    newVals.email = email;
+    const clash = await findIdentifierClash(c, ctx.tenantId, userId, email);
+    if (clash) throw conflict(identifierClashMessage('email', email, clash));
+    const before = String(prevRow.email ?? '').toLowerCase();
+    if (email !== before) {
+      fields.push(`email = $${params.length + 1}`);
+      params.push(email);
+      oldVals.email = prevRow.email ?? null;
+      newVals.email = email;
+    }
   }
   if (body.username !== undefined) {
-    const username = String(body.username).trim();
-    const dup = await c.query('SELECT id FROM users WHERE tenant_id = $1 AND lower(username) = $2 AND id <> $3', [ctx.tenantId, username.toLowerCase(), userId]);
-    if (dup.rows.length > 0) throw conflict(`Username ${username} is already in use`);
-    fields.push(`username = $${params.length + 1}`);
-    params.push(username);
-    oldVals.username = prevRow.username ?? null;
-    newVals.username = username;
+    const raw = String(body.username).trim();
+    const username = raw === '' ? null : raw;
+    if (username) {
+      const clash = await findIdentifierClash(c, ctx.tenantId, userId, username);
+      if (clash) throw conflict(identifierClashMessage('username', username, clash));
+    }
+    const before = prevRow.username === null || prevRow.username === undefined ? null : String(prevRow.username);
+    if (username !== before) {
+      fields.push(`username = $${params.length + 1}`);
+      params.push(username);
+      oldVals.username = before;
+      newVals.username = username;
+    }
   }
   if (fields.length > 0) {
     fields.push('updated_at = now()');
     await c.query(`UPDATE users SET ${fields.join(', ')} WHERE id = $1 AND tenant_id = $2`, params);
+    // Moving the sign-in address is credential-adjacent, so it is recorded under
+    // its own action and the holder is told, rather than folded into a generic
+    // profile edit.
+    const emailChanged = newVals.email !== undefined;
     await logAudit(c, ctx, {
-      action: 'update',
+      action: emailChanged ? 'email_change' : 'update',
       resource: 'users',
       recordId: userId,
       recordCode: String(prevRow.email ?? userId),
       oldValues: oldVals,
       newValues: newVals,
+      metadata: { fields: Object.keys(newVals), emailChanged },
     });
+    if (emailChanged) {
+      await createNotification(c, ctx, {
+        userId,
+        type: 'ACCOUNT_EMAIL_CHANGED',
+        title: 'Your sign-in email was changed',
+        body: `An administrator set your sign-in email to ${String(newVals.email)}. Use it, or your username, the next time you sign in.`,
+        severity: 'WARN',
+        entityType: 'users',
+        entityId: userId,
+      });
+    }
   }
   const fresh = await c.query(`${USER_LIST_SQL} WHERE u.id = $2 AND u.tenant_id = $1`, [ctx.tenantId, userId]);
   return toCamelRow(fresh.rows[0] as Record<string, unknown>);
