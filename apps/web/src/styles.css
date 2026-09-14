@@ -2242,7 +2242,8 @@ html[data-theme='dark'] .audit-old { color: #8995A1; }
   gap: 16px;
   padding: 16px;
 }
-.brand-preview-lh-brand { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.brand-preview-lh-brand { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; min-width: 0; }
+.brand-preview-lh-id { padding-left: 14px; min-width: 0; }
 .brand-preview-logo { height: 42px; width: auto; max-width: 120px; object-fit: contain; flex: none; }
 .brand-preview-name { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 0.01em; }
 .brand-preview-tag { margin: 2px 0 0; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }

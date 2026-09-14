@@ -144,7 +144,7 @@ function CompanyProfilePreview({ drafts }: { drafts: Record<string, Record<strin
                   }}
                 />
               ) : null}
-              <div>
+              <div className="brand-preview-lh-id">
                 <p className="brand-preview-name" style={{ color: navy }}>
                   {name}
                 </p>
