@@ -239,7 +239,7 @@ export function applyExcelBrandHeader(
   const r1 = ws.addRow([company.name]);
   r1.font = { bold: true, size: 16, color: { argb: white }, name: 'Calibri' };
   r1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
-  r1.alignment = { vertical: 'middle' };
+  r1.alignment = { vertical: 'middle', indent: 1 };
   r1.height = 24;
   merge(r1.number);
 
@@ -247,12 +247,14 @@ export function applyExcelBrandHeader(
     const t = ws.addRow([company.tagline]);
     t.font = { italic: true, size: 10, color: { argb: teal }, name: 'Calibri' };
     t.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+    t.alignment = { indent: 1 };
     merge(t.number);
   }
   for (const ln of [...companyContactLines(company), ...companyRegLines(company)]) {
     const r = ws.addRow([ln]);
     r.font = { size: 9, color: { argb: 'FFD0D7DE' }, name: 'Calibri' };
     r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+    r.alignment = { indent: 1 };
     merge(r.number);
   }
 
@@ -781,9 +783,10 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   .topbar::after { content: ''; display: block; height: 3px; background: var(--teal); }
   .letterhead { padding: 18px 32px 0; }
   .lh-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
-  .lh-brand { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+  .lh-brand { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; min-width: 0; }
   .brand-mark { width: 42px; height: 42px; flex: 0 0 auto; display: block; }
   .brand-logo { height: 42px; width: auto; max-width: 120px; flex: 0 0 auto; object-fit: contain; }
+  .lh-id { padding-left: 14px; min-width: 0; }
   .co-name { font-size: 18px; font-weight: 700; color: var(--navy); letter-spacing: 0.01em; margin: 0; }
   .co-tag { color: var(--teal); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin: 2px 0 6px; font-weight: 600; }
   .c-line { color: var(--muted); font-size: 9.5px; line-height: 1.45; }
@@ -891,7 +894,7 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
     <div class="lh-row">
       <div class="lh-brand">
         ${brandMarkHtml}
-        <div>
+        <div class="lh-id">
           <p class="co-name">${esc(c.name)}</p>
           ${c.tagline ? `<div class="co-tag">${esc(c.tagline)}</div>` : ''}
           ${contactHtml}

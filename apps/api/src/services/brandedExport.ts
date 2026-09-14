@@ -42,6 +42,13 @@ export const LINE = BRAND.line;
 export const INK = BRAND.ink;
 export const TABLE_W = PAGE_W - MARGIN * 2;
 
+/**
+ * Left inset, in points, of the company identity block that sits beneath the
+ * primary mark on the page-one letterhead. Holding it as a constant keeps the
+ * block on the same optical column whether or not a primary mark is uploaded.
+ */
+const LETTERHEAD_INDENT = 14;
+
 export interface BrandedTableColumn {
   key: string;
   label: string;
@@ -388,8 +395,9 @@ export function drawRunningHeader(
 
 /**
  * Full letterhead used on page one of every branded document: the uploaded
- * primary mark at the left margin, the uploaded secondary mark flush with the
- * right margin, and the document identity block beneath the secondary mark.
+ * primary mark at the left margin with the company identity block stacked
+ * beneath it, the uploaded secondary mark flush with the right margin, and the
+ * document identity block beneath the secondary mark.
  */
 export function drawLetterhead(
   doc: PdfDoc,
@@ -404,20 +412,20 @@ export function drawLetterhead(
   const top = doc.pageHeight - 18;
   const logoY = top - logoSize - 6;
   const logoW = brandImageWidth(doc, logoSize, 110, logoName);
-  let textX = MARGIN;
-  if (logoW && logoName) {
-    doc.image(logoName, MARGIN, logoY, logoW, logoSize);
-    textX = MARGIN + logoW + 11;
-  }
+  if (logoW && logoName) doc.image(logoName, MARGIN, logoY, logoW, logoSize);
   const rightX = MARGIN + doc.contentWidth * 0.56;
   const rightW = doc.contentWidth * 0.44;
+  // Address and all supporting company information belong beneath the primary
+  // mark, indented in from the page margin, so the letterhead reads as one
+  // left-aligned column instead of text crowded alongside the mark.
+  const textX = MARGIN + LETTERHEAD_INDENT;
   const leftW = Math.max(80, rightX - textX - 4);
-  doc.cursorY = top - 6;
+  doc.cursorY = logoW && logoName ? logoY - 13 : top - 6;
   doc.text(c.name, textX, 12, { bold: true, color: brand.navy, maxWidth: leftW });
   if (c.tagline) {
     doc.text(c.tagline.toUpperCase(), textX, 6.4, { color: brand.teal, maxWidth: leftW, bold: true });
   }
-  for (const ln of [...companyContactLines(c), ...companyRegLines(c)].slice(0, 2)) {
+  for (const ln of [...companyContactLines(c), ...companyRegLines(c)]) {
     doc.text(ln, textX, 6.4, { color: GRAY, maxWidth: leftW });
   }
   // Secondary mark sits at the top-right of the header. The document identity
