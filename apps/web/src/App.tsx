@@ -10,6 +10,7 @@ import { PageLoader } from './components/ui';
 const Shell = lazy(() => import('./views/Shell'));
 const PublicVerify = lazy(() => import('./views/PublicVerify'));
 const AcceptInvite = lazy(() => import('./views/AcceptInvite'));
+const ResetPassword = lazy(() => import('./views/ResetPassword'));
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -56,6 +57,15 @@ export default function App() {
     return (
       <Suspense fallback={<PageLoader />}>
         <AcceptInvite />
+      </Suspense>
+    );
+  }
+
+  // Public password reset - reached from the link mailed by /api/auth/password/forgot.
+  if (path === '/reset') {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <ResetPassword />
       </Suspense>
     );
   }

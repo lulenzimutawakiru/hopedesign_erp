@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useAuth } from '../auth';
-import { ApiError } from '../api';
+import { ApiError, api } from '../api';
 import { BrandMark } from '../components/BrandMark';
 import { branchLabel, shortCompanyName, useCompanyProfile } from '../company';
 
@@ -44,6 +44,13 @@ export default function Login() {
   const [emailEntry, setEmailEntry] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
   const [resendIn, setResendIn] = useState(0);
+  // Self-service reset lives inline on the sign-in card: the employee is already
+  // on the right screen, and the request also raises a Service Desk ticket so
+  // the desk sees recoverable access trouble without being told.
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetNotice, setResetNotice] = useState('');
+  const [resetError, setResetError] = useState('');
 
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -68,6 +75,28 @@ export default function Login() {
         `I need help signing in to ${osName}.\n\nUsername or email: ${identifier.trim() || '(not provided)'}`
       )
     : '';
+
+  const requestReset = async () => {
+    const id = identifier.trim();
+    if (!id) {
+      setResetError('Enter your username or email address above first.');
+      return;
+    }
+    setResetBusy(true);
+    setResetError('');
+    setResetNotice('');
+    try {
+      const r = await api<{ ok: boolean; message?: string }>('/api/auth/password/forgot', {
+        method: 'POST',
+        body: JSON.stringify({ identifier: id }),
+      });
+      setResetNotice(r.message ?? 'If that account exists, we have emailed a reset link.');
+    } catch (err) {
+      setResetError(err instanceof ApiError ? err.message : 'Could not start the reset. Please try again.');
+    } finally {
+      setResetBusy(false);
+    }
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -101,6 +130,9 @@ export default function Login() {
           setMaskedEmail('');
           setEmailEntry(true);
           setResendIn(0);
+          setNotice(
+            'Your account needs a two-step verification address before it can sign in. Add one below and we will mail a code.'
+          );
         } else {
           setMfaMode('code');
           setMaskedEmail(outcome.maskedEmail ?? '');
@@ -247,18 +279,57 @@ export default function Login() {
               {busy ? 'Checking clearance…' : 'Enter the mill'}
             </button>
             <div className="login-help-block">
-              <p className="hint login-help">
-                {resetMail ? (
-                  <a href={resetMail}>Forgot your password?</a>
-                ) : (
-                  <span>Forgot your password?</span>
-                )}{' '}
-                {contactMail ? (
-                  <a href={contactMail}>Contact your system administrator.</a>
-                ) : (
-                  <span>Contact your system administrator.</span>
-                )}
-              </p>
+              {!resetOpen ? (
+                <p className="hint login-help">
+                  <button
+                    type="button"
+                    className="link-btn"
+                    onClick={() => {
+                      setResetOpen(true);
+                      setResetError('');
+                      setResetNotice('');
+                    }}
+                  >
+                    Forgot your password?
+                  </button>{' '}
+                  {contactMail ? (
+                    <a href={contactMail}>Contact your system administrator.</a>
+                  ) : (
+                    <span>Contact your system administrator.</span>
+                  )}
+                </p>
+              ) : (
+                <div className="login-reset">
+                  <p className="hint login-help">
+                    {identifier.trim() ? (
+                      <>
+                        We will email a single-use reset link for <strong>{identifier.trim()}</strong>.
+                      </>
+                    ) : (
+                      <span>Enter your username or email above, then ask for a reset link.</span>
+                    )}
+                  </p>
+                  <p className="hint">A support ticket is logged with IT automatically.</p>
+                  {resetNotice && <div className="alert alert-success">{resetNotice}</div>}
+                  {resetError && <div className="alert alert-error">{resetError}</div>}
+                  <button
+                    type="button"
+                    className="btn btn-block"
+                    disabled={resetBusy || !identifier.trim()}
+                    onClick={() => void requestReset()}
+                  >
+                    {resetBusy ? 'Sending\u2026' : 'Email me a reset link'}
+                  </button>
+                  {resetMail ? (
+                    <p className="hint login-help">
+                      <a href={resetMail}>Or email IT directly.</a>
+                    </p>
+                  ) : null}
+                  <button type="button" className="link-btn login-reset-cancel" onClick={() => setResetOpen(false)}>
+                    Back to sign in
+                  </button>
+                </div>
+              )}
               {(adminEmail || adminPhone) && (
                 <p className="hint login-help-contacts">
                   {adminEmail ? <a href={contactMail || `mailto:${adminEmail}`}>{adminEmail}</a> : null}

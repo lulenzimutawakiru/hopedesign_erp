@@ -78,6 +78,18 @@ export const inviteLimiter = makeRateLimiter({
   message: 'Too many invite attempts. Please try again later.',
 });
 
+/**
+ * Self-service password reset (AUTH-003). Keyed on the identifier so one
+ * account cannot be mail-bombed, and so a single source address cannot sweep
+ * the user directory by trying identifiers in bulk.
+ */
+export const passwordResetLimiter = makeRateLimiter({
+  windowMs: 60_000,
+  limit: 5,
+  keySource: 'identifier',
+  message: 'Too many password reset requests. Please wait a minute and try again.',
+});
+
 /** Search abuse / mass enumeration guard (per authenticated user + IP). */
 export const searchLimiter = makeRateLimiter({
   windowMs: 60_000,
@@ -105,4 +117,3 @@ export const messagingLimiter = makeRateLimiter({
   limit: 20,
   message: 'Message rate limit exceeded. Please slow down.',
 });
-

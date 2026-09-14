@@ -205,6 +205,20 @@ button, input, select, textarea { font-family: inherit; }
 }
 .login-help a:hover, .login-help-contacts a:hover { text-decoration: underline; }
 .login-help-contacts { margin: 6px 0 0; overflow-wrap: anywhere; }
+/* Inline self-service reset panel on the sign-in card (AUTH-003). */
+.login-reset {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  margin-top: 2px;
+  background: var(--sd-workspace, #F2F8FC);
+  border: 1px solid var(--sd-line, #D8E4EC);
+  border-radius: 12px;
+}
+.login-reset .alert { margin: 0; }
+.login-reset .btn { margin: 0; }
+.login-reset-cancel { align-self: center; justify-content: center; }
 .login-qr {
   align-self: center;
   width: 168px;

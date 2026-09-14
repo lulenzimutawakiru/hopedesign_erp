@@ -1,6 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { api, PASSWORD, auth, loginAs, db, deleteEmployees } from './helpers.js';
 import { issueEmailCode, verifyEmailCode } from '../src/services/mfaEmail.js';
+import { hashToken } from '../src/auth.js';
+
+// A reset link only ever leaves the building by email, so the sender is captured
+// here. That lets the suite start a reset through the real public endpoint and
+// then drive the exact link it produced, instead of reaching into the database
+// for a token the employee is supposed to receive.
+const mailbox = vi.hoisted(
+  () => [] as Array<{ to: string[]; subject: string; text?: string; button?: { label: string; url: string } | null }>
+);
+vi.mock('../src/services/bird.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/bird.js')>();
+  return {
+    ...actual,
+    sendEmail: async (input: (typeof mailbox)[number]) => {
+      mailbox.push(input);
+      return { ok: true, provider: 'mock', providerMessageId: 'mock-reset' };
+    },
+  };
+});
 
 describe('Authentication', () => {
   it('GET /api/health reports service ok', async () => {
@@ -246,6 +265,221 @@ describe('MFA email one-time codes', () => {
       expect(verified.error).toBe('no_active_code');
     } finally {
       await dropMailUser(userId);
+    }
+  });
+});
+
+describe('Self-service password reset', () => {
+  const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+  /** Throwaway account in tenant 2, so the reset path never touches seeded users. */
+  async function createResetUser() {
+    const { hashPassword } = await import('../src/auth.js');
+    const username = `reset.${tag}`;
+    const email = `${username}@hopedesign.test`;
+    const ins = await db(
+      `INSERT INTO users (tenant_id, company_id, branch_id, email, username, password_hash, first_name, last_name, status)
+       VALUES (2, 2, 2, $1, $2, $3, 'Reset', 'Path', 'ACTIVE') RETURNING id`,
+      [email, username, await hashPassword(PASSWORD)]
+    );
+    return { userId: Number(ins.rows[0].id), email, username };
+  }
+
+  /**
+   * The auto-raised ticket holds a plain FK to the requester, so it is cleared
+   * before the account; everything hanging off the ticket itself cascades.
+   */
+  async function dropResetUser(userId: number) {
+    await db(`DELETE FROM service_tickets WHERE requester_user_id = $1`, [userId]);
+    await db(`DELETE FROM password_reset_tokens WHERE user_id = $1`, [userId]);
+    await db(`DELETE FROM sessions WHERE user_id = $1`, [userId]);
+    await db(`DELETE FROM users WHERE id = $1`, [userId]);
+  }
+
+  /** Mint a token deterministically, for cases the email flow cannot set up. */
+  async function plantToken(userId: number, raw: string, expiresIn = `30 minutes`) {
+    await db(
+      `INSERT INTO password_reset_tokens (tenant_id, user_id, token_hash, expires_at, created_by, company_id, branch_id)
+       VALUES (2, $1, $2, now() + $3::interval, $1, 2, 2)`,
+      [userId, hashToken(raw), expiresIn]
+    );
+  }
+
+  /** Pull the raw token out of a delivered link (or out of the plain-text body). */
+  function tokenFrom(text: string): string {
+    return decodeURIComponent((text.match(/token=([^&\s]+)/) ?? [])[1] ?? '');
+  }
+
+  it('answers a known, an unknown and a blank identifier identically', async () => {
+    const { userId, email } = await createResetUser();
+    try {
+      const known = await api.post('/api/auth/password/forgot').send({ identifier: email });
+      const unknown = await api.post('/api/auth/password/forgot').send({ identifier: `nobody.${tag}@hopedesign.test` });
+      const blank = await api.post('/api/auth/password/forgot').send({ identifier: '   ' });
+      const expected = { ok: true, message: 'If that account exists, we have emailed a reset link.' };
+      for (const res of [known, unknown, blank]) {
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expected);
+      }
+      // Only the real account is actioned.
+      const minted = await db(`SELECT count(*)::int AS n FROM password_reset_tokens WHERE user_id = $1`, [userId]);
+      expect(Number(minted.rows[0].n)).toBe(1);
+    } finally {
+      await dropResetUser(userId);
+    }
+  });
+
+  it('mints a single-use link, emails it and raises a linked Service Desk ticket', async () => {
+    mailbox.length = 0;
+    const { userId, email } = await createResetUser();
+    try {
+      const res = await api.post('/api/auth/password/forgot').send({ identifier: email });
+      expect(res.status).toBe(200);
+
+      const row = (
+        await db(
+          `SELECT id, ticket_id, company_id, branch_id, requested_ip, expires_at
+             FROM password_reset_tokens WHERE user_id = $1 ORDER BY id DESC LIMIT 1`,
+          [userId]
+        )
+      ).rows[0];
+      expect(row).toBeTruthy();
+      expect(Number(row.company_id)).toBe(2);
+      const minutes = (new Date(row.expires_at).getTime() - Date.now()) / 60000;
+      expect(minutes).toBeGreaterThan(50);
+      expect(minutes).toBeLessThanOrEqual(61);
+
+      // The desk sees the request: raised, numbered, routed to a queue and tied
+      // back to the token so the agent can see recovery is already in flight.
+      expect(row.ticket_id).toBeTruthy();
+      const ticket = (
+        await db(
+          `SELECT ticket_number, requester_user_id, assigned_queue_id, status, priority
+             FROM service_tickets WHERE id = $1`,
+          [row.ticket_id]
+        )
+      ).rows[0];
+      expect(Number(ticket.requester_user_id)).toBe(userId);
+      expect(String(ticket.ticket_number)).toMatch(/^HDG-SD-\d{4}-\d{6}$/);
+      expect(ticket.assigned_queue_id).toBeTruthy();
+
+      const mail = mailbox.find((m) => (m.to ?? []).includes(email));
+      expect(mail).toBeTruthy();
+      expect(String(mail?.button?.url)).toContain('/#/reset?token=');
+      expect(tokenFrom(String(mail?.button?.url))).toBeTruthy();
+    } finally {
+      await dropResetUser(userId);
+    }
+  });
+
+  it('resets with the emailed link, signs the holder in and refuses a second use', async () => {
+    mailbox.length = 0;
+    const { userId, email, username } = await createResetUser();
+    try {
+      await api.post('/api/auth/password/forgot').send({ identifier: email });
+      const mail = mailbox.find((m) => (m.to ?? []).includes(email));
+      const raw = tokenFrom(`${mail?.button?.url ?? ''} ${mail?.text ?? ''}`);
+      expect(raw).toBeTruthy();
+
+      const next = 'ResetPath!2026';
+      const done = await api.post('/api/auth/password/reset').send({ token: raw, password: next });
+      expect(done.status).toBe(200);
+      expect(typeof done.body.accessToken).toBe('string');
+      expect(Number(done.body.user.id)).toBe(userId);
+
+      // One shot: the same link can never set a second password.
+      const reuse = await api.post('/api/auth/password/reset').send({ token: raw, password: 'Another!2026' });
+      expect(reuse.status).toBe(401);
+
+      const fresh = await api.post('/api/auth/login').send({ identifier: username, password: next });
+      expect(fresh.status).toBe(200);
+      expect(typeof fresh.body.accessToken).toBe('string');
+      const old = await api.post('/api/auth/login').send({ identifier: username, password: PASSWORD });
+      expect(old.status).toBe(401);
+    } finally {
+      await dropResetUser(userId);
+    }
+  });
+
+  it('clears a lockout, revokes earlier sessions and re-activates the account', async () => {
+    const { userId, username } = await createResetUser();
+    try {
+      const first = await api.post('/api/auth/login').send({ identifier: username, password: PASSWORD });
+      expect(first.status).toBe(200);
+      const older = first.body.accessToken as string;
+      expect((await api.get('/api/auth/me').set(auth(older))).status).toBe(200);
+
+      await db(
+        `UPDATE users SET status='LOCKED', failed_attempts=5, locked_until=now() + interval '10 minutes' WHERE id=$1`,
+        [userId]
+      );
+      // A locked account is still refused by the sign-in form.
+      expect((await api.post('/api/auth/login').send({ identifier: username, password: PASSWORD })).status).toBe(423);
+
+      const raw = `lockout-${tag}`;
+      await plantToken(userId, raw);
+      const done = await api.post('/api/auth/password/reset').send({ token: raw, password: 'Unlocked!2026' });
+      expect(done.status).toBe(200);
+
+      const row = (
+        await db(`SELECT status, failed_attempts, locked_until, must_change_password FROM users WHERE id=$1`, [userId])
+      ).rows[0];
+      expect(String(row.status)).toBe('ACTIVE');
+      expect(Number(row.failed_attempts)).toBe(0);
+      expect(row.locked_until).toBeNull();
+
+      // Recovery ends every session that predates it.
+      expect((await api.get('/api/auth/me').set(auth(older))).status).toBe(401);
+      expect((await api.post('/api/auth/login').send({ identifier: username, password: 'Unlocked!2026' })).status).toBe(200);
+    } finally {
+      await dropResetUser(userId);
+    }
+  });
+
+  it('rejects a forged, expired or too-short reset attempt', async () => {
+    const { userId } = await createResetUser();
+    try {
+      expect(
+        (await api.post('/api/auth/password/reset').send({ token: `forged-${tag}`, password: 'Whatever!2026' })).status
+      ).toBe(401);
+      expect((await api.post('/api/auth/password/reset').send({ token: '', password: 'Whatever!2026' })).status).toBe(400);
+      expect((await api.post('/api/auth/password/reset').send({ token: 'x'.repeat(24), password: 'short' })).status).toBe(400);
+
+      const stale = `stale-${tag}`;
+      await plantToken(userId, stale, `-1 minute`);
+      expect((await api.post('/api/auth/password/reset').send({ token: stale, password: 'Whatever!2026' })).status).toBe(401);
+    } finally {
+      await dropResetUser(userId);
+    }
+  });
+
+  it('accepts one account however the identifier is typed', async () => {
+    const { userId, email, username } = await createResetUser();
+    try {
+      const variants = [email, email.toUpperCase(), `  ${email}  `, username, username.toUpperCase(), username.replace('.', '_')];
+      for (const identifier of variants) {
+        const res = await api.post('/api/auth/login').send({ identifier, password: PASSWORD });
+        expect(res.status, `login as ${identifier}`).toBe(200);
+        expect(typeof res.body.accessToken).toBe('string');
+      }
+    } finally {
+      await dropResetUser(userId);
+    }
+  });
+
+  it('accepts an eight-character password change', async () => {
+    const { userId, username } = await createResetUser();
+    try {
+      const login = await api.post('/api/auth/login').send({ identifier: username, password: PASSWORD });
+      const token = login.body.accessToken as string;
+      const res = await api
+        .post('/api/auth/change-password')
+        .set(auth(token))
+        .send({ currentPassword: PASSWORD, newPassword: 'Eight888' });
+      expect(res.status).toBe(200);
+      expect((await api.post('/api/auth/login').send({ identifier: username, password: 'Eight888' })).status).toBe(200);
+    } finally {
+      await dropResetUser(userId);
     }
   });
 });

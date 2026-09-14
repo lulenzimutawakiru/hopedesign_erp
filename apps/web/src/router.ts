@@ -22,6 +22,7 @@ export function currentPath(): string {
   const pathname = window.location.pathname.replace(/\/+$/, '');
   if (pathname === '/verify' || pathname.endsWith('/verify')) return '/verify';
   if (pathname === '/invite' || pathname.endsWith('/invite')) return '/invite';
+  if (pathname === '/reset' || pathname.endsWith('/reset')) return '/reset';
   return '/dashboard';
 }
 

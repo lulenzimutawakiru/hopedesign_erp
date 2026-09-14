@@ -1,19 +1,53 @@
 import { Router } from 'express';
+import { createHash, randomBytes } from 'node:crypto';
 import { hashToken, signAccessToken, signLoginToken, verifyLoginToken, verifyPassword, generateTotpSecret, totpEnrollmentPayload, verifyTotp, redactUser, hashPassword, maskEmail } from '../auth.js';
-import { query, tx } from '../db.js';
+import { detach, query, tx } from '../db.js';
 import { authenticate, loadAuthUser } from '../middleware/auth.js';
 import { asyncHandler, badRequest, unauthorized } from '../utils.js';
 import { logAudit } from '../services/audit.js';
-import { loginLimiter, mfaLimiter, inviteLimiter } from '../middleware/rateLimits.js';
+import { loginLimiter, mfaLimiter, inviteLimiter, passwordResetLimiter } from '../middleware/rateLimits.js';
 import { ApiError } from '../utils.js';
 import { config } from '../config.js';
 import { issueEmailCode, verifyEmailCode, clearEmailCodes, EMAIL_RE } from '../services/mfaEmail.js';
+import { sendEmail } from '../services/bird.js';
+import { createTicket } from '../services/serviceDesk.js';
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_MINUTES = 15;
+/** Self-service reset links stay valid for one hour. */
+const RESET_TOKEN_TTL_MINUTES = 60;
 
 function ipOf(req: import('express').Request): string {
   return req.ctx.ip || '';
+}
+
+/**
+ * AUTH-003: identity comparison is forgiving. Case is ignored and spaces, dots,
+ * underscores and hyphens are equivalent separators, so "Nyirinkindi Annonciata",
+ * "nyirinkindi.annonciata" and "nyirinkindi_annonciata" all reach one account.
+ * `auth_resolve_user_by_identifier` applies the same rule in the database.
+ */
+function normalizeIdentifier(raw: unknown): string {
+  return String(raw ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * AUTH-003: a rejected sign-in previously left no server-side trace, which made
+ * "my password is right but I cannot get in" impossible to diagnose in
+ * production. The identifier is hashed so the log never carries an account
+ * name, and the password is never read here.
+ */
+function logLoginFailure(
+  reason: string,
+  identifier: string,
+  req: import('express').Request,
+  extra?: Record<string, unknown>
+): void {
+  const tag = createHash('sha256').update(identifier).digest('hex').slice(0, 12);
+  console.warn(
+    `[auth] login rejected reason=${reason} identifier=${tag} ip=${ipOf(req) || '-'}` +
+      (extra ? ' ' + JSON.stringify(extra) : '')
+  );
 }
 
 async function recordAttempt(identifier: string, ip: string, success: boolean) {
@@ -74,14 +108,18 @@ authRouter.post(
   '/login',
   loginLimiter,
   asyncHandler(async (req, res) => {
-    const identifier = String(req.body?.identifier ?? '').trim().toLowerCase();
+    const identifier = normalizeIdentifier(req.body?.identifier);
     const password = String(req.body?.password ?? '');
     const mfaCode = req.body?.mfaCode ? String(req.body.mfaCode).trim() : null;
-    if (!identifier || !password) throw badRequest('Identifier and password are required');
+    if (!identifier || !password) {
+      logLoginFailure('missing_fields', identifier || '(blank)', req, { hasPassword: Boolean(password) });
+      throw badRequest('Identifier and password are required');
+    }
 
     const user = await userByLogin(identifier);
     if (!user) {
       await recordAttempt(identifier, ipOf(req), false);
+      logLoginFailure('unknown_identifier', identifier, req);
       throw unauthorized('Invalid credentials');
     }
     const userId = Number(user.id);
@@ -90,11 +128,15 @@ authRouter.post(
     if (String(user.status) === 'LOCKED') {
       const lockedUntil = user.locked_until ? new Date(String(user.locked_until)) : null;
       if (lockedUntil && lockedUntil.getTime() > Date.now()) {
+        logLoginFailure('account_locked', identifier, req, { lockedUntil: String(user.locked_until) });
         throw new ApiError(423, 'ACCOUNT_LOCKED', 'Account is temporarily locked. Try again later.');
       }
       await query(`UPDATE users SET status='ACTIVE', failed_attempts=0, locked_until=NULL WHERE id=$1`, [userId], { tenantId, userId });
     }
-    if (!['ACTIVE', 'PENDING'].includes(String(user.status))) throw unauthorized('Account is not active');
+    if (!['ACTIVE', 'PENDING'].includes(String(user.status))) {
+      logLoginFailure('status_not_active', identifier, req, { status: String(user.status) });
+      throw unauthorized('Account is not active');
+    }
 
     const ok = await verifyPassword(password, String(user.password_hash));
     if (!ok) {
@@ -105,10 +147,12 @@ authRouter.post(
           [userId, attempts, LOCKOUT_MINUTES], { tenantId, userId }
         );
         await recordAttempt(identifier, ipOf(req), false);
+        logLoginFailure('bad_password_lockout', identifier, req, { attempts });
         throw new ApiError(423, 'ACCOUNT_LOCKED', 'Too many failed attempts. Account locked.');
       }
       await query(`UPDATE users SET failed_attempts=$2 WHERE id=$1`, [userId, attempts], { tenantId, userId });
       await recordAttempt(identifier, ipOf(req), false);
+      logLoginFailure('bad_password', identifier, req, { attempts });
       throw unauthorized('Invalid credentials');
     }
 
@@ -139,6 +183,7 @@ authRouter.post(
             userAgent: req.ctx.userAgent,
           });
           if (!issued.ok) {
+            logLoginFailure('mfa_email_delivery_failed', identifier, req, { error: issued.error ?? null });
             throw new ApiError(503, 'EMAIL_DELIVERY_FAILED', 'We could not send your sign-in code. Please try again shortly.');
           }
           return res.json({
@@ -156,6 +201,9 @@ authRouter.post(
         await clearEmailCodes(tenantId, userId);
       } else {
         if (!mfaCode) {
+          // A TOTP holder who has lost the authenticator is not stranded: the
+          // client offers email enrollment as an alternative factor, which
+          // still requires control of a mailbox on top of the password.
           return res.json({ mfaRequired: true, method: 'totp', loginToken: signLoginToken(userId, tenantId), user: redactUser(user) });
         }
         const secret = String(user.mfa_secret ?? '');
@@ -178,7 +226,13 @@ authRouter.post(
     // A row can be flagged enabled yet hold neither a personal address nor a
     // TOTP secret, in which case the challenge above cannot run. Enrolment is
     // forced instead of issuing a session that silently skipped the factor.
-    if (Boolean(user.mfa_enabled) || (await userHoldsPrivilegedPermission(userId, tenantId))) {
+    const privileged = await userHoldsPrivilegedPermission(userId, tenantId);
+    if (Boolean(user.mfa_enabled) || privileged) {
+      logLoginFailure('mfa_enrollment_required', identifier, req, {
+        mfa_enabled: Boolean(user.mfa_enabled),
+        method: mfaMethod || null,
+        privileged,
+      });
       return res.json({
         mfaRequired: true,
         enrollmentRequired: true,
@@ -245,6 +299,245 @@ authRouter.post(
     const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
     await tx(async (client) => {
       await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, { action: 'accept_invite', resource: 'users', recordId: userId });
+    }, { tenantId, userId });
+    res.json({ accessToken, refreshToken, user: redactUser(fresh) });
+  })
+);
+// ---------------------------------------------------------------- self-service password reset
+/**
+ * AUTH-003: start a self-service reset.
+ *
+ * The acknowledgement is byte-for-byte identical for a known identifier, an
+ * unknown one and a blank one, and it never reports whether mail went out, so
+ * the endpoint cannot be turned into an account-discovery oracle. A resolvable
+ * request does two further things: it raises a Service Desk ticket, because
+ * recoverable sign-in trouble is exactly what the desk exists for, and it mails
+ * a single-use link to the address already on the account.
+ */
+authRouter.post(
+  '/password/forgot',
+  passwordResetLimiter,
+  asyncHandler(async (req, res) => {
+    const identifier = normalizeIdentifier(req.body?.identifier);
+    const acknowledged = { ok: true, message: 'If that account exists, we have emailed a reset link.' };
+    if (!identifier) return res.json(acknowledged);
+
+    const user = await userByLogin(identifier);
+    if (!user) return res.json(acknowledged);
+
+    const userId = Number(user.id);
+    const tenantId = Number(user.tenant_id);
+    // LOCKED is admitted deliberately: an employee locked out by failed
+    // attempts is the main caller here. DISABLED and SUSPENDED accounts stay
+    // unreachable - a reset must never be a route back into a revoked account.
+    if (!['ACTIVE', 'PENDING', 'LOCKED'].includes(String(user.status).toUpperCase())) {
+      return res.json(acknowledged);
+    }
+
+    const companyId = user.company_id === null || user.company_id === undefined ? null : Number(user.company_id);
+    const branchId = user.branch_id === null || user.branch_id === undefined ? null : Number(user.branch_id);
+    const ip = ipOf(req);
+    const userAgent = req.ctx.userAgent;
+    const raw = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MINUTES * 60 * 1000);
+
+    // A second request retires every outstanding link, so an older intercepted
+    // link cannot be replayed after the holder asks again.
+    await query('SELECT auth_supersede_reset_tokens($1)', [userId]);
+    const created = await query('SELECT * FROM auth_reset_create($1,$2,$3,$4,$5,$6,$7,$8)', [
+      tenantId,
+      userId,
+      hashToken(raw),
+      expiresAt,
+      companyId,
+      branchId,
+      ip || null,
+      userAgent || null,
+    ]);
+    const tokenId = created.rows[0] ? Number((created.rows[0] as Record<string, unknown>).id) : null;
+
+    const to = String(user.email ?? '').trim() || String(user.personal_email ?? '').trim();
+    let delivered = false;
+    if (to) {
+      const link = `${config.webPublicUrl}/#/reset?token=${encodeURIComponent(raw)}`;
+      const greeting = String([user.first_name, user.last_name].filter(Boolean).join(' ')).trim();
+      const text = [
+        greeting ? `Hello ${greeting},` : 'Hello,',
+        '',
+        'We received a request to reset the password for your HOPE DESIGN account.',
+        '',
+        `Choose a new password here. The link works once and expires in ${RESET_TOKEN_TTL_MINUTES} minutes:`,
+        link,
+        '',
+        'A Service Desk ticket has been logged for this request, so IT can follow up if you are still stuck.',
+        '',
+        'If you did not ask for this you can ignore this email - your current password still works.',
+        '',
+        'HOPE DESIGN GROUP LTD',
+      ].join('\n');
+      const result = await sendEmail({
+        to: [to],
+        subject: 'Reset your HOPE DESIGN password',
+        text,
+        preheader: `Your reset link expires in ${RESET_TOKEN_TTL_MINUTES} minutes.`,
+        button: { label: 'Choose a new password', url: link },
+      });
+      delivered = result.ok;
+      if (!result.ok) {
+        console.error(`[auth] password reset mail failed user=${userId} error=${result.error ?? 'unknown'}`);
+      }
+    }
+
+    // The ticket is a courtesy, never a dependency: the link is already minted
+    // and on its way, so a desk failure is logged and the caller still gets the
+    // same calm acknowledgement.
+    let ticketId: number | null = null;
+    if (companyId && tokenId) {
+      try {
+        ticketId = await detach(
+          async (client, ctx) => {
+            const cat = await client.query<{ category_id: number; subcategory_id: number }>(
+              `SELECT c.id AS category_id, sc.id AS subcategory_id
+                 FROM service_subcategories sc
+                 JOIN service_categories c ON c.id = sc.category_id
+                WHERE sc.tenant_id = $1 AND sc.company_id = $2 AND sc.is_active AND c.is_active
+                  AND sc.code IN ('PASSWORD', 'USER_ACCOUNT', 'LOGIN')
+                ORDER BY CASE sc.code WHEN 'PASSWORD' THEN 1 WHEN 'USER_ACCOUNT' THEN 2 ELSE 3 END
+                LIMIT 1`,
+              [tenantId, companyId]
+            );
+            if (cat.rows.length === 0) return null;
+            const ticket = (await createTicket(
+              client,
+              ctx,
+              {
+                categoryId: Number(cat.rows[0].category_id),
+                subcategoryId: Number(cat.rows[0].subcategory_id),
+                ticketType: 'SERVICE_REQUEST',
+                subject: `Password reset requested - ${to || 'account on file'}`.slice(0, 200),
+                description:
+                  'A self-service password reset was requested from the sign-in screen. ' +
+                  'A single-use reset link was emailed to the address on the account. ' +
+                  'If the employee reports that the link never arrived, verify the mailbox and reset from the desk.',
+                impact: 'INDIVIDUAL',
+                urgency: 'MEDIUM',
+                preferredContact: 'EMAIL',
+                source: 'SYSTEM',
+              },
+              { selfService: true }
+            )) as unknown as Record<string, unknown>;
+            const id = Number(ticket.id);
+            await client.query('SELECT auth_reset_attach_ticket($1,$2)', [tokenId, id]);
+            return id;
+          },
+          { tenantId, companyId, branchId, userId, ip, userAgent }
+        );
+      } catch (err) {
+        console.error(`[auth] password reset auto-ticket failed user=${userId}`, err);
+      }
+    }
+
+    await tx(async (client) => {
+      await logAudit(
+        client,
+        { tenantId, userId, ip, userAgent, device: req.ctx.device },
+        {
+          action: 'password_reset_requested',
+          resource: 'users',
+          recordId: userId,
+          metadata: { ticket_id: ticketId, delivered },
+        }
+      );
+    }, { tenantId, userId });
+
+    return res.json(acknowledged);
+  })
+);
+
+/**
+ * AUTH-003: complete a self-service reset.
+ *
+ * The token is claimed with a single conditional UPDATE, so two concurrent
+ * submissions cannot both set a password. A successful reset also clears any
+ * lockout, ends every other session on the account, and signs the holder in, so
+ * recovery is one step rather than three.
+ */
+authRouter.post(
+  '/password/reset',
+  passwordResetLimiter,
+  asyncHandler(async (req, res) => {
+    const token = String(req.body?.token ?? '').trim();
+    const password = String(req.body?.password ?? '');
+    if (!token) throw badRequest('This reset link is missing its token. Request a new one.');
+    if (password.length < 8) throw badRequest('Password must be at least 8 characters');
+
+    const expired = unauthorized('This reset link is invalid or has expired. Request a new one.');
+    const hash = hashToken(token);
+    const found = (await query('SELECT * FROM auth_reset_token_by_hash($1)', [hash])).rows[0] as
+      | Record<string, unknown>
+      | undefined;
+    if (!found || found.used_at) throw expired;
+    if (new Date(String(found.expires_at)).getTime() <= Date.now()) throw expired;
+
+    const claimed = (
+      await query('SELECT * FROM auth_reset_consume($1,$2,$3)', [hash, ipOf(req) || null, req.ctx.userAgent || null])
+    ).rows[0] as Record<string, unknown> | undefined;
+    if (!claimed) throw expired;
+
+    const userId = Number(claimed.user_id);
+    const tenantId = Number(claimed.tenant_id);
+    const user = (
+      await query('SELECT * FROM users WHERE id = $1 AND tenant_id = $2', [userId, tenantId], { tenantId, userId })
+    ).rows[0] as Record<string, unknown> | undefined;
+    if (!user) throw expired;
+
+    const currentStatus = String(user.status).toUpperCase();
+    if (!['ACTIVE', 'PENDING', 'LOCKED'].includes(currentStatus)) {
+      throw unauthorized('This account is not active. Please contact the Service Desk.');
+    }
+
+    const passwordHash = await hashPassword(password);
+    // LOCKED and PENDING become ACTIVE; a status that is already usable is left
+    // exactly as it was.
+    await query(
+      `UPDATE users SET password_hash=$1, password_changed_at=now(), must_change_password=false,
+              failed_attempts=0, locked_until=NULL,
+              status = CASE WHEN status IN ('LOCKED', 'PENDING') THEN 'ACTIVE' ELSE status END
+        WHERE id=$2`,
+      [passwordHash, userId],
+      { tenantId, userId }
+    );
+    await query(
+      `INSERT INTO user_status_history (tenant_id, user_id, from_status, to_status, reason, changed_by)
+       VALUES ($1,$2,$3,'ACTIVE','Password reset completed',NULL)`,
+      [tenantId, userId, currentStatus],
+      { tenantId, userId }
+    );
+    await query('SELECT auth_revoke_all_sessions($1)', [userId]);
+
+    const fresh = (
+      await query('SELECT * FROM users WHERE id = $1 AND tenant_id = $2', [userId, tenantId], { tenantId, userId })
+    ).rows[0] as Record<string, unknown>;
+    const { sid, refreshToken } = await createSession(
+      userId,
+      tenantId,
+      ipOf(req),
+      req.ctx.userAgent,
+      req.ctx.device,
+      true
+    );
+    const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
+    await tx(async (client) => {
+      await logAudit(
+        client,
+        { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device },
+        {
+          action: 'password_reset_completed',
+          resource: 'users',
+          recordId: userId,
+          metadata: { previous_status: currentStatus, ticket_id: claimed.ticket_id ?? null },
+        }
+      );
     }, { tenantId, userId });
     res.json({ accessToken, refreshToken, user: redactUser(fresh) });
   })
@@ -674,7 +967,10 @@ authRouter.post(
     const user = req.auth!;
     const current = String(req.body?.currentPassword ?? '');
     const next = String(req.body?.newPassword ?? '');
-    if (next.length < 12) throw badRequest('New password must be at least 12 characters');
+    // AUTH-003: one rule for every password entry point. Invitation acceptance
+    // and self-service reset both accept eight characters, so requiring twelve
+    // here only locked people into a length they could not reproduce elsewhere.
+    if (next.length < 8) throw badRequest('New password must be at least 8 characters');
     if (next === current) throw badRequest('New password must be different from the current password');
     if (/changeme/i.test(next) || next === 'ChangeMe!2026') {
       throw badRequest('Choose a password that is not the seeded default');
