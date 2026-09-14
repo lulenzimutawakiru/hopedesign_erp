@@ -55,7 +55,7 @@ import {
   useBreakpoint,
 } from '../components/nav';
 import { isFocusPath, itemVisible, normalizePath, requiredPermForPath, track } from '../nav';
-import { BrandMark } from '../components/BrandMark';
+import { BrandMark, BrandWordmark, hasBrandAsset } from '../components/BrandMark';
 import { useCompanyProfile } from '../company';
 
 export default function Shell() {
@@ -238,7 +238,7 @@ export default function Shell() {
           {focus && (
             <button className="icon-btn" onClick={() => history.back()} aria-label="Back">←</button>
           )}
-          {compact && (
+          {compact && hasBrandAsset(company.logo_url) && (
             <button className="topbar-brand" onClick={() => navigate('/dashboard')} aria-label={`${brandCompany.name} dashboard`}>
               <BrandMark size="sm" logoUrl={company.logo_url} />
             </button>
@@ -268,6 +268,12 @@ export default function Shell() {
               onLogout={logout}
             />
           </div>
+          <BrandWordmark
+            size="md"
+            className="topbar-brand-alt hide-phone"
+            logoUrl={company.footer_logo_url}
+            title={`${brandCompany.name} logo`}
+          />
         </header>
 
         {showModuleNav && (

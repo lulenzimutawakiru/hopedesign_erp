@@ -45,7 +45,7 @@ export default function AcceptInvite() {
     <div className="login-page">
       <div className="login-hero">
         <div>
-          <BrandMark size="lg" tone="hope" logoUrl={company.logo_url} />
+          <BrandMark size="lg" logoUrl={company.logo_url} />
           <div className="eyebrow">{company.name}{branch ? ` · ${branch}` : ''}</div>
           <h2>Welcome to {shortCompanyName(company.name)} OS.</h2>
           <p>Set your password to activate your account and join the mill.</p>

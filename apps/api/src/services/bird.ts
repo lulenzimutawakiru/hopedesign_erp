@@ -1,10 +1,18 @@
+import pg from 'pg';
+import { pool, query } from '../db.js';
 import {
   isAfricasTalkingConfigured,
   sendSmsViaAfricastalking,
   sendWhatsAppViaAfricastalking,
 } from './africastalking.js';
 import { isResendConfigured, sendEmailViaResend } from './resend.js';
-import { brandEmailContent, type EmailActionButton } from './emailBranding.js';
+import { loadCompanyProfile } from './branding.js';
+import {
+  brandEmailContent,
+  DEFAULT_COMPANY,
+  type CompanyBrand,
+  type EmailActionButton,
+} from './emailBranding.js';
 
 export interface BirdSendResult {
   ok: boolean;
@@ -28,6 +36,63 @@ export interface BirdEmailInput {
   text?: string;
   button?: EmailActionButton | null;
   preheader?: string | null;
+  /** Overrides the tenant brand assets resolved from app_settings. */
+  company?: CompanyBrand;
+}
+
+const EMAIL_BRAND_TTL_MS = 5 * 60 * 1000;
+let emailBrandCache: { at: number; brand: CompanyBrand } | null = null;
+
+/** Drop the cached brand so the next send re-reads app_settings (tests/admin). */
+export function resetEmailBrandCache(): void {
+  emailBrandCache = null;
+}
+
+/**
+ * Resolve the tenant's branding for outgoing mail.
+ *
+ * These are the same app_settings rows that drive the printed, PDF and
+ * spreadsheet exports, so a message always carries the uploaded logos and
+ * brand colours instead of a built-in mark. A lookup failure degrades to the
+ * shipped default identity rather than blocking delivery, and is never cached,
+ * so a transient database error cannot pin the fallback for later sends.
+ */
+export async function resolveEmailBrand(): Promise<CompanyBrand> {
+  const now = Date.now();
+  if (emailBrandCache && now - emailBrandCache.at < EMAIL_BRAND_TTL_MS) {
+    return emailBrandCache.brand;
+  }
+  try {
+    const tenantRow = await query<{ id: string }>('SELECT id FROM tenants ORDER BY id ASC LIMIT 1');
+    const tenantId = Number(tenantRow.rows[0]?.id) || 0;
+    if (!tenantId) return DEFAULT_COMPANY;
+    const companyRow = await query<{ id: string }>(
+      'SELECT id FROM companies WHERE tenant_id = $1 ORDER BY id ASC LIMIT 1',
+      [tenantId],
+      { tenantId }
+    );
+    const companyId = Number(companyRow.rows[0]?.id) || null;
+    const profile = await loadCompanyProfile(pool as unknown as pg.PoolClient, {
+      tenantId,
+      companyId,
+    });
+    const brand: CompanyBrand = {
+      name: profile.name || DEFAULT_COMPANY.name,
+      tagline: profile.tagline || undefined,
+      address: profile.address || undefined,
+      phone: profile.phone || undefined,
+      email: profile.email || undefined,
+      website: profile.website || undefined,
+      logoUrl: profile.logoUrl || undefined,
+      footerLogoUrl: profile.footerLogoUrl || undefined,
+      brandColor: profile.brandColor || undefined,
+      brandColorSecondary: profile.brandColorSecondary || undefined,
+    };
+    emailBrandCache = { at: now, brand };
+    return brand;
+  } catch {
+    return DEFAULT_COMPANY;
+  }
 }
 
 export interface SmsParams {
@@ -96,6 +161,7 @@ export async function sendEmail(
     text: input.text,
     button: input.button ?? undefined,
     preheader: input.preheader ?? undefined,
+    company: input.company ?? (await resolveEmailBrand()),
   });
   const payload = { ...input, html: branded.html, text: branded.text };
   if (!isResendConfigured()) {

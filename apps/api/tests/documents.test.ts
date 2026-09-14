@@ -92,8 +92,11 @@ describe('branded document exports', () => {
     expect(plain.text).toContain('--navy: #1261A0');
     expect(plain.text).toContain('--teal: #00A6A6');
     expect(plain.text).not.toContain('class="brand-logo"');
-    expect(plain.text).toContain('class="brand-mark"');
     expect(plain.text).not.toContain('class="foot-logo"');
+    // Nothing is drawn from built-in artwork: the only vector mark left is the
+    // 16px authenticity icon stamped on the verification block.
+    expect(plain.text).not.toContain('<svg class="brand-mark" viewBox="0 0 40 40" width="42"');
+    expect(plain.text).toContain('<svg class="brand-mark" viewBox="0 0 40 40" width="16"');
 
     const set = await api.patch('/api/settings').set(auth(token)).send({
       category: 'general',
@@ -119,6 +122,7 @@ describe('branded document exports', () => {
     expect(print.text).toContain('--teal: #654321');
     expect(print.text).toContain('class="brand-logo"');
     expect(print.text).toContain('hope-logo.png');
+    expect(print.text).toContain('class="brand-logo brand-logo-alt"');
     expect(print.text).toContain('class="foot-logo"');
     expect(print.text).toContain('hope-footer-logo.png');
 

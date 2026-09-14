@@ -23,12 +23,14 @@ import {
   hexToRgb,
   renderBrandedHtml,
   type CompanyProfile,
+  type ExcelBrandImages,
 } from './branding.js';
 import {
   BOTTOM,
   MARGIN,
   PAGE_W,
   PdfDoc,
+  imagePixelSize,
   textWidth,
   type PdfTableColumn,
   type Rgb,
@@ -178,15 +180,29 @@ function estimateTableWidth(opts: BrandedTableOpts, rows: Array<Record<string, u
   return total;
 }
 
-function drawBrandMark(doc: PdfDoc, x: number, y: number, size: number, brand: DocBrand): void {
-  doc.rect(x, y, size, size, brand.navy);
-  const bar = size * 0.16;
-  const inset = size * 0.2;
-  doc.rect(x + inset, y + size * 0.2, bar, size * 0.6, BRAND.white);
-  doc.rect(x + size - inset - bar, y + size * 0.2, bar, size * 0.6, BRAND.white);
-  doc.rect(x + size * 0.2, y + size * 0.42, size * 0.6, size * 0.16, brand.teal);
-  doc.rect(x + size * 0.46, y + size * 0.34, size * 0.08, size * 0.32, brand.navy);
-  doc.rect(x + size * 0.36, y + size * 0.44, size * 0.32, size * 0.08, brand.navy);
+/**
+ * Width an uploaded brand image occupies when drawn at `height`, preserving its
+ * intrinsic aspect ratio and never exceeding `maxWidth`. Returns 0 when no
+ * uploaded asset is available, so documents degrade to text only - there is no
+ * built-in vector brand mark to fall back to.
+ */
+export function brandImageWidth(doc: PdfDoc, height: number, maxWidth: number, logoName?: string): number {
+  if (!logoName) return 0;
+  const dims = doc.imageDims(logoName);
+  if (!dims || !dims.height) return 0;
+  return Math.min(maxWidth, Math.max(12, (dims.width / dims.height) * height));
+}
+
+/**
+ * Draw the secondary brand mark (the uploaded second logo) flush with the right
+ * edge of the content area and return the width it consumed, so callers can keep
+ * right-aligned text clear of it.
+ */
+export function drawRightBrandMark(doc: PdfDoc, y: number, height: number, logoName?: string): number {
+  const w = brandImageWidth(doc, height, doc.contentWidth * 0.34, logoName);
+  if (!w || !logoName) return 0;
+  doc.image(logoName, MARGIN + doc.contentWidth - w, y, w, height);
+  return w;
 }
 
 /**
@@ -243,33 +259,84 @@ export function preloadFooterLogo(doc: PdfDoc, footerLogoUrl: string): string | 
   return file ? doc.addImage(file.bytes) ?? undefined : undefined;
 }
 
+/**
+ * Register the uploaded brand logos on an ExcelJS workbook so the spreadsheet
+ * letterhead can carry the same two marks as the PDF/HTML renderers. Returns
+ * nothing when no uploaded asset exists - the letterhead then stays text only.
+ */
+/**
+ * Minimal ExcelJS workbook surface needed to register uploaded brand artwork.
+ *
+ * ExcelJS types `Image.buffer` with its own ambient `Buffer` (declared as
+ * `interface Buffer extends ArrayBuffer {}`), which a Node Buffer does not
+ * structurally satisfy - even though the media writer appends the bytes to the
+ * archive verbatim. The loose `buffer` type keeps that mismatch in one place.
+ */
+export interface ExcelImageWorkbook {
+  addImage: (image: { extension: 'png' | 'jpeg' | 'gif'; buffer?: unknown }) => number;
+}
+
+export function excelBrandImages(
+  wb: unknown,
+  company: { logoUrl: string; footerLogoUrl: string }
+): ExcelBrandImages {
+  const out: ExcelBrandImages = {};
+  const book = wb as ExcelImageWorkbook | null | undefined;
+  if (!book || typeof book.addImage !== 'function') return out;
+  const register = (
+    file: { bytes: Buffer; ext: string } | null,
+    slot: 'logo' | 'footerLogo'
+  ): void => {
+    if (!file) return;
+    const size = imagePixelSize(file.bytes);
+    if (!size || !size.height) return;
+    const id = book.addImage({ buffer: file.bytes, extension: file.ext === '.jpg' ? 'jpeg' : 'png' });
+    const aspect = size.width / size.height;
+    if (slot === 'logo') {
+      out.logoId = id;
+      out.logoAspect = aspect;
+    } else {
+      out.footerLogoId = id;
+      out.footerLogoAspect = aspect;
+    }
+  };
+  register(company.logoUrl ? readStoredLogo(company.logoUrl) : null, 'logo');
+  register(company.footerLogoUrl ? readStoredFooterLogo(company.footerLogoUrl) : null, 'footerLogo');
+  return out;
+}
+
 function drawTopBar(doc: PdfDoc, brand: DocBrand): void {
   doc.rect(0, doc.pageHeight - 8, doc.pageWidth, 8, brand.navy);
   doc.rect(0, doc.pageHeight - 11, doc.pageWidth, 3, brand.teal);
 }
 
-export function drawRunningHeader(doc: PdfDoc, opts: BrandedDocMeta, brand: DocBrand, logoName?: string): void {
+export function drawRunningHeader(
+  doc: PdfDoc,
+  opts: BrandedDocMeta,
+  brand: DocBrand,
+  logoName?: string,
+  footerLogoName?: string
+): void {
   drawTopBar(doc, brand);
   const top = doc.pageHeight - 18;
   const mark = 16;
   const dims = logoName ? doc.imageDims(logoName) : null;
-  let textX = MARGIN + mark + 8;
+  let textX = MARGIN;
   if (dims) {
     const logoW = Math.min(90, Math.max(18, (dims.width / dims.height) * mark));
     doc.image(logoName as string, MARGIN, top - mark, logoW, mark);
     textX = MARGIN + logoW + 8;
-  } else {
-    drawBrandMark(doc, MARGIN, top - mark, mark, brand);
   }
+  const rightMarkW = drawRightBrandMark(doc, top - mark, mark, footerLogoName);
   doc.rawText(opts.company.name, textX, top - 5, 8, {
     bold: true,
     color: brand.navy,
-    maxWidth: doc.contentWidth * 0.55,
+    maxWidth: Math.max(60, doc.contentWidth * 0.5 - rightMarkW),
   });
   const right = `${opts.title.toUpperCase()}${opts.docNo ? `  ${opts.docNo}` : ''}`;
   doc.rawText(right, MARGIN, top - 5, 8, {
     align: 'right',
-    maxWidth: doc.contentWidth,
+    maxWidth: Math.max(60, doc.contentWidth - (rightMarkW ? rightMarkW + 10 : 0)),
     color: GRAY,
     bold: true,
   });
@@ -278,21 +345,26 @@ export function drawRunningHeader(doc: PdfDoc, opts: BrandedDocMeta, brand: DocB
   doc.cursorY = top - 34;
 }
 
-export function drawLetterhead(doc: PdfDoc, opts: BrandedDocMeta, brand: DocBrand, logoName?: string): void {
+export function drawLetterhead(
+  doc: PdfDoc,
+  opts: BrandedDocMeta,
+  brand: DocBrand,
+  logoName?: string,
+  footerLogoName?: string
+): void {
   const c = opts.company;
   drawTopBar(doc, brand);
   const logoSize = 30;
   const top = doc.pageHeight - 18;
   const logoY = top - logoSize - 6;
   const dims = logoName ? doc.imageDims(logoName) : null;
-  let textX = MARGIN + logoSize + 11;
+  let textX = MARGIN;
   if (dims) {
     const logoW = Math.min(110, Math.max(20, (dims.width / dims.height) * logoSize));
     doc.image(logoName as string, MARGIN, logoY, logoW, logoSize);
     textX = MARGIN + logoW + 11;
-  } else {
-    drawBrandMark(doc, MARGIN, logoY, logoSize, brand);
   }
+  const rightMarkW = drawRightBrandMark(doc, logoY, logoSize, footerLogoName);
   const rightX = MARGIN + doc.contentWidth * 0.56;
   const rightW = doc.contentWidth * 0.44;
   const leftW = Math.max(80, rightX - textX - 4);
@@ -304,7 +376,7 @@ export function drawLetterhead(doc: PdfDoc, opts: BrandedDocMeta, brand: DocBran
   for (const ln of [...companyContactLines(c), ...companyRegLines(c)].slice(0, 2)) {
     doc.text(ln, textX, 6.4, { color: GRAY, maxWidth: leftW });
   }
-  let ry = top - 4;
+  let ry = top - 4 - (rightMarkW ? logoSize + 8 : 0);
   doc.rawText((opts.kicker ?? 'Official export').toUpperCase(), rightX, ry, 6.2, {
     align: 'right',
     maxWidth: rightW,
@@ -415,8 +487,8 @@ export async function renderTablePdf(opts: BrandedTableOpts): Promise<Buffer> {
   const logoName = preloadLogo(doc, opts.company.logoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
-  doc.setNewPageHandler(() => drawRunningHeader(doc, opts, brand, logoName));
-  drawLetterhead(doc, opts, brand, logoName);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, opts, brand, logoName, footerLogoName));
+  drawLetterhead(doc, opts, brand, logoName, footerLogoName);
 
   doc.text(
     'Issued by ' +
@@ -589,7 +661,7 @@ export async function renderTableXlsx(opts: BrandedTableOpts): Promise<Buffer> {
     status: opts.status,
     classification: opts.classification ?? 'Internal',
     columns: Math.max(8, opts.columns.length),
-  });
+  }, excelBrandImages(wb, opts.company));
   const hr = ws.addRow(opts.columns.map((c) => c.label));
   hr.font = { bold: true, color: { argb: 'FFFFFFFF' }, name: 'Calibri', size: 9 };
   hr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };

@@ -103,10 +103,10 @@ export const SETTINGS: Record<string, Record<string, SettingDef>> = {
     company_tagline: { label: 'Company tagline', type: 'text', group: 'Company identity' },
     industry: { label: 'Industry', help: 'Primary industry used for report grouping and compliance defaults.', type: 'select', options: ['Manufacturing', 'Paper & Packaging', 'Security Printing', 'FMCG', 'Pharmaceuticals', 'Agriculture', 'Logistics', 'Retail', 'Other'], default: 'Manufacturing', group: 'Company identity' },
     website: { label: 'Website', help: 'Public company website, linked from branded exports.', type: 'url', group: 'Company identity' },
-    logo_url: { label: 'Logo URL', help: 'Public URL of the company logo used in branded document exports.', type: 'url', group: 'Company identity' },
+    logo_url: { label: 'Primary logo', help: 'Uploaded logo used as the left-hand mark in the app header and on branded documents and exports.', type: 'url', group: 'Company identity' },
     favicon_url: { label: 'Favicon URL', help: 'Public URL of the browser tab icon (PNG or ICO).', type: 'url', group: 'Company identity' },
     signature_url: { label: 'Signature image URL', help: 'Public URL of the uploaded signature image used on auto-signed documents.', type: 'url', group: 'Company identity' },
-    footer_logo_url: { label: 'Footer logo URL', help: 'Public URL of the separate footer logo shown at the bottom of branded documents and exports.', type: 'url', group: 'Company identity' },
+    footer_logo_url: { label: 'Secondary logo', help: 'Uploaded logo used as the right-hand mark in the app header and in the footer of branded documents and exports.', type: 'url', group: 'Company identity' },
     brand_color: { label: 'Primary brand colour', help: 'Accent colour used on branded documents and exports.', type: 'color', default: '#1261A0', group: 'Company identity' },
     brand_color_secondary: { label: 'Secondary brand colour', help: 'Secondary accent for highlights and supporting elements.', type: 'color', default: '#00A6A6', group: 'Company identity' },
 

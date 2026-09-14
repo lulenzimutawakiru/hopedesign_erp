@@ -261,19 +261,18 @@ button, input, select, textarea { font-family: inherit; }
 .sidebar-brand strong { color: #FFFFFF; font-size: 14px; display: block; letter-spacing: 0.01em; }
 .brand-sub { font-size: 11px; color: var(--rail-dim); letter-spacing: 0.08em; text-transform: uppercase; }
 .brand-mark {
-  width: 38px; height: 38px; flex: none;
-  border-radius: 8px;
-  overflow: hidden;
-  display: inline-flex; align-items: center; justify-content: center;
+  flex: none;
+  display: inline-flex; align-items: center;
   background: transparent;
   line-height: 0;
 }
-.brand-mark svg { display: block; }
 .brand-mark img {
-  width: 100%; height: 100%; object-fit: contain;
+  width: auto; height: 100%; object-fit: contain;
   display: block;
 }
-.brand-mark-lg { width: 56px; height: 56px; border-radius: 12px; }
+.brand-mark-sm { height: 28px; }
+.brand-mark-md { height: 38px; }
+.brand-mark-lg { height: 56px; }
 .brand-lockup { display: inline-flex; align-items: center; gap: 12px; }
 .brand-lockup-copy { display: flex; flex-direction: column; }
 .brand-lockup-copy strong { color: inherit; font-size: 15px; letter-spacing: 0.01em; }
@@ -1140,7 +1139,7 @@ html[data-theme='dark'] .scan-verified .verify-mark { color: #20C4C4; }
   display: none; align-items: center; gap: 8px;
   border: 0; background: none; cursor: pointer; color: var(--ink); font: inherit;
 }
-.brand-mark-sm { width: 28px; height: 28px; }
+.topbar-brand-alt { margin-left: 2px; }
 .topbar-word { font-weight: 700; letter-spacing: 0.02em; }
 .btn-scan { background: var(--teal); border-color: var(--teal); color: #fff; }
 .btn-scan:hover { filter: brightness(0.95); }
@@ -2215,7 +2214,7 @@ html[data-theme='dark'] .settings-nav-meta { color: #7E8C99; }
 html[data-theme='dark'] .settings-bar { background: #102536; border-color: #2A4A66; }
 html[data-theme='dark'] .audit-old { color: #8995A1; }
 .brand-preview-card { overflow: hidden; }
-.brand-preview-mark { flex: none; display: block; }
+.brand-preview-logo-alt { height: 26px; max-width: 110px; margin-bottom: 6px; }
 .brand-preview-letterhead {
   border: 1px solid var(--line-strong);
   border-radius: 12px;

@@ -202,7 +202,7 @@ export default function Login() {
         />
         <div className="login-hero-veil" aria-hidden />
         <div className="login-hero-copy">
-          <BrandMark size="lg" tone="hope" logoUrl={company.logo_url} />
+          <BrandMark size="lg" logoUrl={company.logo_url} />
           <div className="eyebrow">{company.name}{branch ? ` · ${branch}` : ''}</div>
           <h2>The mill, the press, and the money in one operating system.</h2>
           <p>Paper manufacturing, security printing and QR custody — role-bound, dual-controlled, auditable.</p>

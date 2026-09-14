@@ -162,6 +162,24 @@ function excelCol(n: number): string {
   return s;
 }
 
+/**
+ * Point size of the navy artwork band the spreadsheet letterhead reserves for
+ * the uploaded brand logos.
+ */
+const EXCEL_LOGO_BAND_PT = 34;
+
+/**
+ * Workbook image ids + intrinsic aspect ratios for the uploaded brand logos, as
+ * returned by `excelBrandImages`. Empty when no asset has been uploaded, in
+ * which case the spreadsheet letterhead renders text only.
+ */
+export interface ExcelBrandImages {
+  logoId?: number;
+  logoAspect?: number;
+  footerLogoId?: number;
+  footerLogoAspect?: number;
+}
+
 /** Shared navy letterhead block used by document and report workbooks. */
 export function applyExcelBrandHeader(
   ws: {
@@ -180,17 +198,32 @@ export function applyExcelBrandHeader(
       };
     };
     mergeCells: (from: string, to: string) => void;
+    addImage: (
+      imageId: number,
+      position: { tl: { col: number; row: number }; ext: { width: number; height: number } }
+    ) => void;
   },
   company: CompanyProfile,
-  opts: ExcelBrandHeaderOpts
+  opts: ExcelBrandHeaderOpts,
+  images?: ExcelBrandImages
 ): number {
   const navy = brandHex(company.brandColor, `FF${BRAND_HEX.navy.slice(1)}`);
   const teal = brandHex(company.brandColorSecondary, `FF${BRAND_HEX.teal.slice(1)}`);
   const gray = 'FF5F6B76';
   const white = 'FFFFFFFF';
   const paper = 'FFF4F6F8';
-  const last = excelCol(Math.max(8, opts.columns ?? 8));
+  const cols = Math.max(8, opts.columns ?? 8);
+  const last = excelCol(cols);
   const merge = (n: number) => ws.mergeCells(`A${n}`, `${last}${n}`);
+
+  let logoBandRow = 0;
+  if (images && (images.logoId != null || images.footerLogoId != null)) {
+    const band = ws.addRow([]);
+    band.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
+    band.height = EXCEL_LOGO_BAND_PT;
+    merge(band.number);
+    logoBandRow = band.number;
+  }
 
   const r1 = ws.addRow([company.name]);
   r1.font = { bold: true, size: 16, color: { argb: white }, name: 'Calibri' };
@@ -240,6 +273,23 @@ export function applyExcelBrandHeader(
       fr.getCell(1).font = { size: 9, color: { argb: gray }, name: 'Calibri' };
       fr.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: paper } };
       fr.getCell(2).font = { bold: true, size: 10, color: { argb: navy }, name: 'Calibri' };
+    }
+  }
+  if (logoBandRow && images) {
+    const bandPx = (EXCEL_LOGO_BAND_PT * 4) / 3;
+    const rowOffset = (h: number) => logoBandRow - 1 + Math.max(0, (bandPx - h) / 2) / bandPx;
+    if (images.logoId != null) {
+      const h = 26;
+      const w = Math.round(Math.max(24, Math.min(150, (images.logoAspect ?? 3) * h)));
+      ws.addImage(images.logoId, { tl: { col: 0.06, row: rowOffset(h) }, ext: { width: w, height: h } });
+    }
+    if (images.footerLogoId != null) {
+      const h = 20;
+      const w = Math.round(Math.max(20, Math.min(120, (images.footerLogoAspect ?? 3) * h)));
+      ws.addImage(images.footerLogoId, {
+        tl: { col: Math.max(1, cols - 2.7), row: rowOffset(h) },
+        ext: { width: w, height: h },
+      });
     }
   }
   const spacer = ws.addRow([]);
@@ -585,11 +635,19 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   const contactHtml = [...companyContactLines(c), ...companyRegLines(c)]
     .map((line) => `<div class="c-line">${esc(line)}</div>`)
     .join('');
-  const brandMarkHtml = /^https?:\/\//i.test(c.logoUrl.trim())
-    ? `<img class="brand-logo" src="${esc(c.logoUrl.trim())}" alt="${esc(c.name)} logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
-    : brandMarkSvg(42, c.brandColor, c.brandColorSecondary);
-  const footerLogoHtml = /^https?:\/\//i.test(c.footerLogoUrl.trim())
-    ? `<img class="foot-logo" src="${esc(c.footerLogoUrl.trim())}" alt="${esc(c.name)} footer logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
+  // Branding is driven entirely by the uploaded brand assets. When no asset has
+  // been uploaded the letterhead degrades to text only - there is no hard-coded
+  // vector mark to fall back to.
+  const logoSrc = c.logoUrl.trim();
+  const brandMarkHtml = /^https?:\/\//i.test(logoSrc)
+    ? `<img class="brand-logo" src="${esc(logoSrc)}" alt="${esc(c.name)} logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
+    : '';
+  const footerLogoSrc = c.footerLogoUrl.trim();
+  const rightLogoHtml = /^https?:\/\//i.test(footerLogoSrc)
+    ? `<img class="brand-logo brand-logo-alt" src="${esc(footerLogoSrc)}" alt="${esc(c.name)} logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
+    : '';
+  const footerLogoHtml = /^https?:\/\//i.test(footerLogoSrc)
+    ? `<img class="foot-logo" src="${esc(footerLogoSrc)}" alt="${esc(c.name)} footer logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
     : '';
 
   const stampRaw = `Issued by ${opts.issuedBy} on ${formatDocDateTime(opts.issuedAt)}`;
@@ -679,6 +737,7 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   .lh-brand { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
   .brand-mark { width: 42px; height: 42px; flex: 0 0 auto; display: block; }
   .brand-logo { height: 42px; width: auto; max-width: 120px; flex: 0 0 auto; object-fit: contain; }
+  .brand-logo-alt { max-width: 110px; }
   .co-name { font-size: 18px; font-weight: 700; color: var(--navy); letter-spacing: 0.01em; margin: 0; }
   .co-tag { color: var(--teal); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin: 2px 0 6px; font-weight: 600; }
   .c-line { color: var(--muted); font-size: 9.5px; line-height: 1.45; }
@@ -776,6 +835,7 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
         ${opts.docNo ? `<div class="doc-no">${esc(opts.docNo)}</div>` : ''}
         ${opts.subtitle ? `<div class="doc-sub">${esc(opts.subtitle)}</div>` : ''}
       </div>
+      ${rightLogoHtml}
     </div>
     <div class="lh-rule"></div>
   </header>

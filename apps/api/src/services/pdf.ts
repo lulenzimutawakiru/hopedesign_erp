@@ -331,11 +331,30 @@ function jpegSize(buf: Buffer): { width: number; height: number } | null {
   return null;
 }
 
-function decodePngRgb(buf: Buffer): { width: number; height: number; rgb: Buffer } | null {
+/** PNG pixel dimensions read straight from the IHDR chunk, without decoding. */
+function pngSize(buf: Buffer): { width: number; height: number } | null {
   if (buf.length < 24 || buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4e || buf[3] !== 0x47) return null;
+  const width = buf.readUInt32BE(16);
+  const height = buf.readUInt32BE(20);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+/**
+ * Pixel dimensions of a PNG or JPEG buffer, or null when the format is not
+ * supported. Used to keep uploaded brand assets at their intrinsic aspect ratio
+ * in renderers that cannot measure the image themselves (XLSX drawings).
+ */
+export function imagePixelSize(buf: Buffer): { width: number; height: number } | null {
+  const jpeg = jpegSize(buf);
+  if (jpeg && jpeg.width > 0 && jpeg.height > 0) return jpeg;
+  return pngSize(buf);
+}
+
+function decodePngRgb(buf: Buffer): { width: number; height: number; rgb: Buffer } | null {
+  const size = pngSize(buf);
+  if (!size) return null;
+  const { width, height } = size;
   let offset = 8;
-  let width = 0;
-  let height = 0;
   let bitDepth = 0;
   let colorType = 0;
   const idats: Buffer[] = [];
@@ -344,8 +363,6 @@ function decodePngRgb(buf: Buffer): { width: number; height: number; rgb: Buffer
     const type = buf.toString('ascii', offset + 4, offset + 8);
     const data = buf.subarray(offset + 8, offset + 8 + len);
     if (type === 'IHDR') {
-      width = data.readUInt32BE(0);
-      height = data.readUInt32BE(4);
       bitDepth = data[8];
       colorType = data[9];
       if (data[12] !== 0) return null;
@@ -356,7 +373,7 @@ function decodePngRgb(buf: Buffer): { width: number; height: number; rgb: Buffer
     }
     offset += 12 + len;
   }
-  if (!width || !height || bitDepth !== 8 || (colorType !== 2 && colorType !== 6) || idats.length === 0) return null;
+  if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6) || idats.length === 0) return null;
   if (width > 4000 || height > 4000) return null;
   let inflated: Buffer;
   try {

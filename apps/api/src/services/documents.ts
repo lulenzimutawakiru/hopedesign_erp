@@ -30,7 +30,13 @@ import {
   formatDocStatus,
   renderBrandedHtml,
 } from './branding.js';
-import { excelNumFmt, toExcelValue } from './brandedExport.js';
+import {
+  brandImageWidth,
+  drawRightBrandMark,
+  excelBrandImages,
+  excelNumFmt,
+  toExcelValue,
+} from './brandedExport.js';
 
 /**
  * Generic business-document export layer.
@@ -2413,39 +2419,41 @@ function wrapHard(text: string, size: number, bold: boolean, maxWidth: number): 
   return out.length ? out : [''];
 }
 
-function drawBrandMark(doc: PdfDoc, x: number, y: number, size: number, brand: DocBrand): void {
-  doc.rect(x, y, size, size, brand.navy);
-  const bar = size * 0.16;
-  const inset = size * 0.2;
-  doc.rect(x + inset, y + size * 0.2, bar, size * 0.6, BRAND.white);
-  doc.rect(x + size - inset - bar, y + size * 0.2, bar, size * 0.6, BRAND.white);
-  doc.rect(x + size * 0.2, y + size * 0.42, size * 0.6, size * 0.16, brand.teal);
-  doc.rect(x + size * 0.46, y + size * 0.34, size * 0.08, size * 0.32, brand.navy);
-  doc.rect(x + size * 0.36, y + size * 0.44, size * 0.32, size * 0.08, brand.navy);
-}
-
 function drawTopBar(doc: PdfDoc, brand: DocBrand): void {
   doc.rect(0, PAGE_H - 8, PAGE_W, 8, brand.navy);
   doc.rect(0, PAGE_H - 11, PAGE_W, 3, brand.teal);
 }
 
-function drawRunningHeader(doc: PdfDoc, data: DocData, opts: DocumentRenderOpts, logoName?: string): void {
+function drawRunningHeader(
+  doc: PdfDoc,
+  data: DocData,
+  opts: DocumentRenderOpts,
+  logoName?: string,
+  footerLogoName?: string
+): void {
   const brand = brandOf(opts.company);
   drawTopBar(doc, brand);
   const top = PAGE_H - 18;
   const mark = 16;
-  const dims = logoName ? doc.imageDims(logoName) : null;
-  let textX = MARGIN + mark + 8;
-  if (dims) {
-    const logoW = Math.min(90, Math.max(18, (dims.width / dims.height) * mark));
+  let textX = MARGIN;
+  const logoW = brandImageWidth(doc, mark, 90, logoName);
+  if (logoW) {
     doc.image(logoName as string, MARGIN, top - mark, logoW, mark);
     textX = MARGIN + logoW + 8;
-  } else {
-    drawBrandMark(doc, MARGIN, top - mark, mark, brand);
   }
-  doc.rawText(opts.company.name, textX, top - 5, 8, { bold: true, color: brand.navy, maxWidth: TABLE_W * 0.55 });
+  const rightMarkW = drawRightBrandMark(doc, top - mark, mark, footerLogoName);
+  doc.rawText(opts.company.name, textX, top - 5, 8, {
+    bold: true,
+    color: brand.navy,
+    maxWidth: Math.max(60, TABLE_W * 0.5 - rightMarkW),
+  });
   const right = `${data.title.toUpperCase()}${data.code ? `  ${data.code}` : ''}`;
-  doc.rawText(right, MARGIN, top - 5, 8, { align: 'right', maxWidth: TABLE_W, color: GRAY, bold: true });
+  doc.rawText(right, MARGIN, top - 5, 8, {
+    align: 'right',
+    maxWidth: Math.max(60, TABLE_W - (rightMarkW ? rightMarkW + 10 : 0)),
+    color: GRAY,
+    bold: true,
+  });
   doc.line(MARGIN, top - 22, MARGIN + TABLE_W, top - 22, brand.navy, 1.2);
   doc.line(MARGIN, top - 24.2, MARGIN + TABLE_W, top - 24.2, brand.teal, 0.7);
   doc.cursorY = top - 34;
@@ -2700,11 +2708,9 @@ async function drawAuthenticityBlock(doc: PdfDoc, opts: DocumentRenderOpts, bran
   doc.rect(MARGIN, bottom, TABLE_W, boxH, BRAND.headerFill);
   doc.rect(MARGIN, bottom, 2.6, boxH, brand.teal);
 
-  // Navy header band with brand mark, title and VERIFIED chip.
+  // Navy header band with title and VERIFIED chip.
   doc.rect(MARGIN, top - headerH, TABLE_W, headerH, brand.navy);
-  const mark = 11;
-  drawBrandMark(doc, MARGIN + 10, top - headerH + (headerH - mark) / 2, mark, brand);
-  doc.rawText('DOCUMENT AUTHENTICITY', MARGIN + 10 + mark + 7, top - headerH / 2 + 3, 8.2, {
+  doc.rawText('DOCUMENT AUTHENTICITY', MARGIN + 10, top - headerH / 2 + 3, 8.2, {
     bold: true,
     color: BRAND.white,
     maxWidth: tw,
@@ -2905,22 +2911,27 @@ function drawContractBand(doc: PdfDoc, label: string, brand: DocBrand, light = f
   doc.cursorY = y - bandH - 6;
 }
 
-function drawContractLetterhead(doc: PdfDoc, data: DocData, opts: DocumentRenderOpts, status: string, logoName?: string): void {
+function drawContractLetterhead(
+  doc: PdfDoc,
+  data: DocData,
+  opts: DocumentRenderOpts,
+  status: string,
+  logoName?: string,
+  footerLogoName?: string
+): void {
   const c = opts.company;
   const brand = brandOf(c);
   drawTopBar(doc, brand);
   const logoSize = 30;
   const top = PAGE_H - 18;
   const logoY = top - logoSize - 6;
-  const dims = logoName ? doc.imageDims(logoName) : null;
-  let textX = MARGIN + logoSize + 11;
-  if (dims) {
-    const logoW = Math.min(110, Math.max(20, (dims.width / dims.height) * logoSize));
+  let textX = MARGIN;
+  const logoW = brandImageWidth(doc, logoSize, 110, logoName);
+  if (logoW) {
     doc.image(logoName as string, MARGIN, logoY, logoW, logoSize);
     textX = MARGIN + logoW + 11;
-  } else {
-    drawBrandMark(doc, MARGIN, logoY, logoSize, brand);
   }
+  const rightMarkW = drawRightBrandMark(doc, logoY, logoSize, footerLogoName);
   const rightX = MARGIN + TABLE_W * 0.56;
   const rightW = TABLE_W * 0.44;
   const leftW = Math.max(80, rightX - textX - 4);
@@ -2930,7 +2941,7 @@ function drawContractLetterhead(doc: PdfDoc, data: DocData, opts: DocumentRender
   for (const ln of [...companyContactLines(c), ...companyRegLines(c)].slice(0, 2)) {
     doc.text(ln, textX, 6.4, { color: GRAY, maxWidth: leftW });
   }
-  let ry = top - 4;
+  let ry = top - 4 - (rightMarkW ? logoSize + 8 : 0);
   doc.rawText((data.kicker ?? 'Official document').toUpperCase(), rightX, ry, 6.2, {
     align: 'right',
     maxWidth: rightW,
@@ -3261,8 +3272,8 @@ async function renderContractPdf(data: DocData, opts: DocumentRenderOpts): Promi
   const logoName = preloadLogo(doc, opts.company.logoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
-  doc.setNewPageHandler(() => drawRunningHeader(doc, data, opts, logoName));
-  drawContractLetterhead(doc, data, opts, status, logoName);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, data, opts, logoName, footerLogoName));
+  drawContractLetterhead(doc, data, opts, status, logoName, footerLogoName);
   drawContractIntro(doc, opts);
 
   const photoName = data.photo?.bytes ? doc.addImage(data.photo.bytes) : null;
@@ -3417,8 +3428,8 @@ async function renderCertificatePdf(data: DocData, opts: DocumentRenderOpts): Pr
   const logoName = preloadLogo(doc, opts.company.logoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
-  doc.setNewPageHandler(() => drawRunningHeader(doc, data, opts, logoName));
-  drawContractLetterhead(doc, data, opts, status, logoName);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, data, opts, logoName, footerLogoName));
+  drawContractLetterhead(doc, data, opts, status, logoName, footerLogoName);
   drawCertificateStatement(doc, data, brand);
   drawParties(doc, data.parties ?? [], brand);
 
@@ -4064,8 +4075,8 @@ async function renderPdf(data: DocData, opts: DocumentRenderOpts): Promise<Buffe
   const logoName = preloadLogo(doc, opts.company.logoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
-  doc.setNewPageHandler(() => drawRunningHeader(doc, data, opts, logoName));
-  drawContractLetterhead(doc, data, opts, status, logoName);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, data, opts, logoName, footerLogoName));
+  drawContractLetterhead(doc, data, opts, status, logoName, footerLogoName);
 
   doc.text(
     'Issued by ' + opts.issuedBy + ' on ' + formatDocDateTime(opts.issuedAt) + (opts.correlationId ? '  \u00b7  Ref ' + opts.correlationId : ''),
@@ -4182,7 +4193,7 @@ async function renderXlsx(data: DocData, opts: DocumentRenderOpts): Promise<Buff
     status: statusOf(data, opts),
     classification: classifOf(data, opts),
     columns: Math.max(8, data.columns.length + 1),
-  });
+  }, excelBrandImages(wb, opts.company));
 
   const navy = brandHex(opts.company.brandColor, 'FF0B1F33');
   const teal = brandHex(opts.company.brandColorSecondary, 'FF00A6A6');
