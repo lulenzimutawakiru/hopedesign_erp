@@ -151,6 +151,7 @@ const MODULES = {
     journals: ["view","create","post","void","export","submit","approve","reject","reverse"],
     periods: ["view","create","open","close","lock"],
     banks: ["view","create","update","reconcile"],
+    kcb: ["view","manage","test"],
     budgets: ["view","create","update","submit","approve","close"],
     expenses: ["view","create","update","submit","approve","post","void"],
     advances: ["view","create","settle","void"],

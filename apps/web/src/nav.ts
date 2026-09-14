@@ -318,6 +318,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'records-procurement-suppliers', label: 'Suppliers', href: '/records/procurement/suppliers', perm: 'procurement.suppliers.view', group: 'Payables', keywords: 'supplier vendor master account' },
           { id: 'finance-banks', label: 'Bank & Cash', href: '/finance/banks', perm: 'finance.banks.view', group: 'Cash & Bank', keywords: 'bank cash account cashbook liquidity balance' },
           { id: 'finance-transfers', label: 'Transfers', href: '/finance/transfers', perm: 'finance.banks.view', group: 'Cash & Bank', keywords: 'transfers bank cash movement internal' },
+          { id: 'finance-kcb', label: 'KCB', href: '/finance/kcb', perm: 'finance.kcb.view', group: 'Cash & Bank', keywords: 'kcb bank payment notification ipn reconcile settlement' },
           { id: 'finance-advances', label: 'Advances', href: '/finance/advances', perm: 'finance.advances.view', group: 'Cash & Bank', keywords: 'cash advance imprest holder retirement' },
           { id: 'finance-expenses', label: 'Expenses', href: '/finance/expenses', perm: 'finance.expenses.view', group: 'Spend & Planning', keywords: 'expense claim receipt cost centre' },
           { id: 'finance-budgets', label: 'Budgets', href: '/finance/budgets', perm: 'finance.budgets.view', group: 'Spend & Planning', keywords: 'budget actual variance commitment planning' },

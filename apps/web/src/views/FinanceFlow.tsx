@@ -7,6 +7,7 @@ import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, PageLoader, Modal, Pager } from '../components/ui';
 import { ConfirmDialog, EmptyState, Skeleton } from '../components/os';
 import DownloadMenu from '../components/DownloadMenu';
+import { FinanceKcb } from './FinanceKcb';
 import { pathForEntity } from '../work';
 
 type Rec = Record<string, unknown>;
@@ -106,6 +107,7 @@ export default function FinanceFlow({ path }: { path: string }) {
   if (view === 'advanced') return <AdvancedOverview />;
   if (view === 'posting-rules') return <PostingRules />;
   if (view === 'efris') return <EfrisDesk />;
+  if (view === 'kcb') return <FinanceKcb />;
   if (view === 'tax-compliance') return <TaxCompliance />;
   if (view === 'costing') return <Costing />;
   if (view === 'cost-centres') return <CostCentres />;

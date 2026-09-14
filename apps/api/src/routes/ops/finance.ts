@@ -7,6 +7,7 @@ import * as fin from '../../services/finance.js';
 import * as finAdv from '../../services/finance-advanced.js';
 import * as efrisDir from '../../services/efris/directory.js';
 import * as finAppr from '../../services/financeApprovals.js';
+import * as kcbOps from '../../services/kcb/ops.js';
 
 export const financeOpsRouter = Router();
 
@@ -552,3 +553,29 @@ financeOpsRouter.get(
   '/approvals',
   ...runGet('workflows.instances.view', (c, ctx) => finAppr.listFinanceApprovals(c, ctx, Number(ctx.userId)))
 );
+
+// ---- KCB bank integration ----
+// Inbound payment notifications arrive on /api/integrations/kcb (see
+// routes/kcbEvents.ts). This is the operator's half: whether the integration
+// could actually verify a notification, and what arrived versus what it settled.
+financeOpsRouter.get('/kcb/status', ...runGet('finance.kcb.view', (c, ctx) => kcbOps.kcbStatus(c, ctx)));
+financeOpsRouter.get('/kcb/config', ...runGet('finance.kcb.view', (c, ctx) => kcbOps.kcbConfig(c, ctx)));
+financeOpsRouter.patch('/kcb/config', ...run('finance.kcb.manage', (c, ctx, b) => kcbOps.updateKcbFromPatch(c, ctx, b ?? {})));
+financeOpsRouter.post('/kcb/test-connection', ...run('finance.kcb.test', (c, ctx) => kcbOps.testKcbConnection(c, ctx)));
+financeOpsRouter.get('/kcb/notifications', ...runGet('finance.kcb.view', (c, ctx, q) => kcbOps.listKcbNotifications(c, ctx, {
+  status: q.status != null ? String(q.status) : undefined,
+  notificationType: q.notificationType != null ? String(q.notificationType) : undefined,
+  bankAccountId: q.bankAccountId != null ? Number(q.bankAccountId) : null,
+  matched: q.matched === 'true' ? true : q.matched === 'false' ? false : undefined,
+  search: q.search != null ? String(q.search) : undefined,
+  from: q.from != null ? String(q.from) : undefined,
+  to: q.to != null ? String(q.to) : undefined,
+  limit: q.limit != null ? Number(q.limit) : null,
+  offset: q.offset != null ? Number(q.offset) : null,
+})));
+financeOpsRouter.post('/kcb/notifications/:id/match', ...run('finance.kcb.manage', (c, ctx, b, p) => kcbOps.matchKcbNotification(c, ctx, Number(p.id), Number(b.invoiceId))));
+financeOpsRouter.post('/kcb/notifications/:id/unmatch', ...run('finance.kcb.manage', (c, ctx, _b, p) => kcbOps.unmatchKcbNotification(c, ctx, Number(p.id))));
+financeOpsRouter.get('/kcb/invoices', ...runGet('finance.kcb.view', (c, ctx, q) => kcbOps.searchKcbInvoices(c, ctx, {
+  search: q.search != null ? String(q.search) : undefined,
+  limit: q.limit != null ? Number(q.limit) : null,
+})));

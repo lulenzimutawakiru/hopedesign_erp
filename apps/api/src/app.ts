@@ -46,6 +46,7 @@ import { hcmOpsRouter } from './routes/ops/hcm.js';
 import { assetsOpsRouter } from './routes/ops/assets.js';
 import { employeeIdentityOpsRouter } from './routes/ops/employeeIdentity.js';
 import { hikvisionEventsRouter, hikvisionWebhookErrorFilter } from './routes/hikvisionEvents.js';
+import { kcbEventsRouter, kcbWebhookErrorFilter } from './routes/kcbEvents.js';
 import { hikvisionOpsRouter, hikvisionAttendanceOpsRouter } from './routes/ops/hikvision.js';
 import { runHikvisionWorkerTick } from './services/hikvision/processor.js';
 import { isQueueEnabled } from './services/queue/connection.js';
@@ -156,6 +157,11 @@ app.use('/api/auth', authRouter);                          // /api/auth/login, /
 // ---- Hikvision device-facing event receiver (public webhook; each terminal is
 // authenticated + authorized inside ingestDeviceEvent before any storage) ----
 app.use('/api/integrations/hikvision', hikvisionEventsRouter, hikvisionWebhookErrorFilter);
+
+// ---- KCB bank payment notifications (public webhook; every message is
+// authenticated by the RSA signature over its raw body, and that same key is
+// what attributes it to a company, before a single row is written) ----
+app.use('/api/integrations/kcb', kcbEventsRouter, kcbWebhookErrorFilter);
 
 // ---- Authenticated API ----
 app.use(authenticate);
