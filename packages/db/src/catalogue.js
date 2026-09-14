@@ -426,7 +426,48 @@ const MODULES = {
     reports: ["view","export"],
     employee_links: ["view","create","update","delete"],
   },
+  // ---------------------------------------------------------------
+  // HOPE DESIGN Service Desk & ITSM
+  // ---------------------------------------------------------------
+  service_desk: {
+    command: ["view"],
+    tickets: ["view","view_own","create","create_on_behalf","update","delete","reply","assign","resolve","close","close_own","reopen","escalate","export","import","print","verify"],
+    internal_notes: ["view","create"],
+    queues: ["view","create","update","delete"],
+    teams: ["view","create","update","delete"],
+    skills: ["view","create","update","delete"],
+    categories: ["view","create","update","delete"],
+    sla: ["view","manage"],
+    escalations: ["view","create","update","delete","manage"],
+    service_requests: ["view","create","update","approve","reject","fulfil","cancel"],
+    incidents: ["view","create","update","resolve","close","escalate"],
+    problems: ["view","create","update","investigate","resolve","close"],
+    known_errors: ["view","create","update","resolve","archive"],
+    changes: ["view","create","update","submit","approve","reject","implement","validate","close","cancel"],
+    change_approvals: ["view","create","approve","reject"],
+    access_requests: ["view","view_own","create","update","approve","reject","grant","revoke","cancel"],
+    knowledge: ["view","create","update","delete","submit","approve","publish","archive","rate","manage"],
+    asset_scans: ["view","scan","report"],
+    assets: ["view"],
+    dashboards: ["employee","agent","manager","executive"],
+    reports: ["view","export"],
+    settings: ["view","manage"],
+    audit: ["view"],
+  },
 };
+
+// Module-level permissions that do not follow the {module}.{resource}.{action}
+// shape. Declared explicitly so RBAC checks such as `service_desk.admin`
+// resolve, and so `service_desk.*` wildcards still pick them up.
+const EXTRA_PERMISSIONS = [
+  {
+    code: "service_desk.admin",
+    module: "service_desk",
+    resource: "admin",
+    action: "admin",
+    description: "Administer the HOPE DESIGN Service Desk (taxonomy, queues, SLAs, escalation, settings)",
+  },
+];
 
 function buildPermissions() {
   const perms = [];
@@ -443,6 +484,9 @@ function buildPermissions() {
         });
       }
     }
+  }
+  for (const p of EXTRA_PERMISSIONS) {
+    perms.push({ ...p, is_system: false });
   }
   return perms;
 }
@@ -593,7 +637,91 @@ const ROLES = [
   { code: "insurance_officer", name: "Insurance Officer", grants: ["healthcare.insurance_payers.*", "healthcare.insurance_claims.*", "healthcare.bills.view", "healthcare.patients.view", "healthcare.visits.view", "reports.healthcare.view"] },
   { code: "medical_auditor", name: "Medical Auditor", grants: ["healthcare.patients.view", "healthcare.visits.view", "healthcare.emrs.view", "healthcare.prescriptions.view", "healthcare.dispensings.view", "healthcare.lab_requests.view", "healthcare.lab_results.view", "healthcare.insurance_claims.view", "healthcare.bills.view", "admin.audit.view", "reports.healthcare.view"] },
   { code: "ward_nurse", name: "Ward Nurse", grants: ["healthcare.beds.view", "healthcare.beds.assign", "healthcare.beds.release", "healthcare.visits.view", "healthcare.visits.admit", "healthcare.visits.discharge", "healthcare.vitals.*", "healthcare.observations.*", "healthcare.patients.view", "qr.scan.*"] },
+  // ---------------------------------------------------------------
+  // Service Desk & ITSM
+  // ---------------------------------------------------------------
+  { code: "service_desk_agent", name: "Service Desk Agent", grants: [
+    "service_desk.command.view",
+    "service_desk.tickets.view","service_desk.tickets.create","service_desk.tickets.update",
+    "service_desk.tickets.reply","service_desk.tickets.assign","service_desk.tickets.resolve",
+    "service_desk.tickets.close","service_desk.tickets.reopen","service_desk.tickets.escalate",
+    "service_desk.tickets.print","service_desk.tickets.verify","service_desk.tickets.export","service_desk.tickets.create_on_behalf",
+    "service_desk.internal_notes.view","service_desk.internal_notes.create",
+    "service_desk.queues.view","service_desk.teams.view","service_desk.categories.view",
+    "service_desk.assets.view","service_desk.asset_scans.view","service_desk.asset_scans.scan","service_desk.asset_scans.report",
+    "service_desk.knowledge.view","service_desk.knowledge.create","service_desk.knowledge.update","service_desk.knowledge.rate",
+    "service_desk.service_requests.view","service_desk.service_requests.update",
+    "service_desk.incidents.view","service_desk.incidents.update",
+    "service_desk.problems.view","service_desk.known_errors.view",
+    "service_desk.changes.view","service_desk.access_requests.view",
+    "service_desk.escalations.view",
+    "service_desk.dashboards.agent","service_desk.reports.view",
+  ] },
+  { code: "service_desk_technician", name: "Service Desk Technician", grants: [
+    "service_desk.command.view",
+    "service_desk.tickets.view","service_desk.tickets.create","service_desk.tickets.update",
+    "service_desk.tickets.reply","service_desk.tickets.assign","service_desk.tickets.resolve",
+    "service_desk.tickets.close","service_desk.tickets.reopen","service_desk.tickets.escalate","service_desk.tickets.print","service_desk.tickets.create_on_behalf",
+    "service_desk.internal_notes.view","service_desk.internal_notes.create",
+    "service_desk.queues.view","service_desk.teams.view","service_desk.skills.view","service_desk.categories.view",
+    "service_desk.assets.view","service_desk.asset_scans.view","service_desk.asset_scans.scan","service_desk.asset_scans.report",
+    "service_desk.knowledge.view","service_desk.knowledge.create","service_desk.knowledge.update","service_desk.knowledge.rate",
+    "service_desk.service_requests.view","service_desk.service_requests.update","service_desk.service_requests.fulfil",
+    "service_desk.incidents.view","service_desk.incidents.update","service_desk.incidents.resolve",
+    "service_desk.problems.view","service_desk.problems.update","service_desk.problems.investigate",
+    "service_desk.known_errors.view","service_desk.known_errors.create",
+    "service_desk.changes.view","service_desk.changes.update","service_desk.changes.implement",
+    "service_desk.access_requests.view",
+    "service_desk.escalations.view",
+    "service_desk.dashboards.agent","service_desk.reports.view",
+  ] },
+  { code: "service_desk_manager", name: "Service Desk Manager", grants: [
+    "service_desk.command.view","service_desk.tickets.*","service_desk.internal_notes.*",
+    "service_desk.queues.*","service_desk.teams.*","service_desk.skills.*","service_desk.categories.*",
+    "service_desk.sla.*","service_desk.escalations.*",
+    "service_desk.service_requests.*","service_desk.incidents.*",
+    "service_desk.problems.*","service_desk.known_errors.*",
+    "service_desk.changes.*","service_desk.change_approvals.*","service_desk.access_requests.*",
+    "service_desk.knowledge.*",
+    "service_desk.assets.view","service_desk.asset_scans.*",
+    "service_desk.dashboards.*","service_desk.reports.*","service_desk.settings.*",
+    "service_desk.audit.view","service_desk.admin",
+  ] },
 ];
 
+// ---------------------------------------------------------------------------
+// Service Desk grants for roles defined above.
+// Declared centrally (rather than appending to the long inline grant lists)
+// so Service Desk capability for existing personas stays auditable in one place.
+// ---------------------------------------------------------------------------
+const SERVICE_DESK_ROLE_EXTENSIONS = {
+  system_administrator: ["service_desk.*"],
+  it_support_administrator: ["service_desk.*"],
+  security_administrator: [
+    "service_desk.command.view","service_desk.tickets.view","service_desk.tickets.escalate",
+    "service_desk.internal_notes.view","service_desk.incidents.*","service_desk.asset_scans.view","service_desk.tickets.create_on_behalf",
+    "service_desk.audit.view","service_desk.dashboards.manager",
+  ],
+  operations_director: [
+    "service_desk.command.view","service_desk.tickets.view","service_desk.tickets.escalate",
+    "service_desk.internal_notes.view","service_desk.incidents.*","service_desk.problems.view",
+    "service_desk.changes.view","service_desk.escalations.view","service_desk.asset_scans.view","service_desk.tickets.create_on_behalf",
+    "service_desk.dashboards.*","service_desk.reports.*",
+  ],
+  hr_manager: ["service_desk.command.view","service_desk.tickets.view_own","service_desk.tickets.create","service_desk.tickets.reply"],
+  employee_self_service: [
+    "service_desk.command.view",
+    "service_desk.tickets.view_own","service_desk.tickets.create","service_desk.tickets.reply",
+    "service_desk.tickets.close_own","service_desk.tickets.verify",
+    "service_desk.knowledge.view","service_desk.knowledge.rate",
+    "service_desk.asset_scans.view","service_desk.asset_scans.scan",
+    "service_desk.access_requests.view_own","service_desk.access_requests.create",
+    "service_desk.dashboards.employee",
+  ],
+};
+for (const role of ROLES) {
+  const extra = SERVICE_DESK_ROLE_EXTENSIONS[role.code];
+  if (extra) role.grants = [...role.grants, ...extra];
+}
 
-module.exports = { ACTIONS, MODULES, buildPermissions, ROLES };
+module.exports = { ACTIONS, MODULES, EXTRA_PERMISSIONS, buildPermissions, ROLES };

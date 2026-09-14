@@ -81,6 +81,15 @@ export const SCHEDULED_TASKS: readonly ScheduledTask[] = [
     everyMs: 15_000,
     lock: WORKER_LOCKS.NOTIFICATION_DISPATCH,
   },
+  {
+    id: 'service-desk-sla',
+    label: 'Service Desk SLA and escalation',
+    everyMs: 60_000,
+    // Sits between the two fast 60s tasks so the SLA sweep does not contend with
+    // them for the same advisory locks.
+    offsetMs: 15_000,
+    lock: WORKER_LOCKS.SERVICE_DESK_SLA,
+  },
 ];
 
 export const SCHEDULED_TASK_IDS: readonly string[] = SCHEDULED_TASKS.map((task) => task.id);

@@ -24,6 +24,7 @@ export const WORKER_LOCKS = {
   HIKVISION_QUEUE: 88103,
   NOTIFICATION_DISPATCH: 88104,
   EFRIS_WORKER: 88105,
+  SERVICE_DESK_SLA: 88106,
 } as const;
 
 type Release = () => Promise<void>;

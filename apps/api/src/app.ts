@@ -55,6 +55,9 @@ import { expenditureOpsRouter } from './routes/ops/expenditure.js';
 import { communicationOpsRouter } from './routes/ops/communication.js';
 import { documentsOpsRouter } from './routes/ops/documents.js';
 import { governanceOpsRouter } from './routes/ops/governance.js';
+import { serviceDeskOpsRouter } from './routes/ops/serviceDesk.js';
+import { myServiceDeskRouter } from './routes/ops/myServiceDesk.js';
+import { runServiceDeskSlaTick } from './services/serviceDeskSla.js';
 
 export const app = express();
 
@@ -194,10 +197,19 @@ app.use('/api/ops/expenditure', expenditureOpsRouter);
         app.use('/api/ops/communication', communicationOpsRouter);
         app.use('/api/ops/documents', documentsOpsRouter);
         app.use('/api/ops/governance', governanceOpsRouter);
+        app.use('/api/ops/service-desk', serviceDeskOpsRouter);
         app.use('/api/ops/healthcare', requireModule('healthcare'), healthcareOpsRouter);
 
 // Module-activation gate for the healthcare CRUD namespace (multi-tenant SaaS).
 app.use('/api/healthcare', requireModule('healthcare'));
+
+// Service Desk. The agent/admin surface answers on both the documented
+// /api/service-desk path and the internal /api/ops namespace; employee
+// self-service is a separate router so the two authorization surfaces can
+// never be confused. No requireModule gate: the portal is core to the ERP and
+// the tenant module registry must not be able to lock staff out of support.
+app.use('/api/service-desk', serviceDeskOpsRouter);
+app.use('/api/my/service-desk', myServiceDeskRouter);
 
 // Generic CRUD+ for all registered entities.
 mountCrud(app);
@@ -254,6 +266,15 @@ if (isQueueEnabled()) {
       console.error('[efrisWorker]', err instanceof Error ? err.message : err);
     });
   }, 20_000);
+
+  // Service Desk SLA worker: re-evaluate response/resolution timers and raise
+  // escalations every minute. Single-flight so a breach is never escalated by
+  // two replicas at once.
+  setInterval(() => {
+    singleFlight(WORKER_LOCKS.SERVICE_DESK_SLA, runServiceDeskSlaTick).catch((err: unknown) => {
+      console.error('[serviceDeskSla]', err instanceof Error ? err.message : err);
+    });
+  }, 60_000);
 
   // Notification delivery worker: dispatch queued EMAIL/SMS/WHATSAPP deliveries.
   setInterval(() => {

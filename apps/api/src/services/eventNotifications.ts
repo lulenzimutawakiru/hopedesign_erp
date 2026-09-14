@@ -39,6 +39,14 @@ export interface EventSpec {
   customer?: { title: string; body: string };
   /** Optional copy sent to `party` (falls back to `customer`, then the internal title/body). */
   external?: { title: string; body: string };
+  /**
+   * Explicitly do nothing for this event. Some modules already notify directly
+   * inside their transaction (Service Desk tickets and SLA do this) and the
+   * bridge runs detached, so its dedup cannot see those uncommitted rows. An
+   * entry here documents that the silence is deliberate, not an oversight, and
+   * it also stops MODULE_FALLBACK from fanning the event out a second time.
+   */
+  suppress?: true;
 }
 
 /** Structural subset of the EventPayload emitted by `emitEvent`. */
@@ -70,6 +78,13 @@ const SEC = ['security_printing_manager', 'secure_job_approver'];
 const SECADMIN = ['security_administrator'];
 const LOG = ['logistics_manager', 'dispatch_manager'];
 const HEALTH = ['healthcare_admin', 'doctor'];
+const SD_AGENT = ['service_desk_agent'];
+const SD_TECH = ['service_desk_technician'];
+const SD_MANAGER = ['service_desk_manager'];
+const SD_ADMIN = ['it_support_administrator'];
+/** Everyone who works the desk: queues, escalations and SLA all address this set. */
+const SD_DESK = [...SD_AGENT, ...SD_TECH, ...SD_MANAGER];
+const SD_DESK_ADMIN = [...SD_DESK, ...SD_ADMIN];
 
 /** Normalize an event type to an uppercase alphanumeric lookup key. */
 export function normEventKey(eventType: string): string {
@@ -1534,6 +1549,162 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     body: 'eFRIS registration {{ENTITY_CODE}} was recorded.',
     roleCodes: FIN,
   },
+
+  // ---------------- Service Desk: deliberately silent ----------------
+  // Each of these already notifies inside the Service Desk transaction (the
+  // requester, the assignee, or the escalated role). Bridging them again would
+  // produce a second row per recipient, so they are listed as suppressed.
+  SERVICEDESKTICKETCREATED: {
+    type: 'service_desk.ticket.created',
+    title: 'Service ticket created',
+    body: '{{ENTITY_CODE}} was raised.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETASSIGNED: {
+    type: 'service_desk.ticket.assigned',
+    title: 'Service ticket assigned',
+    body: '{{ENTITY_CODE}} was assigned.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETCOMMENTED: {
+    type: 'service_desk.ticket.commented',
+    title: 'Service ticket reply',
+    body: 'A reply was added to {{ENTITY_CODE}}.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETFIRSTRESPONSE: {
+    type: 'service_desk.ticket.first_response',
+    title: 'Service ticket first response',
+    body: '{{ENTITY_CODE}} received its first response.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETESCALATED: {
+    type: 'service_desk.ticket.escalated',
+    title: 'Service ticket escalated',
+    body: '{{ENTITY_CODE}} was escalated.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETRESOLVED: {
+    type: 'service_desk.ticket.resolved',
+    title: 'Service ticket resolved',
+    body: '{{ENTITY_CODE}} was resolved.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETCLOSED: {
+    type: 'service_desk.ticket.closed',
+    title: 'Service ticket closed',
+    body: '{{ENTITY_CODE}} was closed.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETCANCELLED: {
+    type: 'service_desk.ticket.cancelled',
+    title: 'Service ticket cancelled',
+    body: '{{ENTITY_CODE}} was cancelled.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETPENDINGREQUESTER: {
+    type: 'service_desk.ticket.pending_requester',
+    title: 'Service ticket awaiting requester',
+    body: '{{ENTITY_CODE}} is waiting on the requester.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETPENDINGVENDOR: {
+    type: 'service_desk.ticket.pending_vendor',
+    title: 'Service ticket awaiting vendor',
+    body: '{{ENTITY_CODE}} is waiting on a vendor.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETREOPENED: {
+    type: 'service_desk.ticket.reopened',
+    title: 'Service ticket reopened',
+    body: '{{ENTITY_CODE}} was reopened.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKTICKETREPLY: {
+    type: 'service_desk.ticket.reply',
+    title: 'Service ticket reply',
+    body: 'A reply was added to {{ENTITY_CODE}}.',
+    roleCodes: [],
+    suppress: true,
+  },
+  SERVICEDESKSLABREACHED: {
+    type: 'service_desk.sla.breached',
+    title: 'SLA breached',
+    body: '{{ENTITY_CODE}} breached its SLA.',
+    roleCodes: [],
+    suppress: true,
+  },
+
+  // ---------------- Service Desk: bridged ----------------
+  // A priority change and a requester confirmation are audited and put on the
+  // timeline but never notify the desk, so the bridge is the only channel.
+  SERVICEDESKTICKETPRIORITYCHANGED: {
+    type: 'service_desk.ticket.priority_changed',
+    title: 'Priority changed on {{ENTITY_CODE}}',
+    body: 'Priority moved from {{FROM}} to {{TO}}.',
+    roleCodes: SD_DESK_ADMIN,
+    severity: 'WARN',
+    priority: 'HIGH',
+    actionLabel: 'Open ticket',
+    actionTarget: '/service-desk/tickets/{{entityId}}',
+  },
+  SERVICEDESKTICKETCONFIRMED: {
+    type: 'service_desk.ticket.confirmed',
+    title: 'Requester confirmed {{ENTITY_CODE}}',
+    body: 'Satisfaction rating: {{RATING}}.',
+    roleCodes: SD_MANAGER,
+    severity: 'SUCCESS',
+    actionLabel: 'Open ticket',
+    actionTarget: '/service-desk/tickets/{{entityId}}',
+  },
+
+  // Asset QR scans are high frequency: in-app only, never email. The audit
+  // ledger is the system of record; this is a courtesy signal for the desk.
+  SERVICEDESKASSETSCANNED: {
+    type: 'service_desk.asset_scanned',
+    title: 'Asset QR scanned',
+    body: '{{ASSETNO}} scanned for {{ACTION}}.',
+    roleCodes: SD_DESK_ADMIN,
+    email: false,
+    actionTarget: '/service-desk/assets/{{ASSETID}}',
+  },
+  SERVICEDESKASSETTICKETRAISED: {
+    type: 'service_desk.asset_ticket_raised',
+    title: 'Ticket raised from asset QR',
+    body: '{{ENTITY_CODE}} was raised from a QR scan.',
+    roleCodes: SD_DESK_ADMIN,
+    actionLabel: 'Open ticket',
+    actionTarget: '/service-desk/tickets/{{TICKETID}}',
+  },
+  SERVICEDESKASSETMAINTENANCERAISED: {
+    type: 'service_desk.asset_maintenance_raised',
+    title: 'Maintenance requested from asset QR',
+    body: 'Maintenance was requested for {{ASSETNO}}.',
+    roleCodes: [...SD_DESK_ADMIN, ...MAINT],
+    severity: 'WARN',
+    priority: 'HIGH',
+    actionTarget: '/service-desk/assets/{{ASSETID}}',
+  },
+  SERVICEDESKASSETSCANLINKED: {
+    type: 'service_desk.asset_scan_linked',
+    title: 'Asset QR scan linked to a ticket',
+    body: 'A scan of {{ASSETNO}} was linked to {{ENTITY_CODE}}.',
+    roleCodes: SD_DESK_ADMIN,
+    email: false,
+    actionLabel: 'Open ticket',
+    actionTarget: '/service-desk/tickets/{{TICKETID}}',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -1571,6 +1742,10 @@ const MODULE_FALLBACK: FallbackRule[] = [
   { re: /^admin\./, roleCodes: ['system_administrator'] },
   { re: /^payments?\./, roleCodes: FIN },
   { re: /^manufacturing\./, roleCodes: PROD },
+  // Safety net: a Service Desk event with no explicit spec (problem, change,
+  // knowledge, access request, asset) still reaches the desk rather than
+  // disappearing. Events the desk already self-notifies are suppressed above.
+  { re: /^service_desk\./, roleCodes: SD_DESK_ADMIN },
 ];
 
 const CONTACT_LATERAL = `
@@ -1834,6 +2009,9 @@ export async function notifyFromEvent(
       else if (sev === 'ERROR') spec.priority = 'URGENT';
       else if (sev === 'WARN') spec.priority = 'HIGH';
     }
+    // The owning module already notified for this event; bridging it again would
+    // duplicate the row. See EventSpec.suppress.
+    if (spec.suppress) return;
     const vars = fillVars(e);
     const actionTarget = spec.actionTarget ? fill(spec.actionTarget, vars) : undefined;
     const partyKind = inferPartyKind(spec, eventType);

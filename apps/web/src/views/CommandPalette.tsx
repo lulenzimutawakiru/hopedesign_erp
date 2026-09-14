@@ -17,6 +17,7 @@ import {
   itemVisible,
   labelForSearchHit,
   looksLikeQr,
+  looksLikeTicketNo,
   track,
 } from '../nav';
 
@@ -115,6 +116,9 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const navOnly = navMatches.filter((d) => !actionHrefs.has(d.href));
   const nl = interpretCommand(q);
   const qrGuess = looksLikeQr(q) ? `/qr/${q.trim()}` : null;
+  const ticketGuess = looksLikeTicketNo(q)
+    ? `/service-desk/tickets?search=${encodeURIComponent(q.trim())}`
+    : null;
 
   return (
     <div className="cmd-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -127,6 +131,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             if (e.key === 'Enter') {
               e.preventDefault();
               if (qrGuess) go(qrGuess);
+              else if (ticketGuess) go(ticketGuess);
               else if (nl) go(nl);
               else if (actions[active]) go(actions[active].href);
             }
@@ -139,6 +144,12 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             <button className="cmd-item active" onClick={() => go(qrGuess)}>
               <strong>QR / trace {q.trim()}</strong>
               <span>Open authorized traceability</span>
+            </button>
+          )}
+          {ticketGuess && (
+            <button className="cmd-item" onClick={() => go(ticketGuess)}>
+              <strong>Service Desk {q.trim()}</strong>
+              <span>Find that ticket in the Service Desk</span>
             </button>
           )}
           {nl && (

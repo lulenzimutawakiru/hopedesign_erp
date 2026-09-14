@@ -3,6 +3,7 @@ import { runDueCronJobs } from '../cronJobs.js';
 import { processNotificationDeliveries } from '../communication.js';
 import { runHikvisionWorkerTick } from '../hikvision/processor.js';
 import { runEfrisWorkerTick } from '../efris/processor.js';
+import { runServiceDeskSlaTick } from '../serviceDeskSla.js';
 
 /**
  * Task id -> handler. This module pulls in the five background services and
@@ -24,4 +25,5 @@ export const TASK_HANDLERS: Readonly<Record<string, TaskHandler>> = {
   'notification-dispatch': processNotificationDeliveries,
   'hikvision-queue': runHikvisionWorkerTick,
   'efris-worker': runEfrisWorkerTick,
+  'service-desk-sla': runServiceDeskSlaTick,
 };

@@ -27,6 +27,39 @@ export const asyncHandler = (fn: AsyncHandler) => (req: Request, res: Response, 
 
 export const correlationId = () => randomUUID();
 
+/**
+ * Postgres returns bigint/int8 columns and COUNT(*) results as strings, while
+ * values that originate from a JWT or a Number() cast are JS numbers. Plain
+ * === between the two is always false, which silently breaks ownership and
+ * scope checks. Use these helpers for every id comparison.
+ */
+export const sameId = (a: unknown, b: unknown): boolean => {
+  if (a === null || a === undefined || b === null || b === undefined) return false;
+  if (a === '' || b === '') return false;
+  return String(a) === String(b);
+};
+
+/** Membership test that tolerates a bigint-as-string id against a numeric list. */
+export const idIn = (list: readonly unknown[] | null | undefined, id: unknown): boolean => {
+  if (!list || list.length === 0) return false;
+  if (id === null || id === undefined || id === '') return false;
+  const needle = String(id);
+  return list.some((v) => v !== null && v !== undefined && String(v) === needle);
+};
+
+/**
+ * Is this value an internal numeric primary key rather than a human-facing
+ * document number? Postgres returns bigint columns as strings, so the naive
+ * `typeof ref === 'number'` test silently routes a freshly inserted row's id
+ * down the "look it up by its code" branch and reports a spurious 404.
+ * Accepts a positive JS number or an all-digit string, nothing else.
+ */
+export const isNumericRef = (ref: unknown): boolean => {
+  if (typeof ref === 'number') return Number.isFinite(ref) && ref > 0;
+  if (typeof ref !== 'string') return false;
+  return /^\d+$/.test(ref.trim());
+};
+
 export const parsePagination = (query: Record<string, unknown>) => {
   const page = Math.max(1, Number(query.page) || 1);
   const pageSize = Math.min(500, Math.max(1, Number(query.pageSize) || 25));

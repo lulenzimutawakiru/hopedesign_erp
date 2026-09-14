@@ -5,6 +5,7 @@ export type NavGroupId =
   | 'business'
   | 'supply'
   | 'operations'
+  | 'service'
   | 'security'
   | 'finance'
   | 'spend'
@@ -53,6 +54,31 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'dashboard', label: 'Dashboard', href: '/dashboard', accent: 'exec', keywords: 'home today mission' },
       { id: 'work', label: 'My Work', href: '/work', accent: 'exec', keywords: 'tasks assigned queue' },
       { id: 'approvals', label: 'Approvals', href: '/approvals', accent: 'exec', badge: 'approvals', keywords: 'approve reject inbox decisions' },
+    ],
+  },
+  {
+    id: 'service',
+    label: 'Service',
+    items: [
+      {
+        id: 'service_desk', label: 'Service Desk', href: '/service-desk', perm: 'service_desk.command.view', accent: 'sd',
+        keywords: 'service desk helpdesk itsm ticket incident request sla queue assignment escalation knowledge problem change access qr asset scan',
+        children: [
+          { id: 'sd_overview', label: 'My Service Desk', href: '/service-desk', perm: 'service_desk.command.view' },
+          { id: 'sd_new', label: 'New Request', href: '/service-desk/new', perm: 'service_desk.tickets.create' },
+          { id: 'sd_dashboard', label: 'Dashboards', href: '/service-desk/dashboard', perm: 'service_desk.command.view' },
+          { id: 'sd_tickets', label: 'Tickets', href: '/service-desk/tickets', perm: 'service_desk.tickets.view' },
+          { id: 'sd_workspace', label: 'Agent Workspace', href: '/service-desk/workspace', perm: 'service_desk.tickets.assign' },
+          { id: 'sd_queues', label: 'Queues & Teams', href: '/service-desk/queues', perm: 'service_desk.tickets.assign' },
+          { id: 'sd_knowledge', label: 'Knowledge Base', href: '/service-desk/knowledge', perm: 'service_desk.knowledge.view' },
+          { id: 'sd_problems', label: 'Problems', href: '/service-desk/problems', perm: 'service_desk.problems.view' },
+          { id: 'sd_changes', label: 'Changes', href: '/service-desk/changes', perm: 'service_desk.changes.view' },
+          { id: 'sd_access', label: 'Access Requests', href: '/service-desk/access', perm: 'service_desk.access_requests.view' },
+          { id: 'sd_scan', label: 'Asset Scan', href: '/service-desk/scan', perm: 'service_desk.asset_scans.view' },
+          { id: 'sd_reports', label: 'Reporting', href: '/service-desk/reports', perm: 'service_desk.reports.view' },
+          { id: 'sd_config', label: 'Configuration & SLA', href: '/service-desk/config', perm: 'service_desk.sla.manage' },
+        ],
+      },
     ],
   },
   {
@@ -807,6 +833,24 @@ export function requiredPermForPath(path: string): string | undefined {
     };
     return map[parts[1] ?? ''] ?? 'assets.register.view';
   }
+  if (parts[0] === 'service-desk') {
+    const map: Record<string, string> = {
+      new: 'service_desk.tickets.create',
+      t: 'service_desk.command.view',
+      dashboard: 'service_desk.command.view',
+      tickets: 'service_desk.tickets.view',
+      workspace: 'service_desk.tickets.assign',
+      queues: 'service_desk.tickets.assign',
+      knowledge: 'service_desk.knowledge.view',
+      problems: 'service_desk.problems.view',
+      changes: 'service_desk.changes.view',
+      access: 'service_desk.access_requests.view',
+      scan: 'service_desk.asset_scans.view',
+      reports: 'service_desk.reports.view',
+      config: 'service_desk.sla.manage',
+    };
+    return map[parts[1] ?? ''] ?? 'service_desk.command.view';
+  }
   const item = ALL_NAV_ITEMS.find((i) => moduleActive(i.href, path));
   return item?.perm;
 }
@@ -935,6 +979,10 @@ export function labelForSearchHit(table: string, m: Record<string, unknown>): { 
         secondary: '',
       };
   }
+}
+
+export function looksLikeTicketNo(q: string): boolean {
+  return /^HDG[-_]SD[-_]/i.test(q.trim());
 }
 
 export function looksLikeQr(q: string): boolean {

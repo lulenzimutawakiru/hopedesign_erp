@@ -31,6 +31,12 @@ export interface Ctx {
   ip?: string | null;
   userAgent?: string | null;
   device?: string | null;
+  /**
+   * ABAC resource attributes resolved by a handler for the current request.
+   * `applyContext` ignores this field; it exists so services can publish the
+   * facts a policy needs without a second, parallel context type.
+   */
+  resourceAttributes?: Record<string, unknown>;
 }
 
 const applyContext = async (client: pg.PoolClient | pg.Client, ctx: Ctx) => {
