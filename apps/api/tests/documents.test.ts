@@ -122,7 +122,6 @@ describe('branded document exports', () => {
     expect(print.text).toContain('--teal: #654321');
     expect(print.text).toContain('class="brand-logo"');
     expect(print.text).toContain('hope-logo.png');
-    expect(print.text).toContain('class="brand-logo brand-logo-alt"');
     expect(print.text).toContain('class="foot-logo"');
     expect(print.text).toContain('hope-footer-logo.png');
 

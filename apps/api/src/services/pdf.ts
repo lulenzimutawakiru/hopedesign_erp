@@ -550,21 +550,37 @@ export class PdfDoc {
    * Draw a branded footer (company line, issued-by line, page numbers) at the
    * bottom of every page. Drawn after content so it never affects layout flow.
    */
-  footer(lines: string[], opts: { size?: number; color?: Rgb; navy?: Rgb; accent?: Rgb; logoName?: string } = {}): void {
+  footer(
+    lines: string[],
+    opts: {
+      size?: number;
+      color?: Rgb;
+      navy?: Rgb;
+      accent?: Rgb;
+      logoName?: string;
+      logoHeight?: number;
+      logoMaxWidth?: number;
+    } = {}
+  ): void {
     const size = opts.size ?? 7;
     const color: Rgb = opts.color ?? [0.42, 0.47, 0.52];
     const navy: Rgb = opts.navy ?? [0.043, 0.122, 0.2];
     const accent: Rgb = opts.accent ?? [0, 0.651, 0.651];
     const ruleY = BOTTOM - 6;
     const logo = opts.logoName ? this.images.find((im) => im.name === opts.logoName) : undefined;
-    const logoH = 7;
-    const logoW = logo ? Math.min(120, Math.max(18, (logo.width / logo.height) * logoH)) : 0;
-    const textX = MARGIN + (logoW ? logoW + 8 : 0);
+    // The footer mark is the uploaded secondary brand asset. It is sized from
+    // its own aspect ratio so the wordmark stays legible in print, and it is
+    // vertically centred on the footer text block by matching baselines.
+    const logoH = opts.logoHeight ?? 13;
+    const logoW = logo ? Math.min(opts.logoMaxWidth ?? 132, Math.max(20, (logo.width / logo.height) * logoH)) : 0;
+    const textX = MARGIN + (logoW ? logoW + 10 : 0);
+    const lastBaseline = ruleY - 4 - Math.max(lines.length, 1) * size * 1.28;
+    const logoY = Math.min(lastBaseline - 2, ruleY - 2.2 - 4 - logoH);
     for (let p = 0; p < this.pages.length; p++) {
       const page = this.pages[p];
       page.push(`q 1.6 w ${rgb(navy, true)} ${fmt(MARGIN)} ${fmt(ruleY)} m ${fmt(this.pageW - MARGIN)} ${fmt(ruleY)} l S Q`);
       page.push(`q 0.7 w ${rgb(accent, true)} ${fmt(MARGIN)} ${fmt(ruleY - 2.2)} m ${fmt(this.pageW - MARGIN)} ${fmt(ruleY - 2.2)} l S Q`);
-      if (logo) page.push(`q ${fmt(logoW)} 0 0 ${fmt(logoH)} ${fmt(MARGIN)} ${fmt(ruleY - 2.2 - logoH)} cm /${logo.name} Do Q`);
+      if (logo) page.push(`q ${fmt(logoW)} 0 0 ${fmt(logoH)} ${fmt(MARGIN)} ${fmt(logoY)} cm /${logo.name} Do Q`);
       lines.forEach((ln, i) => {
         const ly = ruleY - 4 - (i + 1) * size * 1.28;
         page.push(`q ${rgb(color)} BT /F1 ${size} Tf 1 0 0 1 ${fmt(textX)} ${fmt(ly)} Tm ${pdfString(ln)} Tj ET Q`);

@@ -65,7 +65,7 @@ describe('email mark rendering', () => {
   });
 });
 
-describe('branded email header', () => {
+describe('branded email header and footer', () => {
   it('draws both uploaded marks and no built-in artwork', () => {
     const html = renderBrandedEmailHtml({
       subject: 'Ticket created',
@@ -115,13 +115,12 @@ describe('branded print letterhead', () => {
     expect(html).not.toContain('class="foot-logo"');
   });
 
-  it('renders the primary mark at the left and the secondary mark at the right', async () => {
+  it('renders the primary mark in the header and the secondary mark in the footer', async () => {
     const html = await renderBrandedHtml({
       ...base,
       company: profile({ logoUrl: PRIMARY, footerLogoUrl: SECONDARY }),
     });
     expect(html).toContain(`class="brand-logo" src="${PRIMARY}"`);
-    expect(html).toContain(`class="brand-logo brand-logo-alt" src="${SECONDARY}"`);
     expect(html).toContain(`class="foot-logo" src="${SECONDARY}"`);
   });
 });

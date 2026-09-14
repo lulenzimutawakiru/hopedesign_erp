@@ -269,7 +269,6 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
                   ${wordmark}
                   ${tagline ? `<div style="font-size:11px;color:${BRAND_COLORS.softMuted};letter-spacing:.5px;margin-top:6px;line-height:1.5;">${tagline}</div>` : ''}
                 </td>
-                <td align="right" style="font-family:${FONT};vertical-align:middle;">${rightMark}</td>
               </tr>
             </table>
           </td>
@@ -292,8 +291,15 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
         </tr>
         <tr>
           <td style="border-top:1px solid ${BRAND_COLORS.border};background:#F8FAFC;padding:18px 36px 0;font-family:${FONT};">
-            <div style="font-size:14px;font-weight:800;color:${BRAND_COLORS.navy};letter-spacing:.4px;">${escapeHtml(company.name)}</div>
-            ${tagline ? `<div style="font-size:12px;color:${BRAND_COLORS.muted};margin-top:2px;">${tagline}</div>` : ''}
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="vertical-align:middle;">
+                  <div style="font-size:14px;font-weight:800;color:${BRAND_COLORS.navy};letter-spacing:.4px;">${escapeHtml(company.name)}</div>
+                  ${tagline ? `<div style="font-size:12px;color:${BRAND_COLORS.muted};margin-top:2px;">${tagline}</div>` : ''}
+                </td>
+                <td align="right" style="vertical-align:middle;">${rightMark}</td>
+              </tr>
+            </table>
           </td>
         </tr>
         ${contactBlock}

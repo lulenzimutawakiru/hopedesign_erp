@@ -169,6 +169,35 @@ function excelCol(n: number): string {
 const EXCEL_LOGO_BAND_PT = 34;
 
 /**
+ * Point size of the trailing band the spreadsheet footer reserves for the
+ * uploaded footer mark.
+ */
+const EXCEL_FOOTER_BAND_PT = 30;
+
+/** Minimal worksheet surface shared by the Excel branding helpers. */
+export interface ExcelBrandSheet {
+  addRow: (values?: unknown[]) => {
+    number: number;
+    font?: unknown;
+    fill?: unknown;
+    alignment?: unknown;
+    height?: number;
+    getCell: (col: number) => {
+      font?: unknown;
+      fill?: unknown;
+      alignment?: unknown;
+      value?: unknown;
+      border?: unknown;
+    };
+  };
+  mergeCells: (from: string, to: string) => void;
+  addImage: (
+    imageId: number,
+    position: { tl: { col: number; row: number }; ext: { width: number; height: number } }
+  ) => void;
+}
+
+/**
  * Workbook image ids + intrinsic aspect ratios for the uploaded brand logos, as
  * returned by `excelBrandImages`. Empty when no asset has been uploaded, in
  * which case the spreadsheet letterhead renders text only.
@@ -182,27 +211,7 @@ export interface ExcelBrandImages {
 
 /** Shared navy letterhead block used by document and report workbooks. */
 export function applyExcelBrandHeader(
-  ws: {
-    addRow: (values?: unknown[]) => {
-      number: number;
-      font?: unknown;
-      fill?: unknown;
-      alignment?: unknown;
-      height?: number;
-      getCell: (col: number) => {
-        font?: unknown;
-        fill?: unknown;
-        alignment?: unknown;
-        value?: unknown;
-        border?: unknown;
-      };
-    };
-    mergeCells: (from: string, to: string) => void;
-    addImage: (
-      imageId: number,
-      position: { tl: { col: number; row: number }; ext: { width: number; height: number } }
-    ) => void;
-  },
+  ws: ExcelBrandSheet,
   company: CompanyProfile,
   opts: ExcelBrandHeaderOpts,
   images?: ExcelBrandImages
@@ -217,7 +226,7 @@ export function applyExcelBrandHeader(
   const merge = (n: number) => ws.mergeCells(`A${n}`, `${last}${n}`);
 
   let logoBandRow = 0;
-  if (images && (images.logoId != null || images.footerLogoId != null)) {
+  if (images && images.logoId != null) {
     const band = ws.addRow([]);
     band.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
     band.height = EXCEL_LOGO_BAND_PT;
@@ -283,17 +292,36 @@ export function applyExcelBrandHeader(
       const w = Math.round(Math.max(24, Math.min(150, (images.logoAspect ?? 3) * h)));
       ws.addImage(images.logoId, { tl: { col: 0.06, row: rowOffset(h) }, ext: { width: w, height: h } });
     }
-    if (images.footerLogoId != null) {
-      const h = 20;
-      const w = Math.round(Math.max(20, Math.min(120, (images.footerLogoAspect ?? 3) * h)));
-      ws.addImage(images.footerLogoId, {
-        tl: { col: Math.max(1, cols - 2.7), row: rowOffset(h) },
-        ext: { width: w, height: h },
-      });
-    }
   }
   const spacer = ws.addRow([]);
   return spacer.number + 1;
+}
+
+/**
+ * Branded spreadsheet footer. ExcelJS exposes the printable header/footer area
+ * as text only, so the uploaded footer mark is anchored to a trailing band
+ * beneath the last content row — the same position the PDF and HTML renderers
+ * give it.
+ */
+export function applyExcelBrandFooter(
+  ws: ExcelBrandSheet,
+  images?: ExcelBrandImages,
+  opts: { columns?: number } = {}
+): void {
+  if (images?.footerLogoId == null) return;
+  const cols = Math.max(8, opts.columns ?? 8);
+  ws.addRow([]);
+  const band = ws.addRow([]);
+  band.height = EXCEL_FOOTER_BAND_PT;
+  band.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F6F8' } };
+  ws.mergeCells(`A${band.number}`, `${excelCol(cols)}${band.number}`);
+  const bandPx = (EXCEL_FOOTER_BAND_PT * 4) / 3;
+  const h = 20;
+  const w = Math.round(Math.max(20, Math.min(120, (images.footerLogoAspect ?? 3) * h)));
+  ws.addImage(images.footerLogoId, {
+    tl: { col: 0.06, row: band.number - 1 + Math.max(0, (bandPx - h) / 2) / bandPx },
+    ext: { width: w, height: h },
+  });
 }
 
 export interface CompanyProfile {
@@ -643,9 +671,9 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
     ? `<img class="brand-logo" src="${esc(logoSrc)}" alt="${esc(c.name)} logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
     : '';
   const footerLogoSrc = c.footerLogoUrl.trim();
-  const rightLogoHtml = /^https?:\/\//i.test(footerLogoSrc)
-    ? `<img class="brand-logo brand-logo-alt" src="${esc(footerLogoSrc)}" alt="${esc(c.name)} logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
-    : '';
+  // The secondary uploaded asset is the *footer* mark. It is drawn in the
+  // document footer only - the letterhead carries a single primary logo so the
+  // header reads as one lockup on every document.
   const footerLogoHtml = /^https?:\/\//i.test(footerLogoSrc)
     ? `<img class="foot-logo" src="${esc(footerLogoSrc)}" alt="${esc(c.name)} footer logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
     : '';
@@ -737,11 +765,10 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   .lh-brand { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
   .brand-mark { width: 42px; height: 42px; flex: 0 0 auto; display: block; }
   .brand-logo { height: 42px; width: auto; max-width: 120px; flex: 0 0 auto; object-fit: contain; }
-  .brand-logo-alt { max-width: 110px; }
   .co-name { font-size: 18px; font-weight: 700; color: var(--navy); letter-spacing: 0.01em; margin: 0; }
   .co-tag { color: var(--teal); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin: 2px 0 6px; font-weight: 600; }
   .c-line { color: var(--muted); font-size: 9.5px; line-height: 1.45; }
-  .lh-doc { text-align: right; flex: 0 0 auto; max-width: 46%; }
+  .lh-doc { text-align: right; flex: 0 1 auto; max-width: 52%; min-width: 0; border-left: 1px solid var(--line); padding-left: 20px; }
   .doc-kicker { font-size: 8.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--teal); font-weight: 700; margin-bottom: 4px; }
   .doc-title { font-size: 20px; font-weight: 700; color: var(--navy); letter-spacing: 0.04em; margin: 0; line-height: 1.15; }
   .doc-no { font-weight: 700; color: var(--teal); font-size: 12.5px; margin-top: 4px; letter-spacing: 0.02em; }
@@ -803,10 +830,11 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
   .auth-value.mono { font-family: 'IBM Plex Mono', Consolas, Menlo, monospace; font-size: 8px; color: #445; }
   .auth-value.vu { color: var(--blue); text-decoration: none; }
   .auth-note { margin: 4px 0 0; font-size: 8.5px; color: var(--muted); line-height: 1.5; }
-  .foot { margin: 18px 32px 0; padding-top: 8px; border-top: 2px solid var(--navy); color: var(--muted); font-size: 8.5px; display: flex; justify-content: space-between; gap: 16px; }
+  .foot { position: relative; margin: 18px 32px 0; padding-top: 12px; border-top: 2px solid var(--navy); color: var(--muted); font-size: 8.5px; display: flex; justify-content: space-between; gap: 16px; }
   .foot .foot-l { display: flex; align-items: center; min-width: 0; }
-  .foot-logo { height: 26px; width: auto; max-width: 120px; object-fit: contain; flex: 0 0 auto; margin-right: 8px; }
+  .foot-logo { height: 30px; width: auto; max-width: 130px; object-fit: contain; flex: 0 0 auto; margin-right: 10px; }
   .foot .r { text-align: right; }
+  .foot::before { content: ''; position: absolute; top: 4px; left: 0; right: 0; height: 1.4px; background: var(--teal); }
   @page { size: A4; margin: 12mm 12mm 14mm; }
   @media print {
     .sheet { max-width: none; }
@@ -835,7 +863,6 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
         ${opts.docNo ? `<div class="doc-no">${esc(opts.docNo)}</div>` : ''}
         ${opts.subtitle ? `<div class="doc-sub">${esc(opts.subtitle)}</div>` : ''}
       </div>
-      ${rightLogoHtml}
     </div>
     <div class="lh-rule"></div>
   </header>

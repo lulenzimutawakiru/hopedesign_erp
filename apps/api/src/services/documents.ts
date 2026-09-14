@@ -3,9 +3,6 @@ import ExcelJS from 'exceljs';
 import { stringify } from 'csv-stringify/sync';
 import { Ctx } from '../db.js';
 import { notFound } from '../utils.js';
-import { existsSync, readFileSync } from 'node:fs';
-import path from 'node:path';
-import { config } from '../config.js';
 import * as sales from './sales.js';
 import * as procurement from './procurement.js';
 import * as finance from './finance.js';
@@ -15,8 +12,8 @@ import { PdfDoc, PdfTableColumn, PdfTextStyle, textWidth, wrapText, PAGE_W, PAGE
 import QRCode from 'qrcode';
 import {
   BRAND,
+  applyExcelBrandFooter,
   CompanyProfile,
-  hexToRgb,
   brandHex,
   applyExcelBrandHeader,
   companyContactLines,
@@ -31,11 +28,19 @@ import {
   renderBrandedHtml,
 } from './branding.js';
 import {
-  brandImageWidth,
-  drawRightBrandMark,
+  brandingAssetParams,
+  brandOf,
+  drawFacts,
+  drawLetterhead,
+  drawRunningHeader,
   excelBrandImages,
   excelNumFmt,
+  preloadFooterLogo,
+  preloadLogo,
+  readStoredBrandingFile,
   toExcelValue,
+  type DocBrand,
+  type LetterheadMeta,
 } from './brandedExport.js';
 
 /**
@@ -2316,21 +2321,24 @@ export interface DocumentRenderOpts {
 const authEnabled = (opts: DocumentRenderOpts): boolean =>
   Boolean(opts.token && opts.verifyUrl && opts.fingerprint);
 
-interface DocBrand {
-  navy: [number, number, number];
-  teal: [number, number, number];
-}
-
-const brandOf = (c: CompanyProfile): DocBrand => ({
-  navy: hexToRgb(c.brandColor, BRAND.navy),
-  teal: hexToRgb(c.brandColorSecondary, BRAND.teal),
-});
-
 const statusOf = (data: DocData, opts: DocumentRenderOpts): string =>
   opts.status ?? data.status ?? data.meta.find(([label]) => /^status$/i.test(label))?.[1] ?? '';
 
 const classifOf = (data: DocData, opts: DocumentRenderOpts): string =>
   opts.classification ?? data.classification ?? 'Internal';
+
+/**
+ * Project a business document onto the shared letterhead shape so the PDF
+ * renderers draw exactly the same branded header as the export pipeline.
+ */
+const letterheadMeta = (data: DocData, opts: DocumentRenderOpts, status: string): LetterheadMeta => ({
+  title: data.title,
+  subtitle: data.subtitle,
+  kicker: data.kicker,
+  docNo: data.code,
+  status,
+  company: opts.company,
+});
 
 /** Signature labels that belong to an external party and must stay blank for a physical signature. */
 const EXTERNAL_SIGNATURE_RE = /customer|driver|supplier|acknowledg|acceptance|witness|^employee$/i;
@@ -2417,98 +2425,6 @@ function wrapHard(text: string, size: number, bold: boolean, maxWidth: number): 
   }
   if (line) out.push(line);
   return out.length ? out : [''];
-}
-
-function drawTopBar(doc: PdfDoc, brand: DocBrand): void {
-  doc.rect(0, PAGE_H - 8, PAGE_W, 8, brand.navy);
-  doc.rect(0, PAGE_H - 11, PAGE_W, 3, brand.teal);
-}
-
-function drawRunningHeader(
-  doc: PdfDoc,
-  data: DocData,
-  opts: DocumentRenderOpts,
-  logoName?: string,
-  footerLogoName?: string
-): void {
-  const brand = brandOf(opts.company);
-  drawTopBar(doc, brand);
-  const top = PAGE_H - 18;
-  const mark = 16;
-  let textX = MARGIN;
-  const logoW = brandImageWidth(doc, mark, 90, logoName);
-  if (logoW) {
-    doc.image(logoName as string, MARGIN, top - mark, logoW, mark);
-    textX = MARGIN + logoW + 8;
-  }
-  const rightMarkW = drawRightBrandMark(doc, top - mark, mark, footerLogoName);
-  doc.rawText(opts.company.name, textX, top - 5, 8, {
-    bold: true,
-    color: brand.navy,
-    maxWidth: Math.max(60, TABLE_W * 0.5 - rightMarkW),
-  });
-  const right = `${data.title.toUpperCase()}${data.code ? `  ${data.code}` : ''}`;
-  doc.rawText(right, MARGIN, top - 5, 8, {
-    align: 'right',
-    maxWidth: Math.max(60, TABLE_W - (rightMarkW ? rightMarkW + 10 : 0)),
-    color: GRAY,
-    bold: true,
-  });
-  doc.line(MARGIN, top - 22, MARGIN + TABLE_W, top - 22, brand.navy, 1.2);
-  doc.line(MARGIN, top - 24.2, MARGIN + TABLE_W, top - 24.2, brand.teal, 0.7);
-  doc.cursorY = top - 34;
-}
-
-function drawFacts(doc: PdfDoc, items: Array<[string, string]>, brand: DocBrand): void {
-  const shown = items.filter(([, v]) => v && v !== '-' && v !== 'N/A');
-  if (!shown.length) return;
-  const cols = Math.min(4, Math.max(2, shown.length));
-  const colW = TABLE_W / cols;
-  const pad = 8;
-  const labelSize = 5.8;
-  const valueSize = 8;
-  const cells = shown.map(([label, value]) => ({
-    label,
-    lines: wrapHard(String(value), valueSize, true, colW - pad * 2).slice(0, 3),
-  }));
-  const rows = Math.ceil(cells.length / cols);
-  const rowHs: number[] = [];
-  for (let r = 0; r < rows; r++) {
-    const slice = cells.slice(r * cols, r * cols + cols);
-    const maxLines = Math.max(...slice.map((c) => c.lines.length), 1);
-    rowHs.push(Math.max(26, 12 + maxLines * (valueSize * 1.32) + 8));
-  }
-  const h = rowHs.reduce((a, b) => a + b, 0);
-  if (doc.cursorY - h < BOTTOM) doc.newPage();
-  const top = doc.cursorY;
-  doc.rect(MARGIN, top - h, TABLE_W, h, BRAND.headerFill);
-  doc.rect(MARGIN, top - h, 2.6, h, brand.teal);
-  doc.strokeRect(MARGIN, top - h, TABLE_W, h, LINE, 0.45);
-  let y = top;
-  for (let r = 0; r < rows; r++) {
-    const rh = rowHs[r];
-    if (r > 0) doc.line(MARGIN, y, MARGIN + TABLE_W, y, LINE, 0.4);
-    for (let c = 0; c < cols; c++) {
-      const cell = cells[r * cols + c];
-      if (!cell) continue;
-      const x = MARGIN + c * colW;
-      if (c > 0) doc.line(x, y, x, y - rh, LINE, 0.35);
-      doc.rawText(cell.label.toUpperCase(), x + pad, y - 10, labelSize, {
-        color: GRAY,
-        bold: true,
-        maxWidth: colW - pad * 2,
-      });
-      cell.lines.forEach((ln, i) => {
-        doc.rawText(ln, x + pad, y - 21 - i * (valueSize * 1.32), valueSize, {
-          color: brand.navy,
-          bold: true,
-          maxWidth: colW - pad * 2,
-        });
-      });
-    }
-    y -= rh;
-  }
-  doc.cursorY = top - h - 10;
 }
 
 function drawParties(doc: PdfDoc, parties: DocParty[], brand: DocBrand, photoName?: string | null, photoCaption?: string): void {
@@ -2911,80 +2827,6 @@ function drawContractBand(doc: PdfDoc, label: string, brand: DocBrand, light = f
   doc.cursorY = y - bandH - 6;
 }
 
-function drawContractLetterhead(
-  doc: PdfDoc,
-  data: DocData,
-  opts: DocumentRenderOpts,
-  status: string,
-  logoName?: string,
-  footerLogoName?: string
-): void {
-  const c = opts.company;
-  const brand = brandOf(c);
-  drawTopBar(doc, brand);
-  const logoSize = 30;
-  const top = PAGE_H - 18;
-  const logoY = top - logoSize - 6;
-  let textX = MARGIN;
-  const logoW = brandImageWidth(doc, logoSize, 110, logoName);
-  if (logoW) {
-    doc.image(logoName as string, MARGIN, logoY, logoW, logoSize);
-    textX = MARGIN + logoW + 11;
-  }
-  const rightMarkW = drawRightBrandMark(doc, logoY, logoSize, footerLogoName);
-  const rightX = MARGIN + TABLE_W * 0.56;
-  const rightW = TABLE_W * 0.44;
-  const leftW = Math.max(80, rightX - textX - 4);
-  doc.cursorY = top - 6;
-  doc.text(c.name, textX, 12, { bold: true, color: brand.navy, maxWidth: leftW });
-  if (c.tagline) doc.text(c.tagline.toUpperCase(), textX, 6.4, { color: brand.teal, maxWidth: leftW, bold: true });
-  for (const ln of [...companyContactLines(c), ...companyRegLines(c)].slice(0, 2)) {
-    doc.text(ln, textX, 6.4, { color: GRAY, maxWidth: leftW });
-  }
-  let ry = top - 4 - (rightMarkW ? logoSize + 8 : 0);
-  doc.rawText((data.kicker ?? 'Official document').toUpperCase(), rightX, ry, 6.2, {
-    align: 'right',
-    maxWidth: rightW,
-    color: brand.teal,
-    bold: true,
-  });
-  ry -= 15;
-  const titleLines = wrapHard(data.title.toUpperCase(), 13, true, rightW);
-  for (const ln of titleLines) {
-    doc.rawText(ln, rightX, ry, 13, { align: 'right', maxWidth: rightW, color: brand.navy, bold: true });
-    ry -= 14.5;
-  }
-  if (data.code) {
-    doc.rawText(data.code, rightX, ry, 9, { align: 'right', maxWidth: rightW, color: brand.teal, bold: true });
-    ry -= 11.5;
-  }
-  if (data.subtitle) {
-    for (const ln of wrapHard(data.subtitle, 7.4, false, rightW).slice(0, 2)) {
-      doc.rawText(ln, rightX, ry, 7.4, { align: 'right', maxWidth: rightW, color: GRAY });
-      ry -= 9.2;
-    }
-  }
-  if (status) {
-    const pillText = status.toUpperCase();
-    const pillW = textWidth(pillText, 6.4, true) + 18;
-    const pillH = 13;
-    const px = MARGIN + TABLE_W - pillW;
-    const py = ry - pillH - 4;
-    doc.rect(px, py, pillW, pillH, brand.teal);
-    doc.rawText(pillText, px, py + pillH / 2 + 2.2, 6.4, {
-      align: 'center',
-      bold: true,
-      color: BRAND.white,
-      maxWidth: pillW,
-    });
-    ry = py - 6;
-  }
-  const ruleY = Math.min(doc.cursorY, ry) - 6;
-  doc.line(MARGIN, ruleY, MARGIN + TABLE_W, ruleY, brand.navy, 1.6);
-  doc.line(MARGIN, ruleY - 2.2, MARGIN + TABLE_W, ruleY - 2.2, brand.teal, 0.8);
-  doc.cursorY = ruleY - 10;
-}
-
 function drawContractIntro(doc: PdfDoc, opts: DocumentRenderOpts): void {
   doc.cursorY -= 2;
   doc.text(
@@ -3141,49 +2983,9 @@ function drawContractNotices(doc: PdfDoc, notes: string[], brand: DocBrand, band
   }
 }
 
-/**
- * Read an uploaded branding image (signature / logo / footer logo) for a
- * tenant/company from local storage. Only PNG/JPG are supported by the PDF
- * writer, so WebP/SVG uploads are ignored here and the vector brand mark is
- * used as the visual fallback.
- */
-function readStoredBrandingFile(assetUrl: string, filePrefix: string): { bytes: Buffer; ext: string } | null {
-  const url = String(assetUrl ?? '').trim();
-  if (!/^https?:\/\//i.test(url)) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  const tenant = String(parsed.searchParams.get('tenant') ?? '');
-  const company = String(parsed.searchParams.get('company') ?? '');
-  if (!/^\d+$/.test(tenant) || !/^\d+$/.test(company)) return null;
-  const dir = path.join(config.storageRoot, 'branding', tenant, company);
-  for (const ext of ['.png', '.jpg']) {
-    const abs = path.join(dir, `${filePrefix}${ext}`);
-    try {
-      if (!existsSync(abs)) continue;
-      const bytes = readFileSync(abs);
-      if (bytes.length) return { bytes, ext };
-    } catch { /* ignore */ }
-  }
-  return null;
-}
-
 /** Read the uploaded signature image for a tenant/company from local storage. */
 function readStoredSignature(signatureUrl: string): { bytes: Buffer; ext: string } | null {
   return readStoredBrandingFile(signatureUrl, 'signature');
-}
-
-/** Read the uploaded company logo for a tenant/company from local storage. */
-function readStoredLogo(logoUrl: string): { bytes: Buffer; ext: string } | null {
-  return readStoredBrandingFile(logoUrl, 'logo');
-}
-
-/** Read the uploaded footer logo for a tenant/company from local storage. */
-function readStoredFooterLogo(footerLogoUrl: string): { bytes: Buffer; ext: string } | null {
-  return readStoredBrandingFile(footerLogoUrl, 'footer-logo');
 }
 
 /**
@@ -3192,44 +2994,12 @@ function readStoredFooterLogo(footerLogoUrl: string): { bytes: Buffer; ext: stri
  * contract-sig-<contract>-<signer> file.
  */
 function readStoredContractSignature(signatureUrl: string): { bytes: Buffer; ext: string } | null {
-  const url = String(signatureUrl ?? '').trim();
-  if (!/^https?:\/\//i.test(url)) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  const tenant = String(parsed.searchParams.get('tenant') ?? '');
-  const company = String(parsed.searchParams.get('company') ?? '');
-  const contract = String(parsed.searchParams.get('contract') ?? '');
-  const signer = String(parsed.searchParams.get('signer') ?? '');
-  if (!/^\d+$/.test(tenant) || !/^\d+$/.test(company) || !/^\d+$/.test(contract)) return null;
-  if (!/^[A-Z_]+$/.test(signer)) return null;
-  const dir = path.join(config.storageRoot, 'branding', tenant, company);
-  for (const ext of ['.png', '.jpg']) {
-    const abs = path.join(dir, `contract-sig-${contract}-${signer}${ext}`);
-    try {
-      if (!existsSync(abs)) continue;
-      const bytes = readFileSync(abs);
-      if (bytes.length) return { bytes, ext };
-    } catch { /* ignore */ }
-  }
-  return null;
-}
-
-/** Preload the stored company logo into the PDF and return its XObject name. */
-function preloadLogo(doc: PdfDoc, logoUrl: string): string | undefined {
-  if (!logoUrl) return undefined;
-  const file = readStoredLogo(logoUrl);
-  return file ? doc.addImage(file.bytes) ?? undefined : undefined;
-}
-
-/** Preload the stored footer logo into the PDF and return its XObject name. */
-function preloadFooterLogo(doc: PdfDoc, footerLogoUrl: string): string | undefined {
-  if (!footerLogoUrl) return undefined;
-  const file = readStoredFooterLogo(footerLogoUrl);
-  return file ? doc.addImage(file.bytes) ?? undefined : undefined;
+  const parsed = brandingAssetParams(signatureUrl);
+  if (!parsed) return null;
+  const contract = String(parsed.url.searchParams.get('contract') ?? '');
+  const signer = String(parsed.url.searchParams.get('signer') ?? '');
+  if (!/^\d+$/.test(contract) || !/^[A-Z_]+$/.test(signer)) return null;
+  return readStoredBrandingFile(signatureUrl, `contract-sig-${contract}-${signer}`);
 }
 
 async function drawContractSignatures(doc: PdfDoc, signs: DocSignature[], brand: DocBrand): Promise<void> {
@@ -3272,8 +3042,9 @@ async function renderContractPdf(data: DocData, opts: DocumentRenderOpts): Promi
   const logoName = preloadLogo(doc, opts.company.logoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
-  doc.setNewPageHandler(() => drawRunningHeader(doc, data, opts, logoName, footerLogoName));
-  drawContractLetterhead(doc, data, opts, status, logoName, footerLogoName);
+  const head = letterheadMeta(data, opts, status);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, head, brand, logoName));
+  drawLetterhead(doc, head, brand, logoName);
   drawContractIntro(doc, opts);
 
   const photoName = data.photo?.bytes ? doc.addImage(data.photo.bytes) : null;
@@ -3428,8 +3199,9 @@ async function renderCertificatePdf(data: DocData, opts: DocumentRenderOpts): Pr
   const logoName = preloadLogo(doc, opts.company.logoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
-  doc.setNewPageHandler(() => drawRunningHeader(doc, data, opts, logoName, footerLogoName));
-  drawContractLetterhead(doc, data, opts, status, logoName, footerLogoName);
+  const head = letterheadMeta(data, opts, status);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, head, brand, logoName));
+  drawLetterhead(doc, head, brand, logoName);
   drawCertificateStatement(doc, data, brand);
   drawParties(doc, data.parties ?? [], brand);
 
@@ -3682,6 +3454,9 @@ function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
   const photoName = data.photo?.bytes ? doc.addImage(data.photo.bytes) : null;
   const qrName = data.qrPng ? doc.addImage(data.qrPng) : null;
   const logoName = preloadLogo(doc, opts.company.logoUrl);
+  const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
+  const cardHead = letterheadMeta(data, opts, status);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, cardHead, brand, logoName));
   const verifyHost = (opts.verifyUrl || opts.company.verifyUrl || opts.company.website || '')
     .replace(/^https?:\/\//i, '')
     .split('/')[0];
@@ -3923,9 +3698,22 @@ function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
     noteY -= 1.5;
   });
 
-  const trailer = ['Issued by ' + opts.issuedBy + ' on ' + formatDocDateTime(opts.issuedAt)];
-  if (opts.verifyUrl) trailer.push('Verify this identity card at ' + opts.verifyUrl);
-  trailer.forEach((line, i) => doc.rawText(line, MARGIN, 52 - i * 8.5, 6.6, { color: GRAY, maxWidth: TABLE_W }));
+  const companyLine = [opts.company.legalName || opts.company.name, opts.company.tin ? 'TIN ' + opts.company.tin : '']
+    .filter(Boolean)
+    .join('  \u00b7  ');
+  doc.footer(
+    [
+      [opts.company.footerText, companyLine].filter(Boolean).join('  \u00b7  '),
+      [
+        'Issued by ' + opts.issuedBy + ' on ' + formatDocDateTime(opts.issuedAt),
+        opts.verifyUrl ? 'Verify this identity card at ' + opts.verifyUrl : '',
+        classifOf(data, opts).toUpperCase(),
+      ]
+        .filter(Boolean)
+        .join('  \u00b7  '),
+    ].filter(Boolean),
+    { navy: brand.navy, accent: brand.teal, color: GRAY, logoName: footerLogoName }
+  );
 
   return doc.build();
 }
@@ -3958,6 +3746,10 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
     ? `<img class="qr" src="data:image/png;base64,${data.qrPng.toString('base64')}" alt="QR"/>`
     : '<div class="qr empty">NO QR CODE<br/>VERIFICATION PENDING</div>';
   const company = htmlEsc(opts.company.name);
+  const footerLogoSrc = String(opts.company.footerLogoUrl ?? '').trim();
+  const footerLogoHtml = /^https?:\/\//i.test(footerLogoSrc)
+    ? `<img class="flogo" src="${htmlEsc(footerLogoSrc)}" alt="${htmlEsc(opts.company.name)} footer logo" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.style.display='none'"/>`
+    : '';
   const validity = ['Issued ' + issued, expires ? 'Expires ' + expires : ''].filter(Boolean).join('  ·  ');
   return `<!doctype html>
 <html><head><meta charset="utf-8"/><title>${htmlEsc(data.title)} ${htmlEsc(official)}</title>
@@ -4000,6 +3792,11 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
   .row .k { flex:0 0 21mm; color:#5f6b76; text-transform:uppercase; font-size:2mm; font-weight:700; letter-spacing:.03em; line-height:1.4; }
   .row .v { flex:1; min-width:0; font-weight:700; font-size:2.7mm; line-height:1.4; word-break:break-all; }
   .terms { text-align:center; font-size:2mm; color:#5f6b76; padding:.6mm 2.8mm 1.6mm; }
+  .doc-foot { margin:18px 0 0; padding-top:12px; border-top:2px solid var(--navy); position:relative; display:flex; justify-content:space-between; align-items:center; gap:14px; font-size:11px; color:#5f6b76; }
+  .doc-foot::before { content:''; position:absolute; top:4px; left:0; right:0; height:1.4px; background:var(--teal); }
+  .doc-foot .fl { display:flex; align-items:center; gap:8px; min-width:0; }
+  .doc-foot .flogo { height:26px; width:auto; max-width:120px; object-fit:contain; flex:0 0 auto; }
+  .doc-foot .fr { text-align:right; }
   @media print {
     body { margin:8mm; }
     .no-print { display:none; }
@@ -4058,7 +3855,13 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
       </div>
     </div>
   </div>
-  <p class="no-print muted">Issued by ${htmlEsc(opts.issuedBy)} on ${htmlEsc(formatDocDateTime(opts.issuedAt))}</p>
+  <footer class="doc-foot">
+    <div class="fl">
+      ${footerLogoHtml}
+      <div>${htmlEsc([opts.company.name, opts.company.footerText].filter(Boolean).join(' \u00b7 '))}</div>
+    </div>
+    <div class="fr">Issued by ${htmlEsc(opts.issuedBy)} on ${htmlEsc(formatDocDateTime(opts.issuedAt))}${opts.verifyUrl ? ` \u00b7 ${htmlEsc(opts.verifyUrl)}` : ''}</div>
+  </footer>
   <script src="/assets/print.js"></script>
 </body></html>`;
 }
@@ -4075,8 +3878,9 @@ async function renderPdf(data: DocData, opts: DocumentRenderOpts): Promise<Buffe
   const logoName = preloadLogo(doc, opts.company.logoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
-  doc.setNewPageHandler(() => drawRunningHeader(doc, data, opts, logoName, footerLogoName));
-  drawContractLetterhead(doc, data, opts, status, logoName, footerLogoName);
+  const head = letterheadMeta(data, opts, status);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, head, brand, logoName));
+  drawLetterhead(doc, head, brand, logoName);
 
   doc.text(
     'Issued by ' + opts.issuedBy + ' on ' + formatDocDateTime(opts.issuedAt) + (opts.correlationId ? '  \u00b7  Ref ' + opts.correlationId : ''),
@@ -4183,6 +3987,7 @@ async function renderXlsx(data: DocData, opts: DocumentRenderOpts): Promise<Buff
     },
   });
 
+  const brandImages = excelBrandImages(wb, opts.company);
   applyExcelBrandHeader(ws, opts.company, {
     title: data.title,
     subtitle: data.subtitle,
@@ -4193,7 +3998,7 @@ async function renderXlsx(data: DocData, opts: DocumentRenderOpts): Promise<Buff
     status: statusOf(data, opts),
     classification: classifOf(data, opts),
     columns: Math.max(8, data.columns.length + 1),
-  }, excelBrandImages(wb, opts.company));
+  }, brandImages);
 
   const navy = brandHex(opts.company.brandColor, 'FF0B1F33');
   const teal = brandHex(opts.company.brandColorSecondary, 'FF00A6A6');
@@ -4278,6 +4083,7 @@ async function renderXlsx(data: DocData, opts: DocumentRenderOpts): Promise<Buff
     from: { row: hr.number, column: 1 },
     to: { row: hr.number, column: data.columns.length + 1 },
   };
+  applyExcelBrandFooter(ws, brandImages, { columns: data.columns.length + 1 });
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 

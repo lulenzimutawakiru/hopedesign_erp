@@ -15,6 +15,7 @@ import { config } from '../config.js';
 import {
   BRAND,
   BRAND_HEX,
+  applyExcelBrandFooter,
   applyExcelBrandHeader,
   brandHex,
   companyContactLines,
@@ -48,15 +49,24 @@ export interface BrandedTableColumn {
   weight?: number;
 }
 
-/** Document-level metadata shared by single-table exports and multi-section payroll documents. */
-export interface BrandedDocMeta {
+/**
+ * The metadata the shared letterhead / running-header renderers need. Both the
+ * export pipeline (`BrandedDocMeta`) and the business-document layer
+ * (`DocData` + `DocumentRenderOpts`) project onto this shape so every PDF and
+ * print sheet is drawn with an identical branded header.
+ */
+export interface LetterheadMeta {
   title: string;
   subtitle?: string;
   kicker?: string;
   docNo?: string;
   status?: string;
-  classification?: string;
   company: CompanyProfile;
+}
+
+/** Document-level metadata shared by single-table exports and multi-section payroll documents. */
+export interface BrandedDocMeta extends LetterheadMeta {
+  classification?: string;
   issuedBy: string;
   issuedAt: string;
   correlationId?: string | null;
@@ -194,24 +204,36 @@ export function brandImageWidth(doc: PdfDoc, height: number, maxWidth: number, l
 }
 
 /**
- * Draw the secondary brand mark (the uploaded second logo) flush with the right
- * edge of the content area and return the width it consumed, so callers can keep
- * right-aligned text clear of it.
- */
-export function drawRightBrandMark(doc: PdfDoc, y: number, height: number, logoName?: string): number {
-  const w = brandImageWidth(doc, height, doc.contentWidth * 0.34, logoName);
-  if (!w || !logoName) return 0;
-  doc.image(logoName, MARGIN + doc.contentWidth - w, y, w, height);
-  return w;
-}
-
-/**
  * Read an uploaded branding asset (logo / footer-logo / signature) from local
  * storage using the tenant+company query params of its public URL. The PDF
  * writer only supports PNG/JPEG, so other formats fall back to the vector
  * brand mark when drawn.
  */
-function readStoredBrandingFile(assetUrl: string, filePrefix: string): { bytes: Buffer; ext: string } | null {
+export function readStoredBrandingFile(
+  assetUrl: string,
+  filePrefix: string
+): { bytes: Buffer; ext: string } | null {
+  const parsed = brandingAssetParams(assetUrl);
+  if (!parsed) return null;
+  const dir = path.join(config.storageRoot, 'branding', parsed.tenant, parsed.company);
+  for (const ext of ['.png', '.jpg']) {
+    const abs = path.join(dir, `${filePrefix}${ext}`);
+    try {
+      if (!existsSync(abs)) continue;
+      const bytes = readFileSync(abs);
+      if (bytes.length) return { bytes, ext };
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
+/**
+ * Validate an uploaded-asset public URL and return its tenant/company scope.
+ * Returns null when the URL is not an absolute http(s) asset URL or when the
+ * numeric tenant/company query params are missing, so callers can reject
+ * malformed branding settings before touching the storage root.
+ */
+export function brandingAssetParams(assetUrl: string): { url: URL; tenant: string; company: string } | null {
   const url = String(assetUrl ?? '').trim();
   if (!/^https?:\/\//i.test(url)) return null;
   let parsed: URL;
@@ -223,16 +245,7 @@ function readStoredBrandingFile(assetUrl: string, filePrefix: string): { bytes: 
   const tenant = String(parsed.searchParams.get('tenant') ?? '');
   const company = String(parsed.searchParams.get('company') ?? '');
   if (!/^\d+$/.test(tenant) || !/^\d+$/.test(company)) return null;
-  const dir = path.join(config.storageRoot, 'branding', tenant, company);
-  for (const ext of ['.png', '.jpg']) {
-    const abs = path.join(dir, `${filePrefix}${ext}`);
-    try {
-      if (!existsSync(abs)) continue;
-      const bytes = readFileSync(abs);
-      if (bytes.length) return { bytes, ext };
-    } catch { /* ignore */ }
-  }
-  return null;
+  return { url: parsed, tenant, company };
 }
 
 /** Read the uploaded company logo for a tenant/company from local storage. */
@@ -305,38 +318,31 @@ export function excelBrandImages(
   return out;
 }
 
-function drawTopBar(doc: PdfDoc, brand: DocBrand): void {
+export function drawTopBar(doc: PdfDoc, brand: DocBrand): void {
   doc.rect(0, doc.pageHeight - 8, doc.pageWidth, 8, brand.navy);
   doc.rect(0, doc.pageHeight - 11, doc.pageWidth, 3, brand.teal);
 }
 
-export function drawRunningHeader(
-  doc: PdfDoc,
-  opts: BrandedDocMeta,
-  brand: DocBrand,
-  logoName?: string,
-  footerLogoName?: string
-): void {
+/** Compact branded header used on every continuation page. */
+export function drawRunningHeader(doc: PdfDoc, opts: LetterheadMeta, brand: DocBrand, logoName?: string): void {
   drawTopBar(doc, brand);
   const top = doc.pageHeight - 18;
   const mark = 16;
-  const dims = logoName ? doc.imageDims(logoName) : null;
+  const logoW = brandImageWidth(doc, mark, 90, logoName);
   let textX = MARGIN;
-  if (dims) {
-    const logoW = Math.min(90, Math.max(18, (dims.width / dims.height) * mark));
-    doc.image(logoName as string, MARGIN, top - mark, logoW, mark);
+  if (logoW && logoName) {
+    doc.image(logoName, MARGIN, top - mark, logoW, mark);
     textX = MARGIN + logoW + 8;
   }
-  const rightMarkW = drawRightBrandMark(doc, top - mark, mark, footerLogoName);
   doc.rawText(opts.company.name, textX, top - 5, 8, {
     bold: true,
     color: brand.navy,
-    maxWidth: Math.max(60, doc.contentWidth * 0.5 - rightMarkW),
+    maxWidth: Math.max(60, doc.contentWidth * 0.5),
   });
   const right = `${opts.title.toUpperCase()}${opts.docNo ? `  ${opts.docNo}` : ''}`;
   doc.rawText(right, MARGIN, top - 5, 8, {
     align: 'right',
-    maxWidth: Math.max(60, doc.contentWidth - (rightMarkW ? rightMarkW + 10 : 0)),
+    maxWidth: Math.max(60, doc.contentWidth * 0.5),
     color: GRAY,
     bold: true,
   });
@@ -345,26 +351,19 @@ export function drawRunningHeader(
   doc.cursorY = top - 34;
 }
 
-export function drawLetterhead(
-  doc: PdfDoc,
-  opts: BrandedDocMeta,
-  brand: DocBrand,
-  logoName?: string,
-  footerLogoName?: string
-): void {
+/** Full letterhead used on page one of every branded document. */
+export function drawLetterhead(doc: PdfDoc, opts: LetterheadMeta, brand: DocBrand, logoName?: string): void {
   const c = opts.company;
   drawTopBar(doc, brand);
   const logoSize = 30;
   const top = doc.pageHeight - 18;
   const logoY = top - logoSize - 6;
-  const dims = logoName ? doc.imageDims(logoName) : null;
+  const logoW = brandImageWidth(doc, logoSize, 110, logoName);
   let textX = MARGIN;
-  if (dims) {
-    const logoW = Math.min(110, Math.max(20, (dims.width / dims.height) * logoSize));
-    doc.image(logoName as string, MARGIN, logoY, logoW, logoSize);
+  if (logoW && logoName) {
+    doc.image(logoName, MARGIN, logoY, logoW, logoSize);
     textX = MARGIN + logoW + 11;
   }
-  const rightMarkW = drawRightBrandMark(doc, logoY, logoSize, footerLogoName);
   const rightX = MARGIN + doc.contentWidth * 0.56;
   const rightW = doc.contentWidth * 0.44;
   const leftW = Math.max(80, rightX - textX - 4);
@@ -376,8 +375,8 @@ export function drawLetterhead(
   for (const ln of [...companyContactLines(c), ...companyRegLines(c)].slice(0, 2)) {
     doc.text(ln, textX, 6.4, { color: GRAY, maxWidth: leftW });
   }
-  let ry = top - 4 - (rightMarkW ? logoSize + 8 : 0);
-  doc.rawText((opts.kicker ?? 'Official export').toUpperCase(), rightX, ry, 6.2, {
+  let ry = top - 4;
+  doc.rawText((opts.kicker ?? 'Official document').toUpperCase(), rightX, ry, 6.2, {
     align: 'right',
     maxWidth: rightW,
     color: brand.teal,
@@ -487,8 +486,8 @@ export async function renderTablePdf(opts: BrandedTableOpts): Promise<Buffer> {
   const logoName = preloadLogo(doc, opts.company.logoUrl);
   const footerLogoName = preloadFooterLogo(doc, opts.company.footerLogoUrl);
 
-  doc.setNewPageHandler(() => drawRunningHeader(doc, opts, brand, logoName, footerLogoName));
-  drawLetterhead(doc, opts, brand, logoName, footerLogoName);
+  doc.setNewPageHandler(() => drawRunningHeader(doc, opts, brand, logoName));
+  drawLetterhead(doc, opts, brand, logoName);
 
   doc.text(
     'Issued by ' +
@@ -651,6 +650,7 @@ export async function renderTableXlsx(opts: BrandedTableOpts): Promise<Buffer> {
     },
   });
   const navy = brandHex(opts.company.brandColor, BRAND_HEX.navy);
+  const brandImages = excelBrandImages(wb, opts.company);
   applyExcelBrandHeader(ws, opts.company, {
     title: opts.title,
     subtitle: opts.subtitle,
@@ -661,7 +661,7 @@ export async function renderTableXlsx(opts: BrandedTableOpts): Promise<Buffer> {
     status: opts.status,
     classification: opts.classification ?? 'Internal',
     columns: Math.max(8, opts.columns.length),
-  }, excelBrandImages(wb, opts.company));
+  }, brandImages);
   const hr = ws.addRow(opts.columns.map((c) => c.label));
   hr.font = { bold: true, color: { argb: 'FFFFFFFF' }, name: 'Calibri', size: 9 };
   hr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: navy } };
@@ -689,6 +689,7 @@ export async function renderTableXlsx(opts: BrandedTableOpts): Promise<Buffer> {
       to: { row: hr.number, column: opts.columns.length },
     };
   }
+  applyExcelBrandFooter(ws, brandImages, { columns: opts.columns.length });
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
