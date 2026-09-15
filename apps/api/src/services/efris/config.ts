@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { Ctx } from '../../db.js';
+import { ApiError } from '../../utils.js';
 
 /**
  * EFRIS configuration & credential resolution (URA EFRIS, spec 74-78).
@@ -141,16 +142,29 @@ export function notificationRoleCodes(config: EfrisConfigurationRow): string[] {
   return [];
 }
 
-/** Reference keys must point at non-empty environment values before TEST/ACTIVE is allowed. */
+/**
+ * Reference keys must point at non-empty environment values before TEST/ACTIVE
+ * is allowed.
+ *
+ * This refusal is a 400, not a 500. The operator who tripped it can clear it by
+ * setting the named key on the server (or repointing the reference), so the
+ * missing key has to reach them. While this threw a plain Error - which carries
+ * no status - the error middleware answered "Internal server error" and the
+ * reason survived only in the server log.
+ */
 export function assertCredentialsResolvable(config: EfrisConfigurationRow): void {
   if (config.client_id_ref && !resolveCredentialValue(config.client_id_ref)) {
-    const err = new Error(`EFRIS env secret ${config.client_id_ref} is not set on the server`);
-    (err as Error & { code?: string }).code = 'EFRIS_CLIENT_ID_MISSING';
-    throw err;
+    throw new ApiError(
+      400,
+      'EFRIS_CLIENT_ID_MISSING',
+      `EFRIS env secret ${config.client_id_ref} is not set on the server`
+    );
   }
   if (config.credentials_ref && !resolveCredentialValue(config.credentials_ref)) {
-    const err = new Error(`EFRIS env secret ${config.credentials_ref} is not set on the server`);
-    (err as Error & { code?: string }).code = 'EFRIS_CREDENTIALS_MISSING';
-    throw err;
+    throw new ApiError(
+      400,
+      'EFRIS_CREDENTIALS_MISSING',
+      `EFRIS env secret ${config.credentials_ref} is not set on the server`
+    );
   }
 }

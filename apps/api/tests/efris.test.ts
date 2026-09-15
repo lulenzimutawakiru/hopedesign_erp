@@ -315,4 +315,49 @@ describe('URA EFRIS fiscalization', () => {
       expect(cfg).not.toHaveProperty('credentialsRef');
     }
   });
+  it('refuses a mode change with a 400 when the referenced env keys are absent on the server', async () => {
+    const { token } = await loginAs('admin');
+    // A configuration may sit DISABLED while its pointer keys are absent from the
+    // server; only leaving DISABLED is refused. That refusal must be a clean 4xx
+    // naming the missing key. It used to be a plain Error, which carries no status,
+    // so the API answered 500 "Internal server error" and the operator never learned
+    // which environment key to set.
+    const absent = `EFRIS_ENV_PROBE_ABSENT_${tag()}`;
+    const cCode = `TE${tag()}`;
+    const created = await api.post('/api/ops/finance/efris/configurations').set(auth(token)).send({
+      code: cCode,
+      name: 'URA EFRIS env probe',
+      mode: 'DISABLED',
+      clientIdRef: absent,
+      credentialsRef: absent,
+    });
+    expect(created.status).toBe(200);
+    configCodes.push(cCode);
+    const configId = Number(created.body.data.id);
+    configIds.push(configId);
+
+    const refused = await api
+      .patch(`/api/ops/finance/efris/configurations/${configId}`)
+      .set(auth(token))
+      .send({ mode: 'TEST' });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error.code).toBe('EFRIS_CLIENT_ID_MISSING');
+    expect(String(refused.body.error.message)).toContain(absent);
+
+    // The same guard covers creation, and it must not write the refused row.
+    const refusedCreate = await api.post('/api/ops/finance/efris/configurations').set(auth(token)).send({
+      code: `TX${tag()}`,
+      name: 'Refused EFRIS config',
+      mode: 'ACTIVE',
+      clientIdRef: absent,
+      credentialsRef: absent,
+    });
+    expect(refusedCreate.status).toBe(400);
+    expect(refusedCreate.body.error.code).toBe('EFRIS_CLIENT_ID_MISSING');
+
+    const after = await asTenant('SELECT mode, is_active FROM efris_configurations WHERE id = $1', [configId]);
+    expect(after.rows[0].mode).toBe('DISABLED');
+
+    await parkConfig(configId);
+  });
 });
