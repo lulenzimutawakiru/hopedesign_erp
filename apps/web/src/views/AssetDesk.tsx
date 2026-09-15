@@ -34,6 +34,23 @@ function showVal(v: unknown): string {
   return String(v);
 }
 
+function personLabel(e: Rec): string {
+  const name = [s(e.firstName ?? e.first_name), s(e.lastName ?? e.last_name)].filter(Boolean).join(' ');
+  const pos = s(e.position);
+  if (name && pos) return name + ' — ' + pos;
+  return name || pos || s(e.employeeNo ?? e.employee_no) || 'Employee';
+}
+
+function employeeAssignBody(employees: Rec[], selectedId: string): Rec {
+  const emp = employees.find((e) => s(e.id) === selectedId);
+  if (!emp) return {};
+  const userId = emp.userId ?? emp.user_id;
+  return {
+    custodianEmployeeId: Number(emp.id),
+    custodianUserId: userId != null && String(userId) !== '' ? Number(userId) : undefined,
+  };
+}
+
 async function fetchRows(path: string): Promise<Rec[]> {
   const r = await api<{ data: unknown }>(path);
   const d = r.data;
@@ -1511,7 +1528,7 @@ function AssignModal({ asset, onClose, onDone }: { asset: Rec; onClose: () => vo
 
   useEffect(() => {
     fetchRows('/api/assets/locations?pageSize=500').then(setLocations).catch(() => undefined);
-    fetchRows('/api/ops/hr/employees?pageSize=100').then(setEmployees).catch(() => undefined);
+    fetchRows('/api/ops/hr/employees?pageSize=500').then(setEmployees).catch(() => undefined);
     fetchRows('/api/ops/hr/departments').then(setDepartments).catch(() => undefined);
   }, []);
 
@@ -1521,7 +1538,7 @@ function AssignModal({ asset, onClose, onDone }: { asset: Rec; onClose: () => vo
       await api(`/api/ops/assets/${num(asset.id)}/assign`, {
         method: 'POST',
         body: JSON.stringify({
-          custodianUserId: custodianType === 'employee' ? custodianUserId || undefined : undefined,
+          ...(custodianType === 'employee' ? employeeAssignBody(employees, custodianUserId) : {}),
           custodianDepartmentId: custodianType === 'department' ? custodianDepartmentId || undefined : undefined,
           locationId: locationId || undefined,
           assignedDate: assignedDate || undefined,
@@ -1559,7 +1576,7 @@ function AssignModal({ asset, onClose, onDone }: { asset: Rec; onClose: () => vo
             <label htmlFor="am-user">Custodian</label>
             <select id="am-user" value={custodianUserId} onChange={(e) => setCustodianUserId(e.target.value)}>
               <option value="">Select employee</option>
-              {employees.map((e) => <option key={s(e.id)} value={String(e.id)}>{s(e.first_name)} {s(e.last_name)}{s(e.position) ? ` - ${s(e.position)}` : ''}</option>)}
+              {employees.map((e) => <option key={s(e.id)} value={String(e.id)}>{personLabel(e)}</option>)}
             </select>
           </div>
         ) : (
@@ -1828,7 +1845,7 @@ function VerifyModal({ asset, onClose, onDone }: { asset: Rec; onClose: () => vo
 
   useEffect(() => {
     fetchRows('/api/assets/locations?pageSize=500').then(setLocations).catch(() => undefined);
-    fetchRows('/api/ops/hr/employees?pageSize=100').then(setEmployees).catch(() => undefined);
+    fetchRows('/api/ops/hr/employees?pageSize=500').then(setEmployees).catch(() => undefined);
   }, []);
 
   const submit = async () => {
@@ -1890,7 +1907,7 @@ function VerifyModal({ asset, onClose, onDone }: { asset: Rec; onClose: () => vo
             <label htmlFor="vm-cust">Expected custodian</label>
             <select id="vm-cust" value={custodianUserId} onChange={(e) => setCustodianUserId(e.target.value)}>
               <option value="">None</option>
-              {employees.map((e) => <option key={s(e.id)} value={String(e.id)}>{s(e.first_name)} {s(e.last_name)}</option>)}
+              {employees.map((e) => <option key={s(e.id)} value={String(e.userId ?? e.user_id ?? e.id)}>{personLabel(e)}</option>)}
             </select>
           </div>
           <div className="field">
@@ -2054,7 +2071,7 @@ function RecoverModal({ asset, onClose, onDone }: { asset: Rec; onClose: () => v
 
   useEffect(() => {
     fetchRows('/api/assets/locations?pageSize=500').then(setLocations).catch(() => undefined);
-    fetchRows('/api/ops/hr/employees?pageSize=100').then(setEmployees).catch(() => undefined);
+    fetchRows('/api/ops/hr/employees?pageSize=500').then(setEmployees).catch(() => undefined);
     fetchRows('/api/ops/hr/departments').then(setDepartments).catch(() => undefined);
   }, []);
 
@@ -2064,7 +2081,7 @@ function RecoverModal({ asset, onClose, onDone }: { asset: Rec; onClose: () => v
       await api(`/api/ops/assets/${num(asset.id)}/missing/recover`, {
         method: 'POST',
         body: JSON.stringify({
-          custodianUserId: custodianType === 'employee' ? custodianUserId || undefined : undefined,
+          ...(custodianType === 'employee' && custodianUserId ? employeeAssignBody(employees, custodianUserId) : {}),
           custodianDepartmentId: custodianType === 'department' ? custodianDepartmentId || undefined : undefined,
           locationId: locationId || undefined,
           condition: condition || undefined,
@@ -2101,7 +2118,7 @@ function RecoverModal({ asset, onClose, onDone }: { asset: Rec; onClose: () => v
             <label htmlFor="rc-user">Custodian</label>
             <select id="rc-user" value={custodianUserId} onChange={(e) => setCustodianUserId(e.target.value)}>
               <option value="">Reassign to nobody</option>
-              {employees.map((e) => <option key={s(e.id)} value={String(e.id)}>{s(e.first_name)} {s(e.last_name)}{s(e.position) ? ` - ${s(e.position)}` : ''}</option>)}
+              {employees.map((e) => <option key={s(e.id)} value={String(e.id)}>{personLabel(e)}</option>)}
             </select>
           </div>
         ) : (

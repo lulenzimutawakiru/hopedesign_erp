@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api, auth, loginAs } from './helpers.js';
+import { api, auth, loginAs, pool } from './helpers.js';
 
 describe('Asset management', () => {
   it('records field verification without violating asset_scans.result', async () => {
@@ -58,6 +58,32 @@ describe('Asset management', () => {
     const list = await api.get('/api/ops/assets?pageSize=100').set(auth(token));
     const rows = list.body.data.rows ?? [];
     expect(rows.some((r: { id: number }) => Number(r.id) === id)).toBe(false);
+  });
+
+  it('assigns an asset when the UI posts an employee id as custodianUserId', async () => {
+    const { token } = await loginAs('admin');
+    const emps = await api.get('/api/ops/hr/employees?pageSize=10').set(auth(token));
+    expect(emps.status).toBe(200);
+    const emp = (emps.body.data.rows ?? emps.body.data)[0];
+    expect(emp).toBeTruthy();
+    const locs = await api.get('/api/assets/locations?pageSize=20').set(auth(token));
+    const loc = (locs.body.data?.rows ?? locs.body.data)?.[0];
+    const locId = loc ? Number(loc.id) : undefined;
+    expect(locId).toBeTruthy();
+    const created = await api.post('/api/ops/assets').set(auth(token)).send({
+      name: 'Assign FK test ' + Date.now(),
+      locationId: locId,
+    });
+    expect(created.status).toBe(200);
+    const id = Number(created.body.data.assetId);
+    await pool.query(`UPDATE asset_register SET status = 'AVAILABLE' WHERE id = $1`, [id]);
+    const assign = await api.post(`/api/ops/assets/${id}/assign`).set(auth(token)).send({
+      custodianUserId: emp.id,
+      locationId: locId,
+      reason: 'ASSIST IN DAILY WORK',
+    });
+    expect(assign.status, JSON.stringify(assign.body)).toBe(200);
+    expect(assign.body.data.status).toMatch(/ASSIGNED|IN_USE/);
   });
 
   it('refuses to delete a live asset', async () => {

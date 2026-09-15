@@ -95,6 +95,46 @@ async function nextNo(client: pg.PoolClient, ctx: Ctx, prefix: string): Promise<
 const TAG_ASSIGNABLE = new Set(['REGISTERED', 'IN_STORE', 'AVAILABLE', 'TRANSFERRED', 'RESERVED']);
 const CUSTODY_RELEASED = new Set(['UNASSIGNED', 'RETURNED', 'TRANSFERRED', 'RELEASED']);
 
+/**
+ * The assign UI lists employees but used to POST the employee id as
+ * custodianUserId. asset_custody.custodian_user_id references users(id), so
+ * that 500'd. Resolve either id to the linked user and employee pair.
+ */
+async function resolveCustodian(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  b: Record<string, unknown>
+): Promise<{ userId: number | null; employeeId: number | null }> {
+  let userId = n(b.custodianUserId);
+  let employeeId = n(b.custodianEmployeeId);
+  if (userId) {
+    const asUser = await client.query(
+      `SELECT id, employee_id FROM users WHERE id = $1 AND tenant_id = $2`,
+      [userId, ctx.tenantId]
+    );
+    if (asUser.rows.length === 0) {
+      const asEmp = await client.query(
+        `SELECT id, user_id FROM employees WHERE id = $1 AND tenant_id = $2`,
+        [userId, ctx.tenantId]
+      );
+      if (asEmp.rows.length === 0) throw badRequest('Selected custodian was not found');
+      employeeId = employeeId ?? Number(asEmp.rows[0].id);
+      userId = asEmp.rows[0].user_id != null ? Number(asEmp.rows[0].user_id) : null;
+    } else if (!employeeId && asUser.rows[0].employee_id != null) {
+      employeeId = Number(asUser.rows[0].employee_id);
+    }
+  }
+  if (employeeId && !userId) {
+    const asEmp = await client.query(
+      `SELECT id, user_id FROM employees WHERE id = $1 AND tenant_id = $2`,
+      [employeeId, ctx.tenantId]
+    );
+    if (asEmp.rows.length === 0) throw badRequest('Selected employee was not found');
+    userId = asEmp.rows[0].user_id != null ? Number(asEmp.rows[0].user_id) : null;
+  }
+  return { userId, employeeId };
+}
+
 // ------------------------------------------------------------
 // Read models
 // ------------------------------------------------------------
@@ -1519,8 +1559,7 @@ export async function assignAsset(client: pg.PoolClient, ctx: Ctx, assetId: numb
   if (NOT_ASSIGNABLE.has(asset.status)) {
     throw badRequest(`Asset status ${asset.status} cannot be assigned`);
   }
-  const custodianUserId = n(b.custodianUserId);
-  const custodianEmployeeId = n(b.custodianEmployeeId);
+  const { userId: custodianUserId, employeeId: custodianEmployeeId } = await resolveCustodian(client, ctx, b);
   const custodianDepartmentId = n(b.custodianDepartmentId);
   if (!custodianUserId && !custodianEmployeeId && !custodianDepartmentId) {
     throw badRequest('A custodian (user, employee or department) is required');
@@ -2004,31 +2043,31 @@ export async function recoverMissing(client: pg.PoolClient, ctx: Ctx, assetId: n
   if (!['MISSING', 'LOST', 'STOLEN'].includes(asset.status)) {
     throw badRequest(`Asset status ${asset.status} is not missing`);
   }
-  const custodianUserId = n(b.custodianUserId);
+  const { userId: custodianUserId, employeeId: custodianEmployeeId } = await resolveCustodian(client, ctx, b);
   const locationId = n(b.locationId) ?? asset.location_id ?? asset.last_scan_location_id;
-  const newStatus = custodianUserId ? 'ASSIGNED' : 'AVAILABLE';
+  const newStatus = custodianUserId || custodianEmployeeId ? 'ASSIGNED' : 'AVAILABLE';
   await client.query(
     `UPDATE asset_custody SET is_current = false, released_at = now()
      WHERE asset_id = $1 AND is_current = true`,
     [assetId]
   );
   let custodyId: number | null = null;
-  if (custodianUserId) {
+  if (custodianUserId || custodianEmployeeId) {
     const ins = await client.query(
       `INSERT INTO asset_custody
-         (company_id, tenant_id, asset_id, custodian_user_id, custodian_department_id, action,
+         (company_id, tenant_id, asset_id, custodian_user_id, custodian_employee_id, custodian_department_id, action,
           from_user_id, assigned_date, is_current, accepted_at, accepted_by, reason, created_by)
-       VALUES ($1,$2,$3,$4,$5,'REASSIGN',$6,CURRENT_DATE,true,now(),$7,$8,$9) RETURNING id`,
-      [ctx.companyId, ctx.tenantId, assetId, custodianUserId, n(b.custodianDepartmentId), asset.custodian_user_id ?? null, ctx.userId ?? null, s(b.reason), ctx.userId ?? null]
+       VALUES ($1,$2,$3,$4,$5,$6,'REASSIGN',$7,CURRENT_DATE,true,now(),$8,$9,$10) RETURNING id`,
+      [ctx.companyId, ctx.tenantId, assetId, custodianUserId, custodianEmployeeId, n(b.custodianDepartmentId), asset.custodian_user_id ?? null, ctx.userId ?? null, s(b.reason), ctx.userId ?? null]
     );
     custodyId = Number(ins.rows[0].id);
   }
   await client.query(
     `UPDATE asset_register
-        SET status = $1, custodian_user_id = $2, custodian_department_id = $3,
-            location_id = $4, custody_status = $5, condition = COALESCE($6, condition), updated_by = $7
-      WHERE id = $8`,
-    [newStatus, custodianUserId, n(b.custodianDepartmentId), locationId, custodianUserId ? 'ASSIGNED' : 'UNASSIGNED', s(b.condition) ? String(b.condition).toUpperCase() : null, ctx.userId ?? null, assetId]
+        SET status = $1, custodian_user_id = $2, custodian_employee_id = $3, custodian_department_id = $4,
+            location_id = $5, custody_status = $6, condition = COALESCE($7, condition), updated_by = $8
+      WHERE id = $9`,
+    [newStatus, custodianUserId, custodianEmployeeId, n(b.custodianDepartmentId), locationId, custodianUserId || custodianEmployeeId ? 'ASSIGNED' : 'UNASSIGNED', s(b.condition) ? String(b.condition).toUpperCase() : null, ctx.userId ?? null, assetId]
   );
   await timeline(client, ctx, assetId, {
     eventType: 'RECOVERED', title: 'Asset recovered',
