@@ -194,6 +194,45 @@ describe('AC-ORG-001 / TC-ORG-001 - organisation information is createable and u
     ).rejects.toThrow();
   });
 
+  it('treats a reason on a flat save body as audit text, not as a setting', async () => {
+    // The HTTP screen sends the justification on the same object as the
+    // fields. The writer used to feed that object straight to validatePatch,
+    // so typing a reason came back as "profile has no setting named reason"
+    // and the legal-name change never landed.
+    const legalName = 'HOPE DESIGN GROUP LTD reason ' + TAG;
+    const view = await tx(
+      (client) =>
+        saveCategory(
+          client,
+          ctx,
+          'profile',
+          { legal_name: legalName, reason: 'because it is the legal name' },
+          { reason: 'because it is the legal name' }
+        ),
+      ctx
+    );
+    expect((view as { values: Record<string, unknown> }).values.legal_name).toBe(legalName);
+
+    const stored = await db(
+      `SELECT value #>> '{}' AS text FROM app_settings
+        WHERE tenant_id = $1 AND category = 'organisation.profile' AND key = 'legal_name'`,
+      [TENANT_ID]
+    );
+    expect(stored.rows.map((r) => r.text)).toContain(legalName);
+
+    const audit = await db(
+      `SELECT metadata FROM audit_logs
+        WHERE tenant_id = $1 AND correlation_id = $2 AND resource = 'organisation.settings.profile'
+        ORDER BY id DESC LIMIT 8`,
+      [TENANT_ID, CORRELATION_ID]
+    );
+    expect(
+      audit.rows.some(
+        (r) => (r.metadata as Record<string, unknown> | null)?.reason === 'because it is the legal name'
+      )
+    ).toBe(true);
+  });
+
   it('saves a stored setting a second time and records the value it replaced', async () => {
     // Regression: configuration_history.old_value is jsonb, but the driver
     // hands back an already-parsed value, so a stored string arrives as a plain

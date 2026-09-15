@@ -83,6 +83,31 @@ function coerce(def: OrgSettingDef, key: string, raw: unknown): unknown {
 }
 
 /**
+ * Keys that travel with a save but are not catalogue fields.
+ *
+ * The screen (and the HTTP router) put the audit justification and secret
+ * clears on the same JSON object as the values. When the client omits the
+ * nested `values` wrapper, those envelope keys must not be fed to
+ * validatePatch - that is how "because it is the legal name" used to come
+ * back as "profile has no setting named reason".
+ */
+const ENVELOPE_KEYS = new Set(['reason', 'clearSecrets', 'values']);
+
+/** Catalogue fields from a save body, whether nested under `values` or flat. */
+export function valuesFromBody(body: Record<string, unknown>): Record<string, unknown> {
+  const nested = body.values;
+  if (nested != null && typeof nested === 'object' && !Array.isArray(nested)) {
+    return nested as Record<string, unknown>;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (ENVELOPE_KEYS.has(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
  * Validate a patch against the catalogue for one category.
  *
  * Anything not in the catalogue is refused rather than ignored: a typo in a
@@ -166,7 +191,7 @@ export async function saveCategoryValues(
   opts: SaveValuesOptions = {}
 ): Promise<CategoryValuesView> {
   const before = await loadCategoryValues(client, ctx, cat);
-  const rawValues = (body.values ?? body) as Record<string, unknown>;
+  const rawValues = valuesFromBody(body);
   const patch = validatePatch(cat, rawValues, before.values);
 
   for (const { key, value } of patch) {

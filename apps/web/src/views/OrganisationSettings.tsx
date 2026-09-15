@@ -5426,7 +5426,7 @@ function OrganisationSettings({ path }: { path: string }) {
     setSaved(null);
     setSaving(true);
     try {
-      const payload = buildPatch();
+      const payload: Record<string, unknown> = { values: buildPatch() };
       if (reason.trim() !== '') payload.reason = reason.trim();
       const clears = cleared.filter((k) => secrets[k] !== undefined || fields[k]?.secret === true);
       if (clears.length > 0) payload.clearSecrets = clears;
