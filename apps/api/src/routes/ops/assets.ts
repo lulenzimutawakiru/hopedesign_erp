@@ -94,11 +94,37 @@ assetsOpsRouter.get('/tags/print-jobs', ...runGet('assets.tags.view', (c, ctx, q
 })));
 assetsOpsRouter.get('/tags/print-jobs/:id', ...runGet('assets.tags.view', (c, ctx, _q, p) => ast.getTagPrintJob(c, ctx, Number(p.id))));
 assetsOpsRouter.post('/tags/generate-bulk', ...run('assets.tags.generate', (c, ctx, b) => ast.generateBulkTags(c, ctx, b)));
+assetsOpsRouter.post(
+  '/tags/print-sheet',
+  requirePermission('assets.tags.print'),
+  asyncHandler(async (req, res) => {
+    const out = await tx((client) => ast.printAssetLabelSheet(client, req.ctx, req.body ?? {}), req.ctx);
+    const format = String(req.query.format ?? 'print').toLowerCase();
+    if (format === 'json') return res.json({ data: { jobId: out.jobId, jobNo: out.jobNo, quantity: out.quantity, labels: out.labels } });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="asset-labels.html"');
+    return res.send(out.html);
+  })
+);
 assetsOpsRouter.post('/tags/:tagId/void', ...run('assets.tags.void', (c, ctx, b, p) => ast.voidTag(c, ctx, Number(p.tagId), b)));
 assetsOpsRouter.post('/tags/:tagId/attach', ...run('assets.tags.generate', (c, ctx, _b, p) => ast.attachTag(c, ctx, Number(p.tagId))));
 assetsOpsRouter.post('/tags/:tagId/verify', ...run('assets.tags.generate', (c, ctx, _b, p) => ast.verifyTag(c, ctx, Number(p.tagId))));
 assetsOpsRouter.post('/:id/tags', ...run('assets.tags.generate', (c, ctx, b, p) => ast.generateTag(c, ctx, Number(p.id), b)));
+assetsOpsRouter.get('/:id/tags/label', ...runGet('assets.tags.view', (c, ctx, _q, p) => ast.loadAssetLabel(c, ctx, Number(p.id))));
 assetsOpsRouter.post('/:id/tags/print', ...run('assets.tags.print', (c, ctx, b, p) => ast.printTags(c, ctx, { ...b, assetIds: [Number(p.id)] })));
+assetsOpsRouter.post(
+  '/:id/tags/print-sheet',
+  requirePermission('assets.tags.print'),
+  asyncHandler(async (req, res) => {
+    const out = await tx(
+      (client) => ast.printAssetLabelSheet(client, req.ctx, { ...(req.body ?? {}), assetIds: [Number(req.params.id)] }),
+      req.ctx
+    );
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="asset-label.html"');
+    return res.send(out.html);
+  })
+);
 assetsOpsRouter.post('/:id/tags/replace', ...run('assets.tags.replace', (c, ctx, b, p) => ast.replaceTag(c, ctx, Number(p.id), b)));
 
 // ---- Global asset scanning & anomaly detection ----

@@ -5,7 +5,7 @@ import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, Pager } from '../components/ui';
 import { ConfirmDialog, Drawer, EmptyState, Skeleton } from '../components/os';
-import { AssetModuleTabs, ModuleHeader, labelize, s } from './assetsShared';
+import { AssetModuleTabs, ModuleHeader, labelize, openAssetLabelSheet, s } from './assetsShared';
 
 type Rec = Record<string, unknown>;
 
@@ -653,7 +653,7 @@ export function TagsFlow() {
   const scopeEvents = slicePage(events, eventPage, pageSize);
 
   return (
-    <div className="page">
+    <div className="page asset-page">
       <ModuleHeader
         kicker="Asset management"
         title="Asset tags"
@@ -701,7 +701,7 @@ export function TagsFlow() {
                         <td><Badge value={t.status} /></td>
                         <td>{fmtDate(t.created_at)}</td>
                         <td className="td-actions">
-                          {can(user, 'assets.tags.generate') && ['PENDING', 'PRINTED'].includes(s(t.status)) && aid > 0 && <button className="btn btn-sm" onClick={() => setPrintTarget(t)}>Print</button>}
+                          {can(user, 'assets.tags.print') && ['PENDING', 'PRINTED', 'ACTIVE', 'ASSIGNED'].includes(s(t.status)) && aid > 0 && <button className="btn btn-sm" onClick={() => setPrintTarget(t)}>Print label</button>}
                           {can(user, 'assets.tags.replace') && aid > 0 && <button className="btn btn-sm" onClick={() => setReplaceTarget(t)}>Replace</button>}
                           {can(user, 'assets.tags.generate') && ['ACTIVE', 'ASSIGNED'].includes(s(t.status)) && <button className="btn btn-sm" onClick={() => tagAction(tid, 'verify', `Tag ${s(t.tag_no)} verified`)}>Verify</button>}
                           {can(user, 'assets.tags.generate') && ['ACTIVE'].includes(s(t.status)) && <button className="btn btn-sm" onClick={() => tagAction(tid, 'attach', `Tag ${s(t.tag_no)} attached`)}>Attach</button>}
@@ -824,8 +824,6 @@ export function TagsFlow() {
 }
 
 function PrintModal({ target, onClose, onDone }: { target: Rec; onClose: () => void; onDone: () => void }) {
-  const [templateId, setTemplateId] = useState('');
-  const [printer, setPrinter] = useState('');
   const [reprintReason, setReprintReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -833,39 +831,26 @@ function PrintModal({ target, onClose, onDone }: { target: Rec; onClose: () => v
   const submit = async () => {
     setBusy(true); setError('');
     try {
-      await api(`/api/ops/assets/${aid}/tags/print`, {
-        method: 'POST',
-        body: JSON.stringify({ templateId: templateId || undefined, printer: printer || undefined, reprintReason: reprintReason || undefined }),
-      });
+      await openAssetLabelSheet([aid], { reprintReason: reprintReason || undefined });
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Print request failed');
+      setError(e instanceof Error ? e.message : 'Print failed');
       setBusy(false);
     }
   };
   return (
-    <Modal title={`Print tag - ${s(target.tag_no)}`} onClose={onClose} footer={
+    <Modal title={`Print label — ${s(target.tag_no || target.asset_no)}`} onClose={onClose} footer={
       <div className="quick-actions">
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={busy || !aid} onClick={() => void submit()}>{busy ? 'Sending...' : 'Send to print'}</button>
+        <button type="button" className="btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="btn btn-primary" disabled={busy || !aid} onClick={() => void submit()}>{busy ? 'Preparing…' : 'Print label'}</button>
       </div>
     }>
-      <p className="muted">Creates a print job for asset {s(target.asset_no)} ({s(target.asset_name)}). Every print is recorded in the tag print audit.</p>
-      <div className="form-grid">
-        <div className="field">
-          <label htmlFor="pm-tpl">Template ID (optional)</label>
-          <input id="pm-tpl" value={templateId} onChange={(e) => setTemplateId(e.target.value)} placeholder="Default template" />
-        </div>
-        <div className="field">
-          <label htmlFor="pm-print">Printer (optional)</label>
-          <input id="pm-print" value={printer} onChange={(e) => setPrinter(e.target.value)} placeholder="Zebra / thermal / A4" />
-        </div>
-        <div className="field" style={{ gridColumn: '1 / -1' }}>
-          <label htmlFor="pm-reason">Reprint reason (optional)</label>
-          <input id="pm-reason" value={reprintReason} onChange={(e) => setReprintReason(e.target.value)} placeholder="Damaged label, lost label, reprint" />
-        </div>
-        {error && <div className="alert alert-error" style={{ gridColumn: '1 / -1' }}>{error}</div>}
+      <p className="muted">Opens a print sheet for {s(target.asset_no)} ({s(target.asset_name)}). The QR identity prints at 100% scale and the job is written to the tag audit.</p>
+      <div className="field">
+        <label htmlFor="pm-reason">Reprint reason (optional)</label>
+        <input id="pm-reason" value={reprintReason} onChange={(e) => setReprintReason(e.target.value)} placeholder="Damaged label, lost label, first print" />
       </div>
+      {error && <div className="alert alert-error" style={{ marginTop: 10 }}>{error}</div>}
     </Modal>
   );
 }

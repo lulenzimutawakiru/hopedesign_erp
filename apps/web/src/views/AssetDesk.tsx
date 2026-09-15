@@ -4,7 +4,7 @@ import { useAuth, can } from '../auth';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { ConfirmDialog, EmptyState } from '../components/os';
-import { DefRow, DefSec, apiRaw, downloadBlob, labelize, s } from './assetsShared';
+import { AssetModuleTabs, DefRow, DefSec, apiRaw, downloadBlob, labelize, openAssetLabelSheet, s } from './assetsShared';
 
 type Rec = Record<string, unknown>;
 
@@ -125,7 +125,7 @@ export default function AssetDesk({ id }: { id: number }) {
   if (status === 'DRAFT' && can(user, 'assets.register.submit')) actions.push({ label: 'Submit', primary: true, onClick: () => setModal('submit') });
   if (can(user, 'assets.register.capitalize') && ['REGISTERED', 'AVAILABLE', 'IN_STORE', 'PENDING_APPROVAL'].includes(status)) actions.push({ label: 'Capitalise', onClick: () => setModal('capitalize') });
   if (can(user, 'assets.tags.generate') && ['DRAFT', 'PENDING_APPROVAL', 'REGISTERED', 'IN_STORE', 'AVAILABLE'].includes(status)) actions.push({ label: 'Generate tag', onClick: () => setModal('tag') });
-  if (qr && can(user, 'assets.tags.print')) actions.push({ label: 'Print tag', onClick: () => setModal('print') });
+  if (can(user, 'assets.tags.print')) actions.push({ label: 'Print label', primary: !actions.some((a) => a.primary), onClick: () => setModal('print') });
   if (qr && can(user, 'assets.tags.replace')) actions.push({ label: 'Replace tag', onClick: () => setModal('replace') });
   if (can(user, 'assets.assignments.create') && ['AVAILABLE', 'IN_STORE', 'REGISTERED', 'RESERVED', 'TRANSFERRED'].includes(status)) actions.push({ label: 'Assign', primary: true, onClick: () => setModal('assign') });
   if (can(user, 'assets.assignments.return') && ['ASSIGNED', 'IN_USE'].includes(status)) actions.push({ label: 'Return', onClick: () => setModal('return') });
@@ -151,11 +151,18 @@ export default function AssetDesk({ id }: { id: number }) {
   };
 
   return (
-    <div className="page">
+    <div className="page asset-page">
+      <div className="crumbs">
+        <button type="button" className="crumb-link" onClick={() => navigate('/assets')}>Asset Management</button>
+        <span className="crumb-sep">/</span>
+        <button type="button" className="crumb-link" onClick={() => navigate('/assets/register')}>Register</button>
+        <span className="crumb-sep">/</span>
+        <span>{s(asset.asset_no)}</span>
+      </div>
       <header className="page-head">
         <div>
-          <button className="btn btn-sm" onClick={() => navigate('/assets/register')}>Back to register</button>
-          <h1>{s(asset.name)} <span className="cell-mono">{s(asset.asset_no)}</span></h1>
+          <p className="mod-kicker" data-mod="ast">Asset management</p>
+          <h1>{s(asset.name)} <span className="cell-mono" style={{ fontSize: '0.7em', fontWeight: 600 }}>{s(asset.asset_no)}</span></h1>
           <div className="page-meta">
             <span>Status <b>{labelize(status)}</b></span>
             <span>Condition <b>{labelize(asset.condition)}</b></span>
@@ -167,20 +174,21 @@ export default function AssetDesk({ id }: { id: number }) {
         </div>
         <div className="head-actions">
           {actions.filter((a) => !a.primary).map((a) => (
-            <button key={a.label} className="btn" onClick={a.onClick}>{a.label}</button>
+            <button key={a.label} type="button" className="btn" onClick={a.onClick}>{a.label}</button>
           ))}
           {actions.filter((a) => a.primary).map((a) => (
-            <button key={a.label} className="btn btn-primary" onClick={a.onClick}>{a.label}</button>
+            <button key={a.label} type="button" className="btn btn-primary" onClick={a.onClick}>{a.label}</button>
           ))}
         </div>
       </header>
+      <AssetModuleTabs active="register" />
       {notice && <div className="notice-banner">{notice}</div>}
       {error && <ErrorBanner error={error} />}
-      <div className="tabs" role="tablist">
+      <nav className="asset-tabs" role="tablist" aria-label="Asset record">
         {TABS.map(([k, label]) => (
-          <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'tab active' : 'tab'} onClick={() => openTab(k)}>{label}</button>
+          <button key={k} type="button" role="tab" aria-selected={tab === k} className={'asset-tab' + (tab === k ? ' is-on' : '')} onClick={() => openTab(k)}>{label}</button>
         ))}
-      </div>
+      </nav>
       <div className="stack" style={{ marginTop: 14 }}>
         {tab === 'overview' && <OverviewTab asset={asset} tags={tags} qr={qr} currentCustody={currentCustody} recentScans={recentScans} warranties={warranties} insurance={insurance} maintenance={maintenance} onAction={setModal} />}
         {tab === 'identity' && <IdentityTab asset={asset} />}
@@ -1317,49 +1325,55 @@ function TagModal({ asset, onClose, onDone }: { asset: Rec; onClose: () => void;
 }
 
 function PrintModal({ asset, tags, onClose, onDone }: { asset: Rec; tags: Rec[]; onClose: () => void; onDone: () => void }) {
-  const [templateId, setTemplateId] = useState('');
-  const [printer, setPrinter] = useState('');
   const [reprintReason, setReprintReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [preview, setPreview] = useState<Rec | null>(null);
   const aid = num(asset.id);
-  const tag = tags.find((t) => t.status === 'ACTIVE' || t.status === 'ASSIGNED') ?? tags[0] ?? null;
+  const tag = tags.find((t) => t.status === 'ACTIVE' || t.status === 'ASSIGNED' || t.status === 'PRINTED' || t.status === 'PENDING') ?? tags[0] ?? null;
+  useEffect(() => {
+    if (!aid) return;
+    api<{ data: Rec }>(`/api/ops/assets/${aid}/tags/label`)
+      .then((r) => setPreview(r.data))
+      .catch(() => setPreview(null));
+  }, [aid]);
   const submit = async () => {
     setBusy(true); setError('');
     try {
-      await api(`/api/ops/assets/${aid}/tags/print`, {
-        method: 'POST',
-        body: JSON.stringify({ templateId: templateId || undefined, printer: printer || undefined, reprintReason: reprintReason || undefined }),
-      });
+      await openAssetLabelSheet([aid], { reprintReason: reprintReason || undefined });
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Print request failed');
+      setError(e instanceof Error ? e.message : 'Print failed');
       setBusy(false);
     }
   };
   return (
-    <Modal title={`Print tag - ${s(tag?.tag_no ?? asset.asset_no)}`} onClose={onClose} footer={
+    <Modal title={`Print label — ${s(asset.asset_no)}`} onClose={onClose} footer={
       <div className="quick-actions">
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={busy || !aid} onClick={() => void submit()}>{busy ? 'Sending...' : 'Send to print'}</button>
+        <button type="button" className="btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="btn btn-primary" disabled={busy || !aid} onClick={() => void submit()}>
+          {busy ? 'Preparing…' : tag ? 'Print label' : 'Generate tag and print'}
+        </button>
       </div>
     }>
-      <p className="muted">Creates a print job for {s(asset.asset_no)} ({s(asset.name)}). Every print is recorded in the tag print audit.</p>
-      <div className="form-grid">
-        <div className="field">
-          <label htmlFor="pm-tpl">Template ID (optional)</label>
-          <input id="pm-tpl" value={templateId} onChange={(e) => setTemplateId(e.target.value)} placeholder="Default template" />
+      <p className="muted">Opens a print sheet with the QR identity. A tag is generated first if this asset does not have one. The print is written to the tag audit.</p>
+      {preview && (
+        <div className="asset-label-preview" style={{ marginBottom: 14 }}>
+          {s(preview.qrDataUrl) ? <img src={s(preview.qrDataUrl)} alt="" /> : <div className="muted">QR will be generated on print</div>}
+          <div>
+            <div className="no">{s(preview.assetNo)}</div>
+            <div className="name">{s(preview.name)}</div>
+            {s(preview.serialNo) !== '' && <div className="sub">SN {s(preview.serialNo)}</div>}
+            {s(preview.location) !== '' && <div className="sub">{s(preview.location)}</div>}
+            {s(preview.tagNo) !== '' && <div className="sub">{s(preview.tagNo)}</div>}
+          </div>
         </div>
-        <div className="field">
-          <label htmlFor="pm-print">Printer (optional)</label>
-          <input id="pm-print" value={printer} onChange={(e) => setPrinter(e.target.value)} placeholder="Zebra / thermal / A4" />
-        </div>
-        <div className="field" style={{ gridColumn: '1 / -1' }}>
-          <label htmlFor="pm-reason">Reprint reason (optional)</label>
-          <input id="pm-reason" value={reprintReason} onChange={(e) => setReprintReason(e.target.value)} placeholder="Damaged label, lost label, reprint" />
-        </div>
-        {error && <div className="alert alert-error" style={{ gridColumn: '1 / -1' }}>{error}</div>}
+      )}
+      <div className="field">
+        <label htmlFor="pm-reason">Reprint reason (optional)</label>
+        <input id="pm-reason" value={reprintReason} onChange={(e) => setReprintReason(e.target.value)} placeholder="Damaged label, lost label, first print" />
       </div>
+      {error && <div className="alert alert-error" style={{ marginTop: 10 }}>{error}</div>}
     </Modal>
   );
 }

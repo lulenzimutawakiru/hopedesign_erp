@@ -533,7 +533,14 @@ export async function generateBulkTags(client: pg.PoolClient, ctx: Ctx, b: Recor
 export async function printTags(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
   const assetIds = Array.isArray(b.assetIds) ? b.assetIds.map(Number).filter((x) => Number.isFinite(x)) : [];
   if (assetIds.length === 0) throw badRequest('assetIds are required');
-  const templateId = n(b.templateId) ?? 5; // LT-ASSET
+  let templateId = n(b.templateId);
+  if (templateId == null) {
+    const tpl = await client.query(
+      `SELECT id FROM label_templates WHERE tenant_id = $1 AND company_id = $2 AND code = 'LT-ASSET' LIMIT 1`,
+      [ctx.tenantId, ctx.companyId]
+    );
+    templateId = tpl.rows[0] ? Number(tpl.rows[0].id) : null;
+  }
   const printer = s(b.printer);
   const reprintReason = s(b.reprintReason);
   const jobNo = await nextNo(client, ctx, 'TAGJOB');
@@ -563,6 +570,160 @@ export async function printTags(client: pg.PoolClient, ctx: Ctx, b: Record<strin
   }
   await logAudit(client, ctx, { action: 'print_tags', resource: 'assets.tags', recordId: jobId, recordCode: jobNo, metadata: { assetIds, printer } });
   return { jobId, jobNo, quantity: assetIds.length, status: 'PRINTED' };
+}
+
+export interface AssetLabel {
+  id: number;
+  assetNo: string;
+  name: string;
+  serialNo: string;
+  category: string;
+  location: string;
+  custodian: string;
+  tagNo: string;
+  qrCode: string;
+  qrDataUrl: string | null;
+  status: string;
+}
+
+/** One printable identity card: asset number, name, QR token. */
+export async function loadAssetLabel(client: pg.PoolClient, ctx: Ctx, id: number): Promise<AssetLabel> {
+  const res = await client.query(
+    `SELECT t.id, t.asset_no, t.name, t.serial_no, t.status,
+            ac.name AS category_name, al.name AS location_name,
+            NULLIF(trim(cu.first_name || ' ' || cu.last_name), '') AS custodian_name,
+            tg.tag_no, q.code AS qr_code
+       FROM asset_register t
+       LEFT JOIN asset_categories ac ON ac.id = t.category_id
+       LEFT JOIN asset_locations al ON al.id = t.location_id
+       LEFT JOIN users cu ON cu.id = t.custodian_user_id
+       LEFT JOIN LATERAL (
+         SELECT tag_no, qr_id FROM asset_tags
+          WHERE asset_id = t.id AND status IN ('PENDING','PRINTED','ACTIVE','ASSIGNED')
+          ORDER BY id DESC LIMIT 1
+       ) tg ON true
+       LEFT JOIN qr_codes q ON q.id = tg.qr_id
+      WHERE t.id = $1 AND t.tenant_id = $2 AND t.company_id = $3 AND NOT t.is_deleted`,
+    [id, ctx.tenantId, ctx.companyId]
+  );
+  if (!res.rows.length) throw notFound('Asset not found');
+  const row = res.rows[0];
+  const qrCode = row.qr_code != null ? String(row.qr_code) : '';
+  let qrDataUrl: string | null = null;
+  if (qrCode) {
+    const { default: QRCode } = await import('qrcode');
+    qrDataUrl = await QRCode.toDataURL(qrCode, { margin: 0, width: 240, errorCorrectionLevel: 'M' });
+  }
+  return {
+    id: Number(row.id),
+    assetNo: String(row.asset_no ?? ''),
+    name: String(row.name ?? ''),
+    serialNo: row.serial_no != null ? String(row.serial_no) : '',
+    category: row.category_name != null ? String(row.category_name) : '',
+    location: row.location_name != null ? String(row.location_name) : '',
+    custodian: row.custodian_name != null ? String(row.custodian_name) : '',
+    tagNo: row.tag_no != null ? String(row.tag_no) : '',
+    qrCode,
+    qrDataUrl,
+    status: String(row.status ?? ''),
+  };
+}
+
+function escapeHtml(v: string): string {
+  return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+export function renderAssetLabelSheetHtml(companyName: string, labels: AssetLabel[]): string {
+  const cards = labels.map((l) => {
+    const qr = l.qrDataUrl
+      ? `<img src="${l.qrDataUrl}" alt="${escapeHtml(l.assetNo)} QR" />`
+      : `<div class="qr-missing">No tag</div>`;
+    const serial = l.serialNo ? `<div class="sub">SN ${escapeHtml(l.serialNo)}</div>` : '';
+    const place = l.location ? `<div class="sub">${escapeHtml(l.location)}</div>` : '';
+    return `<article class="label">
+      <div class="qr">${qr}</div>
+      <div class="meta">
+        <div class="co">${escapeHtml(companyName)}</div>
+        <div class="no">${escapeHtml(l.assetNo)}</div>
+        <div class="name">${escapeHtml(l.name)}</div>
+        ${serial}${place}
+        ${l.tagNo ? `<div class="sub">${escapeHtml(l.tagNo)}</div>` : ''}
+      </div>
+    </article>`;
+  }).join('\n');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Asset labels</title>
+<style>
+  @page { margin: 8mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Segoe UI', sans-serif; color: #0B1F33; background: #fff; }
+  .hint { margin: 12px 16px; font-size: 13px; color: #5F6B76; }
+  .sheet { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 24px; }
+  .label {
+    width: 70mm; height: 38mm;
+    border: 1.5px solid #0B1F33;
+    border-radius: 4px;
+    display: grid;
+    grid-template-columns: 34mm 1fr;
+    overflow: hidden;
+    page-break-inside: avoid;
+    background: #fff;
+  }
+  .qr { display: flex; align-items: center; justify-content: center; padding: 3mm; }
+  .qr img { width: 28mm; height: 28mm; }
+  .qr-missing { font-size: 8pt; color: #8995A1; text-align: center; }
+  .meta { padding: 3mm 3.5mm 3mm 0; display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+  .co { font-size: 6.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #5F6B76; }
+  .no { font-family: ui-monospace, Consolas, monospace; font-size: 11pt; font-weight: 700; }
+  .name { font-size: 9pt; font-weight: 650; line-height: 1.2; margin-top: 1mm; }
+  .sub { font-size: 7pt; color: #5F6B76; margin-top: 0.5mm; }
+  @media print {
+    .hint { display: none; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+  <p class="hint">Print at 100% scale. ${labels.length} label${labels.length === 1 ? '' : 's'}.</p>
+  <div class="sheet">${cards}</div>
+  <script>window.addEventListener('load', function () { setTimeout(function () { window.print(); }, 300); });</script>
+</body>
+</html>`;
+}
+
+/**
+ * Ensure each asset has a tag, record the print job, and return a print-ready
+ * HTML sheet. This is what "Print label" actually does — the older printTags
+ * path only wrote an audit row.
+ */
+export async function printAssetLabelSheet(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  b: Record<string, unknown>
+): Promise<{ jobId: number; jobNo: string; quantity: number; html: string; labels: AssetLabel[] }> {
+  const assetIds = Array.isArray(b.assetIds) ? b.assetIds.map(Number).filter((x) => Number.isFinite(x) && x > 0) : [];
+  if (assetIds.length === 0) throw badRequest('Select at least one asset');
+  if (assetIds.length > 50) throw badRequest('Print at most 50 labels at a time');
+  for (const id of assetIds) {
+    const existing = await client.query(
+      `SELECT id FROM asset_tags
+        WHERE asset_id = $1 AND status IN ('PENDING','PRINTED','ACTIVE','ASSIGNED')
+        ORDER BY id DESC LIMIT 1`,
+      [id]
+    );
+    if (existing.rows.length === 0) {
+      await generateTag(client, ctx, id, { tagType: s(b.tagType) ?? 'QR' });
+    }
+  }
+  const job = await printTags(client, ctx, b);
+  const labels: AssetLabel[] = [];
+  for (const id of assetIds) labels.push(await loadAssetLabel(client, ctx, id));
+  const company = await loadCompanyProfile(client, ctx);
+  const html = renderAssetLabelSheetHtml(company.name || 'Hope Design', labels);
+  return { jobId: Number(job.jobId), jobNo: String(job.jobNo), quantity: labels.length, html, labels };
 }
 
 export async function listTagPrintJobs(client: pg.PoolClient, ctx: Ctx, q: Record<string, unknown>) {

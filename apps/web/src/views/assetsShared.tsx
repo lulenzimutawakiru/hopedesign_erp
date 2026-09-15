@@ -79,25 +79,70 @@ export const ASSET_TABS: Array<[string, string, string]> = [
 
 export function AssetModuleTabs({ active }: { active: string }) {
   return (
-    <div className="tabs">
+    <nav className="asset-tabs" aria-label="Asset sections">
       {ASSET_TABS.map(([k, label, href]) => (
-        <button key={k} className={k === active ? 'tab active' : 'tab'} onClick={() => navigate(href)}>{label}</button>
+        <button
+          key={k}
+          type="button"
+          className={'asset-tab' + (k === active ? ' is-on' : '')}
+          onClick={() => navigate(href)}
+        >
+          {label}
+        </button>
       ))}
-    </div>
+    </nav>
   );
 }
 
 export function ModuleHeader({ kicker: _kicker, title, sub, actions }: { kicker: string; title: string; sub?: string; actions?: ReactNode }) {
   return (
-    <header className="page-head">
-      <div>
-        <p className="mod-kicker" data-mod="ast">Asset management</p>
-        <h1>{title}</h1>
-        {sub && <p className="muted" style={{ maxWidth: 860 }}>{sub}</p>}
+    <>
+      <div className="crumbs">
+        <button type="button" className="crumb-link" onClick={() => navigate('/assets')}>Asset Management</button>
+        {title !== 'Asset command centre' && (
+          <>
+            <span className="crumb-sep">/</span>
+            <span>{title}</span>
+          </>
+        )}
       </div>
-      {actions && <div className="head-actions">{actions}</div>}
-    </header>
+      <header className="page-head">
+        <div>
+          <p className="mod-kicker" data-mod="ast">Asset management</p>
+          <h1>{title}</h1>
+          {sub && <p className="muted" style={{ maxWidth: 720, margin: '6px 0 0' }}>{sub}</p>}
+        </div>
+        {actions && <div className="head-actions">{actions}</div>}
+      </header>
+    </>
   );
+}
+
+/** Open a print-ready HTML sheet of asset QR labels and record the print job. */
+export async function openAssetLabelSheet(assetIds: number[], extra: Record<string, unknown> = {}): Promise<void> {
+  const ids = assetIds.filter((n) => Number.isFinite(n) && n > 0);
+  if (ids.length === 0) throw new Error('Select at least one asset');
+  const res = await apiRaw('/api/ops/assets/tags/print-sheet', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assetIds: ids, ...extra }),
+  });
+  if (!res.ok) {
+    let msg = `Print failed (${res.status})`;
+    try {
+      const body = await res.json();
+      msg = body?.error?.message ?? msg;
+    } catch { /* not json */ }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank');
+  if (!win) {
+    URL.revokeObjectURL(url);
+    throw new Error('Popup blocked — allow popups to print labels.');
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export function s(v: unknown): string {

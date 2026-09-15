@@ -5,7 +5,7 @@ import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { EmptyState, Skeleton } from '../components/os';
-import { AssetModuleTabs, ChartCard, ModuleHeader, Rec, labelize, s, tileStyle } from './assetsShared';
+import { AssetModuleTabs, ChartCard, ModuleHeader, Rec, labelize, openAssetLabelSheet, s } from './assetsShared';
 import { AssetDesk } from './AssetDesk';
 import { AssetScan, VerifyFlow, TagsFlow, CustodyFlow, TransfersFlow } from './AssetOps';
 import { MaintenanceFlow, AuditsFlow, DepreciationFlow, DisposalsFlow, ImpairmentsFlow, AnomaliesFlow } from './AssetLifecycle';
@@ -53,17 +53,14 @@ export default function AssetsFlow({ path }: { path: string }) {
   }
 }
 
-function KpiTile({ label, value, sub, icon, accent, tint, href, money }: {
-  label: string; value: unknown; sub: string; icon: string; accent: string; tint: string; href: string; money?: boolean;
+function KpiTile({ label, value, sub, href, money }: {
+  label: string; value: unknown; sub: string; href: string; money?: boolean;
 }) {
   return (
-    <button className="kpi-tile" style={tileStyle(accent, tint)} onClick={() => navigate(href)}>
-      <span className="kpi-tile-icon" aria-hidden>{icon}</span>
-      <span className="kpi-tile-body">
-        <span className="kpi-tile-label">{label}</span>
-        <span className="kpi-tile-value">{money ? fmtMoney(value) : fmtNum(value)}</span>
-        <span className="kpi-tile-sub">{sub}</span>
-      </span>
+    <button type="button" className="spend-kpi" onClick={() => navigate(href)}>
+      <span className="spend-kpi-label">{label}</span>
+      <span className="spend-kpi-value">{money ? fmtMoney(value) : fmtNum(value)}</span>
+      <span className="spend-kpi-sub">{sub}</span>
     </button>
   );
 }
@@ -87,23 +84,23 @@ function AssetBoard() {
   const byCategory = ((data.byCategory as Rec[]) ?? []).map((r) => ({ label: s(r.name), value: Number(r.value ?? r.count ?? 0) }));
   const byLocation = ((data.byLocation as Rec[]) ?? []).map((r) => ({ label: s(r.name), value: Number(r.value ?? r.count ?? 0) }));
   const byStatus = ((data.byStatus as Rec[]) ?? []).map((r) => ({ label: s(r.status), value: Number(r.count ?? 0) }));
-  const cards: Array<{ key: string; label: string; value: unknown; sub: string; icon: string; accent: string; tint: string; href: string }> = [
-    { key: 'total', label: 'Total assets', value: data.total, sub: 'All registered assets', icon: 'A', accent: '#475569', tint: 'rgba(71,85,105,0.12)', href: '/assets/register' },
-    { key: 'active', label: 'Active assets', value: data.active, sub: 'In service today', icon: '✓', accent: '#168A5B', tint: 'rgba(22,138,91,0.12)', href: '/assets/register?status=REGISTERED,IN_STORE,AVAILABLE,ASSIGNED,IN_USE,TRANSFERRED,UNDER_MAINTENANCE,UNDER_INSPECTION,RESERVED' },
-    { key: 'assigned', label: 'Assigned', value: data.assigned, sub: 'Held by custodians', icon: '☺', accent: '#2878D0', tint: 'rgba(40,120,208,0.12)', href: '/assets/register?status=ASSIGNED,IN_USE' },
-    { key: 'unassigned', label: 'Unassigned', value: data.unassigned, sub: 'Available in store', icon: '○', accent: '#0891B2', tint: 'rgba(8,145,178,0.12)', href: '/assets/register?unassigned=1' },
-    { key: 'in_store', label: 'In store', value: data.in_store, sub: 'Registered / in store', icon: '▣', accent: '#0E7490', tint: 'rgba(14,116,144,0.12)', href: '/assets/register?status=IN_STORE,REGISTERED' },
-    { key: 'under_maint', label: 'Under maintenance', value: data.under_maintenance, sub: 'In the workshop', icon: '⚙', accent: '#D97706', tint: 'rgba(217,119,6,0.12)', href: '/assets/register?status=UNDER_MAINTENANCE' },
-    { key: 'due_maint', label: 'Due maintenance', value: data.due_maintenance, sub: 'Next 30 days', icon: '⏳', accent: '#D99A00', tint: 'rgba(217,154,0,0.12)', href: '/assets/register?dueMaintenance=1' },
-    { key: 'due_insp', label: 'Due inspection', value: data.due_inspection, sub: 'Next 30 days', icon: '🔎', accent: '#8B5CF6', tint: 'rgba(139,92,246,0.12)', href: '/assets/register?dueInspection=1' },
-    { key: 'near_eol', label: 'Near end of life', value: data.near_eol, sub: 'Within 90 days', icon: '⌛', accent: '#B45309', tint: 'rgba(180,83,9,0.12)', href: '/assets/register?nearEol=1' },
-    { key: 'missing', label: 'Missing', value: data.missing, sub: 'Under investigation', icon: '?', accent: '#C93636', tint: 'rgba(201,54,54,0.12)', href: '/assets/register?status=MISSING' },
-    { key: 'lost', label: 'Lost / stolen', value: data.lost, sub: 'Locked assets', icon: '!', accent: '#9F1239', tint: 'rgba(159,18,57,0.12)', href: '/assets/register?status=LOST,STOLEN' },
-    { key: 'damaged', label: 'Damaged', value: data.damaged, sub: 'Awaiting repair', icon: '✕', accent: '#DC2626', tint: 'rgba(220,38,38,0.12)', href: '/assets/register?status=DAMAGED' },
-    { key: 'disposed', label: 'Disposed', value: data.disposed, sub: 'Retired from service', icon: '∅', accent: '#6B7280', tint: 'rgba(107,114,128,0.12)', href: '/assets/register?status=DISPOSED' },
+  const cards: Array<{ key: string; label: string; value: unknown; sub: string; href: string }> = [
+    { key: 'total', label: 'Total assets', value: data.total, sub: 'All registered assets', href: '/assets/register' },
+    { key: 'active', label: 'Active', value: data.active, sub: 'In service today', href: '/assets/register?status=REGISTERED,IN_STORE,AVAILABLE,ASSIGNED,IN_USE,TRANSFERRED,UNDER_MAINTENANCE,UNDER_INSPECTION,RESERVED' },
+    { key: 'assigned', label: 'Assigned', value: data.assigned, sub: 'Held by custodians', href: '/assets/register?status=ASSIGNED,IN_USE' },
+    { key: 'unassigned', label: 'Unassigned', value: data.unassigned, sub: 'Available in store', href: '/assets/register?unassigned=1' },
+    { key: 'in_store', label: 'In store', value: data.in_store, sub: 'Registered / in store', href: '/assets/register?status=IN_STORE,REGISTERED' },
+    { key: 'under_maint', label: 'Under maintenance', value: data.under_maintenance, sub: 'In the workshop', href: '/assets/register?status=UNDER_MAINTENANCE' },
+    { key: 'due_maint', label: 'Due maintenance', value: data.due_maintenance, sub: 'Next 30 days', href: '/assets/register?dueMaintenance=1' },
+    { key: 'due_insp', label: 'Due inspection', value: data.due_inspection, sub: 'Next 30 days', href: '/assets/register?dueInspection=1' },
+    { key: 'near_eol', label: 'Near end of life', value: data.near_eol, sub: 'Within 90 days', href: '/assets/register?nearEol=1' },
+    { key: 'missing', label: 'Missing', value: data.missing, sub: 'Under investigation', href: '/assets/register?status=MISSING' },
+    { key: 'lost', label: 'Lost / stolen', value: data.lost, sub: 'Locked assets', href: '/assets/register?status=LOST,STOLEN' },
+    { key: 'damaged', label: 'Damaged', value: data.damaged, sub: 'Awaiting repair', href: '/assets/register?status=DAMAGED' },
+    { key: 'disposed', label: 'Disposed', value: data.disposed, sub: 'Retired from service', href: '/assets/register?status=DISPOSED' },
   ];
   return (
-    <div className="page">
+    <div className="page asset-page">
       <ModuleHeader
         kicker="Asset management"
         title="Asset command centre"
@@ -117,7 +114,7 @@ function AssetBoard() {
       />
       <AssetModuleTabs active="board" />
       {error && <ErrorBanner error={error} />}
-      <div className="kpi-grid--tiles">
+      <div className="spend-kpis">
         {cards.map(({ key, ...rest }) => <KpiTile key={key} {...rest} />)}
       </div>
       <div className="grid-3" style={{ marginTop: 16 }}>
@@ -423,18 +420,15 @@ function Register() {
     setBusy(true);
     setError('');
     try {
-      let done = 0;
-      for (const id of selected) {
-        await api(`/api/ops/assets/${id}/tags/print`, { method: 'POST', body: JSON.stringify({}) });
-        done++;
-      }
-      setTagResult({ jobNo: 'Batch print', quantity: done });
+      const ids = [...selected];
+      await openAssetLabelSheet(ids);
+      setTagResult({ jobNo: 'Label sheet', quantity: ids.length });
       setSelected(new Set());
     } catch (e) { setError(e instanceof Error ? e.message : 'Bulk print failed'); }
     finally { setBusy(false); }
   };
   return (
-    <div className="page">
+    <div className="page asset-page">
       <ModuleHeader
         kicker="Asset management"
         title="Asset register"
@@ -512,7 +506,7 @@ function Register() {
           {selectNote && <span className="muted" style={{ fontSize: 12 }}>{selectNote}</span>}
           <span className="bulk-spacer" />
           {can(user, 'assets.tags.generate') && <button className="btn btn-sm btn-primary" disabled={busy} onClick={generateTags}>Generate QR tags</button>}
-          {can(user, 'assets.tags.print') && <button className="btn btn-sm" disabled={busy} onClick={printSelected}>Print tags</button>}
+          {can(user, 'assets.tags.print') && <button className="btn btn-sm" disabled={busy} onClick={() => void printSelected()}>Print labels</button>}
           <button className="btn btn-sm btn-ghost" onClick={() => { setSelected(new Set()); setSelectNote(''); }}>Clear</button>
         </div>
       )}
