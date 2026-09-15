@@ -100,6 +100,27 @@ describe('Ops requisition centre', () => {
     expect(detail.body.data.status).toBe('APPROVED');
   });
 
+  it('submits a free-text material line without a catalogue product', async () => {
+    const create = await api
+      .post('/api/ops/requisitions')
+      .set(auth(opsToken))
+      .send({
+        requestType: 'MATERIAL',
+        departmentId: deptId,
+        requiredDate: '2026-09-30',
+        priority: 'NORMAL',
+        purpose: `Uncatalogued paper ${Date.now()}`,
+        items: [{ itemType: 'INVENTORY_ITEM', description: 'A4 bond paper ream', quantity: 10, unitCost: 18000 }],
+      });
+    expect(create.status).toBe(200);
+    expect(create.body.data.status).toBe('DRAFT');
+    expect(create.body.data.fulfillmentMethod).toBe('PURCHASE');
+    const id = Number(create.body.data.id);
+    const submit = await api.post(`/api/ops/requisitions/${id}/submit`).set(auth(opsToken)).send({});
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.status).toBe('SUBMITTED');
+  });
+
   it('blocks the requester from approving their own requisition (segregation of duties)', async () => {
     const create = await createServiceReq(opsToken, 1000000, `SoD service req ${Date.now()}`);
     expect(create.status).toBe(200);

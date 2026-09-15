@@ -329,7 +329,19 @@ async function decideLine(client: pg.PoolClient, ctx: Ctx, line: LineInput) {
   const unitCost = Math.max(0, num0(line.unitCost));
   const amount = round2(quantity * unitCost);
   if (itemType === 'INVENTORY_ITEM') {
-    if (!line.productId) throw badRequest('Inventory item lines require a product');
+    // A free-text material line is a purchase request for something not (yet)
+    // on the product file. Requiring a catalogue pick here is what stopped
+    // Submit on the spend form: the default line type is INVENTORY_ITEM, and
+    // operators type a description without searching stock.
+    if (!line.productId) {
+      return {
+        itemType, productId: null, assetCategory: null, description,
+        quantity, unitId: n(line.unitId), unitCode: s(line.unitCode), unitCost, amount,
+        accountId: n(line.accountId), expenseCategoryId: n(line.expenseCategoryId), warehouseId: n(line.warehouseId),
+        stockOnHand: 0, reservedQty: 0, availableToIssue: 0, reorderStatus: 'UNCATALOGUED',
+        recommendation: 'PURCHASE',
+      };
+    }
     const snap = await stockSnapshot(client, ctx, line.productId);
     const recommendation = snap.available > 0 ? 'STORE_ISSUE' : 'PURCHASE';
     return {
@@ -785,8 +797,9 @@ export async function listRequisitions(client: pg.PoolClient, ctx: Ctx, query: R
     params.push(String(query.status).toUpperCase());
     where.push(`r.status = $${params.length}`);
   }
-  if (query.requestType != null && String(query.requestType)) {
-    params.push(String(query.requestType).toUpperCase());
+  const requestType = query.requestType ?? query.type;
+  if (requestType != null && String(requestType)) {
+    params.push(String(requestType).toUpperCase());
     where.push(`r.request_type = $${params.length}`);
   }
   if (query.departmentId != null && String(query.departmentId)) {

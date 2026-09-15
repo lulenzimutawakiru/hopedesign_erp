@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, fmtDate, fmtMoney, fmtNum, getToken } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
@@ -91,12 +91,58 @@ const SPEND_TABS: [string, string][] = [
 
 function SpendTabs({ active }: { active: string }) {
   return (
-    <div className="otc-tabs">
+    <nav className="spend-tabs" aria-label="Spend sections">
       {SPEND_TABS.map(([key, label]) => (
-        <button key={key} className={`tab ${active === key ? 'active' : ''}`} onClick={() => navigate(key === 'board' ? '/spend' : `/spend/${key}`)}>
+        <button
+          key={key}
+          type="button"
+          className={'spend-tab' + (active === key ? ' is-on' : '')}
+          onClick={() => navigate(key === 'board' ? '/spend' : '/spend/' + key)}
+        >
           {label}
         </button>
       ))}
+    </nav>
+  );
+}
+
+function SpendShell({
+  title,
+  blurb,
+  active,
+  actions,
+  children,
+}: {
+  title: string;
+  blurb?: string;
+  active: string;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  const crumb = SPEND_TABS.find(([key]) => key === active)?.[1] ?? title;
+  return (
+    <div className="page spend-page">
+      <div className="crumbs">
+        <button type="button" className="crumb-link" onClick={() => navigate('/spend')}>
+          Requisitions & Spend
+        </button>
+        {active !== 'board' && (
+          <>
+            <span className="crumb-sep">/</span>
+            <span>{crumb}</span>
+          </>
+        )}
+      </div>
+      <header className="page-head">
+        <div>
+          <div className="mod-kicker" data-mod="fin">Requisitions & Spend</div>
+          <h1>{title}</h1>
+          {blurb ? <p className="muted" style={{ margin: '6px 0 0', maxWidth: 640 }}>{blurb}</p> : null}
+        </div>
+        {actions ? <div className="head-actions">{actions}</div> : null}
+      </header>
+      <SpendTabs active={active} />
+      {children}
     </div>
   );
 }
@@ -199,62 +245,64 @@ export default function SpendFlow({ path }: { path: string }) {
   const alerts = dash?.alerts as Rec | undefined;
 
   return (
-    <div>
-      <div className="toolbar">
-        <h1 style={{ margin: 0, flex: 1 }}>Daily Expenditure Command Center</h1>
-        {can(user, 'expenditure.requisitions.create') && (
-          <button className="btn btn-primary" onClick={() => navigate('/spend/requisitions/new')}>+ Request</button>
-        )}
-        {can(user, 'expenditure.expenses.create') && (
-          <button className="btn btn-ghost" onClick={() => navigate('/spend/expenses/new')}>+ Record Expense</button>
-        )}
-      </div>
+    <SpendShell
+      title="Command Center"
+      blurb="Raise a requisition, record spend, and watch the day's register from one place."
+      active="board"
+      actions={
+        <>
+          {can(user, 'expenditure.requisitions.create') && (
+            <button type="button" className="btn btn-primary" onClick={() => navigate('/spend/requisitions/new')}>+ Request</button>
+          )}
+          {can(user, 'expenditure.expenses.create') && (
+            <button type="button" className="btn" onClick={() => navigate('/spend/expenses/new')}>+ Record Expense</button>
+          )}
+        </>
+      }
+    >
       {error && <ErrorBanner error={error} />}
       {!dash ? <PageLoader /> : (
         <>
-          <div className="kpi-grid">
-            <button className="kpi-card" onClick={() => navigate('/spend/expenses')}>
-              <span className="kpi-label">Today</span>
-              <span className="kpi-value">{fmtMoney(today)}</span>
-              <span className="kpi-sub">{num(dash.today ? (dash.today as Rec).count : 0)} transactions</span>
+          <div className="spend-kpis">
+            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/expenses')}>
+              <span className="spend-kpi-label">Today</span>
+              <span className="spend-kpi-value">{fmtMoney(today)}</span>
+              <span className="spend-kpi-sub">{num(dash.today ? (dash.today as Rec).count : 0)} transactions</span>
             </button>
-            <button className="kpi-card" onClick={() => navigate('/spend/expenses')}>
-              <span className="kpi-label">Month to date</span>
-              <span className="kpi-value">{fmtMoney(mtd)}</span>
-              <span className="kpi-sub">{num(dash.mtd ? (dash.mtd as Rec).count : 0)} transactions</span>
+            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/expenses')}>
+              <span className="spend-kpi-label">Month to date</span>
+              <span className="spend-kpi-value">{fmtMoney(mtd)}</span>
+              <span className="spend-kpi-sub">{num(dash.mtd ? (dash.mtd as Rec).count : 0)} transactions</span>
             </button>
-            <button className="kpi-card" onClick={() => navigate('/spend/requisitions')}>
-              <span className="kpi-label">Budget consumed</span>
-              <span className="kpi-value">{budget ? `${num(budget.consumedPct)}%` : '—'}</span>
-              <span className="kpi-sub">of {fmtMoney(num(budget?.approved))} approved</span>
+            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/requisitions')}>
+              <span className="spend-kpi-label">Budget consumed</span>
+              <span className="spend-kpi-value">{budget ? `${num(budget.consumedPct)}%` : '—'}</span>
+              <span className="spend-kpi-sub">of {fmtMoney(num(budget?.approved))} approved</span>
             </button>
-            <button className="kpi-card" onClick={() => navigate('/spend/requisitions')}>
-              <span className="kpi-label">Pending requisitions</span>
-              <span className="kpi-value">{pendingReqs}</span>
-              <span className="kpi-sub">awaiting approval</span>
+            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/requisitions')}>
+              <span className="spend-kpi-label">Pending requisitions</span>
+              <span className="spend-kpi-value">{pendingReqs}</span>
+              <span className="spend-kpi-sub">awaiting approval</span>
             </button>
-          </div>
-
-          <div className="kpi-grid">
-            <button className="kpi-card" onClick={() => navigate('/spend/petty-cash')}>
-              <span className="kpi-label">Petty cash</span>
-              <span className="kpi-value">{fmtMoney(num((expBoard?.today as Rec)?.total ?? 0))}</span>
-              <span className="kpi-sub">spent today</span>
+            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/petty-cash')}>
+              <span className="spend-kpi-label">Petty cash</span>
+              <span className="spend-kpi-value">{fmtMoney(num((expBoard?.today as Rec)?.total ?? 0))}</span>
+              <span className="spend-kpi-sub">spent today</span>
             </button>
-            <button className="kpi-card" onClick={() => navigate('/spend/close')}>
-              <span className="kpi-label">Awaiting approval</span>
-              <span className="kpi-value">{num(alerts?.pendingApprovals ?? 0) + pendingExp.length}</span>
-              <span className="kpi-sub">expenses + requisitions</span>
+            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/close')}>
+              <span className="spend-kpi-label">Awaiting approval</span>
+              <span className="spend-kpi-value">{num(alerts?.pendingApprovals ?? 0) + pendingExp.length}</span>
+              <span className="spend-kpi-sub">expenses + requisitions</span>
             </button>
-            <button className="kpi-card" onClick={() => navigate('/spend/expenses')}>
-              <span className="kpi-label">Missing receipts</span>
-              <span className="kpi-value">{num(alerts?.missingReceipts ?? 0)}</span>
-              <span className="kpi-sub">expenses without evidence</span>
+            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/expenses')}>
+              <span className="spend-kpi-label">Missing receipts</span>
+              <span className="spend-kpi-value">{num(alerts?.missingReceipts ?? 0)}</span>
+              <span className="spend-kpi-sub">expenses without evidence</span>
             </button>
-            <button className="kpi-card" onClick={() => navigate('/spend/requisitions')}>
-              <span className="kpi-label">Over budget</span>
-              <span className="kpi-value">{(alerts?.overBudgetAccounts as Rec[] | undefined)?.length ?? 0}</span>
-              <span className="kpi-sub">accounts over position</span>
+            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/requisitions')}>
+              <span className="spend-kpi-label">Over budget</span>
+              <span className="spend-kpi-value">{(alerts?.overBudgetAccounts as Rec[] | undefined)?.length ?? 0}</span>
+              <span className="spend-kpi-sub">accounts over position</span>
             </button>
           </div>
 
@@ -332,15 +380,42 @@ export default function SpendFlow({ path }: { path: string }) {
           </section>
         </>
       )}
-    </div>
+    </SpendShell>
   );
-}const REQ_TYPES = ['MATERIAL', 'PURCHASE', 'ASSET', 'SERVICE', 'EXPENSE', 'PETTY_CASH', 'PRODUCTION_MATERIAL', 'MAINTENANCE', 'EMERGENCY', 'PROJECT'];
+}
+
+const REQ_TYPES = ['MATERIAL', 'PURCHASE', 'ASSET', 'SERVICE', 'EXPENSE', 'PETTY_CASH', 'PRODUCTION_MATERIAL', 'MAINTENANCE', 'EMERGENCY', 'PROJECT'];
 const REQ_STATUSES = ['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED', 'PARTIALLY_FULFILLED', 'FULFILLED', 'CANCELLED'];
 const PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT', 'CRITICAL'];
 const ITEM_TYPES = ['INVENTORY_ITEM', 'ASSET', 'SERVICE', 'EXPENSE'];
 let lineKeyCounter = 0;
 function nextLineKey(): number { lineKeyCounter += 1; return lineKeyCounter; }
 interface LineDraft { key: number; itemType: string; productId?: number; assetCategory: string; description: string; quantity: string; unitId?: number; unitCode: string; unitCost: string; }
+
+function defaultItemType(requestType: string): string {
+  if (requestType === 'ASSET') return 'ASSET';
+  if (requestType === 'SERVICE' || requestType === 'MAINTENANCE') return 'SERVICE';
+  if (requestType === 'EXPENSE' || requestType === 'PETTY_CASH') return 'EXPENSE';
+  return 'INVENTORY_ITEM';
+}
+
+function emptyLine(requestType: string): LineDraft {
+  return {
+    key: nextLineKey(),
+    itemType: defaultItemType(requestType),
+    description: '',
+    assetCategory: '',
+    quantity: '1',
+    unitCode: '',
+    unitCost: '',
+  };
+}
+
+function lineIsReady(l: LineDraft): boolean {
+  if (num(l.quantity) <= 0) return false;
+  if (l.itemType === 'ASSET') return Boolean(l.assetCategory || l.description);
+  return Boolean(l.description || l.productId);
+}
 
 const REQ_EXPORT_FORMATS = DOCUMENT_EXPORT_FORMATS;
 
@@ -416,11 +491,13 @@ function RequisitionList() {
   const { user } = useAuth();
   const [items, setItems] = useState<Rec[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
   const [type, setType] = useState('');
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const pageSize = 25;
 
   const load = useCallback(() => {
     setLoading(true);
@@ -428,25 +505,33 @@ function RequisitionList() {
     if (status) params.set('status', status);
     if (type) params.set('type', type);
     if (q) params.set('q', q);
+    if (page > 1) params.set('page', String(page));
+    params.set('pageSize', String(pageSize));
     api<{ data: { items: Rec[]; total: number } }>(`/api/ops/requisitions?${params.toString()}`)
       .then((r) => { setItems(r.data.items); setTotal(r.data.total); })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [status, type, q]);
+  }, [status, type, q, page]);
 
   useEffect(load, [load]);
 
   return (
-    <div>
-      <div className="toolbar">
-        <h1 style={{ margin: 0, flex: 1 }}>Requisitions</h1>
-        <input className="search-input" placeholder="Search req no / purpose…" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 240 }} />
-        <StatusFilter value={type} onChange={setType} options={REQ_TYPES} />
-        <StatusFilter value={status} onChange={setStatus} options={REQ_STATUSES} />
+    <SpendShell
+      title="Requisitions"
+      blurb="Draft, submit and track material, service, asset and expense requests."
+      active="requisitions"
+      actions={
+        can(user, 'expenditure.requisitions.create') ? (
+          <button type="button" className="btn btn-primary" onClick={() => navigate('/spend/requisitions/new')}>+ New Requisition</button>
+        ) : null
+      }
+    >
+      <div className="spend-toolbar">
+        <input className="search-input" placeholder="Search req no / purpose…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} style={{ maxWidth: 260 }} />
+        <StatusFilter value={type} onChange={(v) => { setType(v); setPage(1); }} options={REQ_TYPES} />
+        <StatusFilter value={status} onChange={(v) => { setStatus(v); setPage(1); }} options={REQ_STATUSES} />
         <RequisitionExportMenu status={status} type={type} q={q} />
-        {can(user, 'expenditure.requisitions.create') && (
-          <button className="btn btn-primary" onClick={() => navigate('/spend/requisitions/new')}>+ New Requisition</button>
-        )}
+        <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{total} in this view</span>
       </div>
       {error && <ErrorBanner error={error} />}
       {loading ? <PageLoader /> : (
@@ -476,11 +561,12 @@ function RequisitionList() {
                 ))}
               </tbody>
             </table>
-            {!items.length && <p className="empty-state">No requisitions match.</p>}
+            {!items.length && <p className="empty-state">No requisitions match. Raise a request to get stock, a service or an expense approved.</p>}
           </div>
+          {total > pageSize && <Pager page={page} pageSize={pageSize} total={total} onPage={setPage} />}
         </section>
       )}
-    </div>
+    </SpendShell>
   );
 }
 
@@ -498,45 +584,68 @@ function RequisitionDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(load, [load]);
 
+  const [actError, setActError] = useState('');
   const act = (action: string, label: string, body?: Rec) => {
     setBusy(action);
     setMsg('');
+    setActError('');
     api<{ data: Rec }>(`/api/ops/requisitions/${id}/${action}`, { method: 'POST', body: JSON.stringify(body ?? {}) })
-      .then(() => { setMsg(`${label} — saved.`); load(); })
-      .catch((e) => setMsg(e.message))
+      .then(() => { setMsg(`${label}.`); load(); })
+      .catch((e) => setActError(e.message))
       .finally(() => setBusy(''));
   };
 
   if (!row && !error) return <PageLoader />;
-  if (error) return <ErrorBanner error={error} />;
+  if (error) {
+    return (
+      <SpendShell title="Requisition" active="requisitions">
+        <ErrorBanner error={error} />
+      </SpendShell>
+    );
+  }
   const r = row as Rec;
   const lines = (r.lines as Rec[] | undefined) ?? [];
   const approvals = (r.approvals as Rec[] | undefined) ?? [];
   const fulfillments = (r.fulfillments as Rec[] | undefined) ?? [];
   const isDraft = r.status === 'DRAFT';
   const isApproved = r.status === 'APPROVED';
+  const canSubmit = isDraft && can(user, 'expenditure.requisitions.submit');
 
   return (
-    <div>
-      <div className="toolbar">
-        <button className="btn btn-ghost" onClick={() => navigate('/spend/requisitions')}>← Requisitions</button>
-        <h1 style={{ margin: 0, flex: 1 }}>{s(r.reqNo)} <Badge value={r.status} /> <RiskBadge row={r} /></h1>
-        <CopyButton value={s(r.reqNo)} />
-        {isDraft && can(user, 'expenditure.requisitions.update') && (
-          <button className="btn btn-ghost" disabled={!!busy} onClick={() => navigate(`/spend/requisitions/${id}/edit`)}>Edit</button>
-        )}
-        {isDraft && can(user, 'expenditure.requisitions.submit') && (
-          <button className="btn btn-primary" disabled={!!busy} onClick={() => act('submit', 'Submitted')}>{busy === 'submit' ? 'Submitting…' : 'Submit'}</button>
-        )}
-        {isApproved && can(user, 'expenditure.requisitions.fulfill') && (
-          <button className="btn btn-primary" disabled={!!busy} onClick={() => act('fulfill', 'Fulfilled')}>{busy === 'fulfill' ? 'Working…' : 'Fulfill / Issue'}</button>
-        )}
-        {isDraft && can(user, 'expenditure.requisitions.update') && (
-          <button className="btn btn-ghost btn-ghost-danger" disabled={!!busy} onClick={() => act('cancel', 'Cancelled', { reason: 'Cancelled by requester' })}>Cancel</button>
-        )}
-      </div>
+    <SpendShell
+      title={s(r.reqNo)}
+      blurb={s(r.purpose) || 'Requisition'}
+      active="requisitions"
+      actions={
+        <>
+          <Badge value={r.status} />
+          <RiskBadge row={r} />
+          <CopyButton value={s(r.reqNo)} />
+          {isDraft && can(user, 'expenditure.requisitions.update') && (
+            <button type="button" className="btn" disabled={!!busy} onClick={() => navigate(`/spend/requisitions/${id}/edit`)}>Edit</button>
+          )}
+          {canSubmit && (
+            <button type="button" className="btn btn-primary" disabled={!!busy} onClick={() => act('submit', 'Submitted for approval')}>
+              {busy === 'submit' ? 'Submitting…' : 'Submit for approval'}
+            </button>
+          )}
+          {isApproved && can(user, 'expenditure.requisitions.fulfill') && (
+            <button type="button" className="btn btn-primary" disabled={!!busy} onClick={() => act('fulfill', 'Fulfilled')}>
+              {busy === 'fulfill' ? 'Working…' : 'Fulfill / Issue'}
+            </button>
+          )}
+          {isDraft && (can(user, 'expenditure.requisitions.cancel') || can(user, 'expenditure.requisitions.update')) && (
+            <button type="button" className="btn btn-ghost-danger" disabled={!!busy} onClick={() => act('cancel', 'Cancelled', { reason: 'Cancelled by requester' })}>Cancel</button>
+          )}
+        </>
+      }
+    >
+      {actError && <ErrorBanner error={actError} />}
       {msg && <div className="notice-banner">{msg}</div>}
-      {!isDraft && <Pipeline steps={['SUBMITTED', 'APPROVED', 'FULFILLED']} status={s(r.status)} />}
+      {isDraft && !canSubmit && (
+        <p className="muted" style={{ marginTop: 0 }}>You can edit this draft. Submitting it needs expenditure.requisitions.submit.</p>
+      )}
+      <Pipeline steps={['DRAFT', 'SUBMITTED', 'APPROVED', 'FULFILLED']} status={s(r.status)} />
 
       <div className="form-grid">
         <MetaCard title="Request" rows={[
@@ -629,9 +738,11 @@ function RequisitionDesk({ id }: { id: number }) {
           </div>
         </section>
       )}
-    </div>
+    </SpendShell>
   );
-}function RequisitionComposer({ editId }: { editId?: number }) {
+}
+
+function RequisitionComposer({ editId }: { editId?: number }) {
   const { user } = useAuth();
   const [meta, setMeta] = useState<Rec | null>(null);
   const [error, setError] = useState('');
@@ -640,7 +751,7 @@ function RequisitionDesk({ id }: { id: number }) {
   const [saved, setSaved] = useState<Rec | null>(null);
   const [requestType, setRequestType] = useState('MATERIAL');
   const [priority, setPriority] = useState('NORMAL');
-  const [departmentId, setDepartmentId] = useState('');
+  const [departmentId, setDepartmentId] = useState(s(user?.department_id));
   const [requiredDate, setRequiredDate] = useState(todayIso());
   const [purpose, setPurpose] = useState('');
   const [costCentreId, setCostCentreId] = useState('');
@@ -648,7 +759,7 @@ function RequisitionDesk({ id }: { id: number }) {
   const [accountId, setAccountId] = useState('');
   const [warehouseId, setWarehouseId] = useState('');
   const [currency, setCurrency] = useState('UGX');
-  const [lines, setLines] = useState<LineDraft[]>([{ key: nextLineKey(), itemType: 'INVENTORY_ITEM', description: '', assetCategory: '', quantity: '1', unitCode: '', unitCost: '' }]);
+  const [lines, setLines] = useState<LineDraft[]>(() => [emptyLine('MATERIAL')]);
   const [hits, setHits] = useState<Record<number, Rec[]>>({});
   const [openLine, setOpenLine] = useState<number | null>(null);
   const searchTimer = useRef<number | undefined>(undefined);
@@ -723,15 +834,16 @@ function RequisitionDesk({ id }: { id: number }) {
   const save = async (submitNow: boolean) => {
     setError('');
     setMsg('');
-    if (!departmentId) { setError('Requesting department is required'); return; }
-    if (!lines.length || !lines.some((l) => (l.description || l.productId) && num(l.quantity) > 0)) {
-      setError('Add at least one line with a description and quantity'); return;
+    if (!departmentId) { setError('Requesting department is required.'); return; }
+    if (submitNow && !purpose.trim()) { setError('Purpose is required before submitting.'); return; }
+    if (!lines.some(lineIsReady)) {
+      setError('Add at least one line with a description (or a picked product) and a quantity.'); return;
     }
-    const items = lines.map((l) => ({
+    const items = lines.filter(lineIsReady).map((l) => ({
       itemType: l.itemType,
       productId: l.productId,
       assetCategory: l.assetCategory || undefined,
-      description: l.description,
+      description: l.description || l.assetCategory,
       quantity: num(l.quantity),
       unitId: l.unitId,
       unitCode: l.unitCode || undefined,
@@ -745,17 +857,29 @@ function RequisitionDesk({ id }: { id: number }) {
       warehouseId: warehouseId ? Number(warehouseId) : undefined,
       currency, items,
     };
-    setBusy('save');
+    setBusy(submitNow ? 'submit' : 'save');
     try {
       const path = editId ? `/api/ops/requisitions/${editId}/update` : '/api/ops/requisitions';
       const r = await api<{ data: Rec }>(path, { method: 'POST', body: JSON.stringify(body) });
       const h = r.data;
+      const id = Number(h.id);
+      setSaved(h);
       if (!submitNow) {
-        setSaved(r.data);
-        setMsg(editId ? `Updated ${s(h.reqNo)} — still a draft` : `Saved ${s(h.reqNo)} as a draft`);
-      } else {
-        await api<{ data: Rec }>(`/api/ops/requisitions/${s(h.id)}/submit`, { method: 'POST' });
-        navigate(`/spend/requisitions/${s(h.id)}`);
+        setMsg(editId ? `Updated ${s(h.reqNo)} — still a draft.` : `Saved ${s(h.reqNo)} as a draft.`);
+        return;
+      }
+      if (!Number.isFinite(id) || id <= 0) {
+        setError('Draft saved, but the server did not return a requisition id. Open it from the list and submit from there.');
+        return;
+      }
+      try {
+        await api<{ data: Rec }>(`/api/ops/requisitions/${id}/submit`, { method: 'POST', body: '{}' });
+        navigate(`/spend/requisitions/${id}`);
+      } catch (submitErr) {
+        setError(
+          (submitErr instanceof Error ? submitErr.message : String(submitErr)) +
+          ` Draft ${s(h.reqNo)} is saved — open it and try Submit again.`
+        );
       }
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); } finally { setBusy(''); }
   };
@@ -763,13 +887,14 @@ function RequisitionDesk({ id }: { id: number }) {
   const riskFlags = (saved?.risk as string[] | undefined) ?? [];
   const budget = saved?.budget as Rec | undefined;
 
+  const maySubmit = can(user, 'expenditure.requisitions.submit');
+
   return (
-    <div>
-      <div className="toolbar">
-        <h1 style={{ margin: 0, flex: 1 }}>{editId ? 'Edit Requisition' : 'New Requisition'}</h1>
-        <button className="btn btn-ghost" onClick={() => navigate('/spend/requisitions')}>Back</button>
-      </div>
-      <SpendTabs active="requisitions" />
+    <SpendShell
+      title={editId ? 'Edit Requisition' : 'New Requisition'}
+      blurb="Describe what is needed. Inventory lines can be a catalogue pick or a free-text purchase."
+      active="requisitions"
+    >
       {error && <ErrorBanner error={error} />}
       {msg && <div className="notice-banner">{msg}</div>}
       {saved && (
@@ -810,7 +935,12 @@ function RequisitionDesk({ id }: { id: number }) {
         </div>
         <div className="field">
           <label>Request type</label>
-          <select value={requestType} onChange={(e) => setRequestType(e.target.value)}>
+          <select value={requestType} onChange={(e) => {
+            const next = e.target.value;
+            const prevDefault = defaultItemType(requestType);
+            setRequestType(next);
+            setLines((ls) => ls.map((l) => (l.itemType === prevDefault && !l.description && !l.productId ? { ...l, itemType: defaultItemType(next) } : l)));
+          }}>
             {REQ_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
           </select>
         </div>
@@ -824,9 +954,10 @@ function RequisitionDesk({ id }: { id: number }) {
           <label>Required date</label>
           <input type="date" value={requiredDate} onChange={(e) => setRequiredDate(e.target.value)} />
         </div>
-        <div className="field" style={{ gridColumn: '1 / -1' }}>
+        <div className="field field-required" style={{ gridColumn: '1 / -1' }}>
           <label>Purpose</label>
-          <textarea value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="Why is this request needed?" />
+          <textarea value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="Why is this needed, and who will use it?" />
+          <span className="field-hint">Required when you submit. Stored on the approval trail.</span>
         </div>
         <div className="field">
           <label>Cost centre</label>
@@ -865,14 +996,14 @@ function RequisitionDesk({ id }: { id: number }) {
       <section className="card" style={{ marginBottom: 14 }}>
         <div className="card-head">
           <h3>Items</h3>
-          <button className="btn btn-sm" onClick={() => setLines((ls) => [...ls, { key: nextLineKey(), itemType: requestType === 'ASSET' ? 'ASSET' : requestType === 'SERVICE' ? 'SERVICE' : requestType === 'EXPENSE' || requestType === 'PETTY_CASH' ? 'EXPENSE' : 'INVENTORY_ITEM', description: '', assetCategory: '', quantity: '1', unitCode: '', unitCost: '' }])}>+ Add line</button>
+          <button type="button" className="btn btn-sm" onClick={() => setLines((ls) => [...ls, emptyLine(requestType)])}>+ Add line</button>
         </div>
         <div style={{ padding: '8px 16px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {lines.map((l) => {
             const lineHits = hits[l.key] ?? [];
             const picked = lineHits.find((h) => num(h.id) === l.productId);
             return (
-              <div key={l.key} className="card" style={{ padding: 12 }}>
+              <div key={l.key} className="spend-line">
                 <div className="form-grid">
                   <div className="field">
                     <label>Item type</label>
@@ -887,7 +1018,7 @@ function RequisitionDesk({ id }: { id: number }) {
                         value={l.description}
                         onChange={(e) => { patchLine(l.key, { description: e.target.value, productId: undefined }); searchItems(l.key, e.target.value); }}
                         onBlur={() => window.setTimeout(() => setOpenLine(null), 150)}
-                        placeholder="Type a code or name — e.g. A4 Paper, Glue…"
+                        placeholder="Search stock, or type a free-text item to purchase"
                       />
                       {openLine === l.key && lineHits.length > 0 && (
                         <div className="lookup-menu">
@@ -957,12 +1088,24 @@ function RequisitionDesk({ id }: { id: number }) {
         </div>
       </section>
 
-      <div className="toolbar">
-        <button className="btn btn-ghost" disabled={!!busy} onClick={() => save(false)}>{busy === 'save' ? 'Saving…' : 'Save Draft'}</button>
-        <button className="btn btn-primary" disabled={!!busy} onClick={() => save(true)}>{busy === 'save' ? 'Saving…' : 'Submit Request'}</button>
-        {can(user, 'expenditure.requisitions.view') && <span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 12 }}>Smart engine will recommend Store Issue vs Purchase per line.</span>}
+      <div className="spend-dock">
+        <div className="spend-dock-meta">
+          Estimated total <strong>{fmtMoney(estimatedTotal)}</strong> {currency}
+          {!maySubmit && <span> · You can save a draft; submitting needs expenditure.requisitions.submit.</span>}
+        </div>
+        <div className="head-actions">
+          <button type="button" className="btn" onClick={() => navigate('/spend/requisitions')}>Cancel</button>
+          <button type="button" className="btn" disabled={!!busy} onClick={() => void save(false)}>
+            {busy === 'save' ? 'Saving…' : 'Save draft'}
+          </button>
+          {maySubmit && (
+            <button type="button" className="btn btn-primary" disabled={!!busy} onClick={() => void save(true)}>
+              {busy === 'submit' ? 'Submitting…' : 'Submit for approval'}
+            </button>
+          )}
+        </div>
       </div>
-    </div>
+    </SpendShell>
   );
 }
 
@@ -1022,14 +1165,20 @@ function ExpenseList() {
   useEffect(load, [load]);
 
   return (
-    <div>
-      <div className="toolbar">
-        <h1 style={{ margin: 0, flex: 1 }}>Daily Expenditure</h1>
-        <input className="search-input" placeholder="Search exp no / payee…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} style={{ maxWidth: 240 }} />
+    <SpendShell
+      title="Daily Expenditure"
+      blurb="Record, submit and pay day-to-day expenses against budget."
+      active="expenses"
+      actions={
+        can(user, 'expenditure.expenses.create') ? (
+          <button type="button" className="btn btn-primary" onClick={() => navigate('/spend/expenses/new')}>+ Record Expense</button>
+        ) : null
+      }
+    >
+      <div className="spend-toolbar">
+        <input className="search-input" placeholder="Search exp no / payee…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} style={{ maxWidth: 260 }} />
         <StatusFilter value={status} onChange={(v) => { setStatus(v); setPage(1); }} options={EXP_STATUSES} />
-        {can(user, 'expenditure.expenses.create') && (
-          <button className="btn btn-primary" onClick={() => navigate('/spend/expenses/new')}>+ Record Expense</button>
-        )}
+        <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{total} in this view</span>
       </div>
       {error && <ErrorBanner error={error} />}
       {loading ? <PageLoader /> : (
@@ -1060,12 +1209,12 @@ function ExpenseList() {
                 ))}
               </tbody>
             </table>
-            {!items.length && <p className="empty-state">No expenses match.</p>}
+            {!items.length && <p className="empty-state">No expenses match. Record a payment or petty-cash spend to start the register.</p>}
           </div>
           {total > 30 && <Pager page={page} pageSize={30} total={total} onPage={setPage} />}
         </section>
       )}
-    </div>
+    </SpendShell>
   );
 }
 
@@ -1156,13 +1305,7 @@ function ExpenseForm() {
   };
 
   return (
-    <div>
-      <div className="toolbar">
-        <button className="btn btn-ghost" onClick={() => navigate('/spend/expenses')}>← Daily Expenditure</button>
-        <h1 style={{ margin: 0, flex: 1 }}>Record Expense</h1>
-        <button className="btn btn-ghost" disabled={busy !== ''} onClick={() => save(false)}>{busy === 'save' ? 'Saving…' : 'Save Draft'}</button>
-        <button className="btn btn-primary" disabled={busy !== ''} onClick={() => save(true)}>{busy === 'save' ? 'Saving…' : 'Save & Submit'}</button>
-      </div>
+    <SpendShell title="Record Expense" blurb="Capture the spend, then submit it for approval." active="expenses">
       {error && <ErrorBanner error={error} />}
       <div className="form-grid">
         <section className="card card-accent">
@@ -1288,7 +1431,15 @@ function ExpenseForm() {
           </div>
         )}
       </section>
-    </div>
+      <div className="spend-dock">
+        <div className="spend-dock-meta">Amount <strong>{fmtMoney(num(amount))}</strong></div>
+        <div className="head-actions">
+          <button type="button" className="btn" onClick={() => navigate('/spend/expenses')}>Cancel</button>
+          <button type="button" className="btn" disabled={busy !== ''} onClick={() => save(false)}>{busy === 'save' ? 'Saving…' : 'Save draft'}</button>
+          <button type="button" className="btn btn-primary" disabled={busy !== ''} onClick={() => save(true)}>{busy === 'save' ? 'Saving…' : 'Save & submit'}</button>
+        </div>
+      </div>
+    </SpendShell>
   );
 }
 
@@ -1367,6 +1518,7 @@ function ExpenseDesk({ id }: { id: number }) {
         {canPost && <button className="btn btn-ghost" disabled={busy !== ''} onClick={() => act('post', 'Posted to ledger')}>{busy === 'post' ? 'Working…' : 'Post to Ledger'}</button>}
         {canVoid && <button className="btn btn-ghost-danger" disabled={busy !== ''} onClick={() => setShowVoid(true)}>Void</button>}
       </div>
+      <SpendTabs active="expenses" />
       {error && <ErrorBanner error={error} />}
       {msg && <div className="notice-banner">{msg}</div>}
       {dup && (
@@ -1638,6 +1790,7 @@ function PettyCashDesk() {
           <button className="btn btn-ghost" onClick={() => { setRecFund(defaultFund); setShowRec(true); }}>Reconcile Cash</button>
         )}
       </div>
+      <SpendTabs active="petty-cash" />
       {msg && <div className="notice-banner">{msg}</div>}
 
       <div className="kpi-grid">
@@ -1997,6 +2150,7 @@ function ClaimsList() {
         <h1 style={{ margin: 0, flex: 1 }}>Employee Expense Claims</h1>
         {can(user, 'expenditure.claims.create') && <button className="btn btn-primary" onClick={() => navigate('/spend/claims/new')}>+ New Claim</button>}
       </div>
+      <SpendTabs active="claims" />
       {error && <ErrorBanner error={error} />}
       <div className="toolbar" style={{ marginTop: 8 }}>
         <StatusFilter value={status} onChange={setStatus} options={['DRAFT', 'SUBMITTED', 'APPROVED', 'REIMBURSED', 'REJECTED']} />
@@ -2081,6 +2235,7 @@ function ClaimForm() {
         <button className="btn btn-ghost" onClick={() => navigate('/spend/claims')}>← Claims</button>
         <h1 style={{ margin: 0, flex: 1 }}>New Expense Claim</h1>
       </div>
+      <SpendTabs active="claims" />
       {msg && <div className="notice-banner">{msg}</div>}
       <section className="card">
         <div className="card-head"><h3>Claim details</h3></div>
@@ -2187,6 +2342,7 @@ function ClaimDesk({ id }: { id: number }) {
           <button className="btn btn-primary" disabled={busy !== ''} onClick={() => setShowReimburse(true)}>Reimburse</button>
         )}
       </div>
+      <SpendTabs active="claims" />
       {msg && <div className="notice-banner">{msg}</div>}
       <Pipeline steps={['DRAFT', 'SUBMITTED', 'APPROVED', 'REIMBURSED']} status={s(c.status)} />
 
@@ -2342,6 +2498,7 @@ function DailyCloseDesk() {
           </button>
         )}
       </div>
+      <SpendTabs active="close" />
       {msg && <div className="notice-banner">{msg}</div>}
       {closed && <div className="notice-banner">✓ This day is closed and locked. Corrections require adjustment entries.</div>}
 
