@@ -89,6 +89,23 @@ describe('Inventory warehouse workspace', () => {
     expect(Array.isArray(resv.body.data)).toBe(true);
   });
 
+  it('refuses a pick that exceeds on-hand stock with a 400, not a 500', async () => {
+    const { token } = await loginAs('willy.wh');
+    const stock = await api.get('/api/ops/inventory/stock').set(auth(token));
+    expect(stock.status).toBe(200);
+    const line = stock.body.data.rows.find((r: { quantity: number; warehouseId: number; productId: number }) => Number(r.quantity) >= 0);
+    expect(line).toBeTruthy();
+    const res = await api.post('/api/ops/inventory/moves').set(auth(token)).send({
+      movementType: 'ISSUE',
+      product: line.productId,
+      warehouse: line.warehouseId,
+      quantity: Number(line.quantity) + 1_000_000,
+      reason: 'test over-issue',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/Insufficient inventory/i);
+  });
+
   it('lets a warehouse manager open the inbound and pick desks', async () => {
     const { token } = await loginAs('willy.wh');
     const inbound = await api.get('/api/ops/inventory/inbound').set(auth(token));

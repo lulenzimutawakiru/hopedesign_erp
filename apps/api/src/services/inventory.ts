@@ -28,32 +28,43 @@ export const RAW_MATERIAL_TYPES = ['JUMBO_ROLL', 'PAPER_BOBBIN', 'PACKAGING'];
 export const CONSUMABLE_TYPES = ['CONSUMABLE', 'SPARE_PART'];
 export const OFFICE_CONS_ANCHOR = 'CONS-OFF';
 
+function asStockRefusal(err: unknown): never {
+  const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';
+  const message = err instanceof Error ? err.message : String(err);
+  if (code === 'P0001') throw badRequest(message);
+  throw err;
+}
+
 export async function postMove(client: pg.PoolClient, ctx: Ctx, m: MoveInput) {
-  const res = await client.query('SELECT post_inventory_move($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) AS movement_id', [
-    ctx.companyId,
-    ctx.tenantId,
-    ctx.branchId ?? null,
-    m.movementType,
-    m.product,
-    m.batch ?? null,
-    m.warehouse ?? null,
-    m.bin ?? null,
-    m.fromWarehouse ?? null,
-    m.fromBin ?? null,
-    m.toWarehouse ?? null,
-    m.toBin ?? null,
-    m.quantity,
-    m.unitCost ?? 0,
-    m.refType ?? null,
-    m.refId ?? null,
-    m.refCode ?? null,
-    m.qr ?? null,
-    m.workOrder ?? null,
-    ctx.userId ?? null,
-    m.reason ?? null,
-    m.valuationMethod ?? 'WEIGHTED_AVERAGE',
-  ]);
-  return Number(res.rows[0].movement_id);
+  try {
+    const res = await client.query('SELECT post_inventory_move($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) AS movement_id', [
+      ctx.companyId,
+      ctx.tenantId,
+      ctx.branchId ?? null,
+      m.movementType,
+      m.product,
+      m.batch ?? null,
+      m.warehouse ?? null,
+      m.bin ?? null,
+      m.fromWarehouse ?? null,
+      m.fromBin ?? null,
+      m.toWarehouse ?? null,
+      m.toBin ?? null,
+      m.quantity,
+      m.unitCost ?? 0,
+      m.refType ?? null,
+      m.refId ?? null,
+      m.refCode ?? null,
+      m.qr ?? null,
+      m.workOrder ?? null,
+      ctx.userId ?? null,
+      m.reason ?? null,
+      m.valuationMethod ?? 'WEIGHTED_AVERAGE',
+    ]);
+    return Number(res.rows[0].movement_id);
+  } catch (err) {
+    asStockRefusal(err);
+  }
 }
 
 export async function reserve(
@@ -61,18 +72,22 @@ export async function reserve(
   ctx: Ctx,
   input: { product: number; batch?: number | null; warehouse?: number | null; qty: number; refType: string; refId: number }
 ) {
-  const res = await client.query('SELECT reserve_stock($1,$2,$3,$4,$5,$6,$7,$8,$9) AS reservation_id', [
-    ctx.companyId,
-    ctx.tenantId,
-    input.product,
-    input.batch ?? null,
-    input.warehouse ?? null,
-    input.qty,
-    input.refType,
-    input.refId,
-    ctx.userId ?? null,
-  ]);
-  return Number(res.rows[0].reservation_id);
+  try {
+    const res = await client.query('SELECT reserve_stock($1,$2,$3,$4,$5,$6,$7,$8,$9) AS reservation_id', [
+      ctx.companyId,
+      ctx.tenantId,
+      input.product,
+      input.batch ?? null,
+      input.warehouse ?? null,
+      input.qty,
+      input.refType,
+      input.refId,
+      ctx.userId ?? null,
+    ]);
+    return Number(res.rows[0].reservation_id);
+  } catch (err) {
+    asStockRefusal(err);
+  }
 }
 
 export async function release(client: pg.PoolClient, reservationId: number) {
