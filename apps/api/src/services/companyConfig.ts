@@ -73,7 +73,7 @@ export async function upsertAppSetting(
   category: string,
   key: string,
   value: unknown,
-  opts: { secret?: boolean; resource?: string } = {}
+  opts: { secret?: boolean; resource?: string; reason?: string | null } = {}
 ) {
   const tenantId = ctx.tenantId ?? null;
   const companyId = ctx.companyId ?? null;
@@ -97,7 +97,7 @@ export async function upsertAppSetting(
   );
   await auditConfig(client, ctx, 'update', opts.resource ?? `company.config.${category}`, null, {
     [key]: oldValue,
-  }, { [key]: value }, { category });
+  }, { [key]: value }, { category, ...(opts.reason ? { reason: opts.reason } : {}) });
 }
 
 /** App-level audit entry for configuration changes. */
@@ -328,7 +328,12 @@ export async function allocateDocNo(
      ON CONFLICT (tenant_id, seq_key, doc_year)
      DO UPDATE SET last_seq = number_sequences.last_seq + 1, updated_at = now()
      RETURNING last_seq`,
-    [ctx.tenantId ?? null, seqKey, docYear, rule.startSeq - 1]
+    // last_seq holds the number that was last issued, so a fresh counter is
+    // seeded with the first number the rule will issue. Seeding startSeq - 1
+    // made the very first document come back as 0000, and disagreed with
+    // previewDocNo(), which starts from startSeq. resetSequence() writes the
+    // same last-issued convention.
+    [ctx.tenantId ?? null, seqKey, docYear, rule.startSeq]
   );
   const seq = Number(res.rows[0].last_seq);
   return { number: buildDocNo(rule, seq, vars), seq, rule };

@@ -474,6 +474,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'adminbackups', label: 'Backups', href: '/admin/backups', perm: 'admin.backups.view' },
           { id: 'delegations', label: 'Delegations', href: '/admin/delegations', perm: 'governance.delegations.view' },
           { id: 'signatures', label: 'Signatures', href: '/admin/signatures', perm: 'governance.signature_profiles.view' },
+          { id: 'adminorgsettings', label: 'Organisation Settings', href: '/admin/organisation-settings', perm: 'organisation.settings.view' },
         ],
       },
       {
@@ -713,6 +714,7 @@ export function requiredPermForPath(path: string): string | undefined {
       backups: 'admin.backups.view',
       delegations: 'governance.delegations.view',
       signatures: 'governance.signature_profiles.view',
+      'organisation-settings': 'organisation.settings.view',
     };
     return map[parts[1] ?? ''] ?? 'admin.users.view';
   }

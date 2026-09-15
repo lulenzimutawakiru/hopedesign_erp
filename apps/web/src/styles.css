@@ -2089,6 +2089,8 @@ html[data-theme='dark'] .next-hint {
 .setting-control input[type='number'],
 .setting-control input[type='password'],
 .setting-control input[type='url'],
+.setting-control input[type='email'],
+.setting-control input[type='date'],
 .setting-control input[type='tel'],
 .setting-control textarea {
   padding: 7px 10px;

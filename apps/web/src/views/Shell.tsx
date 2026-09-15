@@ -41,6 +41,7 @@ const DocumentsFlow = lazy(() => import('./DocumentsFlow'));
 const InventoryIntel = lazy(() => import('./InventoryIntel'));
 const ServiceDeskFlow = lazy(() => import('./ServiceDeskFlow'));
 const ComplianceFlow = lazy(() => import('./CompliancePdpo'));
+const OrganisationSettings = lazy(() => import('./OrganisationSettings'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
   AccessDenied,
@@ -185,6 +186,7 @@ export default function Shell() {
   else if (serviceDeskPath) body = <ServiceDeskFlow path={path} />;
   else if (compliancePath) body = <ComplianceFlow path={path} />;
   else if (assetsPath) body = <AssetsFlow path={path} />;
+  else if (path.startsWith('/admin/organisation-settings')) body = <OrganisationSettings path={path} />;
   else if (path === '/admin' || path.startsWith('/admin/')) body = <AdminFlow path={path} />;
   else if (path === '/communication' || path.startsWith('/communication/')) body = <CommunicationFlow path={path} />;
   else if (path === '/documents' || path.startsWith('/documents/')) body = <DocumentsFlow path={path} />;

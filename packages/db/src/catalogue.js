@@ -354,6 +354,25 @@ const MODULES = {
     builder: ["view","create","update","delete","run"],
     saved: ["view","create","update","delete","schedule"],
   },
+  // Organisation Settings is the ERP control plane: one module whose resources
+  // are the settings categories an administrator may configure. Read access is
+  // deliberately separate from per-domain "manage".
+  organisation: {
+    settings: ["view","create","update","delete"],
+    structure: ["manage"],
+    tax: ["manage"],
+    finance: ["manage"],
+    payroll: ["manage"],
+    documents: ["manage"],
+    security: ["manage"],
+    integrations: ["manage"],
+    qr: ["manage"],
+    manufacturing: ["manage"],
+    inventory: ["manage"],
+    hr: ["manage"],
+    attendance: ["manage"],
+    audit: ["view"],
+  },
   admin: {
     users: ["view","create","update","delete","disable","enable","reset_password","assign_roles","activate","suspend","invite","view_sessions","revoke_sessions"],
     roles: ["view","create","update","delete"],
@@ -732,9 +751,67 @@ const SERVICE_DESK_ROLE_EXTENSIONS = {
     "service_desk.dashboards.employee",
   ],
 };
+// ---------------------------------------------------------------------------
+// Organisation Settings grants (migration 0164).
+// Mirrors the explicit role grants seeded by 0164 exactly: the same roles, the
+// same codes, and deliberately no grant to procurement_manager - administrative
+// access and business approval authority stay separate (spec section 26).
+// ---------------------------------------------------------------------------
+const ORGANISATION_PERMISSIONS = {
+  view: "organisation.settings.view",
+  create: "organisation.settings.create",
+  update: "organisation.settings.update",
+  remove: "organisation.settings.delete",
+  structure: "organisation.structure.manage",
+  tax: "organisation.tax.manage",
+  finance: "organisation.finance.manage",
+  payroll: "organisation.payroll.manage",
+  documents: "organisation.documents.manage",
+  security: "organisation.security.manage",
+  integrations: "organisation.integrations.manage",
+  qr: "organisation.qr.manage",
+  manufacturing: "organisation.manufacturing.manage",
+  inventory: "organisation.inventory.manage",
+  hr: "organisation.hr.manage",
+  attendance: "organisation.attendance.manage",
+  audit: "organisation.audit.view",
+};
+const OPERM = ORGANISATION_PERMISSIONS;
+const ORGANISATION_ROLE_EXTENSIONS = {
+  super_administrator: Object.values(OPERM),
+  system_administrator: [OPERM.view, OPERM.update, OPERM.structure, OPERM.documents, OPERM.security, OPERM.integrations, OPERM.audit],
+  security_administrator: [OPERM.view, OPERM.security, OPERM.audit],
+  integration_administrator: [OPERM.view, OPERM.integrations],
+  audit_administrator: [OPERM.view, OPERM.audit],
+  data_protection_officer: [OPERM.view, OPERM.audit],
+  backup_administrator: [OPERM.view, OPERM.audit],
+  cfo: [OPERM.view, OPERM.finance, OPERM.tax, OPERM.audit],
+  finance_manager: [OPERM.view, OPERM.finance, OPERM.tax, OPERM.audit],
+  chief_accountant: [OPERM.view, OPERM.finance, OPERM.tax, OPERM.audit],
+  financial_controller: [OPERM.view, OPERM.finance, OPERM.tax, OPERM.audit],
+  tax_officer: [OPERM.view, OPERM.tax],
+  payroll_manager: [OPERM.view, OPERM.payroll],
+  payroll_accountant: [OPERM.view, OPERM.payroll],
+  hr_director: [OPERM.view, OPERM.hr, OPERM.attendance],
+  hr_manager: [OPERM.view, OPERM.hr, OPERM.attendance],
+  production_director: [OPERM.view, OPERM.manufacturing, OPERM.inventory],
+  production_manager: [OPERM.view, OPERM.manufacturing, OPERM.inventory],
+  quality_manager: [OPERM.view, OPERM.manufacturing, OPERM.inventory],
+  security_printing_director: [OPERM.view, OPERM.manufacturing, OPERM.inventory],
+  warehouse_manager: [OPERM.view, OPERM.inventory],
+  inventory_controller: [OPERM.view, OPERM.inventory],
+  supply_chain_manager: [OPERM.view, OPERM.inventory],
+  security_printing_manager: [OPERM.view, OPERM.qr],
+  secure_stock_controller: [OPERM.view, OPERM.qr],
+  service_desk_manager: [OPERM.view, OPERM.documents],
+};
+
 for (const role of ROLES) {
-  const extra = SERVICE_DESK_ROLE_EXTENSIONS[role.code];
-  if (extra) role.grants = [...role.grants, ...extra];
+  const extra = [
+    ...(SERVICE_DESK_ROLE_EXTENSIONS[role.code] || []),
+    ...(ORGANISATION_ROLE_EXTENSIONS[role.code] || []),
+  ];
+  if (extra.length) role.grants = [...role.grants, ...extra];
 }
 
 module.exports = { ACTIONS, MODULES, EXTRA_PERMISSIONS, buildPermissions, ROLES };

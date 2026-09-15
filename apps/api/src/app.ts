@@ -59,6 +59,7 @@ import { documentsOpsRouter } from './routes/ops/documents.js';
 import { governanceOpsRouter } from './routes/ops/governance.js';
 import { serviceDeskOpsRouter } from './routes/ops/serviceDesk.js';
 import { complianceOpsRouter } from './routes/ops/compliance.js';
+import { organisationSettingsOpsRouter } from './routes/ops/organisationSettings.js';
 import { myServiceDeskRouter } from './routes/ops/myServiceDesk.js';
 import { runServiceDeskSlaTick } from './services/serviceDeskSla.js';
 
@@ -212,6 +213,7 @@ app.use('/api/ops/expenditure', expenditureOpsRouter);
         app.use('/api/ops/governance', governanceOpsRouter);
         app.use('/api/ops/service-desk', serviceDeskOpsRouter);
 app.use('/api/ops/compliance', complianceOpsRouter);
+app.use('/api/ops/organisation-settings', organisationSettingsOpsRouter);
         app.use('/api/ops/healthcare', requireModule('healthcare'), healthcareOpsRouter);
 
 // Module-activation gate for the healthcare CRUD namespace (multi-tenant SaaS).
