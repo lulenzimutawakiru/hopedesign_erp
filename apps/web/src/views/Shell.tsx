@@ -40,6 +40,7 @@ const CommunicationFlow = lazy(() => import('./CommunicationFlow'));
 const DocumentsFlow = lazy(() => import('./DocumentsFlow'));
 const InventoryIntel = lazy(() => import('./InventoryIntel'));
 const ServiceDeskFlow = lazy(() => import('./ServiceDeskFlow'));
+const ComplianceFlow = lazy(() => import('./CompliancePdpo'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
   AccessDenied,
@@ -144,6 +145,7 @@ export default function Shell() {
   const inventoryPath = path === '/inventory' || path.startsWith('/inventory/') || path.startsWith('/records/inventory/');
   const assetsPath = path === '/assets' || path.startsWith('/assets/');
   const serviceDeskPath = path === '/service-desk' || path.startsWith('/service-desk/');
+  const compliancePath = path === '/compliance' || path.startsWith('/compliance/');
 
   const denied = useMemo(() => {
     const perm = requiredPermForPath(path);
@@ -181,6 +183,7 @@ export default function Shell() {
   else if (path === '/inventory-intel' || path.startsWith('/inventory-intel/')) body = <InventoryIntel path={path} />;
   else if (inventoryPath) body = <InventoryFlow path={path} />;
   else if (serviceDeskPath) body = <ServiceDeskFlow path={path} />;
+  else if (compliancePath) body = <ComplianceFlow path={path} />;
   else if (assetsPath) body = <AssetsFlow path={path} />;
   else if (path === '/admin' || path.startsWith('/admin/')) body = <AdminFlow path={path} />;
   else if (path === '/communication' || path.startsWith('/communication/')) body = <CommunicationFlow path={path} />;

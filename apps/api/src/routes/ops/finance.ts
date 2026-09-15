@@ -8,6 +8,7 @@ import * as finAdv from '../../services/finance-advanced.js';
 import * as efrisDir from '../../services/efris/directory.js';
 import * as finAppr from '../../services/financeApprovals.js';
 import * as kcbOps from '../../services/kcb/ops.js';
+import * as equityOps from '../../services/equity/ops.js';
 
 export const financeOpsRouter = Router();
 
@@ -576,6 +577,33 @@ financeOpsRouter.get('/kcb/notifications', ...runGet('finance.kcb.view', (c, ctx
 financeOpsRouter.post('/kcb/notifications/:id/match', ...run('finance.kcb.manage', (c, ctx, b, p) => kcbOps.matchKcbNotification(c, ctx, Number(p.id), Number(b.invoiceId))));
 financeOpsRouter.post('/kcb/notifications/:id/unmatch', ...run('finance.kcb.manage', (c, ctx, _b, p) => kcbOps.unmatchKcbNotification(c, ctx, Number(p.id))));
 financeOpsRouter.get('/kcb/invoices', ...runGet('finance.kcb.view', (c, ctx, q) => kcbOps.searchKcbInvoices(c, ctx, {
+  search: q.search != null ? String(q.search) : undefined,
+  limit: q.limit != null ? Number(q.limit) : null,
+})));
+
+// ---- Equity Bank integration ----
+// Same shape as the KCB half above: inbound notifications arrive on
+// /api/integrations/equity (see routes/equityEvents.ts), and this is the
+// operator's half - whether the integration could actually verify a
+// notification, and what arrived versus what it settled.
+financeOpsRouter.get('/equity/status', ...runGet('finance.equity.view', (c, ctx) => equityOps.equityStatus(c, ctx)));
+financeOpsRouter.get('/equity/config', ...runGet('finance.equity.view', (c, ctx) => equityOps.equityConfig(c, ctx)));
+financeOpsRouter.patch('/equity/config', ...run('finance.equity.manage', (c, ctx, b) => equityOps.updateEquityFromPatch(c, ctx, b ?? {})));
+financeOpsRouter.post('/equity/test-connection', ...run('finance.equity.test', (c, ctx) => equityOps.testEquityConnection(c, ctx)));
+financeOpsRouter.get('/equity/notifications', ...runGet('finance.equity.view', (c, ctx, q) => equityOps.listEquityNotifications(c, ctx, {
+  status: q.status != null ? String(q.status) : undefined,
+  notificationType: q.notificationType != null ? String(q.notificationType) : undefined,
+  bankAccountId: q.bankAccountId != null ? Number(q.bankAccountId) : null,
+  matched: q.matched === 'true' ? true : q.matched === 'false' ? false : undefined,
+  search: q.search != null ? String(q.search) : undefined,
+  from: q.from != null ? String(q.from) : undefined,
+  to: q.to != null ? String(q.to) : undefined,
+  limit: q.limit != null ? Number(q.limit) : null,
+  offset: q.offset != null ? Number(q.offset) : null,
+})));
+financeOpsRouter.post('/equity/notifications/:id/match', ...run('finance.equity.manage', (c, ctx, b, p) => equityOps.matchEquityNotification(c, ctx, Number(p.id), Number(b.invoiceId))));
+financeOpsRouter.post('/equity/notifications/:id/unmatch', ...run('finance.equity.manage', (c, ctx, _b, p) => equityOps.unmatchEquityNotification(c, ctx, Number(p.id))));
+financeOpsRouter.get('/equity/invoices', ...runGet('finance.equity.view', (c, ctx, q) => equityOps.searchEquityInvoices(c, ctx, {
   search: q.search != null ? String(q.search) : undefined,
   limit: q.limit != null ? Number(q.limit) : null,
 })));

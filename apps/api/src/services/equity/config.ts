@@ -1,8 +1,8 @@
 /**
- * KCB bank integration configuration (per company).
+ * Equity bank integration configuration (per company).
  *
- * Like every other external system, the KCB integration is a row in
- * `company_integrations` (category `payments`, code `KCB`), so an operator
+ * Like every other external system, the Equity integration is a row in
+ * `company_integrations` (category `payments`, code `EQUITY`), so an operator
  * configures it once per company and the notification receiver can resolve an
  * inbound payment back to a bank account, a branch and a tenant.
  *
@@ -18,12 +18,12 @@ import { badRequest } from '../../utils.js';
 import { auditConfig, decryptSecret, encryptSecret } from '../companyConfig.js';
 import { cleanKey, isUsablePublicKey, publicKeyFingerprint } from './security.js';
 
-export const KCB_CODE = 'KCB';
-export const KCB_CATEGORY = 'payments';
+export const EQUITY_CODE = 'EQUITY';
+export const EQUITY_CATEGORY = 'payments';
 
-export type KcbEnvironment = 'SANDBOX' | 'PRODUCTION';
+export type EquityEnvironment = 'SANDBOX' | 'PRODUCTION';
 
-export interface KcbIntegrationRow {
+export interface EquityIntegrationRow {
   id: number;
   tenant_id: number;
   company_id: number;
@@ -35,15 +35,15 @@ export interface KcbIntegrationRow {
   last_tested_at: string | null;
 }
 
-export interface KcbConfig {
-  environment: KcbEnvironment;
+export interface EquityConfig {
+  environment: EquityEnvironment;
   country: string;
   currency: string;
   bankAccountId: number | null;
   organizationShortCode: string | null;
   tillNumber: string | null;
   gatewayBaseUrl: string | null;
-  /** KCB's public key: verifies the Signature header on inbound notifications. */
+  /** Equity's public key: verifies the Signature header on inbound notifications. */
   publicKey: string | null;
   /** Ours, for outbound calls only. Never leaves the server. */
   privateKey: string | null;
@@ -52,13 +52,13 @@ export interface KcbConfig {
 }
 
 /** Everything an administrator may see. Never contains secret material. */
-export interface KcbConfigView {
+export interface EquityConfigView {
   configured: boolean;
   integrationId: number | null;
   name: string | null;
   status: string;
   isActive: boolean;
-  environment: KcbEnvironment;
+  environment: EquityEnvironment;
   country: string;
   currency: string;
   bankAccountId: number | null;
@@ -82,42 +82,42 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 
 const pick = (bag: Record<string, unknown>, key: string): string | null => cleanKey(bag[key]);
 
-/** The single KCB integration row for the acting company, if it exists. */
-export async function getKcbIntegration(
+/** The single Equity integration row for the acting company, if it exists. */
+export async function getEquityIntegration(
   client: pg.PoolClient,
   ctx: Ctx
-): Promise<KcbIntegrationRow | null> {
+): Promise<EquityIntegrationRow | null> {
   if (ctx.companyId == null) return null;
   const res = await client.query(
     `SELECT id, tenant_id, company_id, name, status, is_active, config, secrets, last_tested_at
        FROM company_integrations
       WHERE company_id = $1 AND code = $2 AND category = $3
       LIMIT 1`,
-    [ctx.companyId, KCB_CODE, KCB_CATEGORY]
+    [ctx.companyId, EQUITY_CODE, EQUITY_CATEGORY]
   );
-  return res.rows.length > 0 ? (res.rows[0] as KcbIntegrationRow) : null;
+  return res.rows.length > 0 ? (res.rows[0] as EquityIntegrationRow) : null;
 }
 
 /**
  * Decode a stored row into its usable form. Credentials are decrypted here and
  * only here; a caller that intends to return anything to a client must use
- * kcbConfigView instead.
+ * equityConfigView instead.
  */
-export function readKcbConfig(row: KcbIntegrationRow | null): KcbConfig {
+export function readEquityConfig(row: EquityIntegrationRow | null): EquityConfig {
   const cfg = asRecord(row?.config);
   const sec = asRecord(row?.secrets);
   const environment = (pick(cfg, 'environment') ?? 'SANDBOX').toUpperCase();
   const bankAccountId = Number.parseInt(String(cfg.bank_account_id ?? ''), 10);
   return {
     environment: environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX',
-    country: (pick(cfg, 'country') ?? 'KE').toUpperCase(),
-    currency: (pick(cfg, 'currency') ?? 'KES').toUpperCase(),
+    country: (pick(cfg, 'country') ?? 'UG').toUpperCase(),
+    currency: (pick(cfg, 'currency') ?? 'UGX').toUpperCase(),
     bankAccountId: Number.isInteger(bankAccountId) ? bankAccountId : null,
     organizationShortCode: pick(cfg, 'organization_short_code'),
     tillNumber: pick(cfg, 'till_number'),
     gatewayBaseUrl: pick(cfg, 'gateway_base_url'),
-    publicKey: pick(cfg, 'kcb_public_key'),
-    privateKey: decryptSecret(pick(sec, 'kcb_private_key')),
+    publicKey: pick(cfg, 'equity_public_key'),
+    privateKey: decryptSecret(pick(sec, 'equity_private_key')),
     consumerKey: decryptSecret(pick(sec, 'consumer_key')),
     consumerSecret: decryptSecret(pick(sec, 'consumer_secret')),
   };
@@ -129,10 +129,10 @@ export function readKcbConfig(row: KcbIntegrationRow | null): KcbConfig {
  * first so a company can rotate its own key without a redeploy.
  */
 export function envVerificationKey(): string | null {
-  return cleanKey(process.env.KCB_IPN_PUBLIC_KEY);
+  return cleanKey(process.env.EQUITY_IPN_PUBLIC_KEY);
 }
 
-export interface KcbKeyCandidate {
+export interface EquityKeyCandidate {
   companyId: number | null;
   tenantId: number | null;
   publicKey: string;
@@ -155,14 +155,14 @@ interface ActiveKeyRow {
  * arrives and the company it belongs to is still unknown. Only the public half
  * of each key is ever returned.
  */
-export async function verificationKeys(client: pg.PoolClient | pg.Pool): Promise<KcbKeyCandidate[]> {
-  const out: KcbKeyCandidate[] = [];
+export async function verificationKeys(client: pg.PoolClient | pg.Pool): Promise<EquityKeyCandidate[]> {
+  const out: EquityKeyCandidate[] = [];
   const envKey = envVerificationKey();
   if (envKey && isUsablePublicKey(envKey)) {
     out.push({ companyId: null, tenantId: null, publicKey: envKey, source: 'ENV' });
   }
   const res = await client.query(
-    'SELECT company_id, tenant_id, public_key_pem FROM kcb_ipn_active_keys()'
+    'SELECT company_id, tenant_id, public_key_pem FROM equity_ipn_active_keys()'
   );
   for (const row of res.rows as ActiveKeyRow[]) {
     const pem = cleanKey(row.public_key_pem);
@@ -178,8 +178,8 @@ export async function verificationKeys(client: pg.PoolClient | pg.Pool): Promise
 }
 
 /** Safe projection of the integration for an administrator. */
-export function kcbConfigView(row: KcbIntegrationRow | null): KcbConfigView {
-  const cfg = readKcbConfig(row);
+export function equityConfigView(row: EquityIntegrationRow | null): EquityConfigView {
+  const cfg = readEquityConfig(row);
   const fingerprint = publicKeyFingerprint(cfg.publicKey);
   const envKeyPresent = isUsablePublicKey(envVerificationKey());
   return {
@@ -206,7 +206,7 @@ export function kcbConfigView(row: KcbIntegrationRow | null): KcbConfigView {
   };
 }
 
-export interface KcbConfigPatch {
+export interface EquityConfigPatch {
   environment?: string;
   country?: string | null;
   currency?: string | null;
@@ -224,11 +224,11 @@ export interface KcbConfigPatch {
 /**
  * Patch field to the name it is encrypted under in the secrets bag. The stored
  * name is snake_case like every other key in this row, and it has to be the
- * name readKcbConfig looks up: a credential written under one name and read
+ * name readEquityConfig looks up: a credential written under one name and read
  * back under another is stored correctly and still reported as absent.
  */
-const SECRET_FIELDS: ReadonlyArray<[field: keyof KcbConfigPatch, stored: string]> = [
-  ['privateKey', 'kcb_private_key'],
+const SECRET_FIELDS: ReadonlyArray<[field: keyof EquityConfigPatch, stored: string]> = [
+  ['privateKey', 'equity_private_key'],
   ['consumerKey', 'consumer_key'],
   ['consumerSecret', 'consumer_secret'],
 ];
@@ -241,18 +241,18 @@ const SECRET_FIELDS: ReadonlyArray<[field: keyof KcbConfigPatch, stored: string]
  * record carries the before/after projection - key fingerprints and presence
  * flags, never key material.
  */
-export async function updateKcbConfig(
+export async function updateEquityConfig(
   client: pg.PoolClient,
   ctx: Ctx,
-  patch: KcbConfigPatch
-): Promise<KcbConfigView> {
+  patch: EquityConfigPatch
+): Promise<EquityConfigView> {
   const tenantId = ctx.tenantId ?? null;
   const companyId = ctx.companyId ?? null;
   if (tenantId === null || companyId === null) {
-    throw badRequest('A company context is required to configure KCB');
+    throw badRequest('A company context is required to configure Equity');
   }
 
-  const existing = await getKcbIntegration(client, ctx);
+  const existing = await getEquityIntegration(client, ctx);
   const cfg = { ...asRecord(existing?.config) };
   const sec = { ...asRecord(existing?.secrets) };
 
@@ -289,7 +289,7 @@ export async function updateKcbConfig(
   applyText(cfg, 'organization_short_code', patch.organizationShortCode);
   applyText(cfg, 'till_number', patch.tillNumber);
   applyText(cfg, 'gateway_base_url', patch.gatewayBaseUrl);
-  applyText(cfg, 'kcb_public_key', patch.publicKey);
+  applyText(cfg, 'equity_public_key', patch.publicKey);
 
   if (patch.bankAccountId !== undefined) {
     const raw = patch.bankAccountId === null ? '' : String(patch.bankAccountId).trim();
@@ -318,7 +318,7 @@ export async function updateKcbConfig(
   }
 
   const isActive = (patch.isActive === undefined ? existing?.is_active ?? true : patch.isActive === true);
-  const name = existing?.name ?? 'KCB Bank';
+  const name = existing?.name ?? 'Equity Bank';
   const status = existing?.status ?? 'DISCONNECTED';
 
   await client.query(
@@ -333,27 +333,27 @@ export async function updateKcbConfig(
             updated_by = EXCLUDED.updated_by,
             updated_at = now()`,
     [
-      tenantId, companyId, KCB_CATEGORY, KCB_CODE, name,
+      tenantId, companyId, EQUITY_CATEGORY, EQUITY_CODE, name,
       JSON.stringify(cfg), JSON.stringify(sec), status, isActive, ctx.userId ?? null,
     ]
   );
 
-  const saved = await getKcbIntegration(client, ctx);
+  const saved = await getEquityIntegration(client, ctx);
   await auditConfig(
     client,
     ctx,
     'update',
-    'finance.kcb.config',
+    'finance.equity.config',
     saved ? Number(saved.id) : null,
-    existing ? (kcbConfigView(existing) as unknown as Record<string, unknown>) : null,
-    saved ? (kcbConfigView(saved) as unknown as Record<string, unknown>) : null,
-    { code: KCB_CODE, category: KCB_CATEGORY }
+    existing ? (equityConfigView(existing) as unknown as Record<string, unknown>) : null,
+    saved ? (equityConfigView(saved) as unknown as Record<string, unknown>) : null,
+    { code: EQUITY_CODE, category: EQUITY_CATEGORY }
   );
-  return kcbConfigView(saved);
+  return equityConfigView(saved);
 }
 
 /** Record the outcome of a connection / signing-key self-test. */
-export async function markKcbTested(
+export async function markEquityTested(
   client: pg.PoolClient,
   ctx: Ctx,
   status: 'CONNECTED' | 'ERROR' | 'TESTING'
@@ -363,6 +363,6 @@ export async function markKcbTested(
     `UPDATE company_integrations
         SET status = $1, last_tested_at = now(), updated_at = now()
       WHERE company_id = $2 AND code = $3 AND category = $4`,
-    [status, ctx.companyId, KCB_CODE, KCB_CATEGORY]
+    [status, ctx.companyId, EQUITY_CODE, EQUITY_CATEGORY]
   );
 }

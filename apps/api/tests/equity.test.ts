@@ -1,5 +1,5 @@
 // ============================================================
-// KCB bank integration - inbound payment notifications.
+// Equity bank integration - inbound payment notifications.
 //
 // These endpoints are unauthenticated by design: the bank is the
 // caller. The RSA signature over the raw request body is therefore
@@ -28,25 +28,25 @@ const COMPANY_ID = 2;
 
 /** Unique per run, so a row left by an earlier run cannot satisfy a test. */
 const RUN = Math.random().toString(36).slice(2, 8).toUpperCase();
-const ref = (suffix: string) => `KCBTEST-${RUN}-${suffix}`;
-const PREFIX = `KCBTEST-${RUN}%`;
+const ref = (suffix: string) => `EQUITYTEST-${RUN}-${suffix}`;
+const PREFIX = `EQUITYTEST-${RUN}%`;
 
-/** A throwaway pair standing in for the key KCB would hold. */
+/** A throwaway pair standing in for the key Equity would hold. */
 const bankKeys = generateKeyPairSync('rsa', { modulusLength: 2048 });
-const KCB_PUBLIC_PEM = bankKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
-const KCB_PRIVATE_PEM = bankKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+const EQUITY_PUBLIC_PEM = bankKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+const EQUITY_PRIVATE_PEM = bankKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 
 /** The foreign key: a pair that must never be accepted. */
 const foreignKeys = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const FOREIGN_PRIVATE_PEM = foreignKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 
-/** The exact bytes KCB would sign, signed the way KCB would sign them. */
-const sign = (raw: string, key: string = KCB_PRIVATE_PEM) =>
+/** The exact bytes Equity would sign, signed the way Equity would sign them. */
+const sign = (raw: string, key: string = EQUITY_PRIVATE_PEM) =>
   createSign('sha256').update(Buffer.from(raw, 'utf8')).sign(key, 'base64');
 
-/** Deliver a body exactly as KCB would, as raw bytes under a raw signature. */
+/** Deliver a body exactly as Equity would, as raw bytes under a raw signature. */
 function deliver(path: string, raw: string, signature: string | null = sign(raw), header = 'Signature') {
-  const req = api.post(`/api/integrations/kcb${path}`).set('Content-Type', 'application/json');
+  const req = api.post(`/api/integrations/equity${path}`).set('Content-Type', 'application/json');
   if (signature !== null) req.set(header, signature);
   return req.send(raw);
 }
@@ -78,11 +78,11 @@ const count = async (text: string, params: unknown[] = []): Promise<number> =>
 
 /** How many stored notifications carry a given bank transaction id. */
 const storedCount = (txnId: string) =>
-  count('SELECT count(*)::int AS count FROM kcb_payment_notifications WHERE kcb_transaction_id = $1', [txnId]);
+  count('SELECT count(*)::int AS count FROM equity_payment_notifications WHERE equity_transaction_id = $1', [txnId]);
 
 /** How many ledger lines the integration produced for a given bank reference. */
 const ledgerLines = (txnId: string) =>
-  count('SELECT count(*)::int AS count FROM bank_transactions WHERE statement_ref = $1', [`KCB:${txnId}`]);
+  count('SELECT count(*)::int AS count FROM bank_transactions WHERE statement_ref = $1', [`EQUITY:${txnId}`]);
 
 const stored = (txnId: string) =>
   one<{
@@ -105,7 +105,7 @@ const stored = (txnId: string) =>
     `SELECT id, status, reject_reason, bank_account_id, bank_transaction_id, integration_id,
             signature_verified, amount, currency, notification_type, customer_name,
             customer_msisdn, request_id, matched_invoice_id, transaction_at
-       FROM kcb_payment_notifications WHERE kcb_transaction_id = $1`,
+       FROM equity_payment_notifications WHERE equity_transaction_id = $1`,
     [txnId]
   );
 
@@ -162,7 +162,7 @@ beforeAll(async () => {
 
   const ci = await asTenant(
     `INSERT INTO company_integrations (tenant_id, company_id, code, category, name, description, config, secrets, status, is_active)
-     VALUES ($1,$2,'KCB','payments','KCB Bank Notifications','Integration test fixture',$3::jsonb,'{}'::jsonb,'CONNECTED',true)
+     VALUES ($1,$2,'EQUITY','payments','Equity Bank Notifications','Integration test fixture',$3::jsonb,'{}'::jsonb,'CONNECTED',true)
      ON CONFLICT (tenant_id, company_id, code)
      DO UPDATE SET is_active = true, status = 'CONNECTED', config = EXCLUDED.config
      RETURNING id`,
@@ -170,12 +170,12 @@ beforeAll(async () => {
       TENANT_ID,
       COMPANY_ID,
       JSON.stringify({
-        kcb_public_key: KCB_PUBLIC_PEM,
+        equity_public_key: EQUITY_PUBLIC_PEM,
         bank_account_id: String(bankAccountId),
         till_number: `TILL-${RUN}`,
         organization_short_code: `ORG-${RUN}`,
         environment: 'SANDBOX',
-        country: 'KE',
+        country: 'UG',
         currency: accountCurrency,
       }),
     ]
@@ -184,17 +184,17 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await asTenant('DELETE FROM kcb_payment_notifications WHERE company_id = $1 AND (kcb_transaction_id LIKE $2 OR transaction_reference LIKE $2)', [COMPANY_ID, PREFIX]);
-  await pool.query("DELETE FROM bank_transactions WHERE statement_ref LIKE $1", [`KCB:KCBTEST-${RUN}%`]);
+  await asTenant('DELETE FROM equity_payment_notifications WHERE company_id = $1 AND (equity_transaction_id LIKE $2 OR transaction_reference LIKE $2)', [COMPANY_ID, PREFIX]);
+  await pool.query("DELETE FROM bank_transactions WHERE statement_ref LIKE $1", [`EQUITY:EQUITYTEST-${RUN}%`]);
   await asTenant('DELETE FROM customer_invoices WHERE company_id = $1 AND invoice_no LIKE $2', [COMPANY_ID, PREFIX]);
   await asTenant('DELETE FROM company_integrations WHERE id = $1', [integrationId]);
 });
-/** A flat account-notification body, as KCB publishes it. */
+/** A flat account-notification body, as Equity publishes it. */
 const accountBody = (txnId: string, over: Record<string, unknown> = {}): string =>
   JSON.stringify({
     transactionReference: txnId,
     requestId: `${txnId}-REQ`,
-    channelCode: 'KCB',
+    channelCode: 'EQUITY',
     timestamp: '20260914120000',
     transactionAmount: '125000.00',
     currency: accountCurrency,
@@ -209,7 +209,7 @@ const accountBody = (txnId: string, over: Record<string, unknown> = {}): string 
     ...over,
   });
 
-describe('KCB inbound notifications - signature is the authentication', () => {
+describe('Equity inbound notifications - signature is the authentication', () => {
   it('accepts a correctly signed account notification and posts exactly one ledger line', async () => {
     const txnId = ref('ACCEPT');
     const res = await deliver('/account-notification', accountBody(txnId));
@@ -240,7 +240,7 @@ describe('KCB inbound notifications - signature is the authentication', () => {
     expect(await ledgerLines(txnId)).toBe(1);
     const line = await one<{ credit: string; debit: string; statement_ref: string }>(
       'SELECT credit, debit, statement_ref FROM bank_transactions WHERE statement_ref = $1',
-      [`KCB:${txnId}`]
+      [`EQUITY:${txnId}`]
     );
     expect(Number(line!.credit)).toBe(125000);
     expect(Number(line!.debit)).toBe(0);
@@ -249,7 +249,7 @@ describe('KCB inbound notifications - signature is the authentication', () => {
   it('accepts the signature under the documented header aliases', async () => {
     const txnId = ref('ALIAS');
     const raw = accountBody(txnId);
-    const res = await deliver('/account-notification', raw, sign(raw), 'X-KCB-Signature');
+    const res = await deliver('/account-notification', raw, sign(raw), 'X-Equity-Signature');
     expect(res.status).toBe(200);
     expect(res.body.statusCode).toBe('0');
     expect(await ledgerLines(txnId)).toBe(1);
@@ -270,7 +270,7 @@ describe('KCB inbound notifications - signature is the authentication', () => {
     expect(await ledgerLines(txnId)).toBe(0);
   });
 
-  it('refuses a signature made with a key that is not KCB\u2019s', async () => {
+  it('refuses a signature made with a key that is not Equity\u2019s', async () => {
     const txnId = ref('FOREIGN');
     const raw = accountBody(txnId);
     const res = await deliver('/account-notification', raw, sign(raw, FOREIGN_PRIVATE_PEM));
@@ -290,7 +290,7 @@ describe('KCB inbound notifications - signature is the authentication', () => {
 
   it('fails closed when the integration has no usable key', async () => {
     const original = await configOf();
-    await asTenant("UPDATE company_integrations SET config = config - 'kcb_public_key' WHERE id = $1", [integrationId]);
+    await asTenant("UPDATE company_integrations SET config = config - 'equity_public_key' WHERE id = $1", [integrationId]);
     try {
       const txnId = ref('NOKEY');
       const res = await deliver('/account-notification', accountBody(txnId));
@@ -312,7 +312,7 @@ describe('KCB inbound notifications - signature is the authentication', () => {
 
   it('answers a malformed body with 400 so a damaged delivery can be retried', async () => {
     const res = await api
-      .post('/api/integrations/kcb/account-notification')
+      .post('/api/integrations/equity/account-notification')
       .set('Content-Type', 'application/json')
       .set('Signature', sign('{'))
       .send('{');
@@ -328,7 +328,7 @@ describe('KCB inbound notifications - signature is the authentication', () => {
     const second = await deliver('/account-notification', raw);
 
     expect(first.body.statusCode).toBe('0');
-    // A retry is answered as received: it must not be refused, or KCB keeps
+    // A retry is answered as received: it must not be refused, or Equity keeps
     // retrying forever, and it must not post again, or the money doubles.
     expect(second.body.statusCode).toBe('0');
     expect(await storedCount(txnId)).toBe(1);
@@ -341,7 +341,7 @@ const tillBody = (txnId: string, over: Record<string, unknown> = {}): string =>
     header: {
       messageID: `MSG-${txnId}`,
       originatorConversationID: `CONV-${txnId}`,
-      channelCode: 'KCB',
+      channelCode: 'EQUITY',
       timeStamp: '20260914133100',
     },
     requestPayload: {
@@ -368,7 +368,7 @@ const tillBody = (txnId: string, over: Record<string, unknown> = {}): string =>
     },
   });
 
-describe('KCB published envelopes - one record, two shapes', () => {
+describe('Equity published envelopes - one record, two shapes', () => {
   it('reads the nested till envelope into the same record as the flat one', async () => {
     const txnId = ref('TILL');
     const res = await deliver('/till-notification', tillBody(txnId));
@@ -446,7 +446,7 @@ describe('KCB published envelopes - one record, two shapes', () => {
   });
 });
 
-describe('KCB reconciliation of a received payment', () => {
+describe('Equity reconciliation of a received payment', () => {
   it('links a payment to the one invoice whose balance it settles, without touching the invoice', async () => {
     const txnId = ref('AUTOMATCH');
     const res = await deliver(
@@ -485,7 +485,7 @@ describe('KCB reconciliation of a received payment', () => {
   });
 });
 
-describe('KCB operator workspace', () => {
+describe('Equity operator workspace', () => {
   let adminToken = '';
   let customerId = 0;
   let foreignInvoiceId = 0;
@@ -521,7 +521,7 @@ describe('KCB operator workspace', () => {
   });
 
   const getConfig = async () => {
-    const res = await api.get('/api/ops/finance/kcb/config').set(auth(adminToken));
+    const res = await api.get('/api/ops/finance/equity/config').set(auth(adminToken));
     expect(res.status).toBe(200);
     return res.body.data as Record<string, unknown>;
   };
@@ -543,7 +543,7 @@ describe('KCB operator workspace', () => {
   it('leaves the signing key alone when an unrelated setting changes', async () => {
     const before = String((await getConfig()).publicKeyFingerprint);
     const res = await api
-      .patch('/api/ops/finance/kcb/config')
+      .patch('/api/ops/finance/equity/config')
       .set(auth(adminToken))
       .send({ tillNumber: `TILL-${RUN}` });
 
@@ -557,7 +557,7 @@ describe('KCB operator workspace', () => {
     const fingerprint = String((await getConfig()).publicKeyFingerprint);
 
     const cleared = await api
-      .patch('/api/ops/finance/kcb/config')
+      .patch('/api/ops/finance/equity/config')
       .set(auth(adminToken))
       .send({ publicKey: '' });
     expect(cleared.status).toBe(200);
@@ -571,9 +571,9 @@ describe('KCB operator workspace', () => {
     expect(await storedCount(refusedTxnId)).toBe(0);
 
     const restored = await api
-      .patch('/api/ops/finance/kcb/config')
+      .patch('/api/ops/finance/equity/config')
       .set(auth(adminToken))
-      .send({ publicKey: KCB_PUBLIC_PEM });
+      .send({ publicKey: EQUITY_PUBLIC_PEM });
     expect(restored.status).toBe(200);
     expect(restored.body.data.config.publicKeyFingerprint).toBe(fingerprint);
 
@@ -589,9 +589,9 @@ describe('KCB operator workspace', () => {
     const consumerSecret = ref('CONSUMER-SECRET');
 
     const saved = await api
-      .patch('/api/ops/finance/kcb/config')
+      .patch('/api/ops/finance/equity/config')
       .set(auth(adminToken))
-      .send({ privateKey: KCB_PRIVATE_PEM, consumerKey, consumerSecret });
+      .send({ privateKey: EQUITY_PRIVATE_PEM, consumerKey, consumerSecret });
     expect(saved.status).toBe(200);
 
     const view = saved.body.data.config as Record<string, unknown>;
@@ -612,7 +612,7 @@ describe('KCB operator workspace', () => {
     expect(read.consumerSecretPresent).toBe(true);
 
     const cleared = await api
-      .patch('/api/ops/finance/kcb/config')
+      .patch('/api/ops/finance/equity/config')
       .set(auth(adminToken))
       .send({ privateKey: '', consumerKey: '', consumerSecret: '' });
     expect(cleared.status).toBe(200);
@@ -626,7 +626,7 @@ describe('KCB operator workspace', () => {
 
   it('offers the invoices a payment could be reconciled against', async () => {
     const res = await api
-      .get('/api/ops/finance/kcb/invoices')
+      .get('/api/ops/finance/equity/invoices')
       .query({ search: matchInvoiceNo })
       .set(auth(adminToken));
 
@@ -640,20 +640,20 @@ describe('KCB operator workspace', () => {
 
   it('reconciles a payment, refuses a cross-currency match, and undoes it', async () => {
     const unmatchFirst = await api
-      .post(`/api/ops/finance/kcb/notifications/${openNotificationId}/unmatch`)
+      .post(`/api/ops/finance/equity/notifications/${openNotificationId}/unmatch`)
       .set(auth(adminToken));
     expect(unmatchFirst.status).toBe(200);
     expect(unmatchFirst.body.data.matchedInvoiceId).toBeNull();
     expect(unmatchFirst.body.data.status).toBe('POSTED');
 
     const foreign = await api
-      .post(`/api/ops/finance/kcb/notifications/${openNotificationId}/match`)
+      .post(`/api/ops/finance/equity/notifications/${openNotificationId}/match`)
       .set(auth(adminToken))
       .send({ invoiceId: foreignInvoiceId });
     expect(foreign.status).toBe(400);
 
     const matched = await api
-      .post(`/api/ops/finance/kcb/notifications/${openNotificationId}/match`)
+      .post(`/api/ops/finance/equity/notifications/${openNotificationId}/match`)
       .set(auth(adminToken))
       .send({ invoiceId: matchInvoiceId });
     expect(matched.status).toBe(200);
@@ -665,7 +665,7 @@ describe('KCB operator workspace', () => {
     expect(Number(matched.body.data.difference)).toBeCloseTo(-44444.44, 2);
 
     const undone = await api
-      .post(`/api/ops/finance/kcb/notifications/${openNotificationId}/unmatch`)
+      .post(`/api/ops/finance/equity/notifications/${openNotificationId}/unmatch`)
       .set(auth(adminToken));
     expect(undone.status).toBe(200);
     expect(undone.body.data.matchedInvoiceId).toBeNull();
@@ -674,7 +674,7 @@ describe('KCB operator workspace', () => {
     expect(undone.body.data.bankTransactionId).not.toBeNull();
 
     const restored = await api
-      .post(`/api/ops/finance/kcb/notifications/${openNotificationId}/match`)
+      .post(`/api/ops/finance/equity/notifications/${openNotificationId}/match`)
       .set(auth(adminToken))
       .send({ invoiceId: matchInvoiceId });
     expect(restored.body.data.notification.status).toBe('MATCHED');
@@ -682,25 +682,25 @@ describe('KCB operator workspace', () => {
 
   it('filters the notification log by text, type and reconciliation state', async () => {
     const byText = await api
-      .get('/api/ops/finance/kcb/notifications')
-      .query({ search: `KCBTEST-${RUN}`, limit: 200 })
+      .get('/api/ops/finance/equity/notifications')
+      .query({ search: `EQUITYTEST-${RUN}`, limit: 200 })
       .set(auth(adminToken));
     expect(byText.status).toBe(200);
-    const rows = byText.body.data.rows as { kcbTransactionId: string | null }[];
+    const rows = byText.body.data.rows as { equityTransactionId: string | null }[];
     expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((r) => String(r.kcbTransactionId).startsWith(`KCBTEST-${RUN}`))).toBe(true);
+    expect(rows.every((r) => String(r.equityTransactionId).startsWith(`EQUITYTEST-${RUN}`))).toBe(true);
 
     const validations = await api
-      .get('/api/ops/finance/kcb/notifications')
-      .query({ notificationType: 'VALIDATION', search: `KCBTEST-${RUN}`, limit: 200 })
+      .get('/api/ops/finance/equity/notifications')
+      .query({ notificationType: 'VALIDATION', search: `EQUITYTEST-${RUN}`, limit: 200 })
       .set(auth(adminToken));
     const vRows = validations.body.data.rows as { notificationType: string }[];
     expect(vRows.length).toBeGreaterThanOrEqual(2);
     expect(vRows.every((r) => r.notificationType === 'VALIDATION')).toBe(true);
 
     const matchedOnly = await api
-      .get('/api/ops/finance/kcb/notifications')
-      .query({ matched: true, search: `KCBTEST-${RUN}`, limit: 200 })
+      .get('/api/ops/finance/equity/notifications')
+      .query({ matched: true, search: `EQUITYTEST-${RUN}`, limit: 200 })
       .set(auth(adminToken));
     const mRows = matchedOnly.body.data.rows as { matchedInvoiceId: number | null }[];
     expect(mRows.length).toBeGreaterThan(0);
@@ -708,7 +708,7 @@ describe('KCB operator workspace', () => {
   });
 
   it('reports that a notification would be verified and resolved', async () => {
-    const res = await api.post('/api/ops/finance/kcb/test-connection').set(auth(adminToken));
+    const res = await api.post('/api/ops/finance/equity/test-connection').set(auth(adminToken));
     expect(res.status).toBe(200);
 
     const data = res.body.data as {
@@ -726,20 +726,20 @@ describe('KCB operator workspace', () => {
   });
 
   it('surfaces a currency that disagrees with the settlement account', async () => {
-    // The real risk this guards: KCB settles in KES, every account in this
-    // company is in another currency, and a mismatch means money lands in a
-    // ledger it does not belong to.
-    const other = accountCurrency === 'KES' ? 'UGX' : 'KES';
+    // The real risk this guards: the integration is configured to expect one
+    // currency while the settlement account is denominated in another, and a
+    // mismatch means money lands in a ledger it does not belong to.
+    const other = accountCurrency === 'UGX' ? 'KES' : 'UGX';
 
     const patched = await api
-      .patch('/api/ops/finance/kcb/config')
+      .patch('/api/ops/finance/equity/config')
       .set(auth(adminToken))
       .send({ currency: other });
     expect(patched.status).toBe(200);
     const warnings = patched.body.data.warnings as string[];
     expect(warnings.some((w) => w.includes(other))).toBe(true);
 
-    const tested = await api.post('/api/ops/finance/kcb/test-connection').set(auth(adminToken));
+    const tested = await api.post('/api/ops/finance/equity/test-connection').set(auth(adminToken));
     expect(tested.body.data.status).toBe('ERROR');
     const currencyCheck = (tested.body.data.checks as { key: string; ok: boolean }[]).find(
       (c) => c.key === 'currency'
@@ -747,17 +747,17 @@ describe('KCB operator workspace', () => {
     expect(currencyCheck?.ok).toBe(false);
 
     const restored = await api
-      .patch('/api/ops/finance/kcb/config')
+      .patch('/api/ops/finance/equity/config')
       .set(auth(adminToken))
       .send({ currency: accountCurrency });
     expect(restored.status).toBe(200);
     expect(restored.body.data.warnings).toEqual([]);
-    const retested = await api.post('/api/ops/finance/kcb/test-connection').set(auth(adminToken));
+    const retested = await api.post('/api/ops/finance/equity/test-connection').set(auth(adminToken));
     expect(retested.body.data.status).toBe('CONNECTED');
   });
 
   it('refuses to serve the workspace without a session', async () => {
-    const res = await api.get('/api/ops/finance/kcb/status');
+    const res = await api.get('/api/ops/finance/equity/status');
     expect(res.status).toBe(401);
   });
 });

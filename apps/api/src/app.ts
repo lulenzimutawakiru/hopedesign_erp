@@ -47,6 +47,7 @@ import { assetsOpsRouter } from './routes/ops/assets.js';
 import { employeeIdentityOpsRouter } from './routes/ops/employeeIdentity.js';
 import { hikvisionEventsRouter, hikvisionWebhookErrorFilter } from './routes/hikvisionEvents.js';
 import { kcbEventsRouter, kcbWebhookErrorFilter } from './routes/kcbEvents.js';
+import { equityEventsRouter, equityWebhookErrorFilter } from './routes/equityEvents.js';
 import { hikvisionOpsRouter, hikvisionAttendanceOpsRouter } from './routes/ops/hikvision.js';
 import { runHikvisionWorkerTick } from './services/hikvision/processor.js';
 import { isQueueEnabled } from './services/queue/connection.js';
@@ -57,6 +58,7 @@ import { communicationOpsRouter } from './routes/ops/communication.js';
 import { documentsOpsRouter } from './routes/ops/documents.js';
 import { governanceOpsRouter } from './routes/ops/governance.js';
 import { serviceDeskOpsRouter } from './routes/ops/serviceDesk.js';
+import { complianceOpsRouter } from './routes/ops/compliance.js';
 import { myServiceDeskRouter } from './routes/ops/myServiceDesk.js';
 import { runServiceDeskSlaTick } from './services/serviceDeskSla.js';
 
@@ -163,6 +165,11 @@ app.use('/api/integrations/hikvision', hikvisionEventsRouter, hikvisionWebhookEr
 // what attributes it to a company, before a single row is written) ----
 app.use('/api/integrations/kcb', kcbEventsRouter, kcbWebhookErrorFilter);
 
+// ---- Equity Bank payment notifications (public webhook; the same contract as
+// KCB above - the RSA signature over the raw body is what authenticates the
+// message and attributes it to a company before a single row is written) ----
+app.use('/api/integrations/equity', equityEventsRouter, equityWebhookErrorFilter);
+
 // ---- Authenticated API ----
 app.use(authenticate);
 app.use('/api/approvals', approvalsRouter);
@@ -204,6 +211,7 @@ app.use('/api/ops/expenditure', expenditureOpsRouter);
         app.use('/api/ops/documents', documentsOpsRouter);
         app.use('/api/ops/governance', governanceOpsRouter);
         app.use('/api/ops/service-desk', serviceDeskOpsRouter);
+app.use('/api/ops/compliance', complianceOpsRouter);
         app.use('/api/ops/healthcare', requireModule('healthcare'), healthcareOpsRouter);
 
 // Module-activation gate for the healthcare CRUD namespace (multi-tenant SaaS).

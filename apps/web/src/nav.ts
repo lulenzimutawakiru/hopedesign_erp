@@ -13,7 +13,8 @@ export type NavGroupId =
   | 'analytics'
   | 'communication'
   | 'documents'
-  | 'admin';
+  | 'admin'
+  | 'compliance';
 
 export type BadgeKind = 'approvals' | 'exceptions' | 'inventory' | 'quality' | 'security';
 
@@ -319,6 +320,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'finance-banks', label: 'Bank & Cash', href: '/finance/banks', perm: 'finance.banks.view', group: 'Cash & Bank', keywords: 'bank cash account cashbook liquidity balance' },
           { id: 'finance-transfers', label: 'Transfers', href: '/finance/transfers', perm: 'finance.banks.view', group: 'Cash & Bank', keywords: 'transfers bank cash movement internal' },
           { id: 'finance-kcb', label: 'KCB', href: '/finance/kcb', perm: 'finance.kcb.view', group: 'Cash & Bank', keywords: 'kcb bank payment notification ipn reconcile settlement' },
+          { id: 'finance-equity', label: 'Equity', href: '/finance/equity', perm: 'finance.equity.view', group: 'Cash & Bank', keywords: 'equity bank payment notification ipn reconcile settlement' },
           { id: 'finance-advances', label: 'Advances', href: '/finance/advances', perm: 'finance.advances.view', group: 'Cash & Bank', keywords: 'cash advance imprest holder retirement' },
           { id: 'finance-expenses', label: 'Expenses', href: '/finance/expenses', perm: 'finance.expenses.view', group: 'Spend & Planning', keywords: 'expense claim receipt cost centre' },
           { id: 'finance-budgets', label: 'Budgets', href: '/finance/budgets', perm: 'finance.budgets.view', group: 'Spend & Planning', keywords: 'budget actual variance commitment planning' },
@@ -492,6 +494,25 @@ export const NAV_GROUPS: NavGroup[] = [
       },
     ],
   },
+  {
+    id: 'compliance',
+    label: 'Data Protection',
+    items: [
+      {
+        id: 'dataprotection', label: 'Data Protection', href: '/compliance', perm: 'compliance.pdpo.view', accent: 'adm',
+        keywords: 'compliance pdpo personal data protection office data protection act privacy dpo register consent subject request breach filing equity',
+        children: [
+          { id: 'complianceoverview', label: 'Overview', href: '/compliance/overview', perm: 'compliance.pdpo.view' },
+          { id: 'complianceprocessing', label: 'Processing', href: '/compliance/activities', perm: 'compliance.processing_activities.view' },
+          { id: 'complianceconsents', label: 'Consents', href: '/compliance/consents', perm: 'compliance.consents.view' },
+          { id: 'compliancerequests', label: 'Subject requests', href: '/compliance/requests', perm: 'compliance.subject_requests.view' },
+          { id: 'compliancebreaches', label: 'Breaches', href: '/compliance/breaches', perm: 'compliance.breaches.view' },
+          { id: 'compliancefilings', label: 'Filings', href: '/compliance/filings', perm: 'compliance.pdpo.view' },
+          { id: 'complianceregistration', label: 'Registration', href: '/compliance/config', perm: 'compliance.pdpo.manage' },
+        ],
+      },
+    ],
+  },
 ];
 
 export const ALL_NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
@@ -559,6 +580,7 @@ export function moduleActive(href: string, path: string): boolean {
   if (href.includes('/logistics/') && path.includes('/logistics/')) return true;
   if (href.includes('/maintenance/') && path.includes('/maintenance/')) return true;
   if (href.includes('/workflows/') && path.includes('/workflows/')) return true;
+  if (href === '/compliance' && path.startsWith('/compliance')) return true;
   return false;
 }
 
@@ -851,6 +873,18 @@ export function requiredPermForPath(path: string): string | undefined {
       config: 'service_desk.sla.manage',
     };
     return map[parts[1] ?? ''] ?? 'service_desk.command.view';
+  }
+  if (parts[0] === 'compliance') {
+    const map: Record<string, string> = {
+      overview: 'compliance.pdpo.view',
+      activities: 'compliance.processing_activities.view',
+      consents: 'compliance.consents.view',
+      requests: 'compliance.subject_requests.view',
+      breaches: 'compliance.breaches.view',
+      filings: 'compliance.pdpo.view',
+      config: 'compliance.pdpo.manage',
+    };
+    return map[parts[1] ?? ''] ?? 'compliance.pdpo.view';
   }
   const item = ALL_NAV_ITEMS.find((i) => moduleActive(i.href, path));
   return item?.perm;
