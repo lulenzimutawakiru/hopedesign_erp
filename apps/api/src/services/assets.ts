@@ -364,7 +364,7 @@ export async function createAsset(client: pg.PoolClient, ctx: Ctx, b: Record<str
       purchaseCost, s(b.currency) ?? 'UGX', s(b.purchaseDate), n(b.supplierId), n(b.poId), s(b.poNumber),
       n(b.invoiceId), s(b.invoiceNumber), n(b.grnId), s(b.grnNumber),
       s(b.capitalizationDate), usefulLife, num0(b.residualValue), s(b.depreciationMethod) ?? 'STRAIGHT_LINE',
-      0, purchaseCost, 'DRAFT', s(b.condition) ?? 'NEW', s(b.operationalState) ?? 'NOT_IN_USE',
+      0, purchaseCost, 'DRAFT', s(b.condition) ?? 'NEW', operationalStateOf(b.operationalState),
       JSON.stringify(b.attributes ?? {}), ctx.userId ?? null,
     ]
   );
@@ -437,7 +437,11 @@ export async function updateAsset(client: pg.PoolClient, ctx: Ctx, id: number, b
     }
   }
   for (const [camel, col] of Object.entries({ condition: 'condition', operationalState: 'operational_state', expectedReturnDate: 'expected_return_date', eolDate: 'eol_date' })) {
-    if (camel in b) push(col, col === 'condition' ? String(b[camel]).toUpperCase() : s(b[camel]));
+    if (camel in b) {
+      if (col === 'condition') push(col, String(b[camel]).toUpperCase());
+      else if (col === 'operational_state') push(col, operationalStateOf(b[camel]));
+      else push(col, s(b[camel]));
+    }
   }
   if (sets.length === 0) return { id, changed: 0 };
   if ('purchase_cost' in changes && asset.status === 'DRAFT') {
@@ -910,6 +914,37 @@ const SCAN_TYPE_FROM_ACTION: Record<string, string> = {
   AUDIT: 'AUDIT', MAINTAIN: 'MAINTAIN', CHECKIN: 'CHECKIN', CHECKOUT: 'CHECKOUT', REPORT_DAMAGE: 'REPORT_DAMAGE',
   REPORT_MISSING: 'REPORT_MISSING', DISPOSE: 'DISPOSE', TRACK: 'TRACK',
 };
+
+const SCAN_RESULTS = new Set(['AUTHENTIC', 'VOID', 'SUSPICIOUS', 'UNKNOWN']);
+
+/**
+ * asset_scans.result only stores QR authenticity. Field verification and
+ * audit outcomes (VERIFIED, WRONG_LOCATION, DAMAGED, …) used to be written
+ * straight into that column and 500'd on asset_scans_result_check.
+ */
+function scanAuthenticity(outcome: string | null | undefined): 'AUTHENTIC' | 'VOID' | 'SUSPICIOUS' | 'UNKNOWN' {
+  const r = String(outcome ?? '').toUpperCase();
+  if (SCAN_RESULTS.has(r)) return r as 'AUTHENTIC' | 'VOID' | 'SUSPICIOUS' | 'UNKNOWN';
+  if (r === 'VERIFIED' || r === 'PENDING') return 'AUTHENTIC';
+  if (r === 'VOID' || r === 'VOIDED') return 'VOID';
+  if (r === 'NOT_FOUND' || r === 'TAG_MISSING' || r === '') return 'UNKNOWN';
+  return 'SUSPICIOUS';
+}
+
+const OPS_STATES = new Set(['NOT_IN_USE', 'OPERATIONAL', 'RUNNING', 'IDLE', 'FAULTED', 'DECOMMISSIONED']);
+const OPS_STATE_ALIAS: Record<string, string> = {
+  IN_USE: 'OPERATIONAL',
+  QUARANTINED: 'IDLE',
+  OFFLINE: 'NOT_IN_USE',
+};
+
+function operationalStateOf(raw: unknown, fallback = 'NOT_IN_USE'): string {
+  const v = s(raw);
+  if (!v) return fallback;
+  const mapped = OPS_STATE_ALIAS[v.toUpperCase()] ?? v.toUpperCase();
+  if (!OPS_STATES.has(mapped)) throw badRequest(`Invalid operational state: ${v}`);
+  return mapped;
+}
 
 export async function scanAsset(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
   const code = s(b.code);
@@ -1809,7 +1844,7 @@ export async function completeTransfer(client: pg.PoolClient, ctx: Ctx, transfer
     await client.query(
       `INSERT INTO asset_scans
          (company_id, tenant_id, asset_id, scan_type, result, location_id, note, scanned_by, metadata)
-       VALUES ($1,$2,$3,'TRANSFER','VERIFIED',$4,$5,$6,$7)`,
+       VALUES ($1,$2,$3,'TRANSFER','AUTHENTIC',$4,$5,$6,$7)`,
       [ctx.companyId, ctx.tenantId, assetId, toLocation, `Handover for transfer ${t.transfer_no}`, ctx.userId ?? null, JSON.stringify({ transferId })]
     );
     await timeline(client, ctx, assetId, {
@@ -2722,10 +2757,10 @@ export async function auditScan(client: pg.PoolClient, ctx: Ctx, auditId: number
        (company_id, tenant_id, asset_id, scan_type, result, location_id, expected_values, actual_values, note, scanned_by, metadata)
      VALUES ($1,$2,$3,'AUDIT',$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
     [
-      ctx.companyId, ctx.tenantId, asset.id, result, actualLocationId,
+      ctx.companyId, ctx.tenantId, asset.id, scanAuthenticity(result), actualLocationId,
       JSON.stringify({ expectedLocationId, expectedCustodianUserId }),
-      JSON.stringify({ locationId: actualLocationId, custodianUserId: asset.custodian_user_id }),
-      s(b.note), ctx.userId ?? null, JSON.stringify({ auditId, auditNo: au.audit_no, auditItemId: itemId }),
+      JSON.stringify({ locationId: actualLocationId, custodianUserId: asset.custodian_user_id, auditResult: result }),
+      s(b.note), ctx.userId ?? null, JSON.stringify({ auditId, auditNo: au.audit_no, auditItemId: itemId, outcome: result }),
     ]
   );
   const scanId = Number(scanRes.rows[0].id);
@@ -2926,8 +2961,8 @@ export async function verifyAsset(client: pg.PoolClient, ctx: Ctx, b: Record<str
        (company_id, tenant_id, asset_id, qr_id, scan_type, result, location_id, expected_values, actual_values, note, device, scanned_by)
      VALUES ($1,$2,$3,$4,'VERIFY',$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
     [
-      ctx.companyId, ctx.tenantId, asset.id, n(asset.qr_id), result, actualLocationId,
-      JSON.stringify(expected), JSON.stringify(actual), s(b.note), s(b.device), ctx.userId ?? null,
+      ctx.companyId, ctx.tenantId, asset.id, n(asset.qr_id), scanAuthenticity(result), actualLocationId,
+      JSON.stringify(expected), JSON.stringify({ ...actual, verificationResult: result }), s(b.note), s(b.device), ctx.userId ?? null,
     ]
   );
   const scanId = Number(scanRes.rows[0].id);

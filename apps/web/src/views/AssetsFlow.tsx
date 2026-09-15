@@ -14,7 +14,7 @@ import { ImportFlow, ExportFlow } from './AssetData';
 const DEP_METHODS = ['STRAIGHT_LINE', 'REDUCING_BALANCE', 'UNITS_OF_PRODUCTION', 'CUSTOM', 'NONE']; // t
 const CURRENCIES = ['UGX', 'USD', 'KES', 'GBP', 'EUR'];
 const CONDITIONS = ['NEW', 'EXCELLENT', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'CRITICAL', 'UNDER_REPAIR', 'BEYOND_ECONOMIC_REPAIR', 'DISPOSED'];
-const OPS_STATES = ['NOT_IN_USE', 'IN_USE', 'IDLE', 'QUARANTINED', 'OFFLINE'];
+const OPS_STATES = ['NOT_IN_USE', 'OPERATIONAL', 'RUNNING', 'IDLE', 'FAULTED', 'DECOMMISSIONED'];
 const TAG_TYPES = ['QR', 'BARCODE', 'QR_BARCODE'];
 
 async function fetchRows(path: string): Promise<Rec[]> {
