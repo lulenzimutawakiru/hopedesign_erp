@@ -81,7 +81,7 @@ export default function AssetDesk({ id }: { id: number }) {
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
   const [notice, setNotice] = useState('');
-  const [modal, setModal] = useState('');
+  const [modal, setModal] = useState(() => (q.get('delete') === '1' ? 'delete' : q.get('edit') === '1' ? 'edit' : ''));
   const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; danger?: boolean; onConfirm: (reason: string) => Promise<void> } | null>(null);
   const tab = q.get('tab') ?? 'overview';
 
@@ -117,12 +117,18 @@ export default function AssetDesk({ id }: { id: number }) {
   const recentScans = (data.recentScans as Rec[]) ?? [];
 
   const status = s(asset.status);
+  const deleted = asset.is_deleted === true || s(asset.is_deleted) === 'true';
   const isTerminal = ['DISPOSED', 'RETIRED', 'ARCHIVED'].includes(status);
   const qr = tags.find((t) => t.status === 'ACTIVE' || t.status === 'ASSIGNED') ?? tags[0] ?? null;
 
   const actions: Array<{ label: string; onClick: () => void; perm?: string; primary?: boolean }> = [];
-  if (!isTerminal && can(user, 'assets.register.update')) actions.push({ label: 'Edit', onClick: () => setModal('edit') });
-  if (status === 'DRAFT' && can(user, 'assets.register.submit')) actions.push({ label: 'Submit', primary: true, onClick: () => setModal('submit') });
+  if (!deleted && !isTerminal && can(user, 'assets.register.update')) actions.push({ label: 'Edit', onClick: () => setModal('edit') });
+  if (status === 'DRAFT' && can(user, 'assets.register.submit') && !deleted) actions.push({ label: 'Submit', primary: true, onClick: () => setModal('submit') });
+  if (status === 'DRAFT' && can(user, 'assets.register.delete')) actions.push({ label: 'Delete', onClick: () => setModal('delete') });
+  if (!deleted && status !== 'DRAFT' && !['DISPOSED', 'RETIRED', 'ASSIGNED', 'IN_USE'].includes(status) && can(user, 'assets.register.archive')) {
+    actions.push({ label: 'Archive', onClick: () => setModal('archive') });
+  }
+  if (deleted && can(user, 'assets.register.restore')) actions.push({ label: 'Restore', primary: true, onClick: () => setModal('restore') });
   if (can(user, 'assets.register.capitalize') && ['REGISTERED', 'AVAILABLE', 'IN_STORE', 'PENDING_APPROVAL'].includes(status)) actions.push({ label: 'Capitalise', onClick: () => setModal('capitalize') });
   if (can(user, 'assets.tags.generate') && ['DRAFT', 'PENDING_APPROVAL', 'REGISTERED', 'IN_STORE', 'AVAILABLE'].includes(status)) actions.push({ label: 'Generate tag', onClick: () => setModal('tag') });
   if (can(user, 'assets.tags.print')) actions.push({ label: 'Print label', primary: !actions.some((a) => a.primary), onClick: () => setModal('print') });
@@ -202,6 +208,39 @@ export default function AssetDesk({ id }: { id: number }) {
         {tab === 'timeline' && <TimelineTab asset={asset} timeline={timeline} comments={comments} />}
       </div>
       {modal === 'edit' && <EditModal asset={asset} onClose={() => setModal('')} onSaved={() => { setModal(''); refresh(); }} />}
+      {modal === 'delete' && (
+        <ConfirmDialog
+          title={`Delete draft ${s(asset.asset_no)}?`}
+          body="This removes the draft from the register. Live assets must be archived or disposed instead."
+          confirmLabel="Delete draft"
+          danger
+          onCancel={() => setModal('')}
+          onConfirm={(reason) => {
+            void api(`/api/ops/assets/${id}`, { method: 'DELETE', body: JSON.stringify({ reason: reason || 'Draft deleted' }) })
+              .then(() => navigate('/assets/register'))
+              .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+          }}
+        />
+      )}
+      {modal === 'archive' && (
+        <ConfirmDialog
+          title={`Archive ${s(asset.asset_no)}?`}
+          body="The asset leaves the live register but keeps its number and history. Restore it later if needed."
+          confirmLabel="Archive"
+          danger
+          onCancel={() => setModal('')}
+          onConfirm={(reason) => void act(`/api/ops/assets/${id}/archive`, { reason: reason || 'Archived' }, 'Archived')}
+        />
+      )}
+      {modal === 'restore' && (
+        <ConfirmDialog
+          title={`Restore ${s(asset.asset_no)}?`}
+          body="The asset returns to the live register."
+          confirmLabel="Restore"
+          onCancel={() => setModal('')}
+          onConfirm={(reason) => void act(`/api/ops/assets/${id}/restore`, { reason: reason || 'Restored' }, 'Restored')}
+        />
+      )}
       {modal === 'submit' && (
         <ConfirmDialog title="Submit asset for approval" body="The asset and its generated tag will be submitted for the configured approval workflow." confirmLabel="Submit" onCancel={() => setModal('')} onConfirm={() => void act(`/api/ops/assets/${id}/submit`, {}, 'Submitted for approval')} />
       )}
@@ -974,6 +1013,10 @@ function EditModal({ asset, onClose, onSaved }: { asset: Rec; onClose: () => voi
   const [depreciationMethod, setDepreciationMethod] = useState(s(asset.depreciation_method) || 'STRAIGHT_LINE');
   const [expectedReturnDate, setExpectedReturnDate] = useState(s(asset.expected_return_date).slice(0, 10));
   const [eolDate, setEolDate] = useState(s(asset.eol_date).slice(0, 10));
+  const [condition, setCondition] = useState(s(asset.condition) || 'NEW');
+  const [operationalState, setOperationalState] = useState(s(asset.operational_state) || 'NOT_IN_USE');
+  const CONDITIONS = ['NEW', 'EXCELLENT', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'CRITICAL', 'UNDER_REPAIR', 'BEYOND_ECONOMIC_REPAIR'];
+  const OPS_STATES = ['NOT_IN_USE', 'OPERATIONAL', 'RUNNING', 'IDLE', 'FAULTED', 'DECOMMISSIONED'];
 
   useEffect(() => {
     fetchRows('/api/assets/categories?pageSize=500').then(setCategories).catch(() => undefined);
@@ -1019,6 +1062,8 @@ function EditModal({ asset, onClose, onSaved }: { asset: Rec; onClose: () => voi
       building: building || undefined,
       expectedReturnDate: expectedReturnDate || undefined,
       eolDate: eolDate || undefined,
+      condition: condition || undefined,
+      operationalState: operationalState || undefined,
     };
     if (!locked) {
       body.purchaseCost = purchaseCost === '' ? undefined : Number(purchaseCost);
@@ -1105,6 +1150,18 @@ function EditModal({ asset, onClose, onSaved }: { asset: Rec; onClose: () => voi
           <div className="field">
             <label htmlFor="em-bc">Barcode</label>
             <input id="em-bc" value={barcode} onChange={(e) => setBarcode(e.target.value)} />
+          </div>
+          <div className="field">
+            <label htmlFor="em-cond">Condition</label>
+            <select id="em-cond" value={condition} onChange={(e) => setCondition(e.target.value)}>
+              {CONDITIONS.map((c) => <option key={c} value={c}>{labelize(c)}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="em-ops">Operational state</label>
+            <select id="em-ops" value={operationalState} onChange={(e) => setOperationalState(e.target.value)}>
+              {OPS_STATES.map((c) => <option key={c} value={c}>{labelize(c)}</option>)}
+            </select>
           </div>
           <div className="field" style={{ gridColumn: '1 / -1' }}>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12 }}>

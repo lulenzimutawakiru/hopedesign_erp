@@ -31,8 +31,16 @@ async function fetchRows(path: string): Promise<Rec[]> {
 
 export default function AssetsFlow({ path }: { path: string }) {
   const parts = path.split('/').filter(Boolean);
-  const id = parts[2] ?? null;
-  if (id && Number(id) > 0) return <AssetDesk id={Number(id)} />;
+  const numeric = (v: string | undefined) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  // /assets/:id  or  /assets/register/:id
+  const deskId = numeric(parts[1]) || (parts[1] === 'register' ? numeric(parts[2]) : 0);
+  if (deskId > 0) return <AssetDesk id={deskId} />;
+  if (parts[1] === 'register' && parts[2] === 'new') {
+    return <PostAsset onClose={() => navigate('/assets/register')} asPage />;
+  }
   if (parts.length <= 1) return <AssetBoard />;
   switch (parts[1]) {
     case 'scan': return <AssetScan />;
@@ -107,7 +115,7 @@ function AssetBoard() {
         sub={`Register, tag, track and manage every physical and capital asset across ${company.name} — from procurement and custody to maintenance, depreciation and disposal.`}
         actions={
           <>
-            {can(user, 'assets.register.create') && <button className="btn btn-primary" onClick={() => navigate('/assets/register?new=1')}>Register asset</button>}
+            {can(user, 'assets.register.create') && <button className="btn btn-primary" onClick={() => navigate('/assets/register/new')}>Register asset</button>}
             {can(user, 'assets.scans.perform') && <button className="btn" onClick={() => navigate('/assets/scan')}>Scan asset</button>}
           </>
         }
@@ -435,7 +443,7 @@ function Register() {
         sub="Every asset has a permanent, non-reusable asset number and complete lifecycle history. Use lifecycle actions — assignment, transfer, maintenance, audit, disposal — instead of destructive deletion."
         actions={
           <>
-            {can(user, 'assets.register.create') && <button className="btn btn-primary" onClick={() => setShowCreate(true)}>Register asset</button>}
+            {can(user, 'assets.register.create') && <button className="btn btn-primary" onClick={() => navigate('/assets/register/new')}>Register asset</button>}
             {can(user, 'assets.scans.perform') && <button className="btn" onClick={() => navigate('/assets/scan')}>Scan asset</button>}
           </>
         }
@@ -528,7 +536,7 @@ function Register() {
                 : 'Nothing in the register matches the current search and filters. Clear them to see the full register.'}
               action="Clear filters" onAction={() => navigate('/assets/register', { query: {} })} />
           ) : (
-            <EmptyState title="No assets yet" body="Register an asset to begin its lifecycle. Every asset gets a permanent, non-reusable asset number." action={can(user, 'assets.register.create') ? 'Register asset' : undefined} onAction={() => setShowCreate(true)} />
+            <EmptyState title="No assets yet" body="Register an asset to begin its lifecycle. Every asset gets a permanent, non-reusable asset number." action={can(user, 'assets.register.create') ? 'Register asset' : undefined} onAction={() => navigate('/assets/register/new')} />
           )
         ) : (
           <>
@@ -604,8 +612,16 @@ function Register() {
                     <td className="col-hide-sm"><ConditionPill value={r.condition} /></td>
                     <td>{fmtMoney(r.current_book_value)}</td>
                     <td className="col-hide-sm"><DueCell value={r.next_maintenance} /></td>
-                    <td>
-                      <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); navigate(`/assets/${r.id}`); }}>Open</button>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <div className="mini-buttons">
+                        <button type="button" className="btn btn-sm" onClick={() => navigate(`/assets/${r.id}`)}>Open</button>
+                        {can(user, 'assets.register.update') && s(r.status) !== 'DISPOSED' && (
+                          <button type="button" className="btn btn-sm" onClick={() => navigate(`/assets/${r.id}?edit=1`)}>Edit</button>
+                        )}
+                        {s(r.status) === 'DRAFT' && can(user, 'assets.register.delete') && (
+                          <button type="button" className="btn btn-sm btn-ghost-danger" onClick={() => navigate(`/assets/${r.id}?delete=1`)}>Delete</button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -639,7 +655,7 @@ function Register() {
   );
 }
 
-function PostAsset({ onClose }: { onClose: () => void }) {
+function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean }) {
   const [f, setF] = useState<Rec>({ currency: 'UGX', depreciationMethod: 'STRAIGHT_LINE', condition: 'NEW', operationalState: 'NOT_IN_USE', tagType: 'QR', isSerialized: true });
   const [categories, setCategories] = useState<Rec[]>([]);
   const [types, setTypes] = useState<Rec[]>([]);
@@ -695,15 +711,8 @@ function PostAsset({ onClose }: { onClose: () => void }) {
     ? Math.max(0, cost - residual) / life
     : null;
 
-  return (
-    <Modal title="Register a new asset" onClose={onClose} wide
-      footer={
-        <>
-          <span className="muted" style={{ marginRight: 'auto', fontSize: 12 }}>Only the asset name is required to save a draft.</span>
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save draft'}</button>
-        </>
-      }>
+  const form = (
+    <>
       {error && <ErrorBanner error={error} />}
 
       <h4 className="form-sec">Identification</h4>
@@ -791,6 +800,39 @@ function PostAsset({ onClose }: { onClose: () => void }) {
           <p>The asset is saved as a draft with a permanent asset number and a pending QR tag. Submit it for approval, then capitalise when finance confirms the accounting entry.</p>
         </div>
       </div>
+    </>
+  );
+
+  if (asPage) {
+    return (
+      <div className="page asset-page">
+        <ModuleHeader
+          kicker="Asset management"
+          title="Register a new asset"
+          sub="Only the asset name is required to save a draft. A permanent asset number and QR tag are issued on save."
+          actions={
+            <>
+              <button type="button" className="btn" onClick={onClose}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save draft'}</button>
+            </>
+          }
+        />
+        <AssetModuleTabs active="register" />
+        <section className="card card-pad">{form}</section>
+      </div>
+    );
+  }
+
+  return (
+    <Modal title="Register a new asset" onClose={onClose} wide
+      footer={
+        <>
+          <span className="muted" style={{ marginRight: 'auto', fontSize: 12 }}>Only the asset name is required to save a draft.</span>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save draft'}</button>
+        </>
+      }>
+      {form}
     </Modal>
   );
 }

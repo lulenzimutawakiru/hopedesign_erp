@@ -72,6 +72,9 @@ assetsOpsRouter.get('/', ...runGet('assets.register.view', (c, ctx, q) => ast.li
 })));
 assetsOpsRouter.post('/', ...run('assets.register.create', (c, ctx, b) => ast.createAsset(c, ctx, b)));
 assetsOpsRouter.patch('/:id', ...run('assets.register.update', (c, ctx, b, p) => ast.updateAsset(c, ctx, Number(p.id), b)));
+assetsOpsRouter.delete('/:id', ...run('assets.register.delete', (c, ctx, b, p) => ast.deleteAsset(c, ctx, Number(p.id), b)));
+assetsOpsRouter.post('/:id/archive', ...run('assets.register.archive', (c, ctx, b, p) => ast.archiveAsset(c, ctx, Number(p.id), b)));
+assetsOpsRouter.post('/:id/restore', ...run('assets.register.restore', (c, ctx, b, p) => ast.restoreAsset(c, ctx, Number(p.id), b)));
 assetsOpsRouter.post('/:id/submit', ...run('assets.register.submit', (c, ctx, _b, p) => ast.submitAsset(c, ctx, Number(p.id))));
 assetsOpsRouter.post('/:id/capitalize', ...run('assets.register.capitalize', (c, ctx, b, p) => ast.capitalizeAsset(c, ctx, Number(p.id), b)));
 

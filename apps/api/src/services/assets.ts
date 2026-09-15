@@ -457,6 +457,61 @@ export async function updateAsset(client: pg.PoolClient, ctx: Ctx, id: number, b
   return { id, changed: sets.length, changes };
 }
 
+/**
+ * Soft-delete a draft. Live assets keep a permanent number: archive or dispose
+ * them instead of wiping the row.
+ */
+export async function deleteAsset(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown> = {}) {
+  const asset = await loadAsset(client, ctx, id);
+  if (asset.is_deleted === true || asset.is_deleted === 'true') throw badRequest('Asset is already deleted');
+  if (String(asset.status) !== 'DRAFT') {
+    throw badRequest('Only a draft can be deleted. Archive or dispose a live asset.');
+  }
+  const reason = s(b.reason) ?? 'Draft deleted';
+  await client.query(
+    `UPDATE asset_register SET is_deleted = true, updated_by = $1 WHERE id = $2`,
+    [ctx.userId ?? null, id]
+  );
+  await timeline(client, ctx, id, { eventType: 'DELETED', title: 'Draft asset deleted', reason });
+  await logAudit(client, ctx, { action: 'delete', resource: 'assets.register', recordId: id, recordCode: asset.asset_no, metadata: { reason } });
+  return { id, assetNo: asset.asset_no, deleted: true };
+}
+
+export async function archiveAsset(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown> = {}) {
+  const asset = await loadAsset(client, ctx, id);
+  if (asset.is_deleted === true || asset.is_deleted === 'true') throw badRequest('Asset is already archived');
+  const status = String(asset.status);
+  if (status === 'DRAFT') throw badRequest('Delete a draft instead of archiving it');
+  if (['ASSIGNED', 'IN_USE'].includes(status)) {
+    throw badRequest('Return the asset from custody before archiving it');
+  }
+  if (['DISPOSED', 'RETIRED'].includes(status)) {
+    throw badRequest('A disposed or retired asset is already off the register');
+  }
+  const reason = s(b.reason) ?? 'Archived';
+  await client.query(
+    `UPDATE asset_register SET is_deleted = true, status = 'ARCHIVED', updated_by = $1 WHERE id = $2`,
+    [ctx.userId ?? null, id]
+  );
+  await timeline(client, ctx, id, { eventType: 'ARCHIVED', title: 'Asset archived', oldValue: status, newValue: 'ARCHIVED', reason });
+  await logAudit(client, ctx, { action: 'archive', resource: 'assets.register', recordId: id, recordCode: asset.asset_no, oldValues: { status }, newValues: { status: 'ARCHIVED' }, metadata: { reason } });
+  return { id, assetNo: asset.asset_no, status: 'ARCHIVED', archived: true };
+}
+
+export async function restoreAsset(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown> = {}) {
+  const asset = await loadAsset(client, ctx, id);
+  if (asset.is_deleted !== true && asset.is_deleted !== 'true') throw badRequest('Asset is not archived or deleted');
+  const reason = s(b.reason) ?? 'Restored to the register';
+  const nextStatus = String(asset.status) === 'ARCHIVED' ? 'REGISTERED' : String(asset.status);
+  await client.query(
+    `UPDATE asset_register SET is_deleted = false, status = $1, updated_by = $2 WHERE id = $3`,
+    [nextStatus, ctx.userId ?? null, id]
+  );
+  await timeline(client, ctx, id, { eventType: 'RESTORED', title: 'Asset restored', oldValue: asset.status, newValue: nextStatus, reason });
+  await logAudit(client, ctx, { action: 'restore', resource: 'assets.register', recordId: id, recordCode: asset.asset_no, newValues: { status: nextStatus }, metadata: { reason } });
+  return { id, assetNo: asset.asset_no, status: nextStatus, restored: true };
+}
+
 export async function submitAsset(client: pg.PoolClient, ctx: Ctx, id: number) {
   const asset = await loadAsset(client, ctx, id);
   if (asset.status !== 'DRAFT') throw badRequest('Only draft assets can be submitted for approval');

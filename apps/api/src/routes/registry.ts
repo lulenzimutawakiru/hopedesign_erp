@@ -218,7 +218,7 @@ export const ENTITIES: (CrudConfig & Handlers)[] = [
   { table: 'projects', module: 'hr', resource: 'projects', label: 'Project', codeColumn: 'code', codePrefix: 'PRJ', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.code ASC', listSelect: 't.*, COALESCE((SELECT u.first_name || \' \' || u.last_name FROM users u WHERE u.id = t.manager_user_id), \'\') AS manager_name' },
 
   // ------------------------------------------------ Assets
-  { table: 'assets', module: 'assets', resource: 'register', label: 'Asset', codeColumn: 'asset_no', statusColumn: 'status', searchable: ['asset_no', 'name', 'serial_no'], defaultOrder: 't.id DESC', qrEntityType: 'ASSET' },
+  { table: 'asset_register', module: 'assets', resource: 'register', label: 'Asset', codeColumn: 'asset_no', statusColumn: 'status', searchable: ['asset_no', 'name', 'serial_no'], defaultOrder: 't.id DESC', qrEntityType: 'ASSET' },
   { table: 'asset_categories', module: 'assets', resource: 'categories', label: 'Asset Category', searchable: ['name'], defaultOrder: 't.id ASC' },
   { table: 'asset_types', module: 'assets', resource: 'types', label: 'Asset Type', codeColumn: 'code', searchable: ['code', 'name'], defaultOrder: 't.id ASC' },
   { table: 'asset_classes', module: 'assets', resource: 'classes', label: 'Asset Class', codeColumn: 'code', searchable: ['code', 'name'], defaultOrder: 't.id ASC' },
