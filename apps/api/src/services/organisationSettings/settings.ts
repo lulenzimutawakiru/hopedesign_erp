@@ -27,6 +27,14 @@ export interface CategoryValuesView {
 
 /** Fields whose value is compared against options/min/max before it is stored. */
 function coerce(def: OrgSettingDef, key: string, raw: unknown): unknown {
+  // A required field is one the storage cannot hold empty: it is mirrored onto
+  // companies.name / companies.currency, which are NOT NULL. Without this the
+  // blank reached the UPDATE and came back as "null value in column ... violates
+  // not-null constraint" - a 500 for what is really a field the user must fill
+  // in. Refuse it here, where the message can name the field.
+  if (def.required === true && (raw === null || raw === undefined || String(raw).trim() === '')) {
+    throw badRequest(`${key} is required`);
+  }
   switch (def.type) {
     case 'boolean': {
       if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;

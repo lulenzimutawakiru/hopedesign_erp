@@ -193,6 +193,90 @@ describe('AC-ORG-001 / TC-ORG-001 - organisation information is createable and u
       tx((client) => saveCategory(client, ctx, 'profile', { values: { not_a_setting: 'x' } }, {}), ctx)
     ).rejects.toThrow();
   });
+
+  it('saves a stored setting a second time and records the value it replaced', async () => {
+    // Regression: configuration_history.old_value is jsonb, but the driver
+    // hands back an already-parsed value, so a stored string arrives as a plain
+    // string - which is not valid JSON text. Passing it straight to the INSERT
+    // made every second write of a stored setting fail with "invalid input
+    // syntax for type json", surfacing as a 500 on a save that changed an
+    // existing value. This suite could not see it, because afterAll removes its
+    // own rows, so every write it makes is a first write.
+    const first = 'Trading ' + TAG;
+    const second = 'Trading Two ' + TAG;
+
+    await tx((client) => saveCategory(client, ctx, 'profile', { values: { trading_as: first } }, {}), ctx);
+    const view = await tx(
+      (client) => saveCategory(client, ctx, 'profile', { values: { trading_as: second } }, {}),
+      ctx
+    );
+    expect((view as { values: Record<string, unknown> }).values.trading_as).toBe(second);
+
+    const stored = await db(
+      `SELECT value #>> '{}' AS text FROM app_settings
+        WHERE tenant_id = $1 AND category = 'organisation.profile' AND key = 'trading_as'`,
+      [TENANT_ID]
+    );
+    expect(stored.rows.map((r) => r.text)).toEqual([second]);
+
+    // The value it replaced is recorded as the JSON string it was, not lost.
+    const history = await db(
+      `SELECT old_value FROM configuration_history
+        WHERE tenant_id = $1 AND config_key = 'trading_as' AND new_value = $2::jsonb
+        ORDER BY id DESC LIMIT 1`,
+      [TENANT_ID, JSON.stringify(second)]
+    );
+    expect(history.rows[0]?.old_value).toBe(first);
+  });
+
+  it('refuses a blank required field instead of letting it reach a NOT NULL column', async () => {
+    // trading_name and currency are mirrored onto companies.name and
+    // companies.currency, which are NOT NULL. A blank box used to reach the
+    // UPDATE and come back as "null value in column ... violates not-null
+    // constraint" - a 500 for what is really a field the user must fill in.
+    await expect(
+      tx((client) => saveCategory(client, ctx, 'profile', { values: { currency: '' } }, {}), ctx)
+    ).rejects.toThrow(/currency is required/);
+    await expect(
+      tx((client) => saveCategory(client, ctx, 'profile', { values: { trading_name: '   ' } }, {}), ctx)
+    ).rejects.toThrow(/trading_name is required/);
+  });
+
+  it('still accepts a blank on a field the company row can hold empty', async () => {
+    // The guard is about those two NOT NULL columns, not about emptiness in
+    // general: a nullable field is legitimately clearable. Whatever the
+    // development database held for this key is put back afterwards.
+    const before = await db(
+      `SELECT value::text AS text FROM app_settings
+        WHERE tenant_id = $1 AND category = 'organisation.profile' AND key = 'specialty'`,
+      [TENANT_ID]
+    );
+    try {
+      await tx((client) => saveCategory(client, ctx, 'profile', { values: { specialty: '' } }, {}), ctx);
+      const stored = await db(
+        `SELECT value #>> '{}' AS text FROM app_settings
+          WHERE tenant_id = $1 AND category = 'organisation.profile' AND key = 'specialty'`,
+        [TENANT_ID]
+      );
+      expect(stored.rows.length).toBe(1);
+      expect(stored.rows[0].text).toBeNull();
+    } finally {
+      const previous = before.rows[0] as { text: string } | undefined;
+      if (previous === undefined) {
+        await db(
+          `DELETE FROM app_settings
+            WHERE tenant_id = $1 AND category = 'organisation.profile' AND key = 'specialty'`,
+          [TENANT_ID]
+        );
+      } else {
+        await db(
+          `UPDATE app_settings SET value = $2::jsonb
+            WHERE tenant_id = $1 AND category = 'organisation.profile' AND key = 'specialty'`,
+          [TENANT_ID, previous.text]
+        );
+      }
+    }
+  });
 });
 
 describe('AC-ORG-005 / TC-ORG-009 - historical tax configuration is immutable', () => {

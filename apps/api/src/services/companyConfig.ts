@@ -82,6 +82,15 @@ export async function upsertAppSetting(
     [tenantId, companyId, category, key]
   );
   const oldValue = prev.rows[0]?.value ?? null;
+  // configuration_history.old_value is jsonb, but the driver hands back an
+  // already-parsed value: a jsonb string arrives as a plain JS string, and a
+  // plain string is not valid JSON text. Passing it straight through made every
+  // second write of a stored string setting fail with "invalid input syntax for
+  // type json", which surfaced as a 500 on a save that changed an existing
+  // value. Only a missing row becomes SQL NULL - that is what the change
+  // history already renders as "unset" - so everything else is re-serialised.
+  const oldValueJson =
+    oldValue === null || oldValue === undefined ? null : JSON.stringify(oldValue);
   await client.query(
     `INSERT INTO app_settings (tenant_id, company_id, category, key, value, is_secret, updated_by)
      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
@@ -93,7 +102,7 @@ export async function upsertAppSetting(
   await client.query(
     `INSERT INTO configuration_history (tenant_id, user_id, category, config_key, old_value, new_value, ip)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [tenantId, ctx.userId ?? null, category, key, oldValue, JSON.stringify(value), ctx.ip ?? null]
+    [tenantId, ctx.userId ?? null, category, key, oldValueJson, JSON.stringify(value), ctx.ip ?? null]
   );
   await auditConfig(client, ctx, 'update', opts.resource ?? `company.config.${category}`, null, {
     [key]: oldValue,

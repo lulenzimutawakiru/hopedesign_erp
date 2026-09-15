@@ -36,6 +36,15 @@ export interface OrgSettingDef {
   group?: string;
   /** Stored encrypted (AES-256-GCM) and never returned by value. */
   secret?: boolean;
+  /**
+   * Refuses an empty value.
+   *
+   * Set this where the setting is mirrored onto a NOT NULL company column, so
+   * that blanking the box is answered with a field-level refusal instead of a
+   * raw constraint violation. It is a declared fact about the storage, not a
+   * cosmetic marker: the writer enforces it.
+   */
+  required?: boolean;
   min?: number;
   max?: number;
 }
@@ -104,7 +113,9 @@ export const ORG_CATEGORIES: OrgCategory[] = [
     blurb: 'The identity every document, receipt, payslip and report carries. Changing the legal name here changes it everywhere.',
     settings: {
       legal_name: f('Legal Name', 'text', { group: 'Identity', default: 'HOPE DESIGN GROUP LTD' }),
-      trading_name: f('Trading Name', 'text', { group: 'Identity', default: 'HOPE DESIGN GROUP LTD' }),
+      trading_name: f('Trading Name', 'text', {
+        group: 'Identity', default: 'HOPE DESIGN GROUP LTD', required: true,
+      }),
       trading_as: f('Trading As', 'text', { group: 'Identity' }),
       registration_number: f('Registration Number', 'text', { group: 'Registration' }),
       tin: f('TIN', 'text', { group: 'Registration', help: 'Uganda Revenue Authority taxpayer identification number.' }),
@@ -118,7 +129,7 @@ export const ORG_CATEGORIES: OrgCategory[] = [
       ], { group: 'Classification', default: 'LIMITED_COMPANY' }),
       specialty: f('Specialty', 'text', { group: 'Classification', default: 'Paper Manufacturing & Security Printing' }),
       country: f('Country', 'text', { group: 'Localisation', default: 'Uganda' }),
-      currency: f('Currency', 'text', { group: 'Localisation', default: 'UGX' }),
+      currency: f('Currency', 'text', { group: 'Localisation', default: 'UGX', required: true }),
       timezone: f('Timezone', 'text', { group: 'Localisation', default: 'Africa/Kampala' }),
       language: sel('Language', ['en', 'sw', 'fr'], { group: 'Localisation', default: 'en' }),
       date_format: sel('Date Format', ['YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY'], {

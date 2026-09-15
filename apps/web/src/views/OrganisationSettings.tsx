@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { api, ApiError } from '../api';
 import { ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { can, useAuth } from '../auth';
@@ -39,6 +39,7 @@ interface SettingDef {
   default?: string | number | boolean;
   group?: string;
   secret?: boolean;
+  required?: boolean;
   min?: number;
   max?: number;
 }
@@ -161,6 +162,7 @@ function Chip({ value, label }: { value: unknown; label?: string }) {
 function valueProblem(def: SettingDef, draft: Draft | undefined): string | null {
   if (def.type === 'boolean') return null;
   const raw = draft === undefined ? '' : String(draft);
+  if (def.required === true && raw.trim() === '') return 'This field is required.';
   if (!raw) return null;
   if (def.type === 'color' && !HEX_RE.test(raw)) return 'Use a hex colour such as #1261A0.';
   if (def.type === 'email' && !EMAIL_RE.test(raw)) return 'Enter a valid email address.';
@@ -202,16 +204,19 @@ function FieldInput({
   onChange: (v: Draft) => void;
 }) {
   if (type === 'boolean') {
+    const on = value === true;
     return (
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={value === true}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.checked)}
-        />
-        <span>{value === true ? 'Enabled' : 'Disabled'}</span>
-      </label>
+      <button
+        type="button"
+        role="switch"
+        className={'setting-switch' + (on ? ' is-on' : '')}
+        aria-checked={on}
+        disabled={disabled}
+        onClick={() => onChange(!on)}
+      >
+        <span className="setting-switch-track" />
+        <span>{on ? 'On' : 'Off'}</span>
+      </button>
     );
   }
   if (type === 'select') {
@@ -456,15 +461,27 @@ function SettingsForm({
     const problem = errors[key] ?? null;
     const draft: Draft = isSecret ? (drafts[key] ?? '') : (drafts[key] ?? toDraft(values[key]));
 
+    const wide = def.type === 'textarea';
     return (
-      <div key={key} className={'setting-row' + (isDirty ? ' dirty' : '')}>
+      <div
+        key={key}
+        className={
+          'setting-row' +
+          (isDirty ? ' dirty' : '') +
+          (wide ? ' is-wide' : '') +
+          (def.type === 'boolean' ? ' is-bool' : '')
+        }
+      >
         <div className="setting-info">
           <div className="setting-label">
             {def.label}
+            {def.required === true && (
+              <span className="setting-req" aria-hidden="true">*</span>
+            )}
             {locked && <span className="badge badge-neutral">Fixed</span>}
           </div>
           {def.help && <span className="field-hint">{def.help}</span>}
-          <span className="muted" style={{ fontSize: 11 }}>{key}</span>
+          <span className="setting-key">{key}</span>
         </div>
 
         <div className={'setting-control' + (problem ? ' setting-err' : '')}>
@@ -5046,6 +5063,31 @@ function HistoryModal({
 
 const SETTINGS_ROUTE = '/admin/organisation-settings';
 
+const GROUP_TILE: Record<string, string> = {
+  Organisation: 'tile-mill',
+  Finance: 'tile-brass',
+  People: 'tile-moss',
+  Operations: 'tile-amber',
+  Documents: 'tile-purple',
+  Governance: 'tile-clay',
+  Communication: 'tile-neutral',
+  Integrations: 'tile-mill',
+  System: 'tile-neutral',
+};
+
+const groupOf = (group: string) => GROUP_TILE[group] ?? 'tile-neutral';
+
+const initialsOf = (label: string) => {
+  const words = label
+    .replace(/[^A-Za-z& ]/g, ' ')
+    .split(' ')
+    .filter((w) => w !== '' && w !== '&');
+  return words
+    .slice(0, 2)
+    .map((w) => w.charAt(0).toUpperCase())
+    .join('');
+};
+
 /** One row of GET /search. */
 interface SearchHit {
   categoryId: string;
@@ -5068,6 +5110,16 @@ function groupCategories(groups: string[], categories: Category[]) {
   return groups
     .map((group) => ({ group, members: categories.filter((c) => c.group === group) }))
     .filter((entry) => entry.members.length > 0);
+}
+
+function categoryMatches(category: Category, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (q.length === 0) return true;
+  return (
+    category.id.toLowerCase().includes(q) ||
+    category.label.toLowerCase().includes(q) ||
+    category.blurb.toLowerCase().includes(q)
+  );
 }
 
 /**
@@ -5110,6 +5162,11 @@ function OrganisationSettings({ path }: { path: string }) {
   const [saved, setSaved] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [hitIndex, setHitIndex] = useState(-1);
+  const [groupFilter, setGroupFilter] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const cmdRef = useRef<HTMLDivElement>(null);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -5156,14 +5213,33 @@ function OrganisationSettings({ path }: { path: string }) {
     setSaveError(null);
     setPending(null);
     setPendingText('');
+    setGroupFilter('');
   }, [activeId]);
 
   useEffect(() => {
+    if (saved === null) return;
+    const timer = window.setTimeout(() => setSaved(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [saved]);
+
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (!cmdRef.current || cmdRef.current.contains(e.target as Node)) return;
+      setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  useEffect(() => {
     const q = query.trim();
+    setHitIndex(-1);
     if (q.length < 2) {
       setHits([]);
+      setMenuOpen(false);
       return;
     }
+    setMenuOpen(true);
     let alive = true;
     const timer = window.setTimeout(() => {
       api<{ data: SearchHit[] }>(BASE + '/search?q=' + encodeURIComponent(q))
@@ -5401,6 +5477,23 @@ function OrganisationSettings({ path }: { path: string }) {
     }
     void save();
   };
+
+  // Ctrl/Cmd+S runs the same write the Save button runs. The shortcut
+  // deliberately calls requestSave rather than save, so the typed confirmation
+  // for a dangerous key still stands in the way of a keyboard-initiated write.
+  // Ctrl/Cmd+K is deliberately left to the shell command palette: it is
+  // advertised in the top bar, so this screen must not answer it differently.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.key.toLowerCase() !== 's') return;
+      e.preventDefault();
+      requestSave();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
   // The catalogue publishes the permission this screen is read under, so the
   // refusal is stated once here rather than discovered one call at a time.
   const catalogueView = catalogue.data;
@@ -5418,49 +5511,66 @@ function OrganisationSettings({ path }: { path: string }) {
     );
   }
 
-  // Tile colour by catalogue group, so a category reads the same colour here as
-  // it does in the module it configures.
-  const TILE: Record<string, string> = {
-    Organisation: 'tile-mill',
-    Finance: 'tile-brass',
-    People: 'tile-moss',
-    Operations: 'tile-amber',
-    Documents: 'tile-purple',
-    Governance: 'tile-clay',
-    Communication: 'tile-neutral',
-    Integrations: 'tile-mill',
-    System: 'tile-neutral',
+  const openCategory = (id: string) => {
+    setQuery('');
+    setHits([]);
+    setHitIndex(-1);
+    navigate(SETTINGS_ROUTE + '/' + id);
   };
-
-  const groupOf = (group: string) => TILE[group] ?? 'tile-neutral';
-
-  const initialsOf = (label: string) => {
-    const words = label
-      .replace(/[^A-Za-z& ]/g, ' ')
-      .split(' ')
-      .filter((w) => w !== '' && w !== '&');
-    return words
-      .slice(0, 2)
-      .map((w) => w.charAt(0).toUpperCase())
-      .join('');
-  };
-
-  const openCategory = (id: string) => navigate(SETTINGS_ROUTE + '/' + id);
   const canEdit = (c: Category) => can(user, c.manage);
   const grouped = catalogueView === null ? [] : groupCategories(catalogueView.groups, categories);
   const immutableKeys = catalogueView?.immutableKeys ?? [];
+  const manageCount = categories.filter(canEdit).length;
+  const q = query.trim();
+  const landingGroups = grouped
+    .filter((entry) => groupFilter === '' || entry.group === groupFilter)
+    .map((entry) => ({
+      group: entry.group,
+      members: entry.members.filter((c) => categoryMatches(c, q)),
+    }))
+    .filter((entry) => entry.members.length > 0);
 
-  // .result-row is a static information row elsewhere in the application; as a
-  // search result it is a button, so it has to shed the user-agent chrome.
-  const RESULT_BUTTON = {
-    width: '100%',
-    background: 'none',
-    border: '0',
-    borderBottom: '1px solid var(--line)',
-    cursor: 'pointer',
-    textAlign: 'left',
-    font: 'inherit',
-  } as const;
+  /** What a catalogue entry actually exposes, for the card's summary line. */
+  const countOf = (c: Category): string => {
+    const n = Object.keys(c.settings ?? {}).length;
+    if (n > 0) return String(n) + (n === 1 ? ' setting' : ' settings');
+    const f = (c.fields ?? []).length;
+    if (f > 0) return String(f) + (f === 1 ? ' field' : ' fields');
+    return titleCase(c.kind);
+  };
+
+  /** The scope a category writes under, when it is scoped at all. */
+  const scopeOf = (c: Category): string =>
+    c.companyScoped === true ? 'Company scope' : c.branchScoped === true ? 'Branch scope' : '';
+
+  // Arrow keys walk the result list and Enter opens the highlighted category.
+  // The search box keeps focus while this happens, so the query stays editable
+  // and the user never has to reach for the mouse to move between matches.
+  const onSearchKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      setQuery('');
+      setHitIndex(-1);
+      return;
+    }
+    if (hits.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHitIndex((i) => (i + 1 >= hits.length ? 0 : i + 1));
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHitIndex((i) => (i <= 0 ? hits.length - 1 : i - 1));
+      return;
+    }
+    if (e.key === 'Enter') {
+      const hit = hitIndex >= 0 && hitIndex < hits.length ? hits[hitIndex] : null;
+      if (hit !== null) {
+        e.preventDefault();
+        openCategory(hit.categoryId);
+      }
+    }
+  };
 
   // The generic form is the same object for every form-shaped kind, so it is
   // built once: the security policy nests its values one level deeper and the
@@ -5468,22 +5578,20 @@ function OrganisationSettings({ path }: { path: string }) {
   // does not change.
   const formCard =
     category === null ? null : (
-      <div className="card card-pad">
-        <SettingsForm
-          category={category}
-          values={values}
-          secrets={secrets}
-          drafts={drafts}
-          dirty={dirty}
-          errors={errors}
-          disabled={!mayManage}
-          immutableKeys={immutableKeys}
-          clearedSecrets={cleared}
-          onDraft={onDraft}
-          onResetKey={onResetKey}
-          onToggleClear={onToggleClear}
-        />
-      </div>
+      <SettingsForm
+        category={category}
+        values={values}
+        secrets={secrets}
+        drafts={drafts}
+        dirty={dirty}
+        errors={errors}
+        disabled={!mayManage}
+        immutableKeys={immutableKeys}
+        clearedSecrets={cleared}
+        onDraft={onDraft}
+        onResetKey={onResetKey}
+        onToggleClear={onToggleClear}
+      />
     );
 
   // One panel per kind. The two hybrids are a settings category with a records
@@ -5538,46 +5646,105 @@ function OrganisationSettings({ path }: { path: string }) {
 
   const landing = (
     <div className="stack">
-      <div className="card card-pad">
-        <div className="section-title">The control plane</div>
-        <p className="muted" style={{ margin: 0, maxWidth: 760 }}>
-          Configure the organisation once and let HR, payroll, finance, manufacturing, inventory,
-          procurement, sales, the service desk, EQR traceability, EFRIS and security all read the
-          same answer. Nothing is stored in the browser: a change is written to the database and
-          takes effect in the module that consumes it without a deployment. Writes are gated per
-          category, and every one of them lands on the audit trail with its before and after values.
-        </p>
+      <div className="settings-hero">
+        <div>
+          <h2>Configure once. Every module reads it back.</h2>
+          <p className="muted">
+            A change here is written to the database and takes effect without a deployment. Writes
+            are gated per category, and every one of them lands on the audit trail.
+          </p>
+        </div>
+        <div className="settings-stats">
+          <div className="settings-stat">
+            <span className="settings-stat-value">{String(categories.length)}</span>
+            <span className="settings-stat-label">Categories</span>
+          </div>
+          <div className="settings-stat">
+            <span className="settings-stat-value">{String(manageCount)}</span>
+            <span className="settings-stat-label">You can edit</span>
+          </div>
+          <div className="settings-stat">
+            <span className="settings-stat-value">{String(categories.length - manageCount)}</span>
+            <span className="settings-stat-label">View only</span>
+          </div>
+        </div>
       </div>
-      {grouped.map((entry) => (
-        <div className="card card-pad" key={entry.group}>
-          <div className="section-title">{entry.group}</div>
-          <div className="grid-3">
+      <div className="settings-filters" role="tablist" aria-label="Filter by group">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={groupFilter === ''}
+          className={'settings-filter' + (groupFilter === '' ? ' is-on' : '')}
+          onClick={() => setGroupFilter('')}
+        >
+          All
+          <span className="settings-filter-n">{String(categories.length)}</span>
+        </button>
+        {grouped.map((entry) => (
+          <button
+            key={entry.group}
+            type="button"
+            role="tab"
+            aria-selected={groupFilter === entry.group}
+            className={'settings-filter' + (groupFilter === entry.group ? ' is-on' : '')}
+            onClick={() => setGroupFilter(entry.group)}
+          >
+            {entry.group}
+            <span className="settings-filter-n">{String(entry.members.length)}</span>
+          </button>
+        ))}
+      </div>
+      {landingGroups.length === 0 ? (
+        <div className="settings-index">
+          <div className="settings-empty">
+            {q.length > 0
+              ? 'No category matches "' + q + '". Try a group, a key or a label.'
+              : 'No categories in this group.'}
+          </div>
+        </div>
+      ) : (
+        landingGroups.map((entry) => (
+          <div className="settings-index" key={entry.group}>
+            <div className="settings-index-head">
+              <span>{entry.group}</span>
+              <span>{String(entry.members.length)}</span>
+            </div>
             {entry.members.map((c) => (
               <button
                 key={c.id}
                 type="button"
-                className="settings-nav-item"
+                className="settings-index-row"
                 title={c.blurb}
                 onClick={() => openCategory(c.id)}
               >
                 <span className={'settings-nav-tile ' + groupOf(c.group)}>
                   {initialsOf(c.label)}
                 </span>
-                <span className="settings-nav-body">
-                  <span className="settings-nav-label">{c.label}</span>
-                  <span className="settings-nav-meta">
-                    {canEdit(c) ? 'Manage' : 'View only'}
-                  </span>
+                <span className="settings-index-copy">
+                  <span className="settings-index-title">{c.label}</span>
+                  <span className="settings-index-blurb">{c.blurb}</span>
+                </span>
+                <span className="settings-index-meta">
+                  {countOf(c)}
+                  {scopeOf(c) !== '' ? ' · ' + scopeOf(c) : ''}
+                </span>
+                <span className={'settings-pill ' + (canEdit(c) ? 'can' : 'lock')}>
+                  {canEdit(c) ? 'Manage' : 'View'}
+                </span>
+                <span className="settings-index-go" aria-hidden="true">
+                  ›
                 </span>
               </button>
             ))}
           </div>
-        </div>
-      ))}
+        ))
+      )}
     </div>
   );
+  const showHits = q.length >= 2 && menuOpen;
+
   return (
-    <div className="page">
+    <div className="page settings-page">
       <div className="crumbs">
         <button type="button" className="crumb-link" onClick={() => navigate('/admin')}>
           Administration
@@ -5600,42 +5767,9 @@ function OrganisationSettings({ path }: { path: string }) {
             Administration
           </div>
           <h1>Organisation Settings</h1>
-          <p className="muted" style={{ margin: '6px 0 0', maxWidth: 720 }}>
-            {category === null
-              ? 'Every category below drives a module. A change here is a change to how the ERP behaves.'
-              : category.blurb}
+          <p className="muted" style={{ margin: '6px 0 0', maxWidth: 640 }}>
+            The control plane for how the ERP behaves.
           </p>
-        </div>
-        <div className="head-actions">
-          {activeId !== '' && category !== null && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() =>
-                setHistory({ categoryId: activeId, key: null, title: category.label })
-              }
-            >
-              History
-            </button>
-          )}
-          {dirty.length > 0 && (
-            <button type="button" className="btn" onClick={resetToDefaults}>
-              Reset to default
-            </button>
-          )}
-          {dirty.length > 0 && (
-            <button type="button" className="btn" onClick={discard}>
-              Discard
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={saving || dirty.length === 0 || !mayManage}
-            onClick={requestSave}
-          >
-            {saving ? 'Saving...' : 'Save Changes'}
-          </button>
         </div>
       </header>
 
@@ -5645,65 +5779,121 @@ function OrganisationSettings({ path }: { path: string }) {
         <PageLoader />
       ) : (
         <>
-          <div className="toolbar">
-            <input
-              className="search-input"
-              value={query}
-              aria-label="Search settings"
-              placeholder="Search settings by category, key or label..."
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            {query.trim().length > 0 && (
-              <span className="muted">
-                {hits.length} match{hits.length === 1 ? '' : 'es'}
-              </span>
+          <div className="settings-cmd" ref={cmdRef}>
+            <div className="settings-cmd-field">
+              <svg className="settings-cmd-ico" viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M11.5 10.6 14.9 14a.75.75 0 0 1-1.06 1.06l-3.4-3.4A5.5 5.5 0 1 1 11.5 10.6Zm-4.5.9A4 4 0 1 0 7 3.5a4 4 0 0 0 0 8Z"
+                />
+              </svg>
+              <input
+                ref={searchRef}
+                className="search-input settings-cmd-input"
+                value={query}
+                aria-label="Search settings"
+                aria-expanded={showHits}
+                aria-controls="settings-search-results"
+                placeholder="Search categories, keys and labels"
+                onChange={(e) => setQuery(e.target.value)}
+                onFocus={() => {
+                  if (query.trim().length >= 2) setMenuOpen(true);
+                }}
+                onKeyDown={onSearchKey}
+              />
+              {q.length > 0 && (
+                <button
+                  type="button"
+                  className="settings-cmd-clear"
+                  aria-label="Clear search"
+                  onClick={() => {
+                    setQuery('');
+                    searchRef.current?.focus();
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            <span className="settings-cmd-hint kbd-hints">
+              <kbd>Ctrl</kbd>
+              <span>+</span>
+              <kbd>S</kbd>
+              <span>saves</span>
+            </span>
+            {showHits && (
+              <div className="settings-cmd-menu" id="settings-search-results" role="listbox">
+                {hits.length > 0 ? (
+                  <>
+                    <div className="settings-hits">
+                      {hits.map((hit, i) => (
+                        <button
+                          key={hit.categoryId + ':' + String(hit.key) + ':' + hit.label}
+                          type="button"
+                          role="option"
+                          aria-selected={i === hitIndex}
+                          className={'settings-hit' + (i === hitIndex ? ' is-active' : '')}
+                          onMouseEnter={() => setHitIndex(i)}
+                          onClick={() => openCategory(hit.categoryId)}
+                        >
+                          <span className="settings-hit-copy">
+                            <strong>{hit.label}</strong>
+                            {hit.key !== null && (
+                              <span className="settings-hit-key">{hit.key}</span>
+                            )}
+                          </span>
+                          <span className="settings-pill">{hit.categoryLabel}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="settings-cmd-foot">
+                      Arrow keys move, Enter opens, Escape clears.
+                    </div>
+                  </>
+                ) : (
+                  <div className="settings-empty">
+                    {'No setting matches "' + q + '". Try a category, a key or a label.'}
+                  </div>
+                )}
+              </div>
             )}
           </div>
-
-          {hits.length > 0 && (
-            <div className="card" style={{ marginBottom: 14 }}>
-              {hits.map((hit) => (
-                <button
-                  key={hit.categoryId + ':' + String(hit.key) + ':' + hit.label}
-                  type="button"
-                  className="result-row"
-                  style={RESULT_BUTTON}
-                  onClick={() => openCategory(hit.categoryId)}
-                >
-                  <span>
-                    <strong>{hit.label}</strong>
-                    {hit.key !== null && <span className="muted">{' ' + hit.key}</span>}
-                  </span>
-                  <span className="muted">
-                    {hit.categoryLabel + ' - ' + titleCase(hit.kind)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
 
           <div className="settings-layout">
             <nav className="settings-nav" aria-label="Settings categories">
               <button
                 type="button"
                 className={'settings-nav-item' + (activeId === '' ? ' active' : '')}
-                onClick={() => navigate(SETTINGS_ROUTE)}
+                onClick={() => {
+                  setQuery('');
+                  setHits([]);
+                  navigate(SETTINGS_ROUTE);
+                }}
               >
                 <span className={'settings-nav-tile ' + groupOf('Organisation')}>OS</span>
                 <span className="settings-nav-body">
                   <span className="settings-nav-label">Overview</span>
-                  <span className="settings-nav-meta">All categories</span>
+                  <span className="settings-nav-meta">
+                    {String(categories.length) + ' categories'}
+                  </span>
                 </span>
               </button>
 
               {grouped.map((entry) => (
-                <div key={entry.group}>
-                  <div className="section-title">{entry.group}</div>
+                <div className="settings-nav-group" key={entry.group}>
+                  <div className="settings-nav-heading">
+                    <span>{entry.group}</span>
+                    <span className="settings-nav-count">{String(entry.members.length)}</span>
+                  </div>
                   {entry.members.map((c) => (
                     <button
                       key={c.id}
                       type="button"
-                      className={'settings-nav-item' + (c.id === activeId ? ' active' : '')}
+                      className={
+                        'settings-nav-item' +
+                        (c.id === activeId ? ' active' : '') +
+                        (q.length > 0 && !categoryMatches(c, q) ? ' is-dim' : '')
+                      }
                       title={c.blurb}
                       onClick={() => openCategory(c.id)}
                     >
@@ -5727,22 +5917,66 @@ function OrganisationSettings({ path }: { path: string }) {
 
             <div className="settings-main">
               <PanelError error={viewError} />
-              {activeId === ''
-                ? landing
-                : viewLoading && view === null
-                  ? <PageLoader />
-                  : (
-                    <div className="stack">{panel}</div>
+              {activeId === '' ? (
+                landing
+              ) : viewLoading && view === null ? (
+                <PageLoader />
+              ) : (
+                <div className="stack">
+                  {category !== null && (
+                    <div className="settings-pane-head">
+                      <div>
+                        <p className="settings-pane-kicker">{category.group}</p>
+                        <h2>{category.label}</h2>
+                        <p className="muted">{category.blurb}</p>
+                      </div>
+                      <div className="settings-pane-actions">
+                        <span className={'settings-pill ' + (mayManage ? 'can' : 'lock')}>
+                          {mayManage ? 'You can edit' : 'View only'}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn"
+                          title={'Every recorded change to ' + category.label}
+                          onClick={() =>
+                            setHistory({
+                              categoryId: activeId,
+                              key: null,
+                              title: category.label,
+                            })
+                          }
+                        >
+                          History
+                        </button>
+                      </div>
+                    </div>
                   )}
+                  {panel}
+                </div>
+              )}
             </div>
           </div>
 
-          <PanelNote error={saveError} ok={saved} />
+          <PanelError error={saveError} />
+
+          {saved !== null && (
+            <div className="settings-toast" role="status">
+              <span className="settings-toast-mark" aria-hidden="true">{'\u2713'}</span>
+              <span>{saved}</span>
+            </div>
+          )}
 
           {showsForm && dirty.length > 0 && (
             <div className="settings-bar">
-              <div className="muted">
-                {'Unsaved changes: ' + String(dirty.length)}
+              <div className="settings-bar-main">
+                <span className="settings-bar-count">
+                  {String(dirty.length) +
+                    ' unsaved ' +
+                    (dirty.length === 1 ? 'change' : 'changes')}
+                </span>
+                <span className="settings-bar-hint">
+                  {mayManage ? 'Ctrl+S saves.' : 'Read only: you cannot write here.'}
+                </span>
               </div>
               <div style={{ flex: '1 1 320px', minWidth: 260 }}>
                 <Reason
@@ -5754,7 +5988,15 @@ function OrganisationSettings({ path }: { path: string }) {
                 />
               </div>
               <div className="head-actions">
-                <button type="button" className="btn" onClick={discard}>
+                <button
+                  type="button"
+                  className="btn"
+                  title="Put every changed row back to the catalogue default"
+                  onClick={resetToDefaults}
+                >
+                  Reset
+                </button>
+                <button type="button" className="btn" title="Drop the unsaved edits" onClick={discard}>
                   Discard
                 </button>
                 <button
@@ -5763,7 +6005,8 @@ function OrganisationSettings({ path }: { path: string }) {
                   disabled={saving || !mayManage}
                   onClick={requestSave}
                 >
-                  {saving ? 'Saving...' : 'Save Changes (' + String(dirty.length) + ')'}
+                  {saving ? 'Saving...' : 'Save Changes'}
+                  {dirty.length > 0 && <span className="dirty-pill">{String(dirty.length)}</span>}
                 </button>
               </div>
             </div>

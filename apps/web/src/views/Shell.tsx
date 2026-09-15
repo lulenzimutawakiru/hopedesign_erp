@@ -103,6 +103,10 @@ export default function Shell() {
         return;
       }
       if (typing) return;
+      // A bare-letter shortcut must not answer a Ctrl/Cmd chord: Ctrl+S is the
+      // save shortcut inside the settings console, Ctrl+A selects text, and so
+      // on. Only the chords handled above are modifier-aware.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 's' || e.key === 'S') { setScannerOpen(true); return; }
   if (e.key === 'a' || e.key === 'A') { navigate('/approvals'); return; }
       if (e.key === 'n' || e.key === 'N') { setCmdOpen(true); return; }
