@@ -4,7 +4,7 @@ import { useAuth, can } from '../auth';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { ConfirmDialog, EmptyState } from '../components/os';
-import { AssetModuleTabs, DefRow, DefSec, apiRaw, downloadBlob, labelize, openAssetLabelSheet, s } from './assetsShared';
+import { AssetModuleTabs, DefRow, DefSec, FlagToggle, FormJump, FormSection, apiRaw, downloadBlob, labelize, openAssetLabelSheet, s } from './assetsShared';
 
 type Rec = Record<string, unknown>;
 
@@ -1013,7 +1013,6 @@ function EditModal({ asset, onClose, onSaved }: { asset: Rec; onClose: () => voi
   const [projectId, setProjectId] = useState(String(asset.project_id ?? ''));
   const [locationId, setLocationId] = useState(String(asset.location_id ?? ''));
   const [warehouseId, setWarehouseId] = useState(String(asset.warehouse_id ?? ''));
-  const [branchId, setBranchId] = useState(String(asset.branch_id ?? ''));
   const [floor, setFloor] = useState(s(asset.floor));
   const [room, setRoom] = useState(s(asset.room));
   const [building, setBuilding] = useState(s(asset.building));
@@ -1073,7 +1072,6 @@ function EditModal({ asset, onClose, onSaved }: { asset: Rec; onClose: () => voi
       projectId: toNum(projectId),
       locationId: toNum(locationId),
       warehouseId: toNum(warehouseId),
-      branchId: toNum(branchId),
       floor: floor || undefined,
       room: room || undefined,
       building: building || undefined,
@@ -1107,207 +1105,201 @@ function EditModal({ asset, onClose, onSaved }: { asset: Rec; onClose: () => voi
   return (
     <Modal title={`Edit ${s(asset.asset_no)}`} onClose={onClose} wide footer={
       <div className="quick-actions">
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? 'Saving...' : 'Save changes'}</button>
+        <button type="button" className="btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save changes'}</button>
       </div>
     }>
-      <div className="stack">
-        {error && <ErrorBanner error={error} />}
-        <h4>Identification</h4>
-        <div className="form-grid">
-          <div className="field" style={{ gridColumn: '1 / -1' }}>
-            <label htmlFor="em-name">Asset name</label>
-            <input id="em-name" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div className="field" style={{ gridColumn: '1 / -1' }}>
-            <label htmlFor="em-desc">Description</label>
-            <textarea id="em-desc" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-cat">Category</label>
-            <select id="em-cat" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-              <option value="">Not set</option>
-              {categories.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-type">Type</label>
-            <select id="em-type" value={typeId} onChange={(e) => setTypeId(e.target.value)}>
-              <option value="">Not set</option>
-              {types.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-class">Class</label>
-            <select id="em-class" value={classId} onChange={(e) => setClassId(e.target.value)}>
-              <option value="">Not set</option>
-              {classes.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-man">Manufacturer</label>
-            <input id="em-man" value={manufacturer} onChange={(e) => setManufacturer(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-model">Model</label>
-            <input id="em-model" value={model} onChange={(e) => setModel(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-sn">Serial number</label>
-            <input id="em-sn" value={serialNo} onChange={(e) => setSerialNo(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-part">Part number</label>
-            <input id="em-part" value={partNo} onChange={(e) => setPartNo(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-sku">SKU</label>
-            <input id="em-sku" value={sku} onChange={(e) => setSku(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-bc">Barcode</label>
-            <input id="em-bc" value={barcode} onChange={(e) => setBarcode(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-cond">Condition</label>
-            <select id="em-cond" value={condition} onChange={(e) => setCondition(e.target.value)}>
-              {CONDITIONS.map((c) => <option key={c} value={c}>{labelize(c)}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-ops">Operational state</label>
-            <select id="em-ops" value={operationalState} onChange={(e) => setOperationalState(e.target.value)}>
-              {OPS_STATES.map((c) => <option key={c} value={c}>{labelize(c)}</option>)}
-            </select>
-          </div>
-          <div className="field" style={{ gridColumn: '1 / -1' }}>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-              <input type="checkbox" checked={isMachine} onChange={(e) => setIsMachine(e.target.checked)} /> Machine asset (FSS104, FSS300...)
-            </label>
-            {isMachine && <input value={machineRef} onChange={(e) => setMachineRef(e.target.value)} placeholder="Machine reference" style={{ marginTop: 6 }} />}
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-              <input type="checkbox" checked={isHighValue} onChange={(e) => setIsHighValue(e.target.checked)} /> High-value asset (extra approval control)
-            </label>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-              <input type="checkbox" checked={isSerialized} onChange={(e) => setIsSerialized(e.target.checked)} /> Serialized asset
-            </label>
-          </div>
+      {error && <ErrorBanner error={error} />}
+      <FormJump items={[
+        { id: 'em-ident', label: 'Identity' },
+        { id: 'em-place', label: 'Location' },
+        { id: 'em-fin', label: 'Financial' },
+      ]} />
+      <FormSection id="em-ident" title="Identity">
+        <div className="field field-required" style={{ gridColumn: '1 / -1' }}>
+          <label htmlFor="em-name">Asset name</label>
+          <input id="em-name" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
-        <h4>Organization & location</h4>
-        <div className="form-grid">
-          <div className="field">
-            <label htmlFor="em-dep">Department</label>
-            <select id="em-dep" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
-              <option value="">Not set</option>
-              {departments.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-cc">Cost centre ID</label>
-            <input id="em-cc" type="number" value={costCentreId} onChange={(e) => setCostCentreId(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-proj">Project</label>
-            <select id="em-proj" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              <option value="">Not set</option>
-              {projects.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-loc">Location</label>
-            <select id="em-loc" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-              <option value="">Not set</option>
-              {locations.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-wh">Warehouse</label>
-            <select id="em-wh" value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
-              <option value="">Not set</option>
-              {warehouses.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-branch">Branch ID</label>
-            <input id="em-branch" type="number" value={branchId} onChange={(e) => setBranchId(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-floor">Floor</label>
-            <input id="em-floor" value={floor} onChange={(e) => setFloor(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-room">Room</label>
-            <input id="em-room" value={room} onChange={(e) => setRoom(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-bldg">Building</label>
-            <input id="em-bldg" value={building} onChange={(e) => setBuilding(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-eret">Expected return</label>
-            <input id="em-eret" type="date" value={expectedReturnDate} onChange={(e) => setExpectedReturnDate(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-eol">End of life</label>
-            <input id="em-eol" type="date" value={eolDate} onChange={(e) => setEolDate(e.target.value)} />
-          </div>
+        <div className="field" style={{ gridColumn: '1 / -1' }}>
+          <label htmlFor="em-desc">Description</label>
+          <textarea id="em-desc" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
-        <h4>Financial</h4>
-        {locked && <p className="muted" style={{ marginTop: 0 }}>Financial fields are locked because this asset is {labelize(asset.status)}. Change them through finance workflows or while the asset is a draft.</p>}
-        <div className="form-grid">
-          <div className="field">
-            <label htmlFor="em-cost">Purchase cost</label>
-            <input id="em-cost" type="number" min="0" step="0.01" value={purchaseCost} disabled={locked} onChange={(e) => setPurchaseCost(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-cur">Currency</label>
-            <select id="em-cur" value={currency} disabled={locked} onChange={(e) => setCurrency(e.target.value)}>
-              {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-pdate">Purchase date</label>
-            <input id="em-pdate" type="date" value={purchaseDate} disabled={locked} onChange={(e) => setPurchaseDate(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-sup">Supplier</label>
-            <select id="em-sup" value={supplierId} disabled={locked} onChange={(e) => setSupplierId(e.target.value)}>
-              <option value="">Not set</option>
-              {suppliers.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="em-po">PO number</label>
-            <input id="em-po" value={poNumber} disabled={locked} onChange={(e) => setPoNumber(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-inv">Invoice number</label>
-            <input id="em-inv" value={invoiceNumber} disabled={locked} onChange={(e) => setInvoiceNumber(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-grn">GRN number</label>
-            <input id="em-grn" value={grnNumber} disabled={locked} onChange={(e) => setGrnNumber(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-cdate">Capitalization date</label>
-            <input id="em-cdate" type="date" value={capitalizationDate} disabled={locked} onChange={(e) => setCapitalizationDate(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-life">Useful life (months)</label>
-            <input id="em-life" type="number" min="0" step="1" value={usefulLifeMonths} disabled={locked} onChange={(e) => setUsefulLifeMonths(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-res">Residual value</label>
-            <input id="em-res" type="number" min="0" step="0.01" value={residualValue} disabled={locked} onChange={(e) => setResidualValue(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="em-depm">Depreciation method</label>
-            <select id="em-depm" value={depreciationMethod} disabled={locked} onChange={(e) => setDepreciationMethod(e.target.value)}>
-              {DEP_METHODS.map((c) => <option key={c} value={c}>{labelize(c)}</option>)}
-            </select>
-          </div>
+        <div className="field">
+          <label htmlFor="em-cat">Category</label>
+          <select id="em-cat" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+            <option value="">Not set</option>
+            {categories.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
+          </select>
         </div>
-      </div>
+        <div className="field">
+          <label htmlFor="em-type">Type</label>
+          <select id="em-type" value={typeId} onChange={(e) => setTypeId(e.target.value)}>
+            <option value="">Not set</option>
+            {types.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="em-class">Class</label>
+          <select id="em-class" value={classId} onChange={(e) => setClassId(e.target.value)}>
+            <option value="">Not set</option>
+            {classes.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="em-man">Manufacturer</label>
+          <input id="em-man" value={manufacturer} onChange={(e) => setManufacturer(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-model">Model</label>
+          <input id="em-model" value={model} onChange={(e) => setModel(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-sn">Serial number</label>
+          <input id="em-sn" value={serialNo} onChange={(e) => setSerialNo(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-part">Part number</label>
+          <input id="em-part" value={partNo} onChange={(e) => setPartNo(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-sku">SKU</label>
+          <input id="em-sku" value={sku} onChange={(e) => setSku(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-bc">Barcode</label>
+          <input id="em-bc" value={barcode} onChange={(e) => setBarcode(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-cond">Condition</label>
+          <select id="em-cond" value={condition} onChange={(e) => setCondition(e.target.value)}>
+            {CONDITIONS.map((c) => <option key={c} value={c}>{labelize(c)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="em-ops">Operational state</label>
+          <select id="em-ops" value={operationalState} onChange={(e) => setOperationalState(e.target.value)}>
+            {OPS_STATES.map((c) => <option key={c} value={c}>{labelize(c)}</option>)}
+          </select>
+        </div>
+        <div className="asset-flags">
+          <FlagToggle on={isMachine} onChange={setIsMachine} label="Production machine" hint="FSS104, FSS300 and similar plant" />
+          <FlagToggle on={isHighValue} onChange={setIsHighValue} label="High-value" hint="Extra approval on transfer and disposal" />
+          <FlagToggle on={isSerialized} onChange={setIsSerialized} label="Serialized" hint="Tracked by serial" />
+        </div>
+        {isMachine && (
+          <div className="field">
+            <label htmlFor="em-mref">Machine reference</label>
+            <input id="em-mref" value={machineRef} onChange={(e) => setMachineRef(e.target.value)} placeholder="FSS104" />
+          </div>
+        )}
+      </FormSection>
+      <FormSection id="em-place" title="Location & ownership">
+        <div className="field">
+          <label htmlFor="em-dep">Department</label>
+          <select id="em-dep" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
+            <option value="">Not set</option>
+            {departments.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="em-loc">Location</label>
+          <select id="em-loc" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+            <option value="">Not set</option>
+            {locations.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="em-wh">Warehouse</label>
+          <select id="em-wh" value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+            <option value="">Not set</option>
+            {warehouses.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="em-proj">Project</label>
+          <select id="em-proj" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <option value="">Not set</option>
+            {projects.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="em-floor">Floor</label>
+          <input id="em-floor" value={floor} onChange={(e) => setFloor(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-room">Room</label>
+          <input id="em-room" value={room} onChange={(e) => setRoom(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-bldg">Building</label>
+          <input id="em-bldg" value={building} onChange={(e) => setBuilding(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-cc">Cost centre</label>
+          <input id="em-cc" type="number" value={costCentreId} onChange={(e) => setCostCentreId(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-eret">Expected return</label>
+          <input id="em-eret" type="date" value={expectedReturnDate} onChange={(e) => setExpectedReturnDate(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-eol">End of life</label>
+          <input id="em-eol" type="date" value={eolDate} onChange={(e) => setEolDate(e.target.value)} />
+        </div>
+      </FormSection>
+      <FormSection id="em-fin" title="Financial" hint={locked ? `Locked while the asset is ${labelize(asset.status)}. Change via finance workflows.` : 'Editable on a draft.'}>
+        <div className="field">
+          <label htmlFor="em-cost">Purchase cost</label>
+          <input id="em-cost" type="number" min="0" step="0.01" value={purchaseCost} disabled={locked} onChange={(e) => setPurchaseCost(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-cur">Currency</label>
+          <select id="em-cur" value={currency} disabled={locked} onChange={(e) => setCurrency(e.target.value)}>
+            {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="em-pdate">Purchase date</label>
+          <input id="em-pdate" type="date" value={purchaseDate} disabled={locked} onChange={(e) => setPurchaseDate(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-sup">Supplier</label>
+          <select id="em-sup" value={supplierId} disabled={locked} onChange={(e) => setSupplierId(e.target.value)}>
+            <option value="">Not set</option>
+            {suppliers.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="em-po">PO number</label>
+          <input id="em-po" value={poNumber} disabled={locked} onChange={(e) => setPoNumber(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-inv">Invoice number</label>
+          <input id="em-inv" value={invoiceNumber} disabled={locked} onChange={(e) => setInvoiceNumber(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-grn">GRN number</label>
+          <input id="em-grn" value={grnNumber} disabled={locked} onChange={(e) => setGrnNumber(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-cdate">Capitalization date</label>
+          <input id="em-cdate" type="date" value={capitalizationDate} disabled={locked} onChange={(e) => setCapitalizationDate(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-life">Useful life (months)</label>
+          <input id="em-life" type="number" min="0" step="1" value={usefulLifeMonths} disabled={locked} onChange={(e) => setUsefulLifeMonths(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-res">Residual value</label>
+          <input id="em-res" type="number" min="0" step="0.01" value={residualValue} disabled={locked} onChange={(e) => setResidualValue(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="em-depm">Depreciation method</label>
+          <select id="em-depm" value={depreciationMethod} disabled={locked} onChange={(e) => setDepreciationMethod(e.target.value)}>
+            {DEP_METHODS.map((c) => <option key={c} value={c}>{labelize(c)}</option>)}
+          </select>
+        </div>
+      </FormSection>
     </Modal>
   );
 }

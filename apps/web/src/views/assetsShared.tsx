@@ -94,6 +94,67 @@ export function AssetModuleTabs({ active }: { active: string }) {
   );
 }
 
+export function FormSection({
+  id,
+  title,
+  hint,
+  children,
+}: {
+  id?: string;
+  title: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section id={id} className="asset-form-sec">
+      <div className="asset-form-sec-head">
+        <h3>{title}</h3>
+        {hint ? <p>{hint}</p> : null}
+      </div>
+      <div className="form-grid">{children}</div>
+    </section>
+  );
+}
+
+export function FlagToggle({
+  on,
+  onChange,
+  label,
+  hint,
+}: {
+  on: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  hint?: string;
+}) {
+  return (
+    <button type="button" className={'asset-flag' + (on ? ' is-on' : '')} aria-pressed={on} onClick={() => onChange(!on)}>
+      <span className="asset-flag-box" aria-hidden>{on ? '✓' : ''}</span>
+      <span className="asset-flag-copy">
+        <strong>{label}</strong>
+        {hint ? <span>{hint}</span> : null}
+      </span>
+    </button>
+  );
+}
+
+export function FormJump({ items }: { items: Array<{ id: string; label: string }> }) {
+  return (
+    <nav className="asset-form-jump" aria-label="Form sections">
+      {items.map((it) => (
+        <button
+          key={it.id}
+          type="button"
+          className="asset-tab"
+          onClick={() => document.getElementById(it.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+        >
+          {it.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 export function ModuleHeader({ kicker: _kicker, title, sub, actions }: { kicker: string; title: string; sub?: string; actions?: ReactNode }) {
   return (
     <>

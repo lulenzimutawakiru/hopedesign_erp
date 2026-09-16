@@ -5,7 +5,7 @@ import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { EmptyState, Skeleton } from '../components/os';
-import { AssetModuleTabs, ChartCard, ModuleHeader, Rec, labelize, openAssetLabelSheet, s } from './assetsShared';
+import { AssetModuleTabs, ChartCard, FlagToggle, FormJump, FormSection, ModuleHeader, Rec, labelize, openAssetLabelSheet, s } from './assetsShared';
 import { AssetDesk } from './AssetDesk';
 import { AssetScan, VerifyFlow, TagsFlow, CustodyFlow, TransfersFlow } from './AssetOps';
 import { MaintenanceFlow, AuditsFlow, DepreciationFlow, DisposalsFlow, ImpairmentsFlow, AnomaliesFlow } from './AssetLifecycle';
@@ -670,6 +670,17 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
   const [attempted, setAttempted] = useState(false);
 
   useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  useEffect(() => {
     void fetchRows('/api/assets/categories?pageSize=500').then(setCategories);
     void fetchRows('/api/assets/types').then(setTypes);
     void fetchRows('/api/assets/classes').then(setClasses);
@@ -714,92 +725,83 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
   const form = (
     <>
       {error && <ErrorBanner error={error} />}
+      <FormJump items={[
+        { id: 'pa-ident', label: 'Identity' },
+        { id: 'pa-class', label: 'Classification' },
+        { id: 'pa-place', label: 'Location' },
+        { id: 'pa-cost', label: 'Cost' },
+        { id: 'pa-dep', label: 'Depreciation' },
+      ]} />
 
-      <h4 className="form-sec">Identification</h4>
-      <div className="form-grid">
+      <FormSection id="pa-ident" title="Identity" hint="Name is enough to save a draft. Serial and model help later scans.">
         <div className={`field field-required${nameMissing ? ' field-invalid' : ''}`} style={{ gridColumn: '1 / -1' }}>
           <label htmlFor="pa-name">Asset name</label>
-          <input id="pa-name" value={s(f.name)} onChange={(e) => { set('name')(e); if (attempted) setAttempted(false); }} placeholder="e.g. Dell Latitude 7450 laptop" autoFocus />
-          {nameMissing && <span className="field-error">Enter a name for this asset to continue.</span>}
+          <input id="pa-name" value={s(f.name)} onChange={(e) => { set('name')(e); if (attempted) setAttempted(false); }} placeholder="e.g. Dell Latitude 7450" autoFocus />
+          {nameMissing && <span className="field-error">Enter a name to continue.</span>}
         </div>
         <div className="field" style={{ gridColumn: '1 / -1' }}>
           <label htmlFor="pa-desc">Description</label>
-          <textarea id="pa-desc" rows={2} value={s(f.description)} onChange={set('description')} placeholder="What the asset is and what it is used for" />
+          <textarea id="pa-desc" rows={2} value={s(f.description)} onChange={set('description')} placeholder="What it is and who uses it" />
         </div>
-        <div className="field"><label htmlFor="pa-man">Manufacturer</label><input id="pa-man" value={s(f.manufacturer)} onChange={set('manufacturer')} placeholder="e.g. Dell" /></div>
-        <div className="field"><label htmlFor="pa-model">Model</label><input id="pa-model" value={s(f.model)} onChange={set('model')} placeholder="e.g. Latitude 7450" /></div>
-        <div className="field"><label htmlFor="pa-sn">Serial number</label><input id="pa-sn" value={s(f.serialNo)} onChange={set('serialNo')} placeholder="Device serial / chassis number" /></div>
-        <div className="field"><label htmlFor="pa-part">Part number</label><input id="pa-part" value={s(f.partNo)} onChange={set('partNo')} placeholder="Manufacturer part reference" /></div>
-        <div className="field"><label htmlFor="pa-sku">SKU</label><input id="pa-sku" value={s(f.sku)} onChange={set('sku')} placeholder="Stock keeping unit, if tracked" /></div>
-        <div className="field"><label htmlFor="pa-bc">Barcode</label><input id="pa-bc" value={s(f.barcode)} onChange={set('barcode')} placeholder="Existing barcode, if any" /></div>
-        <div style={{ gridColumn: '1 / -1' }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 13, fontWeight: 600 }}><input type="checkbox" checked={f.isMachine === true} onChange={set('isMachine')} /> Production machine</label>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 13, fontWeight: 600 }}><input type="checkbox" checked={f.isHighValue === true} onChange={set('isHighValue')} /> High-value asset</label>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 13, fontWeight: 600 }}><input type="checkbox" checked={f.isSerialized !== false} onChange={set('isSerialized')} /> Serialized</label>
-          </div>
+        <div className="field"><label htmlFor="pa-man">Manufacturer</label><input id="pa-man" value={s(f.manufacturer)} onChange={set('manufacturer')} placeholder="Dell" /></div>
+        <div className="field"><label htmlFor="pa-model">Model</label><input id="pa-model" value={s(f.model)} onChange={set('model')} placeholder="Latitude 7450" /></div>
+        <div className="field"><label htmlFor="pa-sn">Serial number</label><input id="pa-sn" value={s(f.serialNo)} onChange={set('serialNo')} placeholder="Chassis / device serial" /></div>
+        <div className="field"><label htmlFor="pa-part">Part number</label><input id="pa-part" value={s(f.partNo)} onChange={set('partNo')} /></div>
+        <div className="field"><label htmlFor="pa-sku">SKU</label><input id="pa-sku" value={s(f.sku)} onChange={set('sku')} /></div>
+        <div className="field"><label htmlFor="pa-bc">Existing barcode</label><input id="pa-bc" value={s(f.barcode)} onChange={set('barcode')} placeholder="If it already has one" /></div>
+        <div className="asset-flags">
+          <FlagToggle on={f.isMachine === true} onChange={(v) => setF((p) => ({ ...p, isMachine: v }))} label="Production machine" hint="Link to the plant register (FSS104, FSS300…)" />
+          <FlagToggle on={f.isHighValue === true} onChange={(v) => setF((p) => ({ ...p, isHighValue: v }))} label="High-value" hint="Extra approval on transfer and disposal" />
+          <FlagToggle on={f.isSerialized !== false} onChange={(v) => setF((p) => ({ ...p, isSerialized: v }))} label="Serialized" hint="Tracked by serial, not quantity" />
         </div>
         {f.isMachine === true && (
-          <div className="field"><label htmlFor="pa-mref">Machine reference</label><input id="pa-mref" value={s(f.machineRef)} onChange={set('machineRef')} placeholder="e.g. FSS104" /><span className="field-hint">Links this asset to the production machine register.</span></div>
+          <div className="field"><label htmlFor="pa-mref">Machine reference</label><input id="pa-mref" value={s(f.machineRef)} onChange={set('machineRef')} placeholder="FSS104" /></div>
         )}
-      </div>
+      </FormSection>
 
-      <h4 className="form-sec">Classification</h4>
-      <div className="form-grid">
-        <div className="field"><label htmlFor="pa-cat">Category</label><select id="pa-cat" value={s(f.categoryId)} onChange={set('categoryId')}><option value="">Not set</option>{categories.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select><span className="field-hint">Drives the asset number prefix.</span></div>
+      <FormSection id="pa-class" title="Classification" hint="Category drives the asset number prefix.">
+        <div className="field"><label htmlFor="pa-cat">Category</label><select id="pa-cat" value={s(f.categoryId)} onChange={set('categoryId')}><option value="">Not set</option>{categories.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
         <div className="field"><label htmlFor="pa-type">Type</label><select id="pa-type" value={s(f.typeId)} onChange={set('typeId')}><option value="">Not set</option>{types.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
-        <div className="field"><label htmlFor="pa-class">Class</label><select id="pa-class" value={s(f.classId)} onChange={set('classId')}><option value="">Not set</option>{classes.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
+        <div className="field"><label htmlFor="pa-class-sel">Class</label><select id="pa-class-sel" value={s(f.classId)} onChange={set('classId')}><option value="">Not set</option>{classes.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
         <div className="field"><label htmlFor="pa-cond">Condition</label><select id="pa-cond" value={s(f.condition)} onChange={set('condition')}>{CONDITIONS.map((m) => <option key={m} value={m}>{labelize(m)}</option>)}</select></div>
         <div className="field"><label htmlFor="pa-op">Operational state</label><select id="pa-op" value={s(f.operationalState)} onChange={set('operationalState')}>{OPS_STATES.map((m) => <option key={m} value={m}>{labelize(m)}</option>)}</select></div>
-      </div>
+      </FormSection>
 
-      <h4 className="form-sec">Location &amp; ownership</h4>
-      <div className="form-grid">
-        <div className="field"><label htmlFor="pa-branch">Branch ID</label><input id="pa-branch" type="number" value={s(f.branchId)} onChange={set('branchId')} placeholder="Leave blank to use your branch" /><span className="field-hint">Defaults to your branch when left blank.</span></div>
+      <FormSection id="pa-place" title="Location & ownership" hint="Where it lives and who owns the budget.">
         <div className="field"><label htmlFor="pa-dept">Department</label><select id="pa-dept" value={s(f.departmentId)} onChange={set('departmentId')}><option value="">Not set</option>{departments.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
-        <div className="field"><label htmlFor="pa-cc">Cost centre ID</label><input id="pa-cc" type="number" value={s(f.costCentreId)} onChange={set('costCentreId')} placeholder="Finance cost centre code" /></div>
-        <div className="field"><label htmlFor="pa-proj">Project</label><select id="pa-proj" value={s(f.projectId)} onChange={set('projectId')}><option value="">Not set</option>{projects.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
         <div className="field"><label htmlFor="pa-loc">Location</label><select id="pa-loc" value={s(f.locationId)} onChange={set('locationId')}><option value="">Not set</option>{locations.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
         <div className="field"><label htmlFor="pa-wh">Warehouse</label><select id="pa-wh" value={s(f.warehouseId)} onChange={set('warehouseId')}><option value="">Not set</option>{warehouses.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
-        <div className="field"><label htmlFor="pa-floor">Floor</label><input id="pa-floor" value={s(f.floor)} onChange={set('floor')} placeholder="e.g. 2" /></div>
-        <div className="field"><label htmlFor="pa-room">Room</label><input id="pa-room" value={s(f.room)} onChange={set('room')} placeholder="e.g. Accounts office" /></div>
+        <div className="field"><label htmlFor="pa-proj">Project</label><select id="pa-proj" value={s(f.projectId)} onChange={set('projectId')}><option value="">Not set</option>{projects.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
+        <div className="field"><label htmlFor="pa-floor">Floor</label><input id="pa-floor" value={s(f.floor)} onChange={set('floor')} placeholder="2" /></div>
+        <div className="field"><label htmlFor="pa-room">Room</label><input id="pa-room" value={s(f.room)} onChange={set('room')} placeholder="Accounts office" /></div>
         <div className="field"><label htmlFor="pa-bldg">Building</label><input id="pa-bldg" value={s(f.building)} onChange={set('building')} /></div>
-      </div>
+        <div className="field"><label htmlFor="pa-cc">Cost centre</label><input id="pa-cc" type="number" value={s(f.costCentreId)} onChange={set('costCentreId')} placeholder="Optional" /></div>
+      </FormSection>
 
-      <h4 className="form-sec">Procurement &amp; cost</h4>
-      <div className="form-grid">
-        <div className="field"><label htmlFor="pa-cost">Purchase cost</label><input id="pa-cost" type="number" min="0" step="0.01" value={s(f.purchaseCost)} onChange={set('purchaseCost')} placeholder="0.00" /></div>
+      <FormSection id="pa-cost" title="Procurement & cost">
+        <div className="field"><label htmlFor="pa-cost-in">Purchase cost</label><input id="pa-cost-in" type="number" min="0" step="0.01" value={s(f.purchaseCost)} onChange={set('purchaseCost')} placeholder="0.00" /></div>
         <div className="field"><label htmlFor="pa-cur">Currency</label><select id="pa-cur" value={s(f.currency)} onChange={set('currency')}>{CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
         <div className="field"><label htmlFor="pa-pdate">Purchase date</label><input id="pa-pdate" type="date" value={s(f.purchaseDate)} onChange={set('purchaseDate')} /></div>
         <div className="field"><label htmlFor="pa-supplier">Supplier</label><select id="pa-supplier" value={s(f.supplierId)} onChange={set('supplierId')}><option value="">Not set</option>{suppliers.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
-        <div className="field"><label htmlFor="pa-po">PO number</label><input id="pa-po" value={s(f.poNumber)} onChange={set('poNumber')} placeholder="Purchase order reference" /></div>
+        <div className="field"><label htmlFor="pa-po">PO number</label><input id="pa-po" value={s(f.poNumber)} onChange={set('poNumber')} /></div>
         <div className="field"><label htmlFor="pa-inv">Invoice number</label><input id="pa-inv" value={s(f.invoiceNumber)} onChange={set('invoiceNumber')} /></div>
-        <div className="field"><label htmlFor="pa-grn">GRN number</label><input id="pa-grn" value={s(f.grnNumber)} onChange={set('grnNumber')} placeholder="Goods received note" /></div>
-        <div className="field"><label htmlFor="pa-cdate">Capitalization date</label><input id="pa-cdate" type="date" value={s(f.capitalizationDate)} onChange={set('capitalizationDate')} /><span className="field-hint">Date the asset enters the fixed asset register.</span></div>
-      </div>
+        <div className="field"><label htmlFor="pa-grn">GRN number</label><input id="pa-grn" value={s(f.grnNumber)} onChange={set('grnNumber')} /></div>
+        <div className="field"><label htmlFor="pa-cdate">Capitalization date</label><input id="pa-cdate" type="date" value={s(f.capitalizationDate)} onChange={set('capitalizationDate')} /><span className="field-hint">When it enters the FAR.</span></div>
+      </FormSection>
 
-      <h4 className="form-sec">Depreciation &amp; tagging</h4>
-      <div className="form-grid">
-        <div className="field"><label htmlFor="pa-life">Useful life (months)</label><input id="pa-life" type="number" min="1" step="1" value={s(f.usefulLifeMonths)} onChange={set('usefulLifeMonths')} placeholder="e.g. 60" /></div>
+      <FormSection id="pa-dep" title="Depreciation & tag" hint="A QR tag is created automatically on save.">
+        <div className="field"><label htmlFor="pa-life">Useful life (months)</label><input id="pa-life" type="number" min="1" step="1" value={s(f.usefulLifeMonths)} onChange={set('usefulLifeMonths')} placeholder="60" /></div>
         <div className="field"><label htmlFor="pa-res">Residual value</label><input id="pa-res" type="number" min="0" step="0.01" value={s(f.residualValue)} onChange={set('residualValue')} placeholder="0.00" /></div>
-        <div className="field"><label htmlFor="pa-depm">Depreciation method</label><select id="pa-depm" value={s(f.depreciationMethod)} onChange={set('depreciationMethod')}>{DEP_METHODS.map((m) => <option key={m} value={m}>{labelize(m)}</option>)}</select></div>
+        <div className="field"><label htmlFor="pa-depm">Method</label><select id="pa-depm" value={s(f.depreciationMethod)} onChange={set('depreciationMethod')}>{DEP_METHODS.map((m) => <option key={m} value={m}>{labelize(m)}</option>)}</select></div>
         <div className="field"><label htmlFor="pa-tag">Tag type</label><select id="pa-tag" value={s(f.tagType)} onChange={set('tagType')}>{TAG_TYPES.map((m) => <option key={m} value={m}>{m.replace('_', ' + ')}</option>)}</select></div>
         {estMonthly !== null && (
           <div className="callout" style={{ gridColumn: '1 / -1', marginBottom: 0 }}>
             <div className="callout-body">
-              <p style={{ margin: 0 }}>Estimated depreciation: <strong>{fmtMoney(estMonthly)} / month</strong> ({fmtMoney(estMonthly * 12)} per year, straight-line over {life} months).</p>
+              <p style={{ margin: 0 }}>About <strong>{fmtMoney(estMonthly)} / month</strong> ({fmtMoney(estMonthly * 12)} / year over {life} months).</p>
             </div>
           </div>
         )}
-      </div>
-
-      <div className="callout callout-info" style={{ marginTop: 16, marginBottom: 0 }}>
-        <span className="callout-icon" aria-hidden>i</span>
-        <div className="callout-body">
-          <p className="callout-title">What happens next</p>
-          <p>The asset is saved as a draft with a permanent asset number and a pending QR tag. Submit it for approval, then capitalise when finance confirms the accounting entry.</p>
-        </div>
-      </div>
+      </FormSection>
     </>
   );
 
@@ -809,16 +811,21 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
         <ModuleHeader
           kicker="Asset management"
           title="Register a new asset"
-          sub="Only the asset name is required to save a draft. A permanent asset number and QR tag are issued on save."
-          actions={
-            <>
-              <button type="button" className="btn" onClick={onClose}>Cancel</button>
-              <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save draft'}</button>
-            </>
-          }
+          sub="Name is enough to save a draft. A permanent number and QR tag are issued on save."
         />
         <AssetModuleTabs active="register" />
-        <section className="card card-pad">{form}</section>
+        {form}
+        <div className="spend-dock">
+          <div className="spend-dock-meta">
+            {name ? <strong>{name}</strong> : 'Name the asset to save a draft'}
+            {estMonthly != null ? <> · {fmtMoney(estMonthly)} / month</> : null}
+            <span> · Ctrl+S saves</span>
+          </div>
+          <div className="head-actions">
+            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save draft'}</button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -827,7 +834,7 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
     <Modal title="Register a new asset" onClose={onClose} wide
       footer={
         <>
-          <span className="muted" style={{ marginRight: 'auto', fontSize: 12 }}>Only the asset name is required to save a draft.</span>
+          <span className="muted" style={{ marginRight: 'auto', fontSize: 12 }}>Name is enough to save a draft.</span>
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save draft'}</button>
         </>

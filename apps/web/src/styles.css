@@ -6668,3 +6668,66 @@ html[data-theme='dark'] .spend-dock {
 html[data-theme='dark'] .asset-tab { background: #102536; border-color: #254154; color: #A8B6C4; }
 html[data-theme='dark'] .asset-tab.is-on { background: #16324A; border-color: #2E7DB2; color: #8FC7EA; }
 html[data-theme='dark'] .asset-label-preview { background: #102536; border-color: #A8B6C4; }
+.asset-form-jump { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+.asset-form-sec {
+  overflow: hidden;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--sheet);
+}
+.asset-form-sec-head {
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-2);
+}
+.asset-form-sec-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.asset-form-sec-head p { margin: 4px 0 0; font-size: 12.5px; color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 500; }
+.asset-form-sec .form-grid { padding: 14px 16px 16px; }
+.asset-flags { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; grid-column: 1 / -1; }
+.asset-flag {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.asset-flag.is-on { border-color: #C9E1F5; background: #E8F2FA; }
+.asset-flag-box {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--sheet);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--mill);
+}
+.asset-flag.is-on .asset-flag-box { border-color: var(--mill); background: var(--mill); color: #fff; }
+.asset-flag-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.asset-flag-copy strong { font-size: 13px; }
+.asset-flag-copy span { font-size: 12px; color: var(--muted); }
+.modal.asset-form-modal { max-width: min(920px, calc(100vw - 32px)); }
+html[data-theme='dark'] .asset-form-sec { background: #102536; border-color: #254154; }
+html[data-theme='dark'] .asset-form-sec-head { background: #0B1F33; border-color: #254154; }
+html[data-theme='dark'] .asset-flag { background: #0B1F33; border-color: #254154; }
+html[data-theme='dark'] .asset-flag.is-on { background: #16324A; border-color: #2E7DB2; }
