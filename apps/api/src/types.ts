@@ -6,6 +6,10 @@ export interface AuthUser {
   department_id: number | null;
   division_id?: number | null;
   employee_id?: number | null;
+  employee_no?: string | null;
+  employee_phone?: string | null;
+  employee_position?: string | null;
+  has_photo?: boolean;
   email: string;
   username: string | null;
   first_name: string;

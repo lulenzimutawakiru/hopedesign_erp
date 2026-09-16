@@ -9,6 +9,10 @@ export interface MeUser {
   department_id: number | null;
   division_id?: number | null;
   employee_id?: number | null;
+  employee_no?: string | null;
+  employee_phone?: string | null;
+  employee_position?: string | null;
+  has_photo?: boolean;
   email: string;
   username: string | null;
   first_name: string;
@@ -154,6 +158,9 @@ interface AuthState {
   startEnrollment: () => Promise<{ secret: string; otpauthUrl: string; qrDataUrl?: string }>;
   completeEnrollment: (code: string, secret?: string) => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  refreshUser: () => Promise<MeUser>;
+  /** Bumped whenever the signed-in user is re-fetched; version photo URLs with it. */
+  photoRev: number;
   logout: () => void;
 }
 
@@ -164,10 +171,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<MeUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<PendingLogin | null>(null);
+  const [photoRev, setPhotoRev] = useState(0);
 
   const loadMe = useCallback(async () => {
     const r = await api<{ user: MeUser }>('/api/auth/me');
     setUser(r.user);
+    setPhotoRev((n) => n + 1);
     return r.user;
   }, []);
 
@@ -341,6 +350,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         startEnrollment,
         completeEnrollment,
         changePassword,
+        refreshUser: loadMe,
+        photoRev,
         logout,
       }}
     >

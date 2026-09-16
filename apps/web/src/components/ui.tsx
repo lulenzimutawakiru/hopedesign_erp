@@ -160,11 +160,13 @@ export function StaffPhoto({
   hasPhoto,
   name,
   size = 72,
+  round,
 }: {
   path: string;
   hasPhoto?: boolean;
   name?: string;
   size?: number;
+  round?: boolean;
 }) {
   const [src, setSrc] = useState('');
   useEffect(() => {
@@ -190,21 +192,25 @@ export function StaffPhoto({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [path, hasPhoto]);
-  const h = Math.round(size * 1.28);
+  const h = round ? size : Math.round(size * 1.28);
+  const style = round
+    ? { width: size, height: size, borderRadius: '50%' as const, fontSize: Math.round(size * 0.4) }
+    : { width: size, height: h };
   if (!src) {
-    const initial = String(name ?? '').trim().split(/\s+/).filter(Boolean)[0]?.[0] ?? '';
+    const parts = String(name ?? '').trim().split(/\s+/).filter(Boolean);
+    const initial = ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || '?';
     return (
-      <span className="staff-photo staff-photo-empty" style={{ width: size, height: h }} aria-hidden>
-        {initial.toUpperCase()}
+      <span className={'staff-photo staff-photo-empty' + (round ? ' is-round' : '')} style={style} aria-hidden>
+        {initial}
       </span>
     );
   }
   return (
     <img
-      className="staff-photo"
+      className={'staff-photo' + (round ? ' is-round' : '')}
       src={src}
       alt={name ? name + ' photograph' : 'Employee photograph'}
-      style={{ width: size, height: h }}
+      style={style}
     />
   );
 }

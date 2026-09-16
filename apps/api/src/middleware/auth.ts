@@ -104,7 +104,12 @@ export async function loadAuthUser(userId: number, tenantId: number): Promise<Au
             db.name AS default_branch_name,
             u.default_fiscal_year_id AS default_fiscal_year_id,
             dfy.code AS default_fiscal_year_code,
-            dfy.name AS default_fiscal_year_name
+            dfy.name AS default_fiscal_year_name,
+            COALESCE(emp.id, u.employee_id) AS employee_id,
+            emp.employee_no,
+            emp.phone AS employee_phone,
+            emp.position AS employee_position,
+            (emp.photo_path IS NOT NULL) AS has_photo
      FROM tenants t
      LEFT JOIN companies c ON c.id = $2 AND c.tenant_id = t.id
      LEFT JOIN branches b ON b.id = $3 AND b.tenant_id = t.id
@@ -114,7 +119,13 @@ export async function loadAuthUser(userId: number, tenantId: number): Promise<Au
      LEFT JOIN companies dc ON dc.id = u.default_company_id AND dc.tenant_id = t.id
      LEFT JOIN branches db ON db.id = u.default_branch_id AND db.tenant_id = t.id
      LEFT JOIN fiscal_years dfy ON dfy.id = u.default_fiscal_year_id AND dfy.tenant_id = t.id
-     LEFT JOIN employees emp ON emp.id = u.employee_id
+     LEFT JOIN LATERAL (
+       SELECT e.id, e.employee_no, e.phone, e.position, e.photo_path
+         FROM employees e
+        WHERE e.tenant_id = t.id AND (e.id = u.employee_id OR e.user_id = u.id)
+        ORDER BY (e.id = u.employee_id) DESC NULLS LAST, e.id
+        LIMIT 1
+     ) emp ON true
      LEFT JOIN warehouses rl ON rl.id = $7 AND rl.tenant_id = t.id
      LEFT JOIN cost_centres cc ON cc.id = $8 AND cc.tenant_id = t.id
      LEFT JOIN projects pj ON pj.id = $9 AND pj.tenant_id = t.id

@@ -3,7 +3,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { hashToken, signAccessToken, signLoginToken, verifyLoginToken, verifyPassword, generateTotpSecret, totpEnrollmentPayload, verifyTotp, redactUser, hashPassword, maskEmail } from '../auth.js';
 import { detach, query, tx } from '../db.js';
 import { authenticate, loadAuthUser } from '../middleware/auth.js';
-import { asyncHandler, badRequest, unauthorized } from '../utils.js';
+import { asyncHandler, badRequest, notFound, unauthorized } from '../utils.js';
+import multer from 'multer';
+import * as hr from '../services/hr.js';
 import { logAudit } from '../services/audit.js';
 import { loginLimiter, mfaLimiter, inviteLimiter, passwordResetLimiter } from '../middleware/rateLimits.js';
 import { ApiError } from '../utils.js';
@@ -1017,6 +1019,41 @@ authRouter.get(
       [user.id], { tenantId: user.tenant_id, userId: user.id }
     );
     res.json({ user, unreadNotifications: Number(unread.rows[0].c) });
+  })
+);
+
+const mePhotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+authRouter.get(
+  '/me/photo',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const photo = await tx((c) => hr.getLinkedEmployeePhoto(c, req.ctx), req.ctx);
+    if (!photo) throw notFound('No photograph on file');
+    res.setHeader('Content-Type', photo.mime);
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.setHeader('Content-Disposition', 'inline; filename="profile-photo"');
+    res.send(photo.bytes);
+  })
+);
+
+authRouter.post(
+  '/me/photo',
+  authenticate,
+  mePhotoUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw badRequest('A photograph file is required (field "file")');
+    const out = await tx(
+      (c) =>
+        hr.uploadLinkedEmployeePhoto(c, req.ctx, {
+          originalname: req.file!.originalname,
+          mimetype: req.file!.mimetype,
+          size: req.file!.size,
+          buffer: req.file!.buffer,
+        }),
+      req.ctx
+    );
+    res.json({ data: out });
   })
 );
 

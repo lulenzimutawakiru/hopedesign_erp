@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
-import { can, type MeUser } from '../auth';
+import { can, useAuth, type MeUser } from '../auth';
 import { navigate } from '../router';
 import { listHref } from '../listState';
 import {
@@ -19,6 +19,7 @@ import {
   visibleGroups,
 } from '../nav';
 import { personaLabel, personaOf } from '../work';
+import { StaffPhoto } from './ui';
 import { BrandMark } from './BrandMark';
 import { shortCompanyName } from '../company';
 import { CreateMenu } from './os';
@@ -592,10 +593,6 @@ export function ScopeChip({ user }: { user: MeUser | null }) {
   );
 }
 
-function initialsOf(user: MeUser | null): string {
-  return ((user?.first_name?.[0] ?? '') + (user?.last_name?.[0] ?? '') || 'U').toUpperCase();
-}
-
 export function UserMenu({
   user,
   prefsLabel,
@@ -613,6 +610,7 @@ export function UserMenu({
   onLogout: () => void;
   focusMode: boolean;
 }) {
+  const { photoRev } = useAuth();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -623,6 +621,7 @@ export function UserMenu({
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
   const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Account';
+  const photoSrc = '/api/auth/me/photo?r=' + photoRev;
   const go = (fn: () => void) => {
     setOpen(false);
     fn();
@@ -630,12 +629,12 @@ export function UserMenu({
   return (
     <div className="topbar-item" ref={ref}>
       <button className="account-trigger" onClick={() => setOpen((s) => !s)} aria-label="Account" aria-expanded={open}>
-        {initialsOf(user)}
+        <StaffPhoto path={photoSrc} hasPhoto={user?.has_photo} name={name} size={34} round />
       </button>
       {open && (
         <div className="topbar-dropdown account-pop" role="menu">
           <button type="button" className="account-id" onClick={() => go(() => navigate('/account'))}>
-            <span className="account-avatar" aria-hidden>{initialsOf(user)}</span>
+            <StaffPhoto path={photoSrc} hasPhoto={user?.has_photo} name={name} size={40} round />
             <span className="account-id-copy">
               <strong>{name}</strong>
               <span>{user?.email}</span>

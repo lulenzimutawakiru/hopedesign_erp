@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useAuth, can } from '../auth';
+import { api } from '../api';
+import { ErrorBanner, StaffPhoto } from '../components/ui';
 import { navigate } from '../router';
 import { applyPrefs, loadPrefs, savePrefs, type Density, type Prefs, type Theme } from '../prefs';
 import { personaLabel, personaOf } from '../work';
-
-function initials(first?: string | null, last?: string | null): string {
-  return ((first?.[0] ?? '') + (last?.[0] ?? '') || 'U').toUpperCase();
-}
 
 function Seg<T extends string>({
   value,
@@ -36,8 +34,11 @@ function Seg<T extends string>({
 }
 
 export default function Account() {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUser, photoRev } = useAuth();
   const [prefs, setPrefs] = useState<Prefs>(() => loadPrefs());
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState('');
+  const [photoNotice, setPhotoNotice] = useState('');
 
   useEffect(() => {
     const on = (e: Event) => setPrefs((e as CustomEvent<Prefs>).detail);
@@ -49,6 +50,24 @@ export default function Account() {
 
   const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Signed in';
   const persona = personaLabel(personaOf(user));
+
+  const attachPhoto = async (file?: File) => {
+    if (!file) return;
+    setPhotoBusy(true);
+    setPhotoError('');
+    setPhotoNotice('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      await api('/api/auth/me/photo', { method: 'POST', body: fd });
+      await refreshUser();
+      setPhotoNotice('Profile photograph updated. It now shows wherever you are signed in.');
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
 
   return (
     <div className="page account-page">
@@ -66,9 +85,31 @@ export default function Account() {
       </header>
 
       <section className="account-hero">
-        <span className="account-avatar account-avatar-lg" aria-hidden>
-          {initials(user?.first_name, user?.last_name)}
-        </span>
+        <div className="account-photo">
+          <StaffPhoto
+            path={'/api/auth/me/photo?r=' + photoRev}
+            hasPhoto={user?.has_photo}
+            name={name}
+            size={64}
+            round
+          />
+          {user?.employee_id ? (
+            <label className="btn btn-sm">
+              {user.has_photo ? 'Change photo' : 'Add photo'}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+                hidden
+                disabled={photoBusy}
+                onChange={(ev) => {
+                  const f = ev.target.files?.[0];
+                  ev.target.value = '';
+                  void attachPhoto(f);
+                }}
+              />
+            </label>
+          ) : null}
+        </div>
         <div>
           <h2>{name}</h2>
           <p>{user?.email}</p>
@@ -76,8 +117,15 @@ export default function Account() {
             {persona}
             {user?.job_title ? ` · ${user.job_title}` : ''}
           </p>
+          {user && !user.employee_id ? (
+            <p className="muted account-photo-hint">
+              No employee file is linked to this account, so there is no photograph to show. Ask HR to link one.
+            </p>
+          ) : null}
         </div>
       </section>
+      {photoError && <ErrorBanner error={photoError} />}
+      {photoNotice ? <p className="muted account-photo-note">{photoNotice}</p> : null}
 
       <div className="account-grid">
         <section className="asset-form-sec" id="prefs">
@@ -145,6 +193,9 @@ export default function Account() {
             <div><dt>Branch</dt><dd>{user?.branch_name ?? user?.branch_code ?? 'All'}</dd></div>
             <div><dt>Department</dt><dd>{user?.department_name ?? user?.department_code ?? '—'}</dd></div>
             <div><dt>Role</dt><dd>{user?.job_title ?? persona}</dd></div>
+            {user?.employee_no ? <div><dt>Employee no</dt><dd className="cell-mono">{user.employee_no}</dd></div> : null}
+            {user?.employee_position ? <div><dt>Position</dt><dd>{user.employee_position}</dd></div> : null}
+            {user?.employee_phone ? <div><dt>Work phone</dt><dd>{user.employee_phone}</dd></div> : null}
           </dl>
         </section>
 

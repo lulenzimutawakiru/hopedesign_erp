@@ -355,6 +355,50 @@ export async function uploadEmployeePhoto(
   return { employeeId, employeeNo, hasPhoto: true, photoKind, mimeType: file.mimetype };
 }
 
+/** The employee row linked to the signed-in user, if HR has joined them. */
+export async function linkedEmployeeId(client: pg.PoolClient, ctx: Ctx): Promise<number | null> {
+  if (!ctx.userId) return null;
+  const res = await client.query(
+    `SELECT e.id
+       FROM employees e
+       JOIN users u ON u.id = $1 AND u.tenant_id = e.tenant_id
+      WHERE e.tenant_id = $2
+        AND (e.id = u.employee_id OR e.user_id = u.id)
+      LIMIT 1`,
+    [ctx.userId, ctx.tenantId]
+  );
+  return res.rows[0] ? Number(res.rows[0].id) : null;
+}
+
+export async function getLinkedEmployeePhoto(
+  client: pg.PoolClient,
+  ctx: Ctx
+): Promise<{ bytes: Buffer; mime: string; employeeNo: string } | null> {
+  const empId = await linkedEmployeeId(client, ctx);
+  if (!empId) return null;
+  const res = await client.query(
+    `SELECT employee_no, photo_path, photo_mime FROM employees WHERE id = $1 AND tenant_id = $2`,
+    [empId, ctx.tenantId]
+  );
+  if (!res.rows.length) return null;
+  const file = readEmployeePhotoFile(res.rows[0].photo_path, res.rows[0].photo_mime);
+  if (!file) return null;
+  return { ...file, employeeNo: String(res.rows[0].employee_no) };
+}
+
+export async function uploadLinkedEmployeePhoto(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  file: EmployeePhotoFile,
+  kind?: string
+) {
+  const empId = await linkedEmployeeId(client, ctx);
+  if (!empId) throw badRequest('No employee record is linked to this account. Ask HR to link you.');
+  const row = await client.query(`SELECT company_id FROM employees WHERE id = $1 AND tenant_id = $2`, [empId, ctx.tenantId]);
+  const companyId = Number(row.rows[0]?.company_id ?? ctx.companyId);
+  return uploadEmployeePhoto(client, { ...ctx, companyId }, empId, file, kind);
+}
+
 export async function getEmployeePhoto(
   client: pg.PoolClient,
   ctx: Ctx,
