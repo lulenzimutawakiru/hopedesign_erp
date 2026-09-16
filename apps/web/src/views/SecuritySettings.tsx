@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { Badge, ErrorBanner, PageLoader } from '../components/ui';
 import { useAuth, type MfaStatus } from '../auth';
+import { navigate } from '../router';
 
 function message(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : err instanceof Error ? err.message : fallback;
@@ -111,13 +112,20 @@ export default function SecuritySettings() {
   const pending = status?.pendingEmail ?? null;
 
   return (
-    <div className="page">
+    <div className="page account-page">
+      <div className="crumbs">
+        <button type="button" className="crumb-link" onClick={() => navigate('/account')}>Account</button>
+        <span className="crumb-sep">/</span>
+        <span>Security</span>
+      </div>
       <header className="page-head">
-        <h1>Security &amp; MFA</h1>
-        <p className="muted">
-          Your second factor is a 6-digit code mailed to your own personal address. No authenticator app, no QR
-          code, and no shared phone needed.
-        </p>
+        <div>
+          <p className="mod-kicker" data-mod="adm">Account</p>
+          <h1>Security &amp; MFA</h1>
+          <p className="muted" style={{ margin: '6px 0 0', maxWidth: 640 }}>
+            Sign-in codes go to your personal email. No authenticator app, no QR code.
+          </p>
+        </div>
       </header>
 
       {error && <ErrorBanner error={error} />}

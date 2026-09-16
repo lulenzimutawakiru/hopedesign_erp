@@ -37,6 +37,7 @@ export function savePrefs(p: Partial<Prefs>): Prefs {
   const next = { ...loadPrefs(), ...p };
   localStorage.setItem(KEY, JSON.stringify(next));
   applyPrefs(next);
+  window.dispatchEvent(new CustomEvent('hope-prefs', { detail: next }));
   return next;
 }
 

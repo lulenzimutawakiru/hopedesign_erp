@@ -579,10 +579,13 @@ function uniqueScopes(user: MeUser): string[] {
   return [...set];
 }
 
+function initialsOf(user: MeUser | null): string {
+  return ((user?.first_name?.[0] ?? '') + (user?.last_name?.[0] ?? '') || 'U').toUpperCase();
+}
+
 export function UserMenu({
   user,
   prefsLabel,
-  onPrefs,
   onHelp,
   onFocus,
   onPin,
@@ -591,7 +594,6 @@ export function UserMenu({
 }: {
   user: MeUser | null;
   prefsLabel: string;
-  onPrefs: () => void;
   onHelp: () => void;
   onFocus: () => void;
   onPin: () => void;
@@ -607,23 +609,58 @@ export function UserMenu({
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
+  const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Account';
+  const go = (fn: () => void) => {
+    setOpen(false);
+    fn();
+  };
   return (
     <div className="topbar-item" ref={ref}>
-      <button className="icon-btn" onClick={() => setOpen((s) => !s)} aria-label="Account" aria-expanded={open}>
-        {(user?.first_name?.[0] ?? 'U').toUpperCase()}
+      <button className="account-trigger" onClick={() => setOpen((s) => !s)} aria-label="Account" aria-expanded={open}>
+        {initialsOf(user)}
       </button>
       {open && (
-        <div className="topbar-dropdown" role="menu">
-          <div className="dropdown-head">{user?.first_name} {user?.last_name}</div>
-          <div className="search-hint">{user?.email}</div>
-          <div className="search-hint">{personaLabel(personaOf(user))} · {user?.job_title ?? 'Named session'}</div>
-          <button className="search-item" onClick={() => { onPin(); setOpen(false); }}>Pin this view</button>
-          <button className="search-item" onClick={() => { onPrefs(); }}>Preferences · {prefsLabel}</button>
-          <button className="search-item" onClick={() => { onFocus(); setOpen(false); }}>{focusMode ? 'Exit floor mode' : 'Floor mode'}</button>
-          <button className="search-item" onClick={() => navigate('/work')}>My activity</button>
-          <button className="search-item" onClick={() => { onHelp(); setOpen(false); }}>Keyboard shortcuts</button>
-          <button className="btn btn-sm btn-block" onClick={onLogout}>Sign out</button>
-          {can(user, 'admin.settings.view') && <button className="search-item" onClick={() => { setOpen(false); navigate('/settings'); }}>Settings</button>}
+        <div className="topbar-dropdown account-pop" role="menu">
+          <button type="button" className="account-id" onClick={() => go(() => navigate('/account'))}>
+            <span className="account-avatar" aria-hidden>{initialsOf(user)}</span>
+            <span className="account-id-copy">
+              <strong>{name}</strong>
+              <span>{user?.email}</span>
+              <span>{personaLabel(personaOf(user))}{user?.job_title ? ` · ${user.job_title}` : ''}</span>
+            </span>
+          </button>
+          <div className="account-sep" />
+          <button type="button" className="account-row" onClick={() => go(onPin)}>
+            <span>Pin this view</span>
+          </button>
+          <button type="button" className="account-row" onClick={() => go(onFocus)}>
+            <span>{focusMode ? 'Exit floor mode' : 'Floor mode'}</span>
+            <span className="account-row-meta">{focusMode ? 'On' : 'Off'}</span>
+          </button>
+          <button type="button" className="account-row" onClick={() => go(() => navigate('/work'))}>
+            <span>My activity</span>
+          </button>
+          <button type="button" className="account-row" onClick={() => go(onHelp)}>
+            <span>Keyboard shortcuts</span>
+            <kbd>?</kbd>
+          </button>
+          <div className="account-sep" />
+          <button type="button" className="account-row" onClick={() => go(() => navigate('/account'))}>
+            <span>Preferences</span>
+            <span className="account-row-meta">{prefsLabel}</span>
+          </button>
+          <button type="button" className="account-row" onClick={() => go(() => navigate('/account/security'))}>
+            <span>Security & MFA</span>
+          </button>
+          {can(user, 'admin.settings.view') && (
+            <button type="button" className="account-row" onClick={() => go(() => navigate('/settings'))}>
+              <span>Organisation settings</span>
+            </button>
+          )}
+          <div className="account-sep" />
+          <button type="button" className="account-row account-row-out" onClick={() => go(onLogout)}>
+            <span>Sign out</span>
+          </button>
         </div>
       )}
     </div>

@@ -42,6 +42,7 @@ const InventoryIntel = lazy(() => import('./InventoryIntel'));
 const ServiceDeskFlow = lazy(() => import('./ServiceDeskFlow'));
 const ComplianceFlow = lazy(() => import('./CompliancePdpo'));
 const OrganisationSettings = lazy(() => import('./OrganisationSettings'));
+const Account = lazy(() => import('./Account'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
   AccessDenied,
@@ -81,6 +82,11 @@ export default function Shell() {
   };
 
   useEffect(() => { applyPrefs(prefs); }, [prefs]);
+  useEffect(() => {
+    const on = (e: Event) => setPrefs((e as CustomEvent<Prefs>).detail);
+    window.addEventListener('hope-prefs', on);
+    return () => window.removeEventListener('hope-prefs', on);
+  }, []);
   useEffect(() => { track('route', { path, bp }); }, [path, bp]);
 
   useEffect(() => {
@@ -178,6 +184,7 @@ export default function Shell() {
   else if (path === '/reports') body = <Reports />;
   else if (path === '/exports') body = <DataExports />;
   else if (path === '/settings') body = <Settings />;
+  else if (path === '/account') body = <Account />;
   else if (path === '/account/security') body = <SecuritySettings />;
   else if (path === '/security-jobs') body = <SecurityJobs />;
   else if (path === '/qr/scan') body = <QrScanner onClose={() => navigate('/dashboard')} />;
@@ -268,9 +275,6 @@ export default function Shell() {
               user={user}
               prefsLabel={`${prefs.theme} · ${prefs.density}`}
               focusMode={prefs.focusMode}
-              onPrefs={() => setPrefs(savePrefs({
-                theme: prefs.theme === 'dark' ? 'light' : prefs.theme === 'light' ? 'system' : 'dark',
-              }))}
               onHelp={() => setHelpOpen(true)}
               onFocus={() => setPrefs(savePrefs({ focusMode: !prefs.focusMode }))}
               onPin={() => setPrefs(toggleFavorite(path))}
