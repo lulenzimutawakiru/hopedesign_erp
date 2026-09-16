@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+import { rmdirSync, unlinkSync } from 'node:fs';
+import path from 'node:path';
 import { api, PASSWORD, auth, loginAs, db, deleteEmployees } from './helpers.js';
+import { config } from '../src/config.js';
 import { issueEmailCode, verifyEmailCode } from '../src/services/mfaEmail.js';
 import { hashToken } from '../src/auth.js';
 import { authenticator } from 'otplib';
@@ -661,6 +664,119 @@ describe('Second-factor readiness', () => {
       expect(String(start.body.error.message)).toContain('already set up');
     } finally {
       await dropMfaUser(userId);
+    }
+  });
+});
+
+describe('Self-service profile photograph', () => {
+  const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+  // A real 1x1 PNG. The endpoint serves back exactly what it stored, so the
+  // fixture has to be a genuine image rather than arbitrary filler bytes.
+  const PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNQcEgAAAFEAMELjZZCAAAAAElFTkSuQmCC',
+    'base64'
+  );
+
+  /** Throwaway tenant-2 account, so photo writes never touch seeded users. */
+  async function createPhotoUser() {
+    const { hashPassword } = await import('../src/auth.js');
+    const username = `photo.${tag}`;
+    const email = `${username}@hopedesign.test`;
+    const ins = await db(
+      `INSERT INTO users (tenant_id, company_id, branch_id, email, username, password_hash, first_name, last_name, status)
+       VALUES (2, 2, 2, $1, $2, $3, 'Photo', 'Self', 'ACTIVE') RETURNING id`,
+      [email, username, await hashPassword(PASSWORD)]
+    );
+    return { userId: Number(ins.rows[0].id), email, username };
+  }
+
+  it('refuses a file over the 5 MB limit with 400 rather than a 500', async () => {
+    // multer rejects the upload while parsing the body, so no employee link is
+    // needed here: the assertion is about the error mapping, not the write path.
+    // It used to surface as an opaque "Internal server error".
+    const { token } = await loginAs('admin');
+    const res = await api
+      .post('/api/auth/me/photo')
+      .set(auth(token))
+      .attach('file', Buffer.alloc(6 * 1024 * 1024, 7), { filename: 'big.png', contentType: 'image/png' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('BAD_REQUEST');
+    expect(String(res.body.error.message)).toMatch(/too large/i);
+  });
+
+  it('stores a photograph for the linked employee and serves it back', async () => {
+    const { token: admin } = await loginAs('admin');
+    const account = await createPhotoUser();
+    let employeeId: number | null = null;
+    try {
+      // Creating the employee under the account's address is what joins the two,
+      // which is how HR links a real member of staff.
+      const emp = await api.post('/api/ops/hr/employees').set(auth(admin)).send({
+        firstName: 'Photo',
+        lastName: `Self${tag}`,
+        position: 'Clerk',
+        email: account.email,
+        baseSalary: 100000,
+      });
+      expect(emp.status).toBe(200);
+      employeeId = Number(emp.body.data.employeeId);
+      expect(Number(emp.body.data.userId)).toBe(account.userId);
+
+      const { token } = await loginAs(account.username);
+
+      const me = await api.get('/api/auth/me').set(auth(token));
+      expect(me.status).toBe(200);
+      expect(Number(me.body.user.employee_id)).toBe(employeeId);
+      expect(me.body.user.has_photo).toBe(false);
+
+      const notYet = await api.get('/api/auth/me/photo').set(auth(token));
+      expect(notYet.status).toBe(404);
+
+      const upload = await api
+        .post('/api/auth/me/photo')
+        .set(auth(token))
+        .attach('file', PNG, { filename: 'passport.png', contentType: 'image/png' });
+      expect(upload.status).toBe(200);
+      expect(upload.body.data.hasPhoto).toBe(true);
+
+      const stored = await api.get('/api/auth/me/photo').set(auth(token));
+      expect(stored.status).toBe(200);
+      expect(String(stored.headers['content-type'])).toMatch(/image\/png/);
+      expect(Buffer.compare(stored.body, PNG)).toBe(0);
+
+      const after = await api.get('/api/auth/me').set(auth(token));
+      expect(after.body.user.has_photo).toBe(true);
+
+      // Without this the endpoint is an arbitrary file store on the employee
+      // record, so a non-image must never reach storage.
+      const wrongType = await api
+        .post('/api/auth/me/photo')
+        .set(auth(token))
+        .attach('file', Buffer.from('not an image'), { filename: 'notes.txt', contentType: 'text/plain' });
+      expect(wrongType.status).toBe(400);
+      expect(String(wrongType.body.error.message)).toMatch(/JPEG or PNG/i);
+    } finally {
+      if (employeeId) {
+        const row = await db(`SELECT photo_path FROM employees WHERE id = $1`, [employeeId]);
+        const rel = row.rows[0]?.photo_path ? String(row.rows[0].photo_path) : '';
+        if (rel) {
+          const abs = path.join(config.storageRoot, rel);
+          try {
+            unlinkSync(abs);
+          } catch {
+            /* already gone */
+          }
+          try {
+            rmdirSync(path.dirname(abs));
+          } catch {
+            /* not empty */
+          }
+        }
+        await deleteEmployees([employeeId]);
+      }
+      await db(`DELETE FROM sessions WHERE user_id = $1`, [account.userId]);
+      await db(`DELETE FROM users WHERE id = $1`, [account.userId]);
     }
   });
 });

@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
+import multer from 'multer';
 import { ApiError } from '../utils.js';
 import { ZodError } from 'zod';
 
@@ -32,6 +33,16 @@ function fromPostgres(err: unknown): ApiError | null {
 }
 
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  // multer refuses oversized or malformed uploads before the route body runs.
+  // Those are client mistakes, so they must read as 400 rather than falling
+  // through to the generic 500 branch (and logging a server-side trace).
+  if (err instanceof multer.MulterError) {
+    const message =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? 'That file is too large. Choose one under 5 MB.'
+        : 'Upload failed: ' + err.message;
+    return res.status(400).json({ error: { code: 'BAD_REQUEST', message } });
+  }
   if (err instanceof ZodError) {
     return res.status(400).json({
       error: {
