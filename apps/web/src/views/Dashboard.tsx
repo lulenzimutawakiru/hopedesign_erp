@@ -35,6 +35,7 @@ interface Exec {
 interface Exception {
   code: string;
   label: string;
+  hint?: string;
   count: number;
   href: string;
   severity: string;
@@ -117,8 +118,8 @@ export default function Dashboard() {
   const approvalsWaiting = work.exceptions.find((e) => e.code === 'approvals')?.count ?? 0;
 
   const heroStats = [
-    { label: 'Live exceptions', value: fmtNum(work.exceptionCount), cls: work.exceptionCount > 0 ? 'crit' : 'ok', href: '/inbox' },
-    { label: 'Decisions', value: fmtNum(approvalsWaiting), cls: approvalsWaiting > 0 ? 'warn' : 'ok', href: '/inbox' },
+    { label: 'To do now', value: fmtNum(work.exceptionCount), cls: work.exceptionCount > 0 ? 'crit' : 'ok', href: '/inbox' },
+    { label: 'To approve', value: fmtNum(approvalsWaiting), cls: approvalsWaiting > 0 ? 'warn' : 'ok', href: '/inbox' },
     { label: 'Overdue AR', value: fmtMoney(work.overdueArAmount), cls: work.overdueArAmount > 0 ? 'warn' : 'ok', href: '/sales/invoices' },
   ];
 
@@ -129,11 +130,11 @@ export default function Dashboard() {
         tile('revenue', 'Cash in', fmtMoney(exec.monthRevenue), `${fmtNum(exec.monthInvoices)} invoices this month`, '💵', '#168A5B', () => navigate('/sales/invoices')),
         tile('ar', 'Receivable risk', fmtMoney(exec.accountsReceivable), `${fmtNum(exec.arOverdue)} overdue`, '⏳', '#D99A00', () => navigate('/sales/invoices')),
         tile('plant', 'Plant load', fmtNum(exec.workOrdersInProgress), `${fmtNum(exec.workOrdersCompleted)} closed of ${fmtNum(exec.workOrdersTotal)}`, '⚙️', '#D97706', () => navigate('/records/production/work_orders')),
-        tile('inbox', 'Decisions on your desk', fmtNum(exec.pendingApprovals), 'need a person', '🗂️', '#8B5CF6', () => navigate('/inbox')),
+        tile('inbox', 'To approve', fmtNum(exec.pendingApprovals), 'yes or no from you', '🗂️', '#8B5CF6', () => navigate('/inbox')),
       ]
     : [
-        tile('exceptions', 'Exceptions', fmtNum(work.exceptionCount), 'need a person', '⚠️', '#C93636', () => navigate('/inbox')),
-        tile('inbox', 'Decisions on your desk', fmtNum(approvalsWaiting), 'approvals and returns', '🗂️', '#8B5CF6', () => navigate('/inbox')),
+        tile('exceptions', 'To do now', fmtNum(work.exceptionCount), 'close these today', '⚠️', '#C93636', () => navigate('/inbox')),
+        tile('inbox', 'To approve', fmtNum(approvalsWaiting), 'yes or no from you', '🗂️', '#8B5CF6', () => navigate('/inbox')),
         tile('stock', 'Stock on books', fmtMoney(work.stockValue), 'current valuation', '📦', '#00A6A6', () => navigate('/inventory/stock')),
         tile('ar', 'Overdue AR', fmtMoney(work.overdueArAmount), 'collections risk', '⏳', '#D99A00', () => navigate('/sales/invoices')),
       ];
@@ -146,8 +147,8 @@ export default function Dashboard() {
           <h1>{greetingFor()}, {first}.</h1>
           <p>
             {work.exceptionCount > 0
-              ? `${work.exceptionCount} live exceptions. Start with the inbox — not the module tree.`
-              : 'No operational exceptions. Use a workspace or the command bar to start work.'}
+              ? `${work.exceptionCount} items you can close today. Start with the inbox.`
+              : 'Nothing is waiting on you. Open a workspace or the command bar to start work.'}
           </p>
           <div className="hero-stats">
             {heroStats.map((s) => (
@@ -164,20 +165,25 @@ export default function Dashboard() {
           </div>
           {work.asOf && <div className="muted" style={{ marginTop: 14, fontSize: 11 }}>Refreshed {fmtDate(work.asOf)}</div>}
         </div>
-        <div className="exception-list">
+        <div className="work-cards work-cards-hero">
           {focused.length === 0 && (
-            <div className="card card-pad" style={{ margin: 0 }}>
-              <strong>Clear floor</strong>
-              <p className="muted">Nothing in your lane is on fire.</p>
+            <div className="work-card is-clear">
+              <span className="work-card-kicker">Clear</span>
+              <strong>You're caught up</strong>
+              <span className="work-card-hint">Nothing in your lane needs you right now.</span>
             </div>
           )}
           {focused.slice(0, 5).map((ex) => (
-            <button key={ex.code} className={`exception-item severity-${ex.severity}`} onClick={() => navigate(ex.href)}>
-              <div>
-                <strong>{ex.label}</strong>
-                <div className="muted">{ex.severity}</div>
-              </div>
-              <span className="ex-count">{ex.count}</span>
+            <button
+              key={ex.code}
+              type="button"
+              className={`work-card severity-${ex.severity}`}
+              onClick={() => navigate(ex.href)}
+            >
+              <span className="work-card-kicker">{ex.severity === 'critical' ? 'Urgent' : ex.severity === 'high' ? 'Do first' : 'Next'}</span>
+              <strong>{ex.label}</strong>
+              <span className="work-card-hint">{ex.hint ?? 'Open to finish'}</span>
+              <span className="work-card-count">{ex.count}</span>
             </button>
           ))}
         </div>

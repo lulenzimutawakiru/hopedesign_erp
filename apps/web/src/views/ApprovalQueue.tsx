@@ -84,8 +84,8 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
       <div className="card card-pad">
         {empty ?? (
           <>
-            <h3 style={{ marginTop: 0 }}>Decision queue is clear</h3>
-            <p className="muted">Nothing is waiting on your role right now.</p>
+            <h3 style={{ marginTop: 0 }}>Nothing to approve</h3>
+            <p className="muted">Your sign-off queue is empty.</p>
           </>
         )}
       </div>

@@ -37,7 +37,7 @@ export default function Approvals() {
         <div>
           <p className="mod-kicker" data-mod="exec">Approvals</p>
           <h1>Approvals queue</h1>
-          <p className="muted">Tasks assigned to you or your roles. Decisions are SoD-checked and audited.</p>
+          <p className="muted">Approve or reject. Each decision is recorded against your name.</p>
         </div>
         {rows.length > 0 && (
           <div className="queue-count"><b>{rows.length}</b> on your desk</div>
@@ -52,8 +52,8 @@ export default function Approvals() {
           onDecide={decide}
           empty={
             <>
-              <h3 style={{ marginTop: 0 }}>Decision queue is clear</h3>
-              <p className="muted">Nothing is waiting on your role right now.</p>
+              <h3 style={{ marginTop: 0 }}>Nothing to approve</h3>
+              <p className="muted">Your sign-off queue is empty.</p>
             </>
           }
         />

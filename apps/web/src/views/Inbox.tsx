@@ -5,7 +5,7 @@ import { navigate } from '../router';
 import ApprovalQueue, { type ApprovalRow } from './ApprovalQueue';
 
 interface WorkFeed {
-  exceptions: { code: string; label: string; count: number; href: string; severity: string }[];
+  exceptions: { code: string; label: string; hint?: string; count: number; href: string; severity: string }[];
   exceptionCount: number;
 }
 
@@ -52,28 +52,34 @@ export default function Inbox() {
   );
 
   return (
-    <div className="page">
+    <div className="page inbox-page">
       <header className="page-head">
         <div>
           <p className="mod-kicker" data-mod="exec">Inbox</p>
-          <h1>What needs a human</h1>
-          <p className="muted">Approvals are SoD-checked. Exceptions are live operational risk — not reports.</p>
+          <h1>Do this now</h1>
+          <p className="muted">
+            Approvals need a yes or no from you. The cards are work you can close today — tap one and finish it.
+          </p>
         </div>
         {rows.length > 0 && (
-          <div className="queue-count"><b>{rows.length}</b> waiting on your desk</div>
+          <div className="queue-count"><b>{rows.length}</b> to approve</div>
         )}
       </header>
       {error && <ErrorBanner error={error} />}
 
       {work && work.exceptions.length > 0 && (
-        <div className="exception-list" style={{ marginBottom: 18 }}>
+        <div className="work-cards" style={{ marginBottom: 18 }}>
           {work.exceptions.map((ex) => (
-            <button key={ex.code} className={`exception-item severity-${ex.severity}`} onClick={() => navigate(ex.href)}>
-              <div>
-                <strong>{ex.label}</strong>
-                <div className="muted">{ex.severity} · open now</div>
-              </div>
-              <span className="ex-count">{ex.count}</span>
+            <button
+              key={ex.code}
+              type="button"
+              className={`work-card severity-${ex.severity}`}
+              onClick={() => navigate(ex.href)}
+            >
+              <span className="work-card-kicker">{ex.severity === 'critical' ? 'Urgent' : ex.severity === 'high' ? 'Do first' : 'Next'}</span>
+              <strong>{ex.label}</strong>
+              <span className="work-card-hint">{ex.hint ?? 'Open to finish'}</span>
+              <span className="work-card-count">{ex.count}</span>
             </button>
           ))}
         </div>
@@ -88,13 +94,13 @@ export default function Inbox() {
           empty={
             approvalsDenied ? (
               <>
-                <h3 style={{ marginTop: 0 }}>No approval queue for your role</h3>
-                <p className="muted">Approvals are managed by your org's approvers - your role doesn't include approval decisions. Exceptions above still need floor action.</p>
+                <h3 style={{ marginTop: 0 }}>No approvals for your role</h3>
+                <p className="muted">You are not an approver. Use the cards above if something still needs doing.</p>
               </>
             ) : (
               <>
-                <h3 style={{ marginTop: 0 }}>Decision queue is clear</h3>
-                <p className="muted">Nothing is waiting on your role. Exceptions above still need floor action.</p>
+                <h3 style={{ marginTop: 0 }}>Nothing to approve</h3>
+                <p className="muted">Your sign-off queue is empty. If cards are showing above, those still need you.</p>
               </>
             )
           }

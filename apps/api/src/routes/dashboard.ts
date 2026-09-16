@@ -192,17 +192,17 @@ dashboardRouter.get(
     );
 
     const exceptions = [
-      { code: 'approvals', label: 'Decisions waiting', count: n(approvals.rows[0], 'count'), href: '/inbox', severity: 'high' as const, persona: 'all' },
-      { code: 'followups', label: 'Overdue follow-ups', count: n(myFollowUps.rows[0], 'c'), href: '/work', severity: 'high' as const, persona: 'commercial' },
-      { code: 'complaints', label: 'Complaints on you', count: n(myComplaints.rows[0], 'c'), href: '/crm/complaints', severity: 'high' as const, persona: 'commercial' },
-      { code: 'low_stock', label: 'Below reorder point', count: n(lowStock.rows[0], 'count'), href: '/inventory/stock', severity: 'high' as const, persona: 'warehouse' },
-      { code: 'orders', label: 'Orders to fulfil', count: n(openOrders.rows[0], 'c'), href: '/sales/orders', severity: 'medium' as const, persona: 'commercial' },
-      { code: 'quotes', label: 'Quotes to convert', count: n(draftQuotes.rows[0], 'c'), href: '/sales/quotations', severity: 'medium' as const, persona: 'commercial' },
-      { code: 'plant', label: 'Live work orders', count: n(woHold.rows[0], 'c'), href: '/plant', severity: 'medium' as const, persona: 'plant' },
-      { code: 'ncr', label: 'Open NCRs', count: n(ncrs.rows[0], 'c'), href: '/records/quality/ncrs', severity: 'high' as const, persona: 'quality' },
-      { code: 'secure', label: 'Active secure jobs', count: n(secJobs.rows[0], 'c'), href: '/security-jobs', severity: 'high' as const, persona: 'security' },
-      { code: 'qr', label: 'QR anomalies', count: n(qrAnom.rows[0], 'c'), href: '/qr/scan', severity: 'critical' as const, persona: 'security' },
-      { code: 'ar', label: 'Overdue receivables', count: n(overdueAr.rows[0], 'c'), href: '/sales/invoices', severity: 'high' as const, persona: 'finance' },
+      { code: 'approvals', label: 'Approve or reject', hint: 'Waiting on your sign-off', count: n(approvals.rows[0], 'count'), href: '/inbox', severity: 'high' as const, persona: 'all' },
+      { code: 'followups', label: 'Close overdue follow-ups', hint: 'Past due, assigned to you', count: n(myFollowUps.rows[0], 'c'), href: '/work', severity: 'high' as const, persona: 'commercial' },
+      { code: 'complaints', label: 'Answer complaints', hint: 'Assigned to you', count: n(myComplaints.rows[0], 'c'), href: '/crm/complaints', severity: 'high' as const, persona: 'commercial' },
+      { code: 'low_stock', label: 'Reorder stock', hint: 'At or below reorder point', count: n(lowStock.rows[0], 'count'), href: '/inventory/stock', severity: 'high' as const, persona: 'warehouse' },
+      { code: 'orders', label: 'Dispatch orders', hint: 'Approved and waiting fulfilment', count: n(openOrders.rows[0], 'c'), href: '/sales/orders', severity: 'medium' as const, persona: 'commercial' },
+      { code: 'quotes', label: 'Convert quotes', hint: 'Draft or approved quotations', count: n(draftQuotes.rows[0], 'c'), href: '/sales/quotations', severity: 'medium' as const, persona: 'commercial' },
+      { code: 'plant', label: 'Run work orders', hint: 'Released, in progress or on hold', count: n(woHold.rows[0], 'c'), href: '/plant', severity: 'medium' as const, persona: 'plant' },
+      { code: 'ncr', label: 'Close NCRs', hint: 'Quality records still open', count: n(ncrs.rows[0], 'c'), href: '/records/quality/ncrs', severity: 'high' as const, persona: 'quality' },
+      { code: 'secure', label: 'Move secure jobs', hint: 'In production, not yet delivered', count: n(secJobs.rows[0], 'c'), href: '/security-jobs', severity: 'high' as const, persona: 'security' },
+      { code: 'qr', label: 'Investigate QR flags', hint: 'Open authenticity anomalies', count: n(qrAnom.rows[0], 'c'), href: '/qr/scan', severity: 'critical' as const, persona: 'security' },
+      { code: 'ar', label: 'Collect overdue invoices', hint: 'Past due receivables', count: n(overdueAr.rows[0], 'c'), href: '/sales/invoices', severity: 'high' as const, persona: 'finance' },
     ].filter((e) => e.count > 0);
 
     res.json({
