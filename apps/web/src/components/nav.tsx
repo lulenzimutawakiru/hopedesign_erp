@@ -522,61 +522,74 @@ export function MobileDock({
   );
 }
 
-export function ScopeChip({ user }: { user: MeUser | null }) {
-  const [open, setOpen] = useState(false);
-  if (!user) return null;
-  const scopes = uniqueScopes(user);
+function ScopeRow({ k, v }: { k: string; v: string }) {
+  if (!v || v === '—') return null;
   return (
-    <div className="scope-wrap">
-      <button className="scope-chip" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="dialog" title={`${user.company_name ?? user.tenant_name ?? ''}${(user.company_name ?? user.tenant_name) ? ' · ' : ''}${user.company_code ?? user.tenant_code ?? ''}${user.branch_id ? ` · ${user.branch_name ?? ''} (${user.branch_code ?? ''})` : ''}${user.department_id ? ` · ${user.department_name ?? ''} (${user.department_code ?? ''})` : ''}${user.division_id ? ` · ${user.division_name ?? ''} (${user.division_code ?? ''})` : ''}${user.requester_code ? ` · Requester ${user.requester_name ?? ''} (${user.requester_code ?? ''})` : ''}${user.requesting_location_code ? ` · Requesting ${user.requesting_location_name ?? ''} (${user.requesting_location_code ?? ''})` : ''}${user.cost_centre_code ? ` · Cost Centre ${user.cost_centre_name ?? ''} (${user.cost_centre_code ?? ''})` : ''}${user.project_code ? ` · Project ${user.project_name ?? ''} (${user.project_code ?? ''})` : ''}${user.budget_code ? ` · Budget ${user.budget_code}` : ''}${user.fiscal_year_code ? ` · Fiscal Year ${user.fiscal_year_code}` : ''}${user.request_date ? ` · Requested ${user.request_date}` : ''}${user.required_by_date ? ` · Required by ${user.required_by_date}` : ''}${user.default_priority ? ` · Priority ${user.default_priority}` : ''}${user.default_procurement_category ? ` · Category ${user.default_procurement_category}` : ''}${user.default_purpose ? ` · Purpose set` : ''}${user.default_business_justification ? ` · Justification set` : ''}${user.default_delivery_location ? ` · Delivery set` : ''}${user.default_currency_code ? ` · Currency ${user.default_currency_code}` : ''}${user.default_expected_total ? ` · Expected ${Number(user.default_expected_total).toLocaleString()}` : ''}${user.default_confidentiality_level ? ` · Confidentiality ${user.default_confidentiality_level}` : ''}${user.default_emergency_purchase ? ` · Emergency default` : ''}${user.default_recurring_purchase ? ` · Recurring default` : ''}`.trim()}>
-        <span>{user.company_code ?? user.tenant_code ?? ''}</span>
-        {user.branch_id ? <span className="muted"> · {user.branch_code ?? user.branch_name ?? `B${user.branch_id}`}</span> : null}
-      </button>
-      {open && (
-        <div className="topbar-dropdown scope-pop" role="dialog" aria-label="Organisational scope">
-          <div className="dropdown-head">{user.company_name ?? user.tenant_name ?? user.tenant_code ?? 'Working context'}</div>
-          <div className="search-hint">Company {user.company_code ?? user.tenant_code ?? (user.company_id ? `#${user.company_id}` : '—')} · Branch {user.branch_code ?? user.branch_name ?? (user.branch_id ? `#${user.branch_id}` : 'all')} · Dept {user.department_code ?? user.department_name ?? user.department_id ?? 'all'} · Div {user.division_code ?? user.division_name ?? user.division_id ?? 'all'}</div>
-          <div className="search-hint">Default Company {user.default_company_code ?? '—'} · default for new requisitions</div>
-<div className="search-hint">Default Branch {user.default_branch_code ?? '—'} · default for new requisitions</div>
-<div className="search-hint">Default Fiscal Year {user.default_fiscal_year_code ?? '—'} · default for new requisitions</div>
-          <div className="search-hint">Requester {user.requester_name ?? user.email ?? 'you'} ({user.requester_code ?? user.id ?? '—'}){user.job_title ? ` · ${user.job_title}` : ''}</div>
-          <div className="search-hint">Requesting Location {user.requesting_location_code ?? user.branch_code ?? '—'} · {user.requesting_location_name ?? user.branch_name ?? 'branch'}{user.requesting_location_address ? ` — ${user.requesting_location_address}` : ''}</div>
-          <div className="search-hint">Cost Centre {user.cost_centre_code ?? '—'} · {user.cost_centre_name ?? 'unassigned'}</div>
-          <div className="search-hint">Project {user.project_code ?? '—'} · {user.project_name ?? 'unassigned'}</div>
-          <div className="search-hint">Budget {user.budget_code ?? '—'} · {user.budget_status ?? 'unassigned'}{user.budget_amount != null ? ` (UGX ${Number(user.budget_amount).toLocaleString('en-UG')})` : ''}</div>
-          <div className="search-hint">Fiscal Year {user.fiscal_year_code ?? '—'} · {user.fiscal_year_name ?? 'unassigned'}{user.fiscal_year_start ? ` (${user.fiscal_year_start} → ${user.fiscal_year_end ?? '—'})` : ''}{user.fiscal_year_status ? ` · ${user.fiscal_year_status}` : ''}</div>
-          <div className="search-hint">Request Date {user.request_date ?? '—'} · today (org business date)</div>
-          <div className="search-hint">Required By {user.required_by_date ?? '—'} · {user.default_lead_days ? `${user.default_lead_days}-day lead` : 'no default lead'}</div>
-          <div className="search-hint">Priority {user.default_priority ?? '—'} · default for new requisitions</div>
-          <div className="search-hint">Procurement Category {user.default_procurement_category ?? '—'} · default for new requisitions</div>
-          <div className="search-hint">Purpose {user.default_purpose ? `"${user.default_purpose.length > 64 ? user.default_purpose.slice(0, 64) + '…' : user.default_purpose}"` : '—'} · default justification</div>
-          <div className="search-hint">Business Justification {user.default_business_justification ? `"${user.default_business_justification.length > 64 ? user.default_business_justification.slice(0, 64) + '…' : user.default_business_justification}"` : '—'} · default for new requisitions</div>
-          <div className="search-hint">Delivery Location {user.default_delivery_location ? `"${user.default_delivery_location.length > 64 ? user.default_delivery_location.slice(0, 64) + '…' : user.default_delivery_location}"` : '—'} · default for new requisitions</div>
-          <div className="search-hint">Currency {user.default_currency_code ?? '—'} · default for new requisitions</div>
-          <div className="search-hint">Expected Total Value {user.default_expected_total ? Number(user.default_expected_total).toLocaleString() : '—'} · default for new requisitions</div>
-          <div className="search-hint">Confidentiality Level {user.default_confidentiality_level ?? '—'} · default for new requisitions</div>
-          <div className="search-hint">Emergency Purchase {user.default_emergency_purchase ? 'Yes' : 'No'} · default for new requisitions</div>
-          <div className="search-hint">Recurring Purchase {user.default_recurring_purchase ? 'Yes' : 'No'} · default for new requisitions</div>
-          {scopes.map((s) => (
-            <div key={s} className={`search-item ${s === `c${user.company_id}-b${user.branch_id}` ? 'is-current' : ''}`}>
-              <span>{s === `c${user.company_id}-b${user.branch_id}` ? 'Current session' : s}</span>
-            </div>
-          ))}
-          {scopes.length > 1 && (
-            <p className="search-hint">Scope is bound to this session by RBAC and ABAC. Switching company or branch requires a scoped re-authentication — it cannot be done in the client.</p>
-          )}
-          <button className="search-item" onClick={() => setOpen(false)}>Close</button>
-        </div>
-      )}
+    <div className="scope-row">
+      <span>{k}</span>
+      <strong>{v}</strong>
     </div>
   );
 }
 
-function uniqueScopes(user: MeUser): string[] {
-  const set = new Set<string>();
-  set.add(`c${user.company_id}-b${user.branch_id}`);
-  for (const r of user.roles ?? []) set.add(`c${r.company_id}-b${r.branch_id}`);
-  return [...set];
+export function ScopeChip({ user }: { user: MeUser | null }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+  if (!user) return null;
+  const company = user.company_name ?? user.tenant_name ?? user.company_code ?? 'Company';
+  const branch = user.branch_name ?? user.branch_code ?? '';
+  const dept = user.department_name ?? user.department_code ?? '';
+  return (
+    <div className="scope-wrap" ref={ref}>
+      <button
+        type="button"
+        className="scope-chip"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title={[company, branch, dept].filter(Boolean).join(' · ')}
+      >
+        <span>{user.company_code ?? user.tenant_code ?? ''}</span>
+        {user.branch_code || user.branch_name ? (
+          <span className="muted"> · {user.branch_code ?? user.branch_name}</span>
+        ) : null}
+      </button>
+      {open && (
+        <div className="topbar-dropdown account-pop scope-pop" role="dialog" aria-label="Session scope">
+          <div className="account-id" style={{ cursor: 'default' }}>
+            <span className="account-avatar" aria-hidden>{(user.company_code ?? 'HD').slice(0, 2)}</span>
+            <span className="account-id-copy">
+              <strong>{company}</strong>
+              <span>{[branch || 'All branches', dept || 'All departments'].join(' · ')}</span>
+            </span>
+          </div>
+          <div className="account-sep" />
+          <ScopeRow k="You" v={[user.requester_name ?? [user.first_name, user.last_name].filter(Boolean).join(' '), user.job_title].filter(Boolean).join(' · ')} />
+          <ScopeRow k="Location" v={[user.requesting_location_code, user.requesting_location_name].filter(Boolean).join(' · ') || branch} />
+          <ScopeRow k="Cost centre" v={[user.cost_centre_code, user.cost_centre_name].filter(Boolean).join(' · ')} />
+          <ScopeRow k="Project" v={[user.project_code, user.project_name].filter(Boolean).join(' · ')} />
+          <ScopeRow k="Fiscal year" v={user.fiscal_year_code ?? user.fiscal_year_name ?? ''} />
+          {(user.default_priority || user.default_procurement_category || user.default_currency_code) && (
+            <>
+              <div className="account-sep" />
+              <p className="scope-caption">Requisition defaults</p>
+              <ScopeRow k="Priority" v={user.default_priority ?? ''} />
+              <ScopeRow k="Category" v={user.default_procurement_category ?? ''} />
+              <ScopeRow k="Currency" v={user.default_currency_code ?? ''} />
+            </>
+          )}
+          <p className="search-hint">This sign-in is bound to this company and branch. Switch by signing in again.</p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function initialsOf(user: MeUser | null): string {

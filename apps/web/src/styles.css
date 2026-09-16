@@ -1196,7 +1196,25 @@ html[data-theme='dark'] .scan-verified .verify-mark { color: #20C4C4; }
   border: 1px solid var(--line); background: var(--sheet); color: var(--ink);
   border-radius: 999px; padding: 6px 10px; font-size: 11px; font-weight: 700; cursor: pointer;
 }
-.scope-pop { min-width: 280px; }
+.scope-pop { min-width: 300px; max-width: 360px; }
+.scope-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 13px;
+}
+.scope-row span { color: var(--muted); font-weight: 650; font-size: 12px; }
+.scope-row strong { font-weight: 650; }
+.scope-caption {
+  margin: 0;
+  padding: 6px 12px 2px;
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
 .search-item.is-current { font-weight: 700; }
 
 .sidebar { transition: width 160ms ease, min-width 160ms ease, margin-left 160ms ease; }

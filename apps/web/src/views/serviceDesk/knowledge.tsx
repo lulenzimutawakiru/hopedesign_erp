@@ -138,16 +138,17 @@ export default function ServiceDeskKnowledge({ id }: { id?: number | null }) {
   return (
     <div className="page sd-page" style={modStyle()}>
       <SdHead
-        title="HOPE DESIGN Knowledge Base"
-        kicker="Knowledge base"
-        sub="Operational guidance, how-to guides and resolutions. Articles follow a draft to published lifecycle and can be linked to service tickets."
+        title="Knowledge base"
+        kicker="Service desk"
+        sub="How-to guides and resolutions agents can attach to tickets. Draft → review → publish."
       />
       <SdTabs active="knowledge" />
-      <div className="tabs sd-sub-tabs">
+      <nav className="spend-tabs" aria-label="Knowledge sections">
         {TABS.map(([key, text]) => (
           <button
             key={key}
-            className={key === tab ? 'tab active' : 'tab'}
+            type="button"
+            className={'spend-tab' + (key === tab ? ' is-on' : '')}
             onClick={() => {
               setTab(key);
               navigate('/service-desk/knowledge?tab=' + key);
@@ -156,7 +157,7 @@ export default function ServiceDeskKnowledge({ id }: { id?: number | null }) {
             {text}
           </button>
         ))}
-      </div>
+      </nav>
       {meta.error ? <ErrorBanner error={meta.error} /> : null}
       {tab === 'articles' && <ArticlesList onOpen={openArticle} canCreate={can(user, 'service_desk.knowledge.create')} />}
       {tab === 'search' && <KnowledgeSearch onOpen={openArticle} />}
@@ -318,6 +319,16 @@ function ArticlesList({ onOpen, canCreate }: { onOpen: (id: number) => void; can
           <div className="card-pad">
             <Spinner />
           </div>
+        ) : rows.length === 0 ? (
+          <Nothing
+            text={
+              search || status || categoryId
+                ? 'Nothing matches those filters. Clear search or pick All statuses.'
+                : 'No articles yet. Write the first how-to so agents can attach it to tickets.'
+            }
+            action={canCreate && !search && !status && !categoryId ? '+ New article' : undefined}
+            onAction={canCreate ? () => setCreating(true) : undefined}
+          />
         ) : (
           <div className="table-wrap">
             <table className="table sd-kb-table">
@@ -334,7 +345,6 @@ function ArticlesList({ onOpen, canCreate }: { onOpen: (id: number) => void; can
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 && <EmptyRow cols={8}>No articles match the current filters.</EmptyRow>}
                 {rows.map((a) => (
                   <tr
                     key={s(a.id)}

@@ -333,17 +333,18 @@ export function SdTabs({ active }: { active: string }) {
   const { user } = useAuth();
   const tabs = SD_TABS.filter(([, , , perm]) => itemVisible(user, { perm }));
   return (
-    <div className="tabs sd-tabs">
+    <nav className="spend-tabs sd-chip-tabs" aria-label="Service desk">
       {tabs.map(([key, text, href]) => (
         <button
           key={key}
-          className={key === active ? 'tab active' : 'tab'}
+          type="button"
+          className={'spend-tab' + (key === active ? ' is-on' : '')}
           onClick={() => navigate(href)}
         >
           {text}
         </button>
       ))}
-    </div>
+    </nav>
   );
 }
 
