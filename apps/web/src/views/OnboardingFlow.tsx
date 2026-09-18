@@ -81,7 +81,7 @@ function OnboardingDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening onboarding case" />;
+  if (!doc) return <PageLoader variant="page" label="Opening onboarding case" />;
   const s = doc.instance;
   const tasks = doc.tasks ?? [];
   const status = String(s.status);

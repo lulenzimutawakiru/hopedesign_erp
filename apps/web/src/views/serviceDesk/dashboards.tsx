@@ -516,7 +516,7 @@ function AgentDash({ d }: { d: Rec }) {
       <div className="grid-2 sd-stack">
         <SecCard title="Queue load" sub="Where the open work is sitting">
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Queue</th>
@@ -552,7 +552,7 @@ function AgentDash({ d }: { d: Rec }) {
 
         <SecCard title="Technician workload" sub="Open load per service desk agent">
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Technician</th>
@@ -663,7 +663,7 @@ function ManagerDash({ d }: { d: Rec }) {
 
         <SecCard title="Escalations by level" sub="Where escalations were raised, and how many are still open">
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Level</th>
@@ -723,7 +723,7 @@ function ManagerDash({ d }: { d: Rec }) {
           }
         >
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Category</th>
@@ -927,7 +927,7 @@ function ExecutiveDash({ d }: { d: Rec }) {
 
       <SecCard title="Demand by category" sub="Where the organisation spends its service capacity">
         <div className="table-wrap">
-          <table className="table">
+          <table className="data">
             <thead>
               <tr>
                 <th>Category</th>

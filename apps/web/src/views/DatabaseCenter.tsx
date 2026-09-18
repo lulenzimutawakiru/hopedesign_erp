@@ -4,6 +4,7 @@ import { useAuth, can } from '../auth';
 import { useCompanyProfile } from '../company';
 import { ErrorBanner, Modal } from '../components/ui';
 import { ConfirmDialog, EmptyState, Meter, Skeleton } from '../components/os';
+import { toast } from '../components/toast';
 import { Rec, s, tileStyle } from './assetsShared';
 
 type Row = Rec;
@@ -225,7 +226,7 @@ function OverviewTab({ canManage }: { canManage: boolean }) {
       </LoadOr>
       <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
         <button className="btn" onClick={refresh}>↻ Refresh health</button>
-        {canManage && <button className="btn btn-primary" onClick={() => { api(DATA('/backups'), { method: 'POST', body: JSON.stringify({ backupType: 'FULL' }) }).then(refresh).catch((e) => alert(e.message)); }}>Create full backup</button>}
+        {canManage && <button className="btn btn-primary" onClick={() => { api(DATA('/backups'), { method: 'POST', body: JSON.stringify({ backupType: 'FULL' }) }).then(refresh).catch((e) => toast.fromError('Could not start the backup.', e)); }}>Create full backup</button>}
       </div>
     </>
   );
@@ -403,7 +404,7 @@ function BackupsTab({ canCreate, canRestore, canApprove }: { canCreate: boolean;
       await api(DATA(path), { method: 'POST', body: JSON.stringify(body) });
       refresh();
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Action failed');
+      toast.fromError('The backup action failed.', e);
     } finally {
       setBusy(false);
     }
@@ -498,7 +499,7 @@ function IntegrityTab({ canRun }: { canRun: boolean }) {
       setSummary(r.data);
       refresh();
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Integrity run failed');
+      toast.fromError('The integrity run failed.', e);
     } finally {
       setBusy(false);
     }
@@ -578,7 +579,7 @@ function RetentionTab({ canEdit }: { canEdit: boolean }) {
       setEdit(null);
       refresh();
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Update failed');
+      toast.fromError('Could not save the retention policy.', e);
     }
   };
   return (
@@ -695,7 +696,7 @@ function SettingsTab() {
       setEdit(null);
       refresh();
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Update failed');
+      toast.fromError('Could not save the database setting.', e);
     }
   };
   return (
@@ -806,7 +807,7 @@ function MaintenanceTab({ canRun }: { canRun: boolean }) {
   const [confirmReindex, setConfirmReindex] = useState(false);
   const run = async (action: string) => {
     if (!table.trim()) {
-      alert('Enter a table first, e.g. finance.journal_entries or products');
+      toast.warning('Enter a table first, e.g. finance.journal_entries or products');
       return;
     }
     if (action === 'REINDEX' && !confirmReindex) {
@@ -822,7 +823,7 @@ function MaintenanceTab({ canRun }: { canRun: boolean }) {
       setResult(r.data);
       setConfirmReindex(false);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Maintenance failed');
+      toast.fromError('The maintenance action failed.', e);
     } finally {
       setBusy(false);
     }
@@ -890,4 +891,3 @@ function MaintenanceTab({ canRun }: { canRun: boolean }) {
     </>
   );
 }
-

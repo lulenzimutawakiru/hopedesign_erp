@@ -5,6 +5,7 @@ import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { ConfirmDialog, Drawer, EmptyState, Skeleton } from '../components/os';
+import { toast } from '../components/toast';
 import { Rec, labelize, s, tileStyle } from './assetsShared';
 import DatabaseCenter from './DatabaseCenter';
 import GovernanceFlow from './GovernanceFlow';
@@ -80,7 +81,7 @@ function Dashboard() {
       </div>
     );
   }
-  if (!data) return <PageLoader label="Loading administration dashboard..." />;
+  if (!data) return <PageLoader variant="page" label="Loading administration dashboard..." />;
   const u = (data.users ?? {}) as Rec;
   const sess = (data.sessions ?? {}) as Rec;
   const auditRows = Array.isArray(data.recentAudit) ? (data.recentAudit as Rec[]) : [];
@@ -1731,7 +1732,6 @@ function SettingsPage() {
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [error, setError] = useState('');
-  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
 
   const load = async () => {
@@ -1750,12 +1750,6 @@ function SettingsPage() {
   useEffect(() => {
     load().catch((e) => setError(e instanceof Error ? e.message : 'Failed to load settings'));
   }, []);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 4200);
-    return () => window.clearTimeout(t);
-  }, [toast]);
 
   const dirtyKeys = useMemo(() => {
     const n: Record<string, number> = {};
@@ -1807,17 +1801,17 @@ function SettingsPage() {
       const row: Record<string, Draft> = {};
       for (const [key, s] of Object.entries(r.data.settings)) row[key] = toDraft(s.value);
       setDrafts((prev) => ({ ...prev, [cat.category]: row }));
-      setToast({ kind: 'ok', text: `${cat.label} settings saved` });
+      toast.success(`${cat.label} settings saved`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to save settings';
       setError(msg);
-      setToast({ kind: 'err', text: msg });
+      toast.fromError('Unable to save settings', e);
     } finally {
       setBusy((b) => ({ ...b, [cat.category]: false }));
     }
   };
 
-  if (!cats) return <PageLoader label="Loading system settings..." />;
+  if (!cats) return <PageLoader variant="page" label="Loading system settings..." />;
 
   const activeCat = cats.find((c) => c.category === active) ?? cats[0];
 
@@ -2084,11 +2078,6 @@ function SettingsPage() {
           )}
         </div>
       </div>
-      {toast && (
-        <div className="toast" style={{ background: toast.kind === 'err' ? 'var(--clay)' : 'var(--moss)', color: '#fff' }}>
-          {toast.text}
-        </div>
-      )}
     </div>
   );
 }
@@ -2300,13 +2289,6 @@ function Features() {
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<Rec | null>(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 4200);
-    return () => window.clearTimeout(t);
-  }, [toast]);
 
   const load = () => {
     setLoading(true);
@@ -2346,10 +2328,10 @@ function Features() {
           effective_to: s(r.effectiveTo) || undefined,
         }),
       });
-      setToast({ kind: 'ok', text: `${s(r.module)}.${s(r.feature)} ${r.enabled ? 'disabled' : 'enabled'}` });
+      toast.success(`${s(r.module)}.${s(r.feature)} ${r.enabled ? 'disabled' : 'enabled'}`);
       load();
     } catch (e) {
-      setToast({ kind: 'err', text: e instanceof Error ? e.message : 'Feature update failed' });
+      toast.fromError('Unable to update feature', e);
     }
   };
 
@@ -2419,13 +2401,8 @@ function Features() {
         <FeatureModal
           initial={editing}
           onClose={() => { setShowAdd(false); setEditing(null); }}
-          onSaved={(msg) => { setToast({ kind: 'ok', text: msg }); load(); }}
+          onSaved={(msg) => { toast.success(msg); load(); }}
         />
-      )}
-      {toast && (
-        <div className="toast" style={{ background: toast.kind === 'err' ? 'var(--clay)' : 'var(--moss)', color: '#fff' }}>
-          {toast.text}
-        </div>
       )}
     </div>
   );
@@ -2637,13 +2614,6 @@ function Backups() {
   const [error, setError] = useState('');
   const [restore, setRestore] = useState<Rec | null>(null);
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 4200);
-    return () => window.clearTimeout(t);
-  }, [toast]);
 
   const load = () => {
     setLoading(true);
@@ -2668,10 +2638,10 @@ function Backups() {
         body: JSON.stringify({ reason }),
       });
       setRestore(null);
-      setToast({ kind: 'ok', text: `Restore request ${s(r.data?.status)} for ${s(r.data?.backupId)} - awaiting approval` });
+      toast.success(`Restore request ${s(r.data?.status)} for ${s(r.data?.backupId)} - awaiting approval`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Restore request failed');
-      setToast({ kind: 'err', text: e instanceof Error ? e.message : 'Restore request failed' });
+      toast.fromError('Unable to request restore', e);
     } finally {
       setBusy(false);
     }
@@ -2738,11 +2708,6 @@ function Backups() {
           onCancel={() => setRestore(null)}
           onConfirm={(reason) => requestRestore(reason)}
         />
-      )}
-      {toast && (
-        <div className="toast" style={{ background: toast.kind === 'err' ? 'var(--clay)' : 'var(--moss)', color: '#fff' }}>
-          {toast.text}
-        </div>
       )}
     </div>
   );

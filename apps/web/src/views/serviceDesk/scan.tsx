@@ -340,7 +340,7 @@ function MaintenancePanel({ maintenance }: { maintenance: Rec }) {
         {runtime && <Fact k="Last runtime read" v={runtime.readAt ? fmtDT(runtime.readAt) : null} />}
       </div>
       <div className="table-wrap">
-        <table className="table">
+        <table className="data">
           <thead>
             <tr>
               <th style={{ width: '150px' }}>Reference</th>
@@ -382,7 +382,7 @@ function HistoryPanel({ history, onOpenTicket }: { history: Rec; onOpenTicket: (
         <Fact k="Last scan" v={insp.lastScanAt ? fmtDT(insp.lastScanAt) : null} />
       </div>
       <div className="table-wrap">
-        <table className="table">
+        <table className="data">
           <thead>
             <tr>
               <th style={{ width: '170px' }}>Ticket</th>

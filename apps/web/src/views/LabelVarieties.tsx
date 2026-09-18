@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, fmtDate } from '../api';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
+import { ConfirmDialog } from '../components/os';
 
 interface LabelTemplate {
   id: number;
@@ -92,6 +93,8 @@ export default function LabelVarieties() {
     void load();
   }, []);
 
+  const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; run: () => void } | null>(null);
+
   const filtered = useMemo(
     () => (kind === 'ALL' ? templates : templates.filter((t) => t.kind === kind)),
     [templates, kind]
@@ -158,17 +161,23 @@ export default function LabelVarieties() {
   };
 
   const archive = async (row: LabelTemplate) => {
-    if (!window.confirm(`Archive label variety ${row.code}? It will no longer be offered for new labels.`)) return;
-    try {
-      await api(`/api/qr/labels/templates/${row.id}`, { method: 'DELETE' });
-      setMsg(`${row.code} archived`);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to archive variety');
-    }
+    setConfirm({
+      title: 'Archive label variety',
+      body: `Archive ${row.code}? It will no longer be offered for new labels. Existing printed labels keep their variety.`,
+      label: 'Archive variety',
+      run: async () => {
+        try {
+          await api(`/api/qr/labels/templates/${row.id}`, { method: 'DELETE' });
+          setMsg(`${row.code} archived`);
+          await load();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Failed to archive variety');
+        }
+      },
+    });
   };
 
-  if (loading) return <PageLoader label="Loading label varieties..." />;
+  if (loading) return <PageLoader variant="page" label="Loading label varieties..." />;
 
   return (
     <div className="page">
@@ -210,7 +219,7 @@ export default function LabelVarieties() {
       ) : (
         <div className="card">
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Variety</th>
@@ -376,6 +385,17 @@ export default function LabelVarieties() {
             Default variety for this kind (used when no variety is chosen)
           </label>
         </Modal>
+      )}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.label}
+          danger
+          reasonLabel={null}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => { const c = confirm; setConfirm(null); if (c) void c.run(); }}
+        />
       )}
     </div>
   );

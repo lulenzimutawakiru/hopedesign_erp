@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, fmtMoney, fmtNum } from '../api';
 import { Badge, ErrorBanner } from '../components/ui';
-import { EmptyState, Meter, Skeleton } from '../components/os';
+import { ConfirmDialog, EmptyState, Meter, Skeleton } from '../components/os';
 import { pick } from '../helpers';
 import { navigate } from '../router';
 import { useAuth, can } from '../auth';
@@ -189,6 +189,7 @@ export function OperatorFloor({ woId }: { woId?: number }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; run: () => void } | null>(null);
 
   const load = () => {
     api<{ data: Rec[] }>('/api/production/work_orders?pageSize=50')
@@ -254,14 +255,28 @@ export function OperatorFloor({ woId }: { woId?: number }) {
               <button className="btn btn-warning" disabled={busy} onClick={() => act(`/api/ops/production/work-orders/${id}/output`, { outputType: 'WASTE', quantity: Number(qty) })}>Waste</button>
               <button className="btn" disabled={busy} onClick={() => navigate('/records/quality/inspections')}>QC</button>
               <button className="btn btn-success" disabled={busy} onClick={() => {
-                if (window.confirm(`Complete ${String(pick(selected, 'woNo', 'wo_no'))}? This cannot be undone from the floor.`)) {
-                  void act(`/api/ops/production/work-orders/${id}/complete`);
-                }
+                setConfirm({
+                  title: 'Complete work order',
+                  body: `Complete ${String(pick(selected, 'woNo', 'wo_no'))}? Produced ${fmtNum(pick(selected, 'producedQty', 'produced_qty'))} of ${fmtNum(pick(selected, 'quantity'))}. This cannot be undone from the floor.`,
+                  label: 'Complete job',
+                  run: () => { void act(`/api/ops/production/work-orders/${id}/complete`); },
+                });
               }}>Complete</button>
             </div>
             <button className="btn btn-block" style={{ marginTop: 12 }} onClick={() => navigate('/qr/scan')}>Scan QR</button>
           </section>
         </>
+      )}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.label}
+          danger
+          reasonLabel={null}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => { const c = confirm; setConfirm(null); if (c) c.run(); }}
+        />
       )}
     </div>
   );

@@ -152,7 +152,7 @@ function EmployeeDesk({ id }: { id: number }) {
     }
   };
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Loading identity..." />;
+  if (!doc) return <PageLoader variant="page" label="Loading identity..." />;
   const emp = (doc.employee ?? {}) as Rec;
   const identities = (doc.identities ?? []) as Rec[];
   const cards = (doc.cards ?? []) as Rec[];

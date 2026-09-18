@@ -626,7 +626,7 @@ export default function ReportsView() {
               <div className="empty-state"><h3>No daily summaries</h3><p>No attendance records exist for {rangeLabel}. Adjust the date range and apply again.</p></div>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>{hdr(DAILY_HEADERS)}</thead>
                   <tbody>
                     {days.map((d) => (
@@ -661,7 +661,7 @@ export default function ReportsView() {
               <div className="empty-state"><h3>No employee summaries</h3><p>Employees only appear once attendance records exist in the selected range.</p></div>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>{hdr(EMP_HEADERS)}</thead>
                   <tbody>
                     {emps.map((e) => (
@@ -704,7 +704,7 @@ export default function ReportsView() {
               <div className="empty-state"><h3>No department data</h3><p>Department totals are derived from attendance records in the selected range.</p></div>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>{hdr(['Department', 'Employees', 'Present', 'Late', 'Absent', 'On leave', 'Worked'])}</thead>
                   <tbody>
                     {depts.map((d) => (
@@ -737,7 +737,7 @@ export default function ReportsView() {
               <div className="empty-state"><h3>No late arrivals or absences</h3><p>Everyone in the selected range attended on time.</p></div>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>{hdr(['Employee', 'No', 'Date', 'Status', 'Department', 'Late minutes', 'Worked'])}</thead>
                   <tbody>
                     {registerRows.map((r) => {
@@ -783,7 +783,7 @@ export default function ReportsView() {
             ) : (
               <>
                 <div className="table-wrap" style={{ marginTop: 14 }}>
-                  <table className="table">
+                  <table className="data">
                     <thead>{hdr(DETAIL_HEADERS)}</thead>
                     <tbody>
                       {detPage.map((r) => (
@@ -827,7 +827,7 @@ export default function ReportsView() {
                 <div className="empty-state"><h3>No event volume</h3><p>No normalized events were returned for the selected range.</p></div>
               ) : (
                 <div className="table-wrap">
-                  <table className="table">
+                  <table className="data">
                     <thead>{hdr(EVENT_HEADERS)}</thead>
                     <tbody>
                       {evAgg.map((a) => (
@@ -863,7 +863,7 @@ export default function ReportsView() {
                 <div className="empty-state"><h3>No failed events</h3><p>No events failed processing in the selected range. Failures land on the Failed Events tab for retry or reprocess.</p></div>
               ) : (
                 <div className="table-wrap">
-                  <table className="table">
+                  <table className="data">
                     <thead>{hdr(FAILED_HEADERS)}</thead>
                     <tbody>
                       {failedRows.map((e) => {
@@ -905,7 +905,7 @@ export default function ReportsView() {
                 <div className="empty-state"><h3>No exceptions</h3><p>No attendance exceptions were raised in the selected range.</p></div>
               ) : (
                 <div className="table-wrap">
-                  <table className="table">
+                  <table className="data">
                     <thead>{hdr(EXCEPTION_HEADERS)}</thead>
                     <tbody>
                       {excCap.map((x) => {
@@ -944,7 +944,7 @@ export default function ReportsView() {
                 </div>
               </div>
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>{hdr(DEVICE_HEADERS)}</thead>
                   <tbody>
                     {dev.map((d) => (

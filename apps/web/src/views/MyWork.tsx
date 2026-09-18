@@ -89,7 +89,7 @@ export default function MyWork() {
   };
 
   if (error && !bundle) return <ErrorBanner error={error} />;
-  if (!bundle) return <PageLoader label="Opening your work…" />;
+  if (!bundle) return <PageLoader variant="page" label="Opening your work…" />;
 
   const leads = bundle.leads ?? [];
   const opps = bundle.opportunities ?? [];

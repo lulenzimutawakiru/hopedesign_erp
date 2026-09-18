@@ -338,7 +338,7 @@ function LeaveCalendar() {
       .finally(() => setLoading(false));
   }, []);
   useEffect(() => { load(cursor); }, [cursor, load]);
-  if (loading) return <PageLoader label="Loading leave calendar" />;
+  if (loading) return <PageLoader variant="page" label="Loading leave calendar" />;
   const [y, m] = cursor.split('-').map(Number);
   const first = new Date(y, m - 1, 1);
   const startDow = first.getDay();

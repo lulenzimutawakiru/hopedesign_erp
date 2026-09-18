@@ -106,7 +106,7 @@ function CommandView() {
   }, []);
   useEffect(() => { void load(); }, [load]);
   if (err) return <div className="card card-pad"><ErrorBanner error={err} /></div>;
-  if (!data) return <PageLoader label="Loading document command center…" />;
+  if (!data) return <PageLoader variant="page" label="Loading document command center…" />;
   const k = (data.kpis ?? {}) as Rec;
   const pending = (data.pendingReview ?? []) as Rec[];
   const activity = (data.activity ?? []) as Rec[];

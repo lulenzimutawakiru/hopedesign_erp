@@ -1,10 +1,10 @@
 ﻿import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api, fmtDate, fmtMoney, fmtNum } from '../api';
-import { PageLoader, ErrorBanner } from '../components/ui';
 import { navigate } from '../router';
 import { useAuth, can } from '../auth';
 import { COMMANDS, greetingFor, personaLabel, personaOf, WORKSPACES } from '../work';
-import { Meter } from '../components/os';
+import { EmptyState, Meter } from '../components/os';
+import { DashboardSkeleton, ErrorState, SectionHeader, safeMessage } from '../components/states';
 
 interface Exec {
   stockValue: number;
@@ -87,12 +87,14 @@ export default function Dashboard() {
   const [exec, setExec] = useState<Exec | null>(null);
   const [work, setWork] = useState<WorkFeed | null>(null);
   const [activity, setActivity] = useState<Record<string, unknown>[]>([]);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<unknown>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    setError(null);
     api<{ data: WorkFeed }>('/api/dashboard/work')
       .then((r) => setWork(r.data))
-      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load work'));
+      .catch((e) => setError(e));
     if (can(user, 'reports.executive.view')) {
       api<{ data: Exec }>('/api/dashboard/executive')
         .then((r) => setExec(r.data))
@@ -101,7 +103,7 @@ export default function Dashboard() {
     api<{ data: Record<string, unknown>[] }>('/api/dashboard/activity')
       .then((r) => setActivity(r.data ?? []))
       .catch(() => undefined);
-  }, [user]);
+  }, [user, reloadKey]);
 
   const nowActions = useMemo(
     () => COMMANDS.filter((c) => c.id !== 'home' && (!c.perm || can(user, c.perm))).slice(0, 6),
@@ -110,8 +112,16 @@ export default function Dashboard() {
 
   const spaces = WORKSPACES.filter((w) => !w.perm || can(user, w.perm));
 
-  if (error && !work) return <ErrorBanner error={error} />;
-  if (!work) return <PageLoader label="Assembling your day…" />;
+  if (error && !work) {
+    return (
+      <ErrorState
+        title="We couldn't load your dashboard"
+        message={safeMessage(error)}
+        onRetry={() => setReloadKey((k) => k + 1)}
+      />
+    );
+  }
+  if (!work) return <DashboardSkeleton />;
 
   const first = user?.first_name ?? 'there';
   const focused = work.exceptions.filter((e) => e.persona === persona || e.persona === 'all' || persona === 'executive');
@@ -224,13 +234,27 @@ export default function Dashboard() {
 
       {exec && (
         <section className="card card-pad">
-          <h3 style={{ marginTop: 0 }}>Today's operations</h3>
-          <Meter label="Production" value={exec.workOrdersTotal ? (exec.workOrdersCompleted / exec.workOrdersTotal) * 100 : 0} />
-          <Meter label="Warehouse cover" value={exec.lowStockCount ? Math.max(20, 100 - exec.lowStockCount * 8) : 91} />
-          <Meter label="Sales fulfilment" value={exec.openOrders ? Math.min(95, 40 + exec.openOrders * 4) : 73} />
+          <SectionHeader
+            title="Operations health"
+            description="Work-order completion is all-time. Production and yield figures cover the current month."
+          />
+          {exec.workOrdersTotal > 0 ? (
+            <Meter label="Work orders completed" value={(exec.workOrdersCompleted / exec.workOrdersTotal) * 100} />
+          ) : null}
+          {exec.monthYieldPct != null ? <Meter label="Material yield" value={exec.monthYieldPct} /> : null}
+          {exec.stockProducts > 0 ? (
+            <Meter label="SKUs at or below reorder point" value={(exec.lowStockCount / exec.stockProducts) * 100} />
+          ) : null}
+          {exec.workOrdersTotal === 0 && exec.monthYieldPct == null && exec.stockProducts === 0 ? (
+            <EmptyState
+              title="No operational data yet"
+              body="Production, work-order and stock figures appear here once the first work order is released for this company."
+            />
+          ) : null}
           <p className="muted" style={{ margin: '10px 0 0', fontSize: 12 }}>
             {fmtNum(exec.monthProduced)} units produced · {fmtNum(exec.monthWaste)} waste · {fmtNum(exec.monthScrapped)} scrapped
             {exec.monthYieldPct != null ? ` · ${exec.monthYieldPct}% yield this month` : ''}
+            {` · ${fmtNum(exec.lowStockCount)} of ${fmtNum(exec.stockProducts)} SKUs at or below reorder point`}
           </p>
         </section>
       )}

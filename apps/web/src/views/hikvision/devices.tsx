@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api';
 import { useAuth, can } from '../../auth';
 import { Modal, Pager, PageLoader, ErrorBanner } from '../../components/ui';
+import { ConfirmDialog } from '../../components/os';
+import { toast } from '../../components/toast';
 import {
   HikHead, HikTabs, Rec, toNum, toStr, pickS, pickB,
   PURPOSE_LABEL, DEVICE_STATUS_LABEL, DEVICE_STATUS_TONE, SEVERITY_TONE, RAW_STATUS_TONE,
@@ -334,7 +336,7 @@ export default function DevicesView() {
   const [syncNote, setSyncNote] = useState('');
   const [confirmDel, setConfirmDel] = useState<Rec | null>(null);
   const [delReason, setDelReason] = useState('');
-  const [toast, setToast] = useState('');
+  const [confirmStatus, setConfirmStatus] = useState<{ dev: Rec; next: string; reasonRequired: boolean } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -373,20 +375,14 @@ export default function DevicesView() {
     return r.data;
   }, []);
 
-  const changeStatus = async (dev: Rec, next: string) => {
-    let reason = '';
-    if (next === 'MAINTENANCE' || next === 'DISABLED') {
-      const raw = window.prompt('Reason for ' + next + '? (recorded in the audit trail)');
-      if (raw === null) return;
-      reason = raw;
-    }
+  const changeStatus = async (dev: Rec, next: string, reason: string) => {
     try {
-      await act('POST', '/api/hikvision/devices/' + pickS(dev, 'id') + '/status', { status: next, reason: reason || undefined });
-      setToast('Device marked ' + DEVICE_STATUS_LABEL[next] + '.');
+      await act('POST', '/api/hikvision/devices/' + pickS(dev, 'id') + '/status', { status: next, reason: reason.trim() || undefined });
+      toast.success('Device marked ' + DEVICE_STATUS_LABEL[next] + '.');
       setSyncNote('');
       reloadAll();
     } catch (e) {
-      setToast(e instanceof Error ? e.message : 'Status change failed');
+      toast.fromError('Could not change device status', e);
     }
   };
 
@@ -396,7 +392,7 @@ export default function DevicesView() {
       setSyncNote(JSON.stringify({ message: r.message, deviceKey: r.deviceKey }, null, 2));
       reloadAll();
     } catch (e) {
-      setToast(e instanceof Error ? e.message : 'Key rotation failed');
+      toast.fromError('Key rotation failed', e);
     }
   };
 
@@ -406,7 +402,7 @@ export default function DevicesView() {
       setSyncNote(JSON.stringify(r, null, 2));
       reloadAll();
     } catch (e) {
-      setToast(e instanceof Error ? e.message : 'Time sync failed');
+      toast.fromError('Time sync failed', e);
     }
   };
 
@@ -417,10 +413,10 @@ export default function DevicesView() {
         method: 'DELETE',
         body: JSON.stringify({ reason: delReason.trim() || undefined }),
       });
-      setToast(toStr(r.data.message) || 'Device deleted or disabled.');
+      toast.success(toStr(r.data.message) || 'Device deleted or disabled.');
       setConfirmDel(null); setDelReason(''); setDetail(null); reloadAll();
     } catch (e) {
-      setToast(e instanceof Error ? e.message : 'Delete failed');
+      toast.fromError('Delete failed', e);
     }
   };
   const items = ((data ?? {}).items ?? []) as Rec[];
@@ -444,12 +440,6 @@ export default function DevicesView() {
         }
       />
       <HikTabs active="devices" />
-      {toast ? (
-        <div className="notice-banner" style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-          <span>{toast}</span>
-          <button type="button" className="modal-close" onClick={() => setToast('')} aria-label="Dismiss">{'\u2715'}</button>
-        </div>
-      ) : null}
       {error ? <ErrorBanner error={error} /> : null}
 
       <div className="hk-toolbar">
@@ -615,7 +605,7 @@ export default function DevicesView() {
               const current = pickS(dev, 'connection_status');
               return (
                 <button key={s} type="button" className="btn btn-sm" disabled={current === s}
-                  onClick={() => void changeStatus(dev, s)}>
+                  onClick={() => setConfirmStatus({ dev, next: s, reasonRequired: s === 'MAINTENANCE' || s === 'DISABLED' })}>
                   {current === s ? DEVICE_STATUS_LABEL[s] + ' (current)' : 'Mark ' + DEVICE_STATUS_LABEL[s]}
                 </button>
               );
@@ -776,6 +766,20 @@ export default function DevicesView() {
             <Txa value={delReason} onChange={setDelReason} placeholder="Why is this device being removed?" />
           </Field>
         </Modal>
+      ) : null}
+      {confirmStatus ? (
+        <ConfirmDialog
+          title={'Mark device ' + DEVICE_STATUS_LABEL[confirmStatus.next]}
+          body={
+            confirmStatus.reasonRequired
+              ? 'This takes the terminal out of service. The reason is recorded in the audit trail.'
+              : 'Change ' + pickS(confirmStatus.dev, 'name') + ' to ' + DEVICE_STATUS_LABEL[confirmStatus.next] + '?'
+          }
+          confirmLabel={DEVICE_STATUS_LABEL[confirmStatus.next]}
+          danger={confirmStatus.reasonRequired}
+          onCancel={() => setConfirmStatus(null)}
+          onConfirm={(reason) => void changeStatus(confirmStatus.dev, confirmStatus.next, reason).finally(() => setConfirmStatus(null))}
+        />
       ) : null}
       <p className="muted hint" style={{ marginTop: 8 }}>
         Webhook events authenticate against the device serial number and the one-time device key.

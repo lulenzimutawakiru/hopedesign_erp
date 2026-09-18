@@ -420,7 +420,7 @@ function ProductStock({ id }: { id: number }) {
   }, [id]);
 
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading product…" />;
+  if (!data) return <PageLoader variant="page" label="Loading product…" />;
   const p = data.product;
   const onHand = data.locations.reduce((s, r) => s + num(pick(r, 'quantity')), 0);
   const reserved = data.locations.reduce((s, r) => s + num(pick(r, 'reservedQty')), 0);
@@ -1169,7 +1169,7 @@ function TransferDetail({ id }: { id: number }) {
   };
 
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Loading transfer…" />;
+  if (!doc) return <PageLoader variant="page" label="Loading transfer…" />;
   const status = String(pick(doc, 'status') ?? '');
 
   return (
@@ -1250,7 +1250,7 @@ function AdjustmentDetail({ id }: { id: number }) {
   };
 
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Loading adjustment…" />;
+  if (!doc) return <PageLoader variant="page" label="Loading adjustment…" />;
   const status = String(pick(doc, 'status') ?? '');
 
   return (

@@ -384,7 +384,7 @@ function CandidatesPanel({ canCreate }: { canCreate: boolean }) {
       ) : (
         <SecCard title="Detected patterns" sub={(data?.windowDays ?? 0) + ' day window, minimum ' + (data?.minCount ?? 0)}>
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Cluster</th>
@@ -559,7 +559,7 @@ function KnownErrorsPanel() {
           </div>
         ) : (
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th style={{ width: 140 }}>Code</th>
@@ -890,7 +890,7 @@ export function ProblemDetail({ id }: { id: number }) {
               }
             >
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>
                     <tr>
                       <th style={{ width: 160 }}>Ticket</th>
@@ -969,7 +969,7 @@ export function ProblemDetail({ id }: { id: number }) {
               }
             >
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>
                     <tr>
                       <th style={{ width: 150 }}>Method</th>
@@ -1050,7 +1050,7 @@ export function ProblemDetail({ id }: { id: number }) {
               }
             >
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>
                     <tr>
                       <th style={{ width: 140 }}>Code</th>

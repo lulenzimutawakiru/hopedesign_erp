@@ -383,7 +383,7 @@ export default function PublicVerify() {
               {members.length > 0 && (
                 <>
                   <h4 style={{ margin: '12px 0 8px' }}>Reams in this carton</h4>
-                  <table className="table">
+                  <table className="data">
                     <thead>
                       <tr><th>#</th><th>Ream</th><th>QR code</th><th>Verified</th><th>Status</th></tr>
                     </thead>

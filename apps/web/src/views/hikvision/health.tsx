@@ -101,7 +101,7 @@ export default function HealthBoard() {
   ]);
 
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading device health..." />;
+  if (!data) return <PageLoader variant="page" label="Loading device health..." />;
 
   return (
     <div className="page">
@@ -176,7 +176,7 @@ export default function HealthBoard() {
           <div className="empty-state"><h3>No devices</h3><p>Register terminals under Devices to start monitoring them here.</p></div>
         ) : (
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Device</th><th>Purpose</th><th>Status</th><th>Clock drift</th>

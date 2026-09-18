@@ -3,6 +3,7 @@ import { api, fmtDate, fmtMoney, fmtNum, openDocument } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
+import { ConfirmDialog } from '../components/os';
 
 type Rec = Record<string, unknown>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -277,7 +278,7 @@ function LoanDesk({ id }: { id: number }) {
     try { await api(path, { method: 'POST', body: '{}' }); setNotice(ok); load(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
-  if (!doc && !error) return <PageLoader label="Opening loan…" />;
+  if (!doc && !error) return <PageLoader variant="page" label="Opening loan…" />;
   const loan = ((doc?.loan ?? doc) ?? {}) as Rec;
   return (
     <Page kicker="Staff loan" title={String(loan.loanNo ?? 'Loan')} back="/people/loans">
@@ -361,7 +362,7 @@ function AdvanceDesk({ id }: { id: number }) {
     try { await api(path, { method: 'POST', body: '{}' }); setNotice(ok); load(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
-  if (!doc && !error) return <PageLoader label="Opening advance…" />;
+  if (!doc && !error) return <PageLoader variant="page" label="Opening advance…" />;
   const a = ((doc?.advance ?? doc) ?? {}) as Rec;
   return (
     <Page kicker="Salary advance" title={String(a.advanceNo ?? 'Advance')} back="/people/advances">
@@ -422,7 +423,7 @@ function PaymentDesk({ id }: { id: number }) {
     try { const r = await api<{ data: Rec }>(path, { method: 'POST', body: '{}' }); setNotice(ok); load(); return r.data; }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); return null; }
   };
-  if (!doc && !error) return <PageLoader label="Opening payment batch…" />;
+  if (!doc && !error) return <PageLoader variant="page" label="Opening payment batch…" />;
   const items = (doc?.items as Rec[]) ?? [];
   return (
     <Page kicker="Pay batch" title={String(doc?.batchNo ?? 'Batch')} back="/people/payments">
@@ -725,6 +726,7 @@ function RelationsDesk() {
   const [employeeId, setEmployeeId] = useState('');
   const [subject, setSubject] = useState('');
   const [reason, setReason] = useState('');
+  const [resolve, setResolve] = useState<Rec | null>(null);
   const post = async (path: string, body: Rec, reload: () => void) => {
     try { await api(path, { method: 'POST', body: JSON.stringify(body) }); setOpen(''); reload(); grievances.load(); cases.load(); warnings.load(); }
     catch (e) { grievances.setError(e instanceof Error ? e.message : 'Action failed'); }
@@ -748,7 +750,7 @@ function RelationsDesk() {
           <tr key={String(r.id)}>
             <td>{nameOf(r)}</td><td>{String(r.subject)}</td><td><Badge value={r.priority} /></td><td><Badge value={r.status} /></td>
             <td>{String(r.status) === 'OPEN' && can(user, 'hr.grievances.resolve') && (
-              <button className="btn btn-sm" onClick={() => { const resolution = window.prompt('Resolution'); if (resolution) post(`/api/ops/hcm/relations/grievances/${r.id}/resolve`, { resolution }, grievances.load); }}>Resolve</button>
+              <button className="btn btn-sm" onClick={() => setResolve(r)}>Resolve</button>
             )}</td>
           </tr>
         ))}</tbody>
@@ -779,6 +781,21 @@ function RelationsDesk() {
             {open === 'warning' && <Field label="Reason"><input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>}
           </div>
         </Modal>
+      )}
+      {resolve && (
+        <ConfirmDialog
+          title="Resolve grievance"
+          confirmLabel="Resolve grievance"
+          reasonLabel="Resolution"
+          reasonRequired
+          body={`Record the resolution for ${nameOf(resolve)} — "${String(resolve.subject)}". The grievance moves to resolved.`}
+          onCancel={() => setResolve(null)}
+          onConfirm={(resolution) => {
+            const g = resolve;
+            setResolve(null);
+            post(`/api/ops/hcm/relations/grievances/${String(g.id)}/resolve`, { resolution }, grievances.load);
+          }}
+        />
       )}
     </Page>
   );

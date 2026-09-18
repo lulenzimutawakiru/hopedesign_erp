@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api';
 import { useAuth, can } from '../../auth';
 import { Modal, Pager, ErrorBanner } from '../../components/ui';
+import { ConfirmDialog } from '../../components/os';
 import {
   HikHead, HikTabs, Rec, toNum, toStr, pickS, pickN,
   VERIF_LABEL, statusPill, fmtWhen, empName, empNo, MiniAvatar,
@@ -65,6 +66,7 @@ export default function SyncCentre() {
   const [linkQ, setLinkQ] = useState('');
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
+  const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; danger?: boolean; onConfirm: (reason: string) => Promise<void> } | null>(null);
 
   // ---- new mapping modal ----
   const [createOpen, setCreateOpen] = useState(false);
@@ -196,11 +198,10 @@ export default function SyncCentre() {
     } finally { setBusy(false); }
   };
 
-  const deleteLink = async (link: LinkRow) => {
-    if (!window.confirm('Remove access mapping for ' + empName(link.employee) + '? This does not delete the employee.')) return;
+  const deleteLink = async (link: LinkRow, reason: string) => {
     setBusy(true); setError('');
     try {
-      await api('/api/hikvision/links/' + link.id, { method: 'DELETE', body: JSON.stringify({ reason: 'Removed from device mapping.' }) });
+      await api('/api/hikvision/links/' + link.id, { method: 'DELETE', body: JSON.stringify({ reason: reason.trim() || 'Removed from device mapping.' }) });
       setNote('Mapping removed.');
       await loadLinks();
     } catch (e) {
@@ -239,19 +240,12 @@ export default function SyncCentre() {
     } finally { setBusy(false); }
   };
 
-  const runEmployeeAction = async (employeeId: number, action: 'deactivate' | 'disable' | 'remove-access', deviceIdRaw?: string) => {
-    if (!canRemove && action !== 'deactivate') { setError('You do not have permission to disable device access.'); return; }
-    const msg = action === 'deactivate'
-      ? 'Deactivate this employee on every terminal and move mappings to INACTIVE?'
-      : action === 'disable'
-        ? 'Disable access for this employee?'
-        : 'Remove all device access for this employee?';
-    if (!window.confirm(msg)) return;
+  const runEmployeeAction = async (employeeId: number, action: 'deactivate' | 'disable' | 'remove-access', deviceIdRaw: string | undefined, reason: string) => {
     setBusy(true); setError(''); setResult(null);
     try {
       const r = await api<{ data: Rec }>('/api/hikvision/sync/employees/' + employeeId + '/' + action, {
         method: 'POST',
-        body: JSON.stringify({ deviceId: deviceIdRaw ? Number(deviceIdRaw) : undefined, reason: 'Operator request.' }),
+        body: JSON.stringify({ deviceId: deviceIdRaw ? Number(deviceIdRaw) : undefined, reason: reason.trim() || 'Operator request.' }),
       });
       setResult(r.data);
       setNote('Action completed and logged.');
@@ -259,6 +253,22 @@ export default function SyncCentre() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Action failed');
     } finally { setBusy(false); }
+  };
+
+  const askEmployeeAction = (employeeId: number, action: 'deactivate' | 'disable' | 'remove-access', deviceIdRaw?: string) => {
+    if (!canRemove && action !== 'deactivate') { setError('You do not have permission to disable device access.'); return; }
+    const body = action === 'deactivate'
+      ? 'Deactivate this employee on every terminal and move mappings to INACTIVE?'
+      : action === 'disable'
+        ? 'Disable access for this employee?'
+        : 'Remove all device access for this employee?';
+    setConfirm({
+      title: action === 'deactivate' ? 'Deactivate employee' : action === 'disable' ? 'Disable device access' : 'Remove device access',
+      body,
+      label: action === 'remove-access' ? 'Remove access' : action === 'disable' ? 'Disable access' : 'Deactivate',
+      danger: true,
+      onConfirm: (reason) => runEmployeeAction(employeeId, action, deviceIdRaw, reason),
+    });
   };
 
   const summary = (r: Rec | null) => (r && typeof r.summary === 'object' ? (r.summary as Rec) : null);
@@ -310,7 +320,7 @@ export default function SyncCentre() {
               <div className="empty-state"><h3>No mappings</h3><p>Map employees to terminals so their employee numbers are recognised.</p></div>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>
                     <tr><th>Employee</th><th>Terminal</th><th>Device identifier</th><th>Verification</th><th>Status</th><th>Actions</th></tr>
                   </thead>
@@ -349,10 +359,16 @@ export default function SyncCentre() {
                                 </select>
                               ) : null}
                               {canRemove ? (
-                                <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => void runEmployeeAction(Number(l.employeeId), 'remove-access', l.deviceId ? String(l.deviceId) : '')}>Remove access</button>
+                                <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => askEmployeeAction(Number(l.employeeId), 'remove-access', l.deviceId ? String(l.deviceId) : '')}>Remove access</button>
                               ) : null}
                               {canDeleteLink ? (
-                                <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => void deleteLink(l)}>Delete</button>
+                                <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setConfirm({
+                                  title: 'Delete access mapping',
+                                  body: 'Remove the access mapping for ' + empName(l.employee) + '? This does not delete the employee.',
+                                  label: 'Delete mapping',
+                                  danger: true,
+                                  onConfirm: (reason) => deleteLink(l, reason),
+                                })}>Delete</button>
                               ) : null}
                             </div>
                             {!canAct ? <span className="muted">Read only</span> : null}
@@ -450,7 +466,7 @@ export default function SyncCentre() {
             <div className="empty-state"><h3>No sync activity</h3><p>Provisioning actions will appear here.</p></div>
           ) : (
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr><th>When</th><th>Action</th><th>Outcome</th><th>Employee</th><th>Terminal</th><th>Detail</th></tr>
                 </thead>
@@ -514,6 +530,16 @@ export default function SyncCentre() {
           </section>
         </div>
       ) : null}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.label}
+          danger={confirm.danger}
+          onCancel={() => setConfirm(null)}
+          onConfirm={(reason) => void confirm.onConfirm(reason).finally(() => setConfirm(null))}
+        />
+      )}
     </div>
   );
 }

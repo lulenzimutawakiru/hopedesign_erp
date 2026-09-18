@@ -143,7 +143,7 @@ export default function DataExports() {
         {history.length === 0 ? (
           <p className="muted" style={{ padding: 12 }}>No exports or prints recorded yet.</p>
         ) : (
-          <table className="table">
+          <table className="data">
             <thead>
               <tr>
                 <th>When</th>

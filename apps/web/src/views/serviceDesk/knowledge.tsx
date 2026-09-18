@@ -601,7 +601,7 @@ function CategoriesTab() {
         </div>
       ) : (
         <div className="table-wrap">
-          <table className="table">
+          <table className="data">
             <thead>
               <tr>
                 <th>Category</th>
@@ -885,7 +885,7 @@ function PublishingTab({ onOpen }: { onOpen: (id: number) => void }) {
 
       <SecCard title="Coverage by category" sub="Published articles against total articles per category.">
         <div className="table-wrap">
-          <table className="table">
+          <table className="data">
             <thead>
               <tr>
                 <th>Category</th>
@@ -1114,7 +1114,7 @@ function ArticleDetail({ id, onBack }: { id: number; onBack: () => void }) {
             sub={versions.length + ' version(s) recorded. Editing a published article creates a new draft version.'}
           >
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th style={{ width: '80px' }}>Version</th>

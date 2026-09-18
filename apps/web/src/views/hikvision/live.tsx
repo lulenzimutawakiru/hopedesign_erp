@@ -46,7 +46,7 @@ export default function LiveBoard() {
     return () => clearInterval(iv);
   }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading live attendance..." />;
+  if (!data) return <PageLoader variant="page" label="Loading live attendance..." />;
 
   const deviceCounts = (data.deviceCounts ?? {}) as Rec;
   const eventsToday = (data.eventsToday ?? {}) as Rec;

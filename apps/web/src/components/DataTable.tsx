@@ -4,7 +4,8 @@ import { fmtBool, fmtDate, fmtMoney, fmtNum } from '../api';
 import { pick, titleCase } from '../helpers';
 import { Badge } from './ui';
 import { EmptyState } from './os';
-import { loadPrefs } from '../prefs';
+import { ErrorState, TableSkeleton, safeMessage } from './states';
+import { loadPrefs, type Density } from '../prefs';
 
 const HIDDEN = new Set([
   'id', 'created_at', 'updated_at', 'created_by', 'updated_by', 'attributes', 'secret_hash',
@@ -77,6 +78,9 @@ export function DataTable({
   onLoadMore,
   hasMore,
   loadingMore,
+  loading,
+  error,
+  onRetry,
 }: {
   meta: EntityMeta;
   rows: Record<string, unknown>[];
@@ -87,17 +91,28 @@ export function DataTable({
   onLoadMore?: () => void;
   hasMore?: boolean;
   loadingMore?: boolean;
+  loading?: boolean;
+  error?: unknown;
+  onRetry?: () => void;
 }) {
   const all = useMemo(() => pickColumns(meta, 10), [meta]);
   const [hidden, setHidden] = useState<string[]>([]);
   const [sort, setSort] = useState<{ col: string; dir: 'asc' | 'desc' } | null>(null);
   const [filter, setFilter] = useState('');
   const [showCols, setShowCols] = useState(false);
+  // Density is a preference, so it has to react to changes from Settings rather
+  // than being read once during render.
+  const [density, setDensity] = useState<Density>(() => loadPrefs().density);
   const columns = all.filter((c) => !hidden.includes(c));
-  const density = loadPrefs().density;
   const [widths, setWidths] = useState<Record<string, number>>({});
   const [view, setView] = useState<'table' | 'cards'>(() => (typeof window !== 'undefined' && window.innerWidth < 768 ? 'cards' : 'table'));
   const sentinel = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const sync = () => setDensity(loadPrefs().density);
+    window.addEventListener('hope-prefs', sync);
+    return () => window.removeEventListener('hope-prefs', sync);
+  }, []);
 
   useEffect(() => {
     if (!onLoadMore || !hasMore) return;
@@ -147,6 +162,8 @@ export function DataTable({
     setSort((s) => !s || s.col !== c ? { col: c, dir: 'asc' } : s.dir === 'asc' ? { col: c, dir: 'desc' } : null);
   };
 
+  if (loading) return <TableSkeleton cols={Math.min(columns.length || 5, 8)} />;
+  if (error) return <ErrorState message={safeMessage(error)} onRetry={onRetry} />;
   if (rows.length === 0) {
     return (
       <EmptyState

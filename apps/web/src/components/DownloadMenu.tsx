@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { getToken } from '../api';
+import { toast } from './toast';
 
 export const DOCUMENT_EXPORT_FORMATS = [
   { id: 'print', label: 'Print letterhead', hint: 'Open a branded A4 view for printing' },
@@ -57,7 +58,7 @@ export default function DownloadMenu({
       URL.revokeObjectURL(url);
       setOpen(false);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : String(e));
+      toast.fromError('Could not download the document.', e);
     } finally {
       setBusy('');
     }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { ErrorBanner, PageLoader } from '../components/ui';
+import { ConfirmDialog } from '../components/os';
 import { pick } from '../helpers';
 
 interface ProductRow {
@@ -227,6 +228,7 @@ export default function ReamPacking() {
   const scanRef = useRef<HTMLInputElement>(null);
   const [scanFlash, setScanFlash] = useState('');
   const flashTimer = useRef<number | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const showFlash = (msg: string) => {
     setFlashMsg(msg);
@@ -821,17 +823,10 @@ export default function ReamPacking() {
     }
   };
 
-  if (loading) return <PageLoader label="Loading ream products..." />;
+  if (loading) return <PageLoader variant="page" label="Loading ream products..." />;
   if (error) return <ErrorBanner error={error} />;
 
-  const resetFlow = () => {
-    const hasWork = generated.length > 0 || scanned.length > 0 || !!carton || !!spool;
-    if (
-      hasWork &&
-      !window.confirm('Clear the current packing flow? Generated reams, scans and the open carton will be reset.')
-    ) {
-      return;
-    }
+  const doReset = () => {
     setGenerated([]);
     setScanned([]);
     setCarton(null);
@@ -846,6 +841,12 @@ export default function ReamPacking() {
     if (productId && batchId) void loadSummary(productId, batchId);
     if (productId) void loadCapacity(productId);
     scanRef.current?.focus();
+  };
+
+  const resetFlow = () => {
+    const hasWork = generated.length > 0 || scanned.length > 0 || !!carton || !!spool;
+    if (hasWork) { setConfirmReset(true); return; }
+    doReset();
   };
 
 
@@ -1597,6 +1598,17 @@ export default function ReamPacking() {
           )}
         </div>
       </section>
+      {confirmReset && (
+        <ConfirmDialog
+          title="Start over"
+          body="Clear the current packing flow? Generated reams, scanned reams and the open carton will be reset. Labels already printed keep their QR codes."
+          confirmLabel="Clear flow"
+          danger
+          reasonLabel={null}
+          onCancel={() => setConfirmReset(false)}
+          onConfirm={() => { setConfirmReset(false); doReset(); }}
+        />
+      )}
     </div>
   );
 }

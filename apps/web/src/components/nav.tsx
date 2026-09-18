@@ -79,8 +79,13 @@ export function AccessDenied({ path }: { path: string }) {
   );
 }
 
-export function Breadcrumbs({ path, extra, tail }: { path: string; extra?: Crumb[]; tail?: string }) {
-  const items = crumbsFor(path, extra);
+export function Breadcrumbs({
+  path,
+  extra,
+  tail,
+  items: supplied,
+}: { path?: string; extra?: Crumb[]; tail?: string; items?: Crumb[] }) {
+  const items = supplied ? [...supplied] : crumbsFor(path ?? '', extra);
   if (tail) items.push({ label: tail });
   return (
     <nav className="crumbs" aria-label="Breadcrumb">

@@ -147,7 +147,7 @@ function CommandCenter() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Command center failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Reading the warehouse..." />;
+  if (!data) return <PageLoader variant="page" label="Reading the warehouse..." />;
   const alerts = Array.isArray(data.alerts) ? (data.alerts as Rec[]) : [];
   const today = (data.today && typeof data.today === 'object' ? data.today : {}) as Rec;
   const todayByType = Array.isArray(today.byType) ? (today.byType as Rec[]) : [];
@@ -917,7 +917,7 @@ function Reorder() {
   }, []);
   useEffect(() => { load(); }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Calculating reorder points..." />;
+  if (!data) return <PageLoader variant="page" label="Calculating reorder points..." />;
   const rows = Array.isArray(data.recommendations) ? (data.recommendations as Rec[]) : [];
   const warn = (r: Rec) => num(r.available) < num(r.reorderPoint);
   return (
@@ -965,7 +965,7 @@ function Forecasts() {
   }, []);
   useEffect(() => { load(horizon); }, [horizon, load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Projecting demand..." />;
+  if (!data) return <PageLoader variant="page" label="Projecting demand..." />;
   const rows = Array.isArray(data.forecasts) ? (data.forecasts as Rec[]) : [];
   return (
     <>
@@ -1029,7 +1029,7 @@ function Valuation() {
       .finally(() => setBusy(false));
   };
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Valuing inventory..." />;
+  if (!data) return <PageLoader variant="page" label="Valuing inventory..." />;
   const snapshot = Array.isArray(data.snapshot) ? (data.snapshot as Rec[]) : [];
   return (
     <>
@@ -1077,7 +1077,7 @@ function AbcXyz() {
   }, []);
   useEffect(() => { load(); }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Classifying inventory..." />;
+  if (!data) return <PageLoader variant="page" label="Classifying inventory..." />;
   const rows = Array.isArray(data.classifications) ? (data.classifications as Rec[]) : [];
   const names = new Map<number, { code: string; name: string }>();
   for (const p of products) names.set(p.productId, { code: p.productCode, name: p.productName });
@@ -1127,7 +1127,7 @@ function Risk() {
   }, []);
   useEffect(() => { load(); }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Scoring inventory risk..." />;
+  if (!data) return <PageLoader variant="page" label="Scoring inventory risk..." />;
   const scores = Array.isArray(data.scores) ? (data.scores as Rec[]) : [];
   const summary = Array.isArray(data.summary) ? (data.summary as Rec[]) : [];
   const names = new Map<number, { code: string; name: string }>();
@@ -1186,7 +1186,7 @@ function DataQuality() {
   }, []);
   useEffect(() => { load(); }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Scanning master data..." />;
+  if (!data) return <PageLoader variant="page" label="Scanning master data..." />;
   const issues = Array.isArray(data.issues) ? (data.issues as Rec[]) : [];
   const population = (data.population && typeof data.population === 'object' ? data.population as Rec : {});
   return (
@@ -1583,7 +1583,7 @@ function Ageing() {
   }, []);
   useEffect(() => { load(); }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Ageing stock analysis..." />;
+  if (!data) return <PageLoader variant="page" label="Ageing stock analysis..." />;
   const buckets = Array.isArray(data.buckets) ? (data.buckets as Rec[]) : [];
   const deadStock = Array.isArray(data.deadStock) ? (data.deadStock as Rec[]) : [];
   const maxValue = Math.max(1, ...buckets.map((b) => num(b.value)));
@@ -1684,7 +1684,7 @@ function Kpis() {
   }, []);
   useEffect(() => { load(); }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Crunching inventory KPIs..." />;
+  if (!data) return <PageLoader variant="page" label="Crunching inventory KPIs..." />;
   const k = (data.kpis && typeof data.kpis === 'object' ? data.kpis : {}) as Rec;
   const raw = (data.raw && typeof data.raw === 'object' ? data.raw : {}) as Rec;
   const items: { label: string; value: string; pct?: boolean }[] = [

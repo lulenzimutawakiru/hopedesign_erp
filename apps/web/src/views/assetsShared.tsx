@@ -54,7 +54,7 @@ export function ChartCard({ title, rows, money }: { title: string; rows: Array<{
   return (
     <section className="card card-pad">
       <div className="card-head"><h3>{title}</h3></div>
-      {rows.length === 0 ? <p className="muted" style={{ margin: 0 }}>No data yet.</p> : <MiniBars rows={rows} money={money} />}
+      {rows.length === 0 ? <p className="muted" style={{ margin: 0 }}>Nothing recorded for this view yet.</p> : <MiniBars rows={rows} money={money} />}
     </section>
   );
 }

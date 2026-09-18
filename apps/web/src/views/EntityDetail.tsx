@@ -143,7 +143,7 @@ export default function EntityDetail({ route }: { route: RouteMatch }) {
   };
 
   if (error && !row) return <ErrorBanner error={error} />;
-  if (!meta || !row) return <PageLoader label="Loading record…" />;
+  if (!meta || !row) return <PageLoader variant="page" label="Loading record…" />;
 
   const status = pick<string>(row, meta.statusColumn ?? '', 'status') ?? null;
   const code = pick<string>(row, meta.codeColumn ?? '', 'id') ?? '';

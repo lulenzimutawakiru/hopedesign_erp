@@ -5,6 +5,7 @@ import { navigate, useHashQuery } from '../router';
 import { pick } from '../helpers';
 import DownloadMenu from '../components/DownloadMenu';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
+import { toast } from '../components/toast';
 
 const RESOURCES: { resource: string; label: string; perm: string }[] = [
   { resource: 'quotations', label: 'Quotations', perm: 'sales.quotations.view' },
@@ -63,7 +64,7 @@ function SalesBoard() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Sales command center failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening command center…" />;
+  if (!data) return <PageLoader variant="page" label="Opening command center…" />;
 
   const k = (data.kpis ?? {}) as Rec;
   const alerts = (data.alerts as Rec[]) ?? [];
@@ -365,7 +366,7 @@ function CustomerDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening customer..." />;
+  if (!doc) return <PageLoader variant="page" label="Opening customer..." />;
   const c = (doc.customer ?? {}) as Rec;
   const credit = (doc.credit ?? {}) as Rec;
   const aging = (doc.aging ?? {}) as Rec;
@@ -1279,7 +1280,7 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
   };
 
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Loading document…" />;
+  if (!doc) return <PageLoader variant="page" label="Loading document…" />;
 
   const status = String(pick(doc, 'status') ?? '');
   const code = String((
@@ -1395,8 +1396,8 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
           {docType && <DownloadMenu type={docType} id={id} code={code} />}
           {resource === 'delivery_notes' && (
             <>
-              <button className="btn btn-sm" onClick={() => openDocument('packing-list', id, 'print', code + '.pdf').catch((e) => window.alert(e instanceof Error ? e.message : String(e)))}>Packing list</button>
-              <button className="btn btn-sm" onClick={() => openDocument('proof-of-delivery', id, 'print', code + '.pdf').catch((e) => window.alert(e instanceof Error ? e.message : String(e)))}>POD</button>
+              <button className="btn btn-sm" onClick={() => openDocument('packing-list', id, 'print', code + '.pdf').catch((e) => toast.fromError('Could not generate the packing list.', e))}>Packing list</button>
+              <button className="btn btn-sm" onClick={() => openDocument('proof-of-delivery', id, 'print', code + '.pdf').catch((e) => toast.fromError('Could not generate the proof of delivery.', e))}>POD</button>
             </>
           )}
           <Badge value={status} />

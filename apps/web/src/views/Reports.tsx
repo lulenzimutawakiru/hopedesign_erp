@@ -1045,7 +1045,7 @@ export default function Reports() {
     }
   };
 
-  if (!user) return <PageLoader />;
+  if (!user) return <PageLoader variant="page" />;
   if (!can(user, 'reports.dashboards.view')) return <AccessDenied path="/reports" />;
 
   const visible = reports.filter((r) => can(user, r.permission));

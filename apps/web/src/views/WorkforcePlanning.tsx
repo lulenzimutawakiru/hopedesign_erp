@@ -622,7 +622,7 @@ function OrgTree() {
   }, [layout, tree, focused, stageSize.w]);
 
   if (error && !tree) return <ErrorBanner error={error} />;
-  if (!doc || !tree) return <PageLoader label="Building org chart" />;
+  if (!doc || !tree) return <PageLoader variant="page" label="Building org chart" />;
 
   const company = (doc.company ?? {}) as Rec;
   const summary = (doc.summary ?? {}) as Rec;
@@ -1444,7 +1444,7 @@ function PlanDesk({ id, scenarioOpen = false }: { id: number; scenarioOpen?: boo
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening workforce plan" />;
+  if (!doc) return <PageLoader variant="page" label="Opening workforce plan" />;
   const plan = doc.plan;
   const lines = doc.lines ?? [];
   const totals = doc.totals ?? {};

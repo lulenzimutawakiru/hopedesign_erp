@@ -3,6 +3,7 @@ import { api, fmtDate, fmtMoney, fmtNum, getToken } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
+import { ConfirmDialog } from '../components/os';
 
 type Rec = Record<string, unknown>;
 
@@ -662,6 +663,10 @@ function CandidateDesk({ id }: { id: number }) {
   const [assessApp, setAssessApp] = useState<Rec | null>(null);
   const [offerApp, setOfferApp] = useState<Rec | null>(null);
   const [showUpload, setShowUpload] = useState(false);
+  const [offerAccept, setOfferAccept] = useState<Rec | null>(null);
+  const [offerDecline, setOfferDecline] = useState<Rec | null>(null);
+  const [offerWithdraw, setOfferWithdraw] = useState<Rec | null>(null);
+  const [startDate, setStartDate] = useState('');
   const load = useCallback(() => {
     api<{ data: CandidateDoc }>(`/api/ops/hcm/candidates/${id}`)
       .then((r) => setDoc(r.data))
@@ -672,7 +677,7 @@ function CandidateDesk({ id }: { id: number }) {
     api<{ data: Rec[] }>('/api/ops/hcm/positions').then((r) => setPositions(r.data ?? [])).catch(() => undefined);
   }, []);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening candidate..." />;
+  if (!doc) return <PageLoader variant="page" label="Opening candidate..." />;
   const c = doc.candidate;
   const act = async (path: string, body: Rec = {}, ok = 'Done') => {
     setBusy(true); setError(''); setNotice('');
@@ -691,15 +696,11 @@ function CandidateDesk({ id }: { id: number }) {
   };
   const appOpen = (a: Rec) => !['ACCEPTED', 'REJECTED', 'WITHDRAWN'].includes(String(a.status ?? ''));
   const acceptOffer = (o: Rec) => {
-    const startDate = window.prompt('Start date (YYYY-MM-DD)');
-    if (startDate === null) return;
-    if (!startDate.trim()) { setError('Start date is required'); return; }
-    act(`/api/ops/hcm/offers/${String(o.id)}/accept`, { startDate: startDate.trim() }, 'Offer accepted');
+    setStartDate('');
+    setOfferAccept(o);
   };
   const declineOffer = (o: Rec) => {
-    const reason = window.prompt('Reason for declining (optional)');
-    if (reason === null) return;
-    act(`/api/ops/hcm/offers/${String(o.id)}/decline`, { reason: reason.trim() || undefined }, 'Offer declined');
+    setOfferDecline(o);
   };
   const downloadDocument = async (d: Rec) => {
     setError('');
@@ -908,7 +909,7 @@ function CandidateDesk({ id }: { id: number }) {
                       )}
                       {['DRAFT', 'SENT'].includes(String(o.status)) && can(user, 'hr.offers.withdraw') && (
                         <button className="btn btn-sm" disabled={busy}
-                          onClick={() => { if (window.confirm(`Withdraw offer ${String(o.offerNo ?? '')}?`)) act(`/api/ops/hcm/offers/${String(o.id)}/withdraw`, {}, 'Offer withdrawn'); }}>
+                          onClick={() => setOfferWithdraw(o)}>
                           Withdraw
                         </button>
                       )}
@@ -958,6 +959,55 @@ function CandidateDesk({ id }: { id: number }) {
       {assessApp && <AssessmentModal app={assessApp} onClose={() => setAssessApp(null)} onDone={(ok) => { setAssessApp(null); setNotice(ok); load(); }} />}
       {offerApp && <OfferModal app={offerApp} positions={positions} onClose={() => setOfferApp(null)} onDone={(ok) => { setOfferApp(null); setNotice(ok); load(); }} />}
       {showUpload && <UploadModal id={id} onClose={() => setShowUpload(false)} onDone={() => { setShowUpload(false); setNotice('Document uploaded'); load(); }} />}
+      {offerAccept && (
+        <ConfirmDialog
+          title="Accept offer"
+          confirmLabel="Accept offer"
+          body="This creates the employee record, an employment contract and the onboarding checklist."
+          reasonLabel={null}
+          confirmDisabled={!startDate.trim()}
+          onCancel={() => setOfferAccept(null)}
+          onConfirm={() => {
+            const o = offerAccept;
+            setOfferAccept(null);
+            act(`/api/ops/hcm/offers/${String(o.id)}/accept`, { startDate: startDate.trim() }, 'Offer accepted');
+          }}
+        >
+          <div className="field">
+            <label htmlFor="offer-start">Employment start date</label>
+            <input id="offer-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+        </ConfirmDialog>
+      )}
+      {offerDecline && (
+        <ConfirmDialog
+          title="Decline offer"
+          confirmLabel="Decline offer"
+          body={`Record that offer ${String(offerDecline.offerNo ?? '')} was declined by the candidate.`}
+          reasonLabel="Reason for declining (optional)"
+          onCancel={() => setOfferDecline(null)}
+          onConfirm={(reason) => {
+            const o = offerDecline;
+            setOfferDecline(null);
+            act(`/api/ops/hcm/offers/${String(o.id)}/decline`, { reason: reason.trim() || undefined }, 'Offer declined');
+          }}
+        />
+      )}
+      {offerWithdraw && (
+        <ConfirmDialog
+          title="Withdraw offer"
+          confirmLabel="Withdraw offer"
+          danger
+          body={`Withdraw offer ${String(offerWithdraw.offerNo ?? '')}? The candidate will no longer be able to accept it.`}
+          reasonLabel={null}
+          onCancel={() => setOfferWithdraw(null)}
+          onConfirm={() => {
+            const o = offerWithdraw;
+            setOfferWithdraw(null);
+            act(`/api/ops/hcm/offers/${String(o.id)}/withdraw`, {}, 'Offer withdrawn');
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
 import { useCompanyProfile } from '../company';
@@ -332,7 +332,7 @@ function Overview() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Finance summary failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening the books..." />;
+  if (!data) return <PageLoader variant="page" label="Opening the books..." />;
 
   const num = (v: unknown) => Number(v ?? 0);
   const period = (data.period ?? null) as PeriodInfo | null;
@@ -771,7 +771,7 @@ function Overview() {
           <>
             <div className="record-cards mobile-only">
               {rows.map((r) => (
-                <div key={`card-${String(r.id)}`} className="record-card" onClick={() => navigate(`/finance/journals/${r.id}`)}>
+                <button key={`card-${String(r.id)}`} className="record-card" onClick={() => navigate(`/finance/journals/${r.id}`)}>
                   <div className="record-card-top">
                     <strong className="cell-mono">{String(r.entryNo)}</strong>
                     <Badge value={r.status} />
@@ -782,7 +782,7 @@ function Overview() {
                     <span>{fmtMoney(r.totalDebit)}</span>
                   </div>
                   <div>{String(r.description)}</div>
-                </div>
+                </button>
               ))}
             </div>
             <div className="table-wrap desktop-only">
@@ -848,7 +848,7 @@ function JournalDetail({ id }: { id: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  if (!doc) return error ? <div className="page"><ErrorBanner error={error} /></div> : <PageLoader label="Reading journal..." />;
+  if (!doc) return error ? <div className="page"><ErrorBanner error={error} /></div> : <PageLoader variant="page" label="Reading journal..." />;
   const j = doc.journal;
   const canEdit = j.status === 'DRAFT' && can(user, 'finance.journals.create');
   return (
@@ -972,7 +972,7 @@ function JournalComposer({ id }: { id?: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  if (!ready) return <PageLoader label="Loading journal..." />;
+  if (!ready) return <PageLoader variant="page" label="Loading journal..." />;
   return (
     <div className="page">
       <header className="page-head">
@@ -1165,7 +1165,7 @@ function ExpenseList() {
           <>
             <div className="record-cards mobile-only">
               {rows.map((r) => (
-                <div key={`card-${String(r.id)}`} className="record-card" onClick={() => navigate(`/finance/expenses/${r.id}`)}>
+                <button key={`card-${String(r.id)}`} className="record-card" onClick={() => navigate(`/finance/expenses/${r.id}`)}>
                   <div className="record-card-top">
                     <strong className="cell-mono">{String(r.expenseNo)}</strong>
                     <Badge value={r.status} />
@@ -1176,7 +1176,7 @@ function ExpenseList() {
                     <span>{fmtMoney(r.amount)}</span>
                   </div>
                   <div className="cell-mono">{String(r.accountCode)} {String(r.accountName)}</div>
-                </div>
+                </button>
               ))}
             </div>
             <div className="table-wrap desktop-only">
@@ -1239,7 +1239,7 @@ function ExpenseDetail({ id }: { id: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  if (!doc) return error ? <div className="page"><ErrorBanner error={error} /></div> : <PageLoader label="Reading expense..." />;
+  if (!doc) return error ? <div className="page"><ErrorBanner error={error} /></div> : <PageLoader variant="page" label="Reading expense..." />;
   const e = doc.expense;
   const journal = doc.journal?.journal ?? null;
   return (
@@ -1380,7 +1380,7 @@ function TrialBalance() {
   }, [from, to]);
   useEffect(() => { load(); }, [load]);
   if (error) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Preparing trial balance..." />;
+  if (!data) return <PageLoader variant="page" label="Preparing trial balance..." />;
   const ok = Math.round(Number(data.totals.debit) * 100) === Math.round(Number(data.totals.credit) * 100);
   return (
     <div className="page">
@@ -1437,7 +1437,7 @@ function ProfitLoss() {
   }, [from, to]);
   useEffect(() => { load(); }, [load]);
   if (error) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Preparing profit and loss..." />;
+  if (!data) return <PageLoader variant="page" label="Preparing profit and loss..." />;
   const rows = (data.rows as Rec[]) ?? [];
   return (
     <div className="page">
@@ -1487,7 +1487,7 @@ function BalanceSheet() {
   }, [asOf]);
   useEffect(() => { load(); }, [load]);
   if (error) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Preparing balance sheet..." />;
+  if (!data) return <PageLoader variant="page" label="Preparing balance sheet..." />;
   const rows = (data.rows as Rec[]) ?? [];
   const currentResult = data.currentResult == null ? null : Number(data.currentResult);
   const ok = Math.round(Number(data.assets) * 100) === Math.round(Number(data.totalLAndE) * 100);
@@ -1672,7 +1672,7 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {  const { user } = useAuth();
     } finally { setBusy(false); }
   };
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening subledger..." />;
+  if (!data) return <PageLoader variant="page" label="Opening subledger..." />;
   const buckets = (data.buckets ?? {}) as Rec;
   const SORTS: Record<string, (r: Rec) => string | number> = {
     document: (r) => String((isAr ? r.invoiceNo : r.supplierInvoiceNo) ?? ''),
@@ -1866,7 +1866,7 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {  const { user } = useAuth();
           <>
             <div className="record-cards mobile-only">
               {rows.map((r) => (
-                <div key={`card-${String(r.id)}`} className="record-card" onClick={() => openInvoice(r)}>
+                <button key={`card-${String(r.id)}`} className="record-card" onClick={() => openInvoice(r)}>
                   <div className="record-card-top">
                     <strong className="cell-mono">{String(isAr ? r.invoiceNo : r.supplierInvoiceNo)}</strong>
                     <AgingChip bucket={r.bucket} />
@@ -1883,7 +1883,7 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {  const { user } = useAuth();
                       {r.poNo != null && <span className="muted cell-mono">{String(r.poNo)}</span>}
                     </div>
                   )}
-                </div>
+                </button>
               ))}
             </div>
             <div className="table-wrap desktop-only">
@@ -2120,7 +2120,7 @@ function BankRecon({ bankId }: { bankId: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  if (!data) return error ? <ErrorBanner error={error} /> : <PageLoader label="Opening bank match..." />;
+  if (!data) return error ? <ErrorBanner error={error} /> : <PageLoader variant="page" label="Opening bank match..." />;
   const bank = (data.bank ?? {}) as Rec;
   const recon = (data.recon ?? {}) as Rec;
   const statement = (data.statement ?? []) as Rec[];
@@ -3231,7 +3231,7 @@ function TaxDesk() {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  if (!data) return error ? <ErrorBanner error={error} /> : <PageLoader label="Reading VAT account..." />;
+  if (!data) return error ? <ErrorBanner error={error} /> : <PageLoader variant="page" label="Reading VAT account..." />;
   return (
     <div className="page">
       <header className="page-head">
@@ -3873,7 +3873,7 @@ function BudgetList() {
           <>
             <div className="record-cards mobile-only">
               {rows.map((r) => (
-                <div key={`card-${String(r.id)}`} className="record-card" onClick={() => navigate(`/finance/budgets/${r.id}`)}>
+                <button key={`card-${String(r.id)}`} className="record-card" onClick={() => navigate(`/finance/budgets/${r.id}`)}>
                   <div className="record-card-top">
                     <strong className="cell-mono">{String(r.budgetNo)}</strong>
                     <Badge value={r.status} />
@@ -3883,7 +3883,7 @@ function BudgetList() {
                     <span>{fmtNum(r.lineCount)} lines</span>
                     <span>{fmtMoney(r.amount)}</span>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
             <div className="table-wrap desktop-only">
@@ -3946,7 +3946,7 @@ function BudgetDetail({ id }: { id: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  if (!doc) return error ? <div className="page"><ErrorBanner error={error} /></div> : <PageLoader label="Reading budget..." />;
+  if (!doc) return error ? <div className="page"><ErrorBanner error={error} /></div> : <PageLoader variant="page" label="Reading budget..." />;
   const b = doc.budget;
   const status = String(b.status);
   const canEdit = can(user, 'finance.budgets.update') && (status === 'DRAFT' || status === 'SUBMITTED');
@@ -4057,7 +4057,7 @@ function BudgetComposer({ id }: { id?: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  if (!ready) return <PageLoader label="Loading budget..." />;
+  if (!ready) return <PageLoader variant="page" label="Loading budget..." />;
   return (
     <div className="page">
       <header className="page-head">
@@ -4286,7 +4286,24 @@ function Advances({ autoOpen }: { autoOpen?: boolean }) {
           <>
             <div className="record-cards mobile-only">
               {rows.map((r) => (
-                <div key={`card-${String(r.id)}`} className="record-card" onClick={() => navigate(`/finance/advances/${r.id}`)}>
+                <div
+                  key={`card-${String(r.id)}`}
+                  className="record-card"
+                  onClick={() => navigate(`/finance/advances/${r.id}`)}
+                  {...(r.status === 'POSTED' && can(user, 'finance.advances.void')
+                    ? {}
+                    : {
+                        role: 'button' as const,
+                        tabIndex: 0,
+                        onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
+                          if (e.target !== e.currentTarget) return;
+                          if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                            e.preventDefault();
+                            navigate(`/finance/advances/${r.id}`);
+                          }
+                        },
+                      })}
+                >
                   <div className="record-card-top">
                     <strong className="cell-mono">{String(r.advanceNo)}</strong>
                     <Badge value={r.status} />
@@ -4489,7 +4506,7 @@ function AdvanceDetail({ id }: { id: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
-  if (!doc) return error ? <div className="page"><ErrorBanner error={error} /></div> : <PageLoader label="Reading advance..." />;
+  if (!doc) return error ? <div className="page"><ErrorBanner error={error} /></div> : <PageLoader variant="page" label="Reading advance..." />;
   const a = doc.advance;
   const journal = doc.journal?.journal ?? null;
   return (
@@ -4628,7 +4645,7 @@ function AdvancedOverview() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Advanced finance summary failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening the advanced books..." />;
+  if (!data) return <PageLoader variant="page" label="Opening the advanced books..." />;
   const tiles: FinanceTile[] = [
     { href: '/finance/journals', label: 'Journals', hint: 'Double-entry workflow', perm: 'finance.journals.view' },
     { href: '/finance/posting-rules', label: 'Posting Rules', hint: 'Configurable accounting engine', perm: 'finance.posting_rules.view' },
@@ -7101,7 +7118,7 @@ function ConsolidationDetail({ id }: { id: number }) {
       .catch((e) => setError(e instanceof Error ? e.message : 'Consolidation run failed'));
   }, [id]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading consolidation..." />;
+  if (!data) return <PageLoader variant="page" label="Loading consolidation..." />;
   const res = (data.results as Rec) ?? {};
   const companies = (res.companies as Rec[]) ?? [];
   const consolidated = (res.consolidated as Rec[]) ?? [];

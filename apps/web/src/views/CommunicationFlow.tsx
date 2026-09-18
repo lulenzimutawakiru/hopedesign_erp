@@ -189,7 +189,7 @@ function CommandCenter() {
   }, []);
   useEffect(() => { void load(); }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading command center…" />;
+  if (!data) return <PageLoader variant="page" label="Loading command center…" />;
   const kpis = (data.kpis ?? {}) as Rec;
   const cards: { label: string; value: number; href: string; icon: string }[] = [
     { label: 'Urgent notifications', value: Number(kpis.urgentNotifications ?? 0), href: '/communication/notifications', icon: '\u26A0' },
@@ -299,7 +299,7 @@ function ComWorkView() {
   }, []);
   useEffect(() => { void load(); }, [load]);
   if (error && !summary) return <ErrorBanner error={error} />;
-  if (!summary) return <PageLoader label="Building your action center…" />;
+  if (!summary) return <PageLoader variant="page" label="Building your action center…" />;
   const totals = (summary.totals ?? {}) as Rec;
   const counts = ((work?.counts ?? {}) as Rec) ?? {};
   const buckets = bucketNotifs(notifs);
@@ -375,7 +375,7 @@ function CommunicationAdmin() {
   }, []);
   useEffect(() => { void load(); }, [load]);
   if (error && !summary) return <ErrorBanner error={error} />;
-  if (!summary) return <PageLoader label="Loading communication health…" />;
+  if (!summary) return <PageLoader variant="page" label="Loading communication health…" />;
   const totals = (summary.totals ?? {}) as Rec;
   const deliveries = (summary.deliveries ?? {}) as Rec;
   const statusKeys = ['QUEUED', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'BOUNCED', 'RETRYING', 'CANCELLED'];

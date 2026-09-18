@@ -13,6 +13,7 @@ import QrScanner from './QrScanner';
 import QrTrace from './QrTrace';
 import NotificationsBell from './NotificationsBell';
 import CommandPalette from './CommandPalette';
+import { Toaster } from '../components/toast';
 import { WarehouseRoom, OperatorFloor } from './Rooms';
 import { CreateMenu } from '../components/os';
 import { PageLoader } from '../components/ui';
@@ -297,7 +298,7 @@ export default function Shell() {
         )}
 
         <main id="main-content" className="content" tabIndex={-1}>
-          <Suspense fallback={<PageLoader />}>{body}</Suspense>
+          <Suspense fallback={<PageLoader variant="page" />}>{body}</Suspense>
         </main>
 
         {compact && !focus && (
@@ -322,6 +323,7 @@ export default function Shell() {
 
       {scannerOpen && <QrScanner onClose={() => setScannerOpen(false)} sheet={compact} />}
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
+      <Toaster />
       {helpOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setHelpOpen(false)}>
           <div className="modal" role="dialog" aria-labelledby="kbd-title">

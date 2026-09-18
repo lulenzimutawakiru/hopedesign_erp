@@ -4,6 +4,7 @@ import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { DOCUMENT_EXPORT_FORMATS } from '../components/DownloadMenu';
+import { toast } from '../components/toast';
 
 type Rec = Record<string, unknown>;
 
@@ -461,7 +462,7 @@ function RequisitionExportMenu({ status, type, q }: { status: string; type: stri
       URL.revokeObjectURL(url);
       setOpen(false);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : String(e));
+      toast.fromError('Could not export the requisitions.', e);
     } finally {
       setBusy('');
     }
@@ -538,7 +539,7 @@ function RequisitionList() {
         <section className="card">
           <div className="card-head"><h3>{total} requisitions</h3></div>
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Request No</th><th>Type</th><th>Department</th><th>Purpose</th>
@@ -595,7 +596,7 @@ function RequisitionDesk({ id }: { id: number }) {
       .finally(() => setBusy(''));
   };
 
-  if (!row && !error) return <PageLoader />;
+  if (!row && !error) return <PageLoader variant="page" />;
   if (error) {
     return (
       <SpendShell title="Requisition" active="requisitions">
@@ -671,7 +672,7 @@ function RequisitionDesk({ id }: { id: number }) {
       <section className="card">
         <div className="card-head"><h3>Items</h3></div>
         <div className="table-wrap">
-          <table className="table">
+          <table className="data">
             <thead>
               <tr><th>#</th><th>Item</th><th>Type</th><th>Qty</th><th>Unit</th><th>Unit Cost</th><th>Amount</th><th>Recommendation</th><th>Status</th></tr>
             </thead>
@@ -698,7 +699,7 @@ function RequisitionDesk({ id }: { id: number }) {
         <section className="card">
           <div className="card-head"><h3>Approval Trail</h3></div>
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead><tr><th>Step</th><th>Role</th><th>Decider</th><th>Decision</th><th>Comment</th><th>At</th></tr></thead>
               <tbody>
                 {approvals.map((a) => (
@@ -721,7 +722,7 @@ function RequisitionDesk({ id }: { id: number }) {
         <section className="card">
           <div className="card-head"><h3>Fulfillment</h3></div>
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead><tr><th>Method</th><th>Reference</th><th>Notes</th><th>By</th><th>At</th></tr></thead>
               <tbody>
                 {fulfillments.map((f) => (
@@ -1185,7 +1186,7 @@ function ExpenseList() {
         <section className="card">
           <div className="card-head"><h3>{total} expenses</h3></div>
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Exp No</th><th>Date</th><th>Description</th><th>Category</th><th>Department</th>
@@ -1409,7 +1410,7 @@ function ExpenseForm() {
         </div>
         {showLines && (
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr><th>Description</th><th>Qty</th><th>Unit cost</th><th>Line total</th><th></th></tr>
               </thead>
@@ -1493,7 +1494,7 @@ function ExpenseDesk({ id }: { id: number }) {
     }
   };
 
-  if (!row && !error) return <PageLoader />;
+  if (!row && !error) return <PageLoader variant="page" />;
   if (error) return <ErrorBanner error={error} />;
   const e = row as Rec;
   const lines = (e.lines as Rec[] | undefined) ?? [];
@@ -1570,7 +1571,7 @@ function ExpenseDesk({ id }: { id: number }) {
         <section className="card">
           <div className="card-head"><h3>Line breakdown</h3></div>
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr><th>Line</th><th>Description</th><th>Qty</th><th>Unit cost</th><th>Amount</th></tr>
               </thead>
@@ -1595,7 +1596,7 @@ function ExpenseDesk({ id }: { id: number }) {
         {timeline.length === 0 && <p className="empty-state">No approval actions yet.</p>}
         {timeline.length > 0 && (
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr><th>Action</th><th>By</th><th>Comment</th><th>At</th></tr>
               </thead>
@@ -1773,7 +1774,7 @@ function PettyCashDesk() {
       .finally(() => setBusy(''));
   };
 
-  if (!data && !error) return <PageLoader />;
+  if (!data && !error) return <PageLoader variant="page" />;
   if (error) return <ErrorBanner error={error} />;
 
   return (
@@ -1828,7 +1829,7 @@ function PettyCashDesk() {
       <section className="card" style={{ marginTop: 18 }}>
         <div className="card-head"><h3>Replenishment Requests</h3></div>
         <div className="table-wrap">
-          <table className="table">
+          <table className="data">
             <thead>
               <tr><th>No.</th><th>Fund</th><th>Amount</th><th>Date</th><th>Reason</th><th>Requested by</th><th>Status</th><th></th></tr>
             </thead>
@@ -1975,7 +1976,7 @@ function PettyCashFund({ id }: { id: number }) {
   }, [id]);
   useEffect(load, [load]);
 
-  if (!row && !error) return <PageLoader />;
+  if (!row && !error) return <PageLoader variant="page" />;
   if (error) return <ErrorBanner error={error} />;
   const f = row as Rec;
   const txs = (f.transactions as Rec[] | undefined) ?? [];
@@ -2055,7 +2056,7 @@ function PettyCashFund({ id }: { id: number }) {
       <section className="card" style={{ marginTop: 18 }}>
         <div className="card-head"><h3>Transactions</h3></div>
         <div className="table-wrap">
-          <table className="table">
+          <table className="data">
             <thead>
               <tr><th>Date</th><th>Type</th><th>Amount</th><th>Balance after</th><th>Reference</th><th>Description</th><th>Linked expense</th><th>By</th></tr>
             </thead>
@@ -2158,7 +2159,7 @@ function ClaimsList() {
       </div>
       <section className="card">
         <div className="table-wrap">
-          <table className="table">
+          <table className="data">
             <thead>
               <tr><th>Claim no.</th><th>Employee</th><th>Trip</th><th>Description</th><th>Date</th><th>Amount</th><th>Method</th><th>Status</th><th></th></tr>
             </thead>
@@ -2205,7 +2206,7 @@ function ClaimForm() {
   }, []);
   const employees = (meta?.employees as Rec[] | undefined) ?? [];
   const paymentMethods = (meta?.paymentMethods as Rec[] | undefined) ?? [];
-  if (!meta && !error) return <PageLoader />;
+  if (!meta && !error) return <PageLoader variant="page" />;
   if (error) return <ErrorBanner error={error} />;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2324,7 +2325,7 @@ function ClaimDesk({ id }: { id: number }) {
     }
   };
 
-  if (!row && !error) return <PageLoader />;
+  if (!row && !error) return <PageLoader variant="page" />;
   if (error) return <ErrorBanner error={error} />;
   const c = row as Rec;
   const receipts = (c.receipts as Rec[] | undefined) ?? [];
@@ -2453,7 +2454,7 @@ function DailyCloseDesk() {
       .finally(() => setBusy(''));
   };
 
-  if (!data && !error) return <PageLoader />;
+  if (!data && !error) return <PageLoader variant="page" />;
   if (error) return <ErrorBanner error={error} />;
 
   const st = data as Rec;
@@ -2553,7 +2554,7 @@ function DailyCloseDesk() {
         <section className="card" style={{ marginTop: 18 }}>
           <div className="card-head"><h3>Expenditure by status</h3></div>
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr><th>Status</th><th>Count</th><th>Amount</th></tr>
               </thead>

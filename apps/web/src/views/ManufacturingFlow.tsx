@@ -95,7 +95,7 @@ function PlantBoard() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Plant board failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading the mill…" />;
+  if (!data) return <PageLoader variant="page" label="Loading the mill…" />;
   const kpis = (data.kpis ?? {}) as Rec;
   const live = (data.live as Rec[]) ?? [];
   const machines = (data.machines as Rec[]) ?? [];
@@ -295,7 +295,7 @@ function PlanDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening plan…" />;
+  if (!doc) return <PageLoader variant="page" label="Opening plan…" />;
   const explode = async () => {
     setBusy(true); setError(''); setNotice('');
     try {
@@ -514,7 +514,7 @@ function MrpDesk() {
     } finally { setBusy(false); }
   };
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading MRP and requisitions..." />;
+  if (!data) return <PageLoader variant="page" label="Loading MRP and requisitions..." />;
   const canRaise = can(user, 'procurement.requisitions.create');
   return (
     <div className="page">

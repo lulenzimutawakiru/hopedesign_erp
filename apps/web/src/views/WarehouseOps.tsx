@@ -35,7 +35,7 @@ function OpsBoard() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Work queue failed'));
   }, []);
   if (error && !work) return <ErrorBanner error={error} />;
-  if (!work) return <PageLoader label="Loading warehouse work…" />;
+  if (!work) return <PageLoader variant="page" label="Loading warehouse work…" />;
   const inbound = (work.inbound ?? {}) as Rec;
   const outbound = (work.outbound ?? {}) as Rec;
   const production = (work.production ?? {}) as Rec;

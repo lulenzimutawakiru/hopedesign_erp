@@ -398,7 +398,7 @@ function ClockCell({ v }: { v: unknown }) {
           ) : (
             <>
               <div className="table-wrap" style={{ marginTop: 14 }}>
-                <table className="table">
+                <table className="data">
                   <thead>
                     <tr>
                       <th>Employee</th><th>Date</th><th>In</th><th>Out</th><th>Worked</th>
@@ -460,7 +460,7 @@ function ClockCell({ v }: { v: unknown }) {
             <div className="empty-state"><h3>No payroll periods</h3><p>Create an OPEN period to group attendance records for approval and payroll locking.</p></div>
           ) : (
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr><th>Period</th><th>Dates</th><th>Branch</th><th>Status</th><th>Records</th><th>Approved</th><th>Actions</th></tr>
                 </thead>
@@ -520,7 +520,7 @@ function ClockCell({ v }: { v: unknown }) {
             <div className="empty-state"><h3>No adjustments</h3><p>Authorised HR officers can correct a punch before the period is locked.</p></div>
           ) : (
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr><th>When</th><th>Employee</th><th>Date</th><th>Type</th><th>Reason</th><th>Status</th><th>Actions</th></tr>
                 </thead>
@@ -740,7 +740,7 @@ function ClockCell({ v }: { v: unknown }) {
               <div className="empty-state"><h3>No punches linked</h3><p>This record may have been created by an adjustment or system rule.</p></div>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead><tr><th>Time</th><th>Type</th><th>Verification</th><th>Purpose</th><th>Terminal</th><th>Location</th></tr></thead>
                   <tbody>
                     {punches.map((pu) => (
@@ -763,7 +763,7 @@ function ClockCell({ v }: { v: unknown }) {
               <p className="muted">No open exceptions for this record.</p>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead><tr><th>Type</th><th>Severity</th><th>Status</th><th>Summary</th></tr></thead>
                   <tbody>
                     {excRows.map((x) => (
@@ -784,7 +784,7 @@ function ClockCell({ v }: { v: unknown }) {
               <p className="muted">No adjustments.</p>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead><tr><th>Created</th><th>Type</th><th>Status</th><th>Reason</th></tr></thead>
                   <tbody>
                     {adjRowsDetail.map((x) => (
@@ -805,7 +805,7 @@ function ClockCell({ v }: { v: unknown }) {
               <p className="muted">No audit entries for this record.</p>
             ) : (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead><tr><th>When</th><th>Action</th><th>User</th><th>Detail</th></tr></thead>
                   <tbody>
                     {audit.map((x, i) => (

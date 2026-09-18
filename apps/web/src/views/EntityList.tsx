@@ -84,7 +84,7 @@ export default function EntityList({ route }: { route: RouteMatch }) {
   };
 
   if (error && !meta) return <ErrorBanner error={error} />;
-  if (!meta) return <PageLoader label="Loading entity…" />;
+  if (!meta) return <PageLoader variant="page" label="Loading entity…" />;
 
   return (
     <div className="page">

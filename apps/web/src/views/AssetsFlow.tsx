@@ -88,7 +88,7 @@ function AssetBoard() {
       .catch(() => undefined);
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening asset command centre" />;
+  if (!data) return <PageLoader variant="page" label="Opening asset command centre" />;
   const byCategory = ((data.byCategory as Rec[]) ?? []).map((r) => ({ label: s(r.name), value: Number(r.value ?? r.count ?? 0) }));
   const byLocation = ((data.byLocation as Rec[]) ?? []).map((r) => ({ label: s(r.name), value: Number(r.value ?? r.count ?? 0) }));
   const byStatus = ((data.byStatus as Rec[]) ?? []).map((r) => ({ label: s(r.status), value: Number(r.count ?? 0) }));

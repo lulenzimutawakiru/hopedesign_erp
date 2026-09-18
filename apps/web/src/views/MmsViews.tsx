@@ -4,6 +4,7 @@ import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
+import { EmptyState } from '../components/os';
 
 type Rec = Record<string, unknown>;
 
@@ -112,7 +113,7 @@ type Col = {
   render?: (r: Rec) => ReactNode;
 };
 
-function DeskTable({ rows, cols, onRow }: { rows: Rec[]; cols: Col[]; onRow?: (r: Rec) => void }) {
+function DeskTable({ rows, cols, onRow, empty }: { rows: Rec[]; cols: Col[]; onRow?: (r: Rec) => void; empty?: ReactNode }) {
   return (
     <div className="table-wrap">
       <table className="data">
@@ -141,8 +142,8 @@ function DeskTable({ rows, cols, onRow }: { rows: Rec[]; cols: Col[]; onRow?: (r
           ))}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={cols.length} className="muted" style={{ textAlign: 'center', padding: 24 }}>
-                No records.
+              <td colSpan={cols.length} style={{ padding: 12 }}>
+                {empty ?? <EmptyState title="Nothing recorded yet" body="No rows have been recorded for this register." />}
               </td>
             </tr>
           )}
@@ -159,6 +160,7 @@ function DeskPage({
   cols,
   onRow,
   actions,
+  empty,
 }: {
   title: string;
   sub?: string;
@@ -166,6 +168,7 @@ function DeskPage({
   cols: Col[];
   onRow?: (r: Rec) => void;
   actions?: ReactNode;
+  empty?: ReactNode;
 }) {
   const { rows, error } = useDesk(endpoint);
   return (
@@ -180,7 +183,14 @@ function DeskPage({
       </header>
       {error && !rows && <ErrorBanner error={error} />}
       {!rows && !error && <PageLoader label="Loading..." />}
-      {rows && <DeskTable rows={rows} cols={cols} onRow={onRow} />}
+      {rows && (
+        <DeskTable
+          rows={rows}
+          cols={cols}
+          onRow={onRow}
+          empty={empty ?? <EmptyState title={`No ${title.toLowerCase()} yet`} body={sub ?? 'Nothing has been recorded for this register yet.'} />}
+        />
+      )}
     </div>
   );
 }
@@ -198,7 +208,7 @@ export function MmsDashboard() {
     load();
   }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading manufacturing dashboard..." />;
+  if (!data) return <PageLoader variant="page" label="Loading manufacturing dashboard..." />;
   const p = (data.production ?? {}) as Rec;
   const m = (data.machine ?? {}) as Rec;
   const mat = (data.material ?? {}) as Rec;

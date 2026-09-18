@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { api, ApiError } from '../api';
 import { ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { can, useAuth } from '../auth';
+import { toast } from '../components/toast';
 import { navigate } from '../router';
 
 /**
@@ -366,7 +367,7 @@ function RecordTable({
   if (rows.length === 0) return <Empty>{empty}</Empty>;
   return (
     <div className="table-wrap">
-      <table className="table">
+      <table className="data">
         <thead>
           <tr>
             {columns.map((c) => (
@@ -615,8 +616,8 @@ function Loader<T>({
 }) {
   const { data, error, loading, reload } = useLoad<T>(path);
   if (error) return <ErrorBanner error={error} />;
-  if (data === null) return <PageLoader />;
-  if (loading && data === null) return <PageLoader />;
+  if (data === null) return <PageLoader variant="page" />;
+  if (loading && data === null) return <PageLoader variant="page" />;
   return <>{children(data, reload)}</>;
 }
 
@@ -1399,7 +1400,7 @@ function NumberingPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
 
   if (rules.data === null) {
     if (rules.error) return <ErrorBanner error={rules.error} />;
-    return <PageLoader />;
+    return <PageLoader variant="page" />;
   }
 
   const ruleRows = Array.isArray(rules.data) ? (rules.data as Row[]) : [];
@@ -1834,7 +1835,7 @@ function FiscalPanel({ mayManage, onChanged }: { mayManage: boolean; onChanged: 
 
   if (overview.data === null) {
     if (overview.error) return <ErrorBanner error={overview.error} />;
-    return <PageLoader />;
+    return <PageLoader variant="page" />;
   }
 
   const years = arr(overview.data.years);
@@ -2357,7 +2358,7 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
 
   if (workflows.data === null) {
     if (workflows.error) return <ErrorBanner error={workflows.error} />;
-    return <PageLoader />;
+    return <PageLoader variant="page" />;
   }
 
   const wfRows = Array.isArray(workflows.data) ? (workflows.data as Row[]) : [];
@@ -3750,7 +3751,7 @@ function RetentionPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
   const [problem, setProblem] = useState<string | null>(null);
 
   if (error && data === null) return <ErrorBanner error={error} />;
-  if (data === null) return <PageLoader />;
+  if (data === null) return <PageLoader variant="page" />;
 
   const policies = arr(data.policies);
   const backups = arr(data.backups);
@@ -5020,7 +5021,7 @@ function HistoryModal({
       )}
       {rows.length > 0 && (
         <div className="table-wrap">
-          <table className="table">
+          <table className="data">
             <thead>
               <tr>
                 <th>When</th>
@@ -5159,7 +5160,6 @@ function OrganisationSettings({ path }: { path: string }) {
   const [history, setHistory] = useState<{ categoryId: string; key: string | null; title: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<unknown>(null);
-  const [saved, setSaved] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [hitIndex, setHitIndex] = useState(-1);
@@ -5209,18 +5209,11 @@ function OrganisationSettings({ path }: { path: string }) {
     setCleared([]);
     setErrors({});
     setReason('');
-    setSaved(null);
     setSaveError(null);
     setPending(null);
     setPendingText('');
     setGroupFilter('');
   }, [activeId]);
-
-  useEffect(() => {
-    if (saved === null) return;
-    const timer = window.setTimeout(() => setSaved(null), 4200);
-    return () => window.clearTimeout(timer);
-  }, [saved]);
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
@@ -5307,7 +5300,6 @@ function OrganisationSettings({ path }: { path: string }) {
 
   const onDraft = useCallback((key: string, v: Draft) => {
     setDrafts((d) => ({ ...d, [key]: v }));
-    setSaved(null);
   }, []);
 
   const onResetKey = useCallback((key: string) => {
@@ -5325,14 +5317,12 @@ function OrganisationSettings({ path }: { path: string }) {
 
   const onToggleClear = useCallback((key: string, on: boolean) => {
     setCleared((c) => (on ? (c.includes(key) ? c : c.concat(key)) : c.filter((k) => k !== key)));
-    setSaved(null);
   }, []);
 
   const discard = () => {
     setDrafts({});
     setCleared([]);
     setErrors({});
-    setSaved(null);
     setSaveError(null);
   };
 
@@ -5423,7 +5413,6 @@ function OrganisationSettings({ path }: { path: string }) {
     const changed = dirty.length;
     setErrors({});
     setSaveError(null);
-    setSaved(null);
     setSaving(true);
     try {
       const payload: Record<string, unknown> = { values: buildPatch() };
@@ -5443,7 +5432,7 @@ function OrganisationSettings({ path }: { path: string }) {
       setDrafts({});
       setCleared([]);
       setReason('');
-      setSaved(
+      toast.success(
         'Saved ' +
           String(changed) +
           ' change' +
@@ -5958,13 +5947,6 @@ function OrganisationSettings({ path }: { path: string }) {
           </div>
 
           <PanelError error={saveError} />
-
-          {saved !== null && (
-            <div className="settings-toast" role="status">
-              <span className="settings-toast-mark" aria-hidden="true">{'\u2713'}</span>
-              <span>{saved}</span>
-            </div>
-          )}
 
           {showsForm && dirty.length > 0 && (
             <div className="settings-bar">

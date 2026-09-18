@@ -377,7 +377,7 @@ export default function ServiceDeskConfig() {
             }
           >
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th>Category</th>
@@ -472,7 +472,7 @@ export default function ServiceDeskConfig() {
           >
             {selected ? (
               <div className="table-wrap">
-                <table className="table">
+                <table className="data">
                   <thead>
                     <tr>
                       <th>Subcategory</th>
@@ -584,7 +584,7 @@ export default function ServiceDeskConfig() {
           }
         >
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Policy</th>
@@ -682,7 +682,7 @@ export default function ServiceDeskConfig() {
             sub="Who a ticket climbs to when it is not moving (spec section 17)"
           >
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th className="sd-num">Level</th>
@@ -740,7 +740,7 @@ export default function ServiceDeskConfig() {
             }
           >
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th>Rule</th>
@@ -843,7 +843,7 @@ export default function ServiceDeskConfig() {
           }
         >
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Skill</th>
@@ -933,7 +933,7 @@ export default function ServiceDeskConfig() {
             sub={'IMPACT + URGENCY = PRIORITY \u00b7 mirrored from the database function service_priority_for()'}
           >
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th style={{ width: 190 }}>Impact</th>

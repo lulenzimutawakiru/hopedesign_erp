@@ -6,6 +6,7 @@ import { api, fmtMoney, fmtNum, ListResult } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
+import { ConfirmDialog } from '../components/os';
 import { pick } from '../helpers';
 
 type Rec = Record<string, unknown>;
@@ -114,7 +115,7 @@ export function FactoryDashboard() {
   }, []);
   useEffect(() => { load(); }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening the factory command center…" />;
+  if (!data) return <PageLoader variant="page" label="Opening the factory command center…" />;
   const p = (data.production ?? {}) as Rec;
   const m = (data.machine ?? {}) as Rec;
   const mat = (data.material ?? {}) as Rec;
@@ -272,7 +273,7 @@ export function LiveFactory() {
   }, []);
   useEffect(() => { load(); }, [load]);
   if (error && !rows) return <ErrorBanner error={error} />;
-  if (!rows) return <PageLoader label="Loading live factory…" />;
+  if (!rows) return <PageLoader variant="page" label="Loading live factory…" />;
   const running = rows.filter((r) => String(r.machineState ?? r.status ?? '').toUpperCase() === 'RUNNING').length;
   return (
     <div className="page">
@@ -348,6 +349,7 @@ export function OrderWorkspace({ id }: { id: number }) {
   const [outOpen, setOutOpen] = useState(false);
   const [outType, setOutType] = useState('GOOD');
   const [outQty, setOutQty] = useState('100');
+  const [dialog, setDialog] = useState<{ title: string; body: string; label: string; danger?: boolean; onConfirm: (reason: string) => void } | null>(null);
 
   const load = useCallback(() => {
     setError('');
@@ -361,7 +363,7 @@ export function OrderWorkspace({ id }: { id: number }) {
   useEffect(() => { load(); }, [load]);
 
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening production order…" />;
+  if (!data) return <PageLoader variant="page" label="Opening production order…" />;
   const wo = data.workOrder;
   const materials = data.materials ?? [];
   const operations = data.operations ?? [];
@@ -418,12 +420,21 @@ export function OrderWorkspace({ id }: { id: number }) {
           )}
           {inProgress && (
             <button className="btn" disabled={busy} onClick={() => {
-              const r = window.prompt('Hold reason', 'Paused from workspace');
-              if (r !== null) void act(`/api/ops/production/work-orders/${id}/hold`, { reason: r || 'Paused' });
+              setDialog({
+                title: 'Pause this order',
+                body: `Hold ${String(wo.woNo ?? '')}? The order stays open and records why the line stopped.`,
+                label: 'Pause order',
+                onConfirm: (reason) => { setDialog(null); void act(`/api/ops/production/work-orders/${id}/hold`, { reason: reason || 'Paused from workspace' }); },
+              });
             }}>Pause</button>
           )}
           <button className="btn btn-success" disabled={busy || completed} onClick={() => {
-            if (window.confirm(`Complete ${String(wo.woNo ?? '')}?`)) void act(`/api/ops/production/work-orders/${id}/complete`);
+            setDialog({
+              title: 'Complete production order',
+              body: `Complete ${String(wo.woNo ?? '')}? Produced ${fmtNum(produced)} of ${fmtNum(planned)} planned. QC still verifies before the order closes.`,
+              label: 'Complete order',
+              onConfirm: () => { setDialog(null); void act(`/api/ops/production/work-orders/${id}/complete`); },
+            });
           }}>Complete</button>
           {completed && (
             <button className="btn" disabled={busy} onClick={() => act(`/api/ops/production/work-orders/${id}/close`)}>Close</button>
@@ -611,6 +622,16 @@ export function OrderWorkspace({ id }: { id: number }) {
             <input inputMode="numeric" className="op-qty" value={outQty} onChange={(e) => setOutQty(e.target.value)} />
           </div>
         </Modal>
+      )}
+      {dialog && (
+        <ConfirmDialog
+          title={dialog.title}
+          body={dialog.body}
+          confirmLabel={dialog.label}
+          danger={dialog.danger}
+          onCancel={() => setDialog(null)}
+          onConfirm={(reason) => dialog.onConfirm(reason)}
+        />
       )}
     </div>
   );
@@ -913,6 +934,7 @@ export function OperatorHub() {
   const [downCat, setDownCat] = useState(DOWNTIME_CATS[0]);
   const [minutes, setMinutes] = useState('15');
   const [reason, setReason] = useState('');
+  const [dialog, setDialog] = useState<{ title: string; body: string; label: string; danger?: boolean; onConfirm: (reason: string) => void } | null>(null);
 
   const load = useCallback(() => {
     setError('');
@@ -1018,7 +1040,13 @@ export function OperatorHub() {
                 <button className="btn btn-warning" style={BIG_BTN} disabled={busy} onClick={() => { setWasteType('NORMAL'); setWasteCat(WASTE_CATS[0]); setQty('1'); setReason(''); setModal('waste'); }}>Waste</button>
                 <button className="btn" style={BIG_BTN} disabled={busy} onClick={() => { setDownCat(DOWNTIME_CATS[0]); setMinutes('15'); setReason(''); setModal('down'); }}>⚠ Problem</button>
                 {can(user, 'production.work_orders.update') && (
-                  <button className="btn btn-danger" style={BIG_BTN} disabled={busy} onClick={() => { if (window.confirm('Complete ' + String(pick(wo, 'woNo', 'wo_no')) + '? QC will verify before close.')) void act(`/api/ops/production/work-orders/${id}/complete`); }}>✓ Complete</button>
+                  <button className="btn btn-danger" style={BIG_BTN} disabled={busy} onClick={() => setDialog({
+                    title: 'Complete job',
+                    body: 'Complete ' + String(pick(wo, 'woNo', 'wo_no')) + '? Produced ' + fmtNum(produced) + ' of ' + fmtNum(planned) + '. QC will verify before close.',
+                    label: 'Complete job',
+                    danger: true,
+                    onConfirm: () => { setDialog(null); void act(`/api/ops/production/work-orders/${id}/complete`); },
+                  })}>✓ Complete</button>
                 )}
                 <button className="btn" style={BIG_BTN} onClick={() => navigate('/plant/inspections-ux')}>QC sample</button>
               </div>
@@ -1111,6 +1139,16 @@ export function OperatorHub() {
             <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="What happened?" />
           </label>
         </Modal>
+      )}
+      {dialog && (
+        <ConfirmDialog
+          title={dialog.title}
+          body={dialog.body}
+          confirmLabel={dialog.label}
+          danger={dialog.danger}
+          onCancel={() => setDialog(null)}
+          onConfirm={(reason) => dialog.onConfirm(reason)}
+        />
       )}
     </div>
   );

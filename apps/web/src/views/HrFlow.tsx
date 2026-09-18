@@ -4,6 +4,7 @@ import { useAuth, can } from '../auth';
 import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, PageLoader, StaffPhoto } from '../components/ui';
+import { ConfirmDialog } from '../components/os';
 import { HrKpi, HrKpiGrid, HrPageHeader, HrTableEmpty, HrToolbar } from '../components/hrUi';
 import RecruitmentFlow from './RecruitmentFlow';
 import OnboardingFlow from './OnboardingFlow';
@@ -108,7 +109,7 @@ function PeopleBoard() {
       .catch((e) => setError(e instanceof Error ? e.message : 'People board failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening people…" />;
+  if (!data) return <PageLoader variant="page" label="Opening people…" />;
   const kpis = (data.kpis ?? {}) as Rec;
   const pending = (data.pendingLeave as Rec[]) ?? [];
   const runs = (data.payrolls as Rec[]) ?? [];
@@ -267,6 +268,7 @@ function ExceptionsCentre() {
   const [severity, setSeverity] = useState('');
   const [q, setQ] = useState('');
   const [filters, setFilters] = useState({ status: '', severity: '', q: '' });
+  const [dialog, setDialog] = useState<{ row: Rec; action: 'RESOLVED' | 'IGNORED' } | null>(null);
   const load = useCallback(() => {
     const params = new URLSearchParams({ pageSize: '100' });
     if (filters.status) params.set('status', filters.status);
@@ -279,28 +281,23 @@ function ExceptionsCentre() {
   useEffect(() => { load(); }, [load]);
   const apply = () => { setError(''); setFilters({ status, severity, q: q.trim() }); };
   const reset = () => { setStatus(''); setSeverity(''); setQ(''); setError(''); setFilters({ status: '', severity: '', q: '' }); };
-  const act = async (row: Rec, action: 'RESOLVED' | 'IGNORED') => {
+  const act = async (row: Rec, action: 'RESOLVED' | 'IGNORED', note: string) => {
     setBusy(true); setError(''); setNotice('');
     try {
-      if (action === 'RESOLVED') {
-        const note = window.prompt('Resolution note (optional)');
-        if (note === null) return;
-        const payload: Rec = { status: action };
-        if (note) payload.note = note;
-        const r = await api<{ data: Rec }>(`/api/ops/hr/exceptions/${row.id}/resolve`, { method: 'POST', body: JSON.stringify(payload) });
-        setNotice(`Exception resolved. Readiness refreshed to ${(r.data.validation as Rec | undefined)?.validationScore ?? '?'}/100.`);
-      } else {
-        if (!window.confirm('Ignore this exception? It stays on record but no longer blocks this payroll.')) return;
-        const r = await api<{ data: Rec }>(`/api/ops/hr/exceptions/${row.id}/resolve`, { method: 'POST', body: JSON.stringify({ status: action }) });
-        setNotice(`Exception ignored. Readiness refreshed to ${(r.data.validation as Rec | undefined)?.validationScore ?? '?'}/100.`);
-      }
+      const payload: Rec = { status: action };
+      if (action === 'RESOLVED' && note) payload.note = note;
+      const r = await api<{ data: Rec }>(`/api/ops/hr/exceptions/${row.id}/resolve`, { method: 'POST', body: JSON.stringify(payload) });
+      const score = (r.data.validation as Rec | undefined)?.validationScore ?? '?';
+      setNotice(action === 'RESOLVED'
+        ? `Exception resolved. Readiness refreshed to ${score}/100.`
+        : `Exception ignored. Readiness refreshed to ${score}/100.`);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening exception centre" />;
+  if (!data) return <PageLoader variant="page" label="Opening exception centre" />;
   const summary = (data.summary ?? {}) as Rec;
   const rows = (data.rows as Rec[]) ?? [];
   const topTypes = (data.topTypes as Rec[]) ?? [];
@@ -374,8 +371,8 @@ function ExceptionsCentre() {
                 <td>
                   {String(row.status) === 'OPEN' && can(user, 'hr.payrolls.approve') ? (
                     <span className="row-actions">
-                      <button className="btn btn-sm btn-success" disabled={busy} onClick={() => act(row, 'RESOLVED')}>Resolve</button>
-                      <button className="btn btn-sm" disabled={busy} onClick={() => act(row, 'IGNORED')}>Ignore</button>
+                      <button className="btn btn-sm btn-success" disabled={busy} onClick={() => setDialog({ row, action: 'RESOLVED' })}>Resolve</button>
+                      <button className="btn btn-sm" disabled={busy} onClick={() => setDialog({ row, action: 'IGNORED' })}>Ignore</button>
                     </span>
                   ) : <span className="muted">—</span>}
                 </td>
@@ -385,6 +382,19 @@ function ExceptionsCentre() {
           </tbody>
         </table>
       </div>
+      {dialog && (
+        <ConfirmDialog
+          title={dialog.action === 'RESOLVED' ? 'Resolve exception' : 'Ignore exception'}
+          body={dialog.action === 'RESOLVED'
+            ? `Resolve ${String(dialog.row.exceptionType ?? 'this exception').replace(/_/g, ' ').toLowerCase()} for ${String(dialog.row.firstName ?? '')} ${String(dialog.row.lastName ?? '')}? Payroll readiness is recalculated immediately.`
+            : 'Ignore this exception? It stays on record but no longer blocks this payroll.'}
+          confirmLabel={dialog.action === 'RESOLVED' ? 'Resolve exception' : 'Ignore exception'}
+          danger={dialog.action === 'IGNORED'}
+          reasonLabel={dialog.action === 'RESOLVED' ? 'Resolution note (stored on the exception)' : null}
+          onCancel={() => setDialog(null)}
+          onConfirm={(reason) => { const d = dialog; setDialog(null); if (d) void act(d.row, d.action, reason); }}
+        />
+      )}
     </div>
   );
 }
@@ -398,7 +408,7 @@ function HcmBoard() {
       .catch((e) => setError(e instanceof Error ? e.message : 'HCM dashboard failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening HCM overview..." />;
+  if (!data) return <PageLoader variant="page" label="Opening HCM overview..." />;
   const kpis = (data.kpis ?? {}) as Rec;
   const pipeline = (data.pipeline as Rec[]) ?? [];
   const requisitions = (data.openRequisitions as Rec[]) ?? [];
@@ -742,7 +752,7 @@ function OffCycleDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening run" />;
+  if (!doc) return <PageLoader variant="page" label="Opening run" />;
   const p = doc.payroll;
   const exceptions = (doc.exceptions as Rec[]) ?? [];
   const openErrors = exceptions.filter((x) => x.severity === 'ERROR' && x.status === 'OPEN').length;
@@ -1022,6 +1032,7 @@ function EmployeeDesk({ id }: { id: number }) {
   const [tab, setTab] = useState('overview');
   const [docBusy, setDocBusy] = useState('');
   const [photoRev, setPhotoRev] = useState(0);
+  const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; danger?: boolean; run: () => void } | null>(null);
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/hr/employees/${id}`)
       .then((r) => setDoc(r.data))
@@ -1065,7 +1076,7 @@ function EmployeeDesk({ id }: { id: number }) {
     } finally { setBusy(false); }
   };
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening employee…" />;
+  if (!doc) return <PageLoader variant="page" label="Opening employee…" />;
   const e = doc.employee as Rec;
   const act = async (path: string, body: Rec = {}, ok = 'Done') => {
     setBusy(true); setError(''); setNotice('');
@@ -1172,12 +1183,23 @@ function EmployeeDesk({ id }: { id: number }) {
           )}
           {can(user, 'hr.employees.terminate') && !terminated && (
             <button className="btn btn-warning" disabled={busy} onClick={() => {
-              if (window.confirm('Terminate ' + fullName + '?')) act(`/api/ops/hr/employees/${id}/terminate`, {}, 'Terminated');
+              setConfirm({
+                title: 'Terminate employee',
+                body: `Terminate ${fullName}? This ends active employment, closes the current contract and stops future payroll for this employee. It is recorded on the employee file.`,
+                label: 'Terminate employee',
+                danger: true,
+                run: () => act(`/api/ops/hr/employees/${id}/terminate`, {}, 'Terminated'),
+              });
             }}>Terminate</button>
           )}
           {can(user, 'hr.final_settlements.create') && terminated && (
             <button className="btn btn-primary" disabled={busy} onClick={() => {
-              if (window.confirm('Prepare final settlement for ' + fullName + '?')) prepareSettlement();
+              setConfirm({
+                title: 'Prepare final settlement',
+                body: `Prepare a final settlement for ${fullName}? A draft settlement is created from their salary, leave balance and outstanding loans, then routed for approval.`,
+                label: 'Prepare settlement',
+                run: () => { void prepareSettlement(); },
+              });
             }}>Final settlement</button>
           )}
         </div>
@@ -1405,6 +1427,17 @@ function EmployeeDesk({ id }: { id: number }) {
           </section>
         </div>
       )}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.label}
+          danger={confirm.danger}
+          reasonLabel={null}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => { const c = confirm; setConfirm(null); if (c) c.run(); }}
+        />
+      )}
     </div>
   );
 }
@@ -1484,7 +1517,7 @@ function EmployeeEditor({ id }: { id: number }) {
     } finally { setBusy(false); }
   };
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening employee..." />;
+  if (!doc) return <PageLoader variant="page" label="Opening employee..." />;
   const e = doc.employee as Rec;
   return (
     <div className="page">
@@ -1658,7 +1691,7 @@ function AttendanceDesk() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Attendance failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening attendance…" />;
+  if (!data) return <PageLoader variant="page" label="Opening attendance…" />;
   return (
     <div className="page">
       <header className="page-head">
@@ -1853,7 +1886,7 @@ function PayrollDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening payroll…" />;
+  if (!doc) return <PageLoader variant="page" label="Opening payroll…" />;
   const p = doc.payroll;
   const exceptions = (doc.exceptions as Rec[]) ?? [];
   const openErrors = exceptions.filter((x) => x.severity === 'ERROR' && x.status === 'OPEN').length;
@@ -2276,6 +2309,7 @@ function FinalSettlementDesk({ id }: { id: number }) {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [payMethod, setPayMethod] = useState('BANK_TRANSFER');
+  const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; danger?: boolean; run: () => void } | null>(null);
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/hr/final-settlements/${id}`)
       .then((r) => setDoc(r.data))
@@ -2283,7 +2317,7 @@ function FinalSettlementDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening settlement" />;
+  if (!doc) return <PageLoader variant="page" label="Opening settlement" />;
   const s = doc;
   const components = (s.components as Rec[]) ?? [];
   const act = async (path: string, ok: string, body: Rec = {}) => {
@@ -2320,11 +2354,22 @@ function FinalSettlementDesk({ id }: { id: number }) {
         )}
         {String(s.status) === 'PENDING' && can(user, 'hr.final_settlements.approve') && (
           <button className="btn btn-success" disabled={busy} onClick={() => {
-            if (window.confirm(`Approve ${String(s.settlementNo)}?`)) act(`/api/ops/hr/final-settlements/${id}/approve`, 'Approved');
+            setConfirm({
+              title: 'Approve final settlement',
+              body: `Approve ${String(s.settlementNo)}? Net payable ${fmtMoney(s.netPayable)} becomes authorised for payment. Approval is recorded against your name.`,
+              label: 'Approve settlement',
+              run: () => act(`/api/ops/hr/final-settlements/${id}/approve`, 'Approved'),
+            });
           }}>Approve</button>
         )}
         {String(s.status) === 'PENDING' && can(user, 'hr.final_settlements.reject') && (
-          <button className="btn" disabled={busy} onClick={() => act(`/api/ops/hr/final-settlements/${id}/reject`, 'Returned to draft')}>Reject</button>
+          <button className="btn" disabled={busy} onClick={() => setConfirm({
+            title: 'Return final settlement',
+            body: `Return ${String(s.settlementNo)} to draft? The approver's decision is cleared and the preparer must resubmit.`,
+            label: 'Return to draft',
+            danger: true,
+            run: () => act(`/api/ops/hr/final-settlements/${id}/reject`, 'Returned to draft'),
+          })}>Reject</button>
         )}
         {String(s.status) === 'APPROVED' && can(user, 'hr.final_settlements.pay') && (
           <>
@@ -2335,7 +2380,13 @@ function FinalSettlementDesk({ id }: { id: number }) {
               <option value="OTHER">Other</option>
             </select>
             <button className="btn btn-primary" disabled={busy} onClick={() => {
-              if (window.confirm(`Pay ${String(s.settlementNo)} ${fmtMoney(s.netPayable)}?`)) act(`/api/ops/hr/final-settlements/${id}/pay`, 'Paid', { paymentMethod: payMethod });
+              setConfirm({
+                title: 'Pay final settlement',
+                body: `Pay ${fmtMoney(s.netPayable)} for ${String(s.settlementNo)} by ${payMethod.replace(/_/g, ' ').toLowerCase()}? This posts the disbursement and cannot be reversed from here.`,
+                label: 'Pay settlement',
+                danger: true,
+                run: () => act(`/api/ops/hr/final-settlements/${id}/pay`, 'Paid', { paymentMethod: payMethod }),
+              });
             }}>Pay settlement</button>
           </>
         )}
@@ -2359,6 +2410,17 @@ function FinalSettlementDesk({ id }: { id: number }) {
           </table>
         </div>
       </section>
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.label}
+          danger={confirm.danger}
+          reasonLabel={null}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => { const c = confirm; setConfirm(null); if (c) c.run(); }}
+        />
+      )}
     </div>
   );
 }
@@ -2654,6 +2716,7 @@ function OffboardingDesk({ id }: { id: number }) {
   const [exitNotes, setExitNotes] = useState('');
   const [alumniDate, setAlumniDate] = useState('');
   const [rehireEligible, setRehireEligible] = useState(true);
+  const [confirm, setConfirm] = useState<{ title: string; body: string; label: string; danger?: boolean; keepReason?: boolean; run: (reason: string) => void } | null>(null);
   const load = useCallback(() => {
     api<{ data: { instance: Rec; tasks: Rec[] } }>(`/api/ops/hcm/offboardings/${id}`)
       .then((r) => setDoc(r.data))
@@ -2661,7 +2724,7 @@ function OffboardingDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening offboarding case" />;
+  if (!doc) return <PageLoader variant="page" label="Opening offboarding case" />;
   const s = doc.instance;
   const tasks = doc.tasks ?? [];
   const status = String(s.status);
@@ -2693,18 +2756,6 @@ function OffboardingDesk({ id }: { id: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setTaskBusy(null); }
   };
-  const cancel = () => {
-    const reason = window.prompt('Reason for cancelling this offboarding case?');
-    if (reason === null) return;
-    act(`/api/ops/hcm/offboardings/${id}/cancel`, 'Offboarding case cancelled.', { reason: reason.trim() || undefined });
-  };
-  const complete = () => {
-    act(`/api/ops/hcm/offboardings/${id}/complete`, 'Offboarding completed - employee marked as exited.', {
-      exitInterviewNotes: exitNotes.trim() || undefined,
-      alumniDate: alumniDate || undefined,
-      rehireEligible,
-    });
-  };
   return (
     <div className="page">
       <header className="page-head">
@@ -2729,7 +2780,14 @@ function OffboardingDesk({ id }: { id: number }) {
           <button className="btn btn-primary" disabled={busy} onClick={() => act(`/api/ops/hcm/offboardings/${id}/start`, 'Offboarding started - clearance tasks are now open.')}>Start offboarding</button>
         )}
         {(status === 'DRAFT' || status === 'IN_PROGRESS') && can(user, 'hr.offboardings.cancel') && (
-          <button className="btn" disabled={busy} onClick={cancel}>Cancel case</button>
+          <button className="btn" disabled={busy} onClick={() => setConfirm({
+            title: 'Cancel offboarding case',
+            body: `Cancel ${String(s.instanceNo)}? The clearance checklist is closed and the case is withdrawn. The employee record is not changed by this action.`,
+            label: 'Cancel case',
+            danger: true,
+            keepReason: true,
+            run: (reason) => act(`/api/ops/hcm/offboardings/${id}/cancel`, 'Offboarding case cancelled.', { reason: reason.trim() || undefined }),
+          })}>Cancel case</button>
         )}
       </div>
       <section className="card card-pad">
@@ -2784,8 +2842,29 @@ function OffboardingDesk({ id }: { id: number }) {
             <div className="field"><label><input type="checkbox" checked={rehireEligible} onChange={(e) => setRehireEligible(e.target.checked)} /> Rehire eligible</label></div>
           </div>
           <div className="field"><label>Exit interview notes</label><textarea rows={4} value={exitNotes} onChange={(e) => setExitNotes(e.target.value)} placeholder="Reason for leaving, feedback, recommendations (kept confidential)" /></div>
-          <button className="btn btn-primary" style={{ marginTop: 12 }} disabled={busy || pendingTasks > 0} onClick={complete}>Complete offboarding</button>
+          <button className="btn btn-primary" style={{ marginTop: 12 }} disabled={busy || pendingTasks > 0} onClick={() => setConfirm({
+            title: 'Complete offboarding',
+            body: `Close ${String(s.instanceNo)} and mark ${String(s.firstName)} ${String(s.lastName)} as exited on ${alumniDate || String(s.effectiveDate ?? '').slice(0, 10) || 'the effective date'}? This updates the employee status and cannot be reversed from here.`,
+            label: 'Complete offboarding',
+            danger: true,
+            run: () => act(`/api/ops/hcm/offboardings/${id}/complete`, 'Offboarding completed - employee marked as exited.', {
+              exitInterviewNotes: exitNotes.trim() || undefined,
+              alumniDate: alumniDate || undefined,
+              rehireEligible,
+            }),
+          })}>Complete offboarding</button>
         </section>
+      )}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.label}
+          danger={confirm.danger}
+          reasonLabel={confirm.keepReason ? undefined : null}
+          onCancel={() => setConfirm(null)}
+          onConfirm={(reason) => { const c = confirm; setConfirm(null); if (c) c.run(reason); }}
+        />
       )}
     </div>
   );

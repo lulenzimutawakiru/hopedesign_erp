@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { ErrorBanner, Modal, PageLoader } from '../components/ui';
+import { toast } from '../components/toast';
 import { useAuth, can } from '../auth';
 
 type SettingType = 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'color' | 'url' | 'tel';
@@ -714,17 +715,14 @@ export default function Settings() {
   const [savingAll, setSavingAll] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState('');
-  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [auditOpen, setAuditOpen] = useState(false);
   const [resetTarget, setResetTarget] = useState<{ category: string | null; all: boolean } | null>(null);
-  const toastTimer = useRef<number | null>(null);
 
   const showToast = useCallback((kind: 'ok' | 'err', text: string) => {
-    if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    setToast({ kind, text });
-    toastTimer.current = window.setTimeout(() => setToast(null), 4200);
+    if (kind === 'err') toast.error(text);
+    else toast.success(text);
   }, []);
 
   const clearCatErrors = (cat: string) => {
@@ -752,8 +750,6 @@ export default function Settings() {
   useEffect(() => {
     load().catch((e) => setError(e instanceof Error ? e.message : 'Failed to load settings'));
   }, [load]);
-
-  useEffect(() => () => { if (toastTimer.current) window.clearTimeout(toastTimer.current); }, []);
 
   const dirtyCats = useMemo(() => {
     if (!cats) return new Set<string>();
@@ -972,7 +968,7 @@ export default function Settings() {
     return valid;
   };
 
-  if (!cats) return <PageLoader label="Loading settings..." />;
+  if (!cats) return <PageLoader variant="page" label="Loading settings..." />;
 
   const activeCat = cats.find((c) => c.category === active) ?? cats[0];
 
@@ -1356,14 +1352,6 @@ export default function Settings() {
         </Modal>
       )}
 
-      {toast && (
-        <div
-          className="toast"
-          style={{ background: toast.kind === 'err' ? 'var(--clay)' : 'var(--moss)', color: '#fff' }}
-        >
-          {toast.text}
-        </div>
-      )}
     </div>
   );
 }
@@ -1408,7 +1396,7 @@ function AuditModal({ cats, onClose }: { cats: SettingCategory[]; onClose: () =>
       )}
       {rows && rows.length > 0 && (
         <div className="table-wrap">
-          <table className="table">
+          <table className="data">
             <thead>
               <tr>
                 <th>When</th>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, fmtMoney, fmtNum, ListResult } from '../api';
 import { ErrorBanner } from '../components/ui';
-import { Breadcrumbs } from '../components/os';
+import { Breadcrumbs } from '../components/nav';
 import { pick } from '../helpers';
 import { navigate } from '../router';
 

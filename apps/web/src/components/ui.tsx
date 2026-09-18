@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { getToken } from '../api';
+import { CardSkeleton, TableSkeleton } from './skeleton';
 
 export type StatusKind =
   | 'ok'
@@ -73,7 +74,37 @@ export function Spinner() {
   return <div className="spinner" />;
 }
 
-export function PageLoader({ label = 'Loading…' }: { label?: string }) {
+/**
+ * Loading placeholder.
+ *
+ * `spinner` (the default) is for in-place refreshes, where the surrounding chrome
+ * is still on screen. `page` mirrors the shape of the page that is about to replace
+ * it - the same 1280px column, a heading block, a card row and a table - so a
+ * full-page load reads as content settling rather than an empty screen. The label
+ * is announced through a live region instead of being drawn.
+ */
+export function PageLoader({
+  label = 'Loading…',
+  variant = 'spinner',
+}: {
+  label?: string;
+  variant?: 'spinner' | 'page';
+}) {
+  if (variant === 'page') {
+    return (
+      <div className="page skel-page" role="status" aria-busy="true">
+        <span className="visually-hidden">{label}</span>
+        <div className="skel-page-visual" aria-hidden>
+          <div className="skel-page-head">
+            <span className="skel skel-line" style={{ width: '26%', height: 22 }} />
+            <span className="skel skel-line" style={{ width: '42%' }} />
+          </div>
+          <CardSkeleton count={4} />
+          <TableSkeleton rows={6} cols={5} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="center-box" style={{ flexDirection: 'column', gap: 10 }}>
       <Spinner />

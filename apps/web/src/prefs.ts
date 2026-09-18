@@ -45,9 +45,6 @@ export function applyPrefs(p: Prefs = loadPrefs()) {
   const root = document.documentElement;
   const dark = p.theme === 'dark' || (p.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   root.dataset.theme = dark ? 'dark' : 'light';
-  root.dataset.density = p.density;
-  root.dataset.sidebar = p.sidebarCollapsed ? 'collapsed' : 'expanded';
-  root.dataset.focus = p.focusMode ? 'on' : 'off';
   const themeMeta = document.querySelector('meta[name="theme-color"]');
   if (themeMeta) themeMeta.setAttribute('content', dark ? '#08131F' : '#0B1F33');
 }

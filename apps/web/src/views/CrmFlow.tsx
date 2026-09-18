@@ -224,7 +224,7 @@ function CrmBoard() {
       .catch((e) => setError(e instanceof Error ? e.message : 'CRM board failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening accounts…" />;
+  if (!data) return <PageLoader variant="page" label="Opening accounts…" />;
   const kpis = (data.kpis ?? {}) as Rec;
   const leads = (data.leads as Rec[]) ?? [];
   const hot = (data.hot as Rec[]) ?? [];
@@ -412,7 +412,7 @@ function CustomerDesk({ id }: { id: number }) {
     api<{ data: Rec[] }>('/api/ops/crm/owners').then((r) => setOwners(r.data ?? [])).catch(() => undefined);
   }, []);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening account…" />;
+  if (!doc) return <PageLoader variant="page" label="Opening account…" />;
   const c = doc.customer as Rec;
   const credit = (doc.credit ?? {}) as Rec;
   const health = (doc.health ?? {}) as Rec;
@@ -764,7 +764,7 @@ function LeadDesk({ id }: { id: number }) {
     api<{ data: Rec[] }>('/api/ops/crm/owners').then((r) => setOwners(r.data ?? [])).catch(() => undefined);
   }, []);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening lead…" />;
+  if (!doc) return <PageLoader variant="page" label="Opening lead…" />;
   const lead = doc.lead;
   const score = Number((lead.attributes as Rec | undefined)?.score ?? lead.score ?? 0);
   const status = String(lead.status);
@@ -949,7 +949,7 @@ function Pipeline() {
   }, []);
   useEffect(() => { load(); }, [load]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening pipeline…" />;
+  if (!data) return <PageLoader variant="page" label="Opening pipeline…" />;
   return (
     <div className="page">
       <CrmCommandBar
@@ -1004,7 +1004,7 @@ function OppDesk({ id }: { id: number }) {
     api<{ data: Rec[] }>('/api/ops/crm/products').then((r) => setProducts(r.data ?? [])).catch(() => undefined);
   }, []);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening opportunity…" />;
+  if (!doc) return <PageLoader variant="page" label="Opening opportunity…" />;
   const o = doc.opportunity;
   const status = String(o.status);
   const open = status === 'OPEN';
@@ -1301,7 +1301,7 @@ function ComplaintDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening complaint…" />;
+  if (!doc) return <PageLoader variant="page" label="Opening complaint…" />;
   const c = doc.complaint;
   const act = async (path: string, body: Rec = {}, ok = 'Done') => {
     setBusy(true); setError(''); setNotice('');
@@ -1376,7 +1376,7 @@ function MyDesk() {
       .catch((e) => setError(e instanceof Error ? e.message : 'My desk failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening your desk…" />;
+  if (!data) return <PageLoader variant="page" label="Opening your desk…" />;
   const kpis = (data.kpis ?? {}) as Rec;
   const leads = (data.leads as Rec[]) ?? [];
   const opps = (data.opportunities as Rec[]) ?? [];
@@ -1486,7 +1486,7 @@ function CrmAnalytics() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Analytics failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening analytics…" />;
+  if (!data) return <PageLoader variant="page" label="Opening analytics…" />;
   const funnel = (data.funnel ?? {}) as Rec;
   const forecast = (data.forecast ?? {}) as Rec;
   const aging = (data.aging ?? {}) as Rec;

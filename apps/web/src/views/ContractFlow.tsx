@@ -359,7 +359,7 @@ function ChartCard({ title, rows }: { title: string; rows: Array<{ label: string
   return (
     <section className="card card-pad">
       <div className="card-head"><h3>{title}</h3></div>
-      {rows.length === 0 ? <p className="muted" style={{ margin: 0 }}>No data yet.</p> : <MiniBars rows={rows} />}
+      {rows.length === 0 ? <p className="muted" style={{ margin: 0 }}>Nothing recorded for this view yet.</p> : <MiniBars rows={rows} />}
     </section>
   );
 }
@@ -400,7 +400,7 @@ function ContractBoard() {
     return () => window.removeEventListener('keydown', onKey);
   }, [user]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening contracts" />;
+  if (!data) return <PageLoader variant="page" label="Opening contracts" />;
   const kpis = (data.kpis ?? {}) as Rec;
   const charts = (data.charts ?? {}) as Rec;
   const alerts = (data.alerts as Array<Rec | string>) ?? [];
@@ -1704,7 +1704,7 @@ useEffect(() => {
     return () => window.removeEventListener('keydown', onKey);
   });
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening contract" />;
+  if (!data) return <PageLoader variant="page" label="Opening contract" />;
   const c = (data.contract ?? {}) as Rec;
   const terms = (data.terms ?? []) as Rec[];
   const allowances = (data.allowances ?? []) as Rec[];
@@ -2652,7 +2652,7 @@ function TemplateDesk({ id }: { id: number }) {
       .catch((e) => setError(e instanceof Error ? e.message : 'Template failed'));
   }, [id]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening template" />;
+  if (!data) return <PageLoader variant="page" label="Opening template" />;
   const t = (data.template ?? {}) as Rec;
   const versions = (data.versions ?? []) as Rec[];
   const activeVersion = versions.find((v) => v.status === 'ACTIVE') ?? versions[0] ?? null;
@@ -3307,7 +3307,7 @@ function MyContracts() {
     return () => { cancelled = true; };
   }, [data?.items]);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening your contracts" />;
+  if (!data) return <PageLoader variant="page" label="Opening your contracts" />;
   const items = (data.items ?? []) as Rec[];
   const doSign = async () => {
     if (signId === null) return;

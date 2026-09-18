@@ -3,13 +3,7 @@ import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { CREATE_ITEMS } from '../work';
 
-export function Skeleton({ rows = 4 }: { rows?: number }) {
-  return (
-    <div className="skel-wrap" aria-busy="true" aria-label="Loading">
-      {Array.from({ length: rows }).map((_, i) => <div key={i} className="skel" />)}
-    </div>
-  );
-}
+export { Skeleton } from './states';
 
 export function ConfirmDialog({
   title,
@@ -19,6 +13,9 @@ export function ConfirmDialog({
   onCancel,
   onConfirm,
   children,
+  reasonLabel = 'Reason (written to the audit trail)',
+  reasonRequired,
+  confirmDisabled,
 }: {
   title: string;
   body: string;
@@ -27,8 +24,12 @@ export function ConfirmDialog({
   onCancel: () => void;
   onConfirm: (reason: string) => void;
   children?: ReactNode;
+  reasonLabel?: string | null;
+  reasonRequired?: boolean;
+  confirmDisabled?: boolean;
 }) {
   const [reason, setReason] = useState('');
+  const blocked = Boolean(confirmDisabled) || Boolean(reasonRequired && !reason.trim());
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="modal" role="alertdialog" aria-labelledby="confirm-title">
@@ -36,14 +37,16 @@ export function ConfirmDialog({
         <div className="modal-body">
           <p>{body}</p>
           {children}
-          <div className="field">
-            <label htmlFor="confirm-reason">Reason (written to the audit trail)</label>
-            <input id="confirm-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
-          </div>
+          {reasonLabel !== null && (
+            <div className="field">
+              <label htmlFor="confirm-reason">{reasonLabel}</label>
+              <input id="confirm-reason" value={reason} onChange={(e) => setReason(e.target.value)} aria-required={reasonRequired || undefined} />
+            </div>
+          )}
         </div>
         <div className="modal-foot">
           <button className="btn" onClick={onCancel}>Keep as-is</button>
-          <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} onClick={() => onConfirm(reason)}>{confirmLabel}</button>
+          <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} disabled={blocked} onClick={() => onConfirm(reason)}>{confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -89,19 +92,6 @@ export function CreateMenu() {
         </div>
       )}
     </div>
-  );
-}
-
-export function Breadcrumbs({ items }: { items: { label: string; href?: string }[] }) {
-  return (
-    <nav className="crumbs" aria-label="Breadcrumb">
-      {items.map((it, i) => (
-        <span key={i}>
-          {i > 0 && <span className="crumb-sep">/</span>}
-          {it.href ? <button className="crumb-link" onClick={() => navigate(it.href!)}>{it.label}</button> : <span>{it.label}</span>}
-        </span>
-      ))}
-    </nav>
   );
 }
 

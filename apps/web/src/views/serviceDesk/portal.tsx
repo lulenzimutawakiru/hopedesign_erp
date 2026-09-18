@@ -84,7 +84,7 @@ export default function ServiceDeskPortal() {
 
   useEffect(() => void load(), [load, tick]);
 
-  if (!data && !error) return <PageLoader label="Loading your service desk" />;
+  if (!data && !error) return <PageLoader variant="page" label="Loading your service desk" />;
 
   const open = data?.openTickets ?? [];
   const recent = data?.recentTickets ?? [];

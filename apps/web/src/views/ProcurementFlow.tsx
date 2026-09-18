@@ -3,9 +3,11 @@ import { api, fmtDate, fmtMoney, fmtNum, getToken, openDocument } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
+import { ConfirmDialog } from '../components/os';
 import DownloadMenu from '../components/DownloadMenu';
 import { SupplierPicker } from '../components/SupplierPicker';
 import { pick } from '../helpers';
+import { toast } from '../components/toast';
 
 type Rec = Record<string, unknown>;
 
@@ -267,7 +269,7 @@ function BuyBoard() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Buy board failed'));
   }, []);
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening procurement…" />;
+  if (!data) return <PageLoader variant="page" label="Opening procurement…" />;
   const kpis = (data.kpis ?? {}) as Rec;
   const inbound = (data.inbound as Rec[]) ?? [];
   const awaiting = (data.awaiting as Rec[]) ?? [];
@@ -401,7 +403,7 @@ function DemandDesk() {
     } finally { setBusy(false); }
   };
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Loading demand…" />;
+  if (!data) return <PageLoader variant="page" label="Loading demand…" />;
   return (
     <div className="page">
       <header className="page-head">
@@ -569,6 +571,7 @@ function PrDesk({ id }: { id: number }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [osDialog, setOsDialog] = useState<{ title: string; body: string; label: string; danger?: boolean; reasonLabel?: string | null; run: (reason: string) => void } | null>(null);
   const load = useCallback(() => {
     api<{ data: { requisition: Rec; items: Rec[]; orders: Rec[]; rfqs?: Rec[]; workflow: Rec | null; comments: Rec[]; history: Rec[]; assignments: Rec[]; attachments: Rec[]; remainingBudget: number | null } }>(`/api/ops/procurement/requisitions/${id}`)
       .then((r) => setDoc({ ...r.data, rfqs: r.data.rfqs ?? [] }))
@@ -586,7 +589,7 @@ function PrDesk({ id }: { id: number }) {
       .catch(() => setInventory(null));
   }, [id]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening requisition..." />;
+  if (!doc) return <PageLoader variant="page" label="Opening requisition..." />;
 const pr = doc.requisition;
 const status = String(pr.status);
 const estTotal = num(pr.totalEstimated) || doc.items.reduce((s, i) => s + num(i.quantity) * num(i.estimatedCost), 0);
@@ -819,10 +822,23 @@ return (
                       <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act(`/api/ops/approvals/${String(t.id)}/decide`, { decision: 'APPROVED', comment: '' }, 'Approved')}>Approve</button>
                     )}
                     {can(user, 'workflows.instances.reject') && (
-                      <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => { const c = window.prompt('Rejection comment (optional)'); if (c !== null) act(`/api/ops/approvals/${String(t.id)}/decide`, { decision: 'REJECTED', comment: c }, 'Rejected'); }}>Reject</button>
+                      <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => setOsDialog({
+                        title: 'Reject step',
+                        body: `Reject "${String(t.stepName)}"? The requisition is returned to the requester as rejected and the decision is recorded against your name.`,
+                        label: 'Reject step',
+                        danger: true,
+                        reasonLabel: 'Rejection comment (optional)',
+                        run: (reason) => act(`/api/ops/approvals/${String(t.id)}/decide`, { decision: 'REJECTED', comment: reason }, 'Rejected'),
+                      })}>Reject</button>
                     )}
                     {can(user, 'workflows.instances.return') && (
-                      <button className="btn btn-sm" disabled={busy} onClick={() => { const c = window.prompt('Reason for return (optional)'); if (c !== null) act(`/api/ops/approvals/${String(t.id)}/decide`, { decision: 'RETURNED', comment: c }, 'Returned'); }}>Return</button>
+                      <button className="btn btn-sm" disabled={busy} onClick={() => setOsDialog({
+                        title: 'Return step for changes',
+                        body: `Return "${String(t.stepName)}" to the previous step? The requester is notified and the step stays open.`,
+                        label: 'Return for changes',
+                        reasonLabel: 'Reason for return (optional)',
+                        run: (reason) => act(`/api/ops/approvals/${String(t.id)}/decide`, { decision: 'RETURNED', comment: reason }, 'Returned'),
+                      })}>Return</button>
                     )}
                   </span>
                 ))}
@@ -1000,14 +1016,25 @@ return (
             )}
             {['DRAFT', 'SUBMITTED'].includes(status) && can(user, 'procurement.requisitions.update') && (
               <button className="btn btn-block btn-warning" disabled={busy} onClick={() => {
-                if (window.confirm(`Cancel requisition ${String(pr.prNo)}?`)) act(`/api/ops/procurement/requisitions/${id}/cancel`, {}, 'Cancelled');
+                setOsDialog({
+                  title: 'Cancel requisition',
+                  body: `Cancel ${String(pr.prNo)}? It is withdrawn from the approval chain and cannot be submitted again.`,
+                  label: 'Cancel requisition',
+                  danger: true,
+                  reasonLabel: null,
+                  run: () => act(`/api/ops/procurement/requisitions/${id}/cancel`, {}, 'Cancelled'),
+                });
               }}>Cancel requisition</button>
             )}
             {['SUBMITTED', 'APPROVED', 'PARTIALLY_ORDERED'].includes(status) && can(user, 'procurement.requisitions.update') && (
               <button className="btn btn-block" disabled={busy} onClick={() => {
-                const reason = window.prompt('Reason for holding this requisition (optional)');
-                if (reason === null) return;
-                act(`/api/ops/procurement/requisitions/${id}/hold`, reason.trim() ? { reason: reason.trim() } : {}, 'Held');
+                setOsDialog({
+                  title: 'Hold requisition',
+                  body: `Put ${String(pr.prNo)} on hold? Approvers cannot decide the open step until it is released.`,
+                  label: 'Hold requisition',
+                  reasonLabel: 'Reason for holding (optional)',
+                  run: (reason) => act(`/api/ops/procurement/requisitions/${id}/hold`, reason.trim() ? { reason: reason.trim() } : {}, 'Held'),
+                });
               }}>Hold</button>
             )}
             {status === 'ON_HOLD' && can(user, 'procurement.requisitions.update') && (
@@ -1059,6 +1086,17 @@ return (
         />
       </div>
     </div>
+      {osDialog && (
+        <ConfirmDialog
+          title={osDialog.title}
+          body={osDialog.body}
+          confirmLabel={osDialog.label}
+          danger={osDialog.danger}
+          reasonLabel={osDialog.reasonLabel}
+          onCancel={() => setOsDialog(null)}
+          onConfirm={(reason) => { const d = osDialog; setOsDialog(null); if (d) d.run(reason); }}
+        />
+      )}
   </div>
 );
 }
@@ -1754,7 +1792,7 @@ function RfqDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening RFQ..." />;
+  if (!doc) return <PageLoader variant="page" label="Opening RFQ..." />;
   const act = async (path: string, body: Rec = {}, ok = 'Done') => {
     setBusy(true); setError(''); setNotice('');
     try {
@@ -1813,7 +1851,7 @@ function RfqDesk({ id }: { id: number }) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <DownloadMenu type="rfq" id={id} code={String(rfq.rfqNo)} />
-          <button className="btn btn-sm" onClick={() => openDocument('bid-analysis', id, 'print', String(rfq.rfqNo) + '.pdf').catch((e) => window.alert(e instanceof Error ? e.message : String(e)))}>Bid analysis</button>
+          <button className="btn btn-sm" onClick={() => openDocument('bid-analysis', id, 'print', String(rfq.rfqNo) + '.pdf').catch((e) => toast.fromError('Could not generate the bid analysis.', e))}>Bid analysis</button>
           <Badge value={rfqStatus} />
         </div>
       </header>
@@ -2100,7 +2138,7 @@ function PoDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening purchase order..." />;
+  if (!doc) return <PageLoader variant="page" label="Opening purchase order..." />;
   const po = doc.order;
   const status = String(po.status);
   const act = async (path: string, body: Rec = {}, ok = 'Done') => {
@@ -2650,7 +2688,7 @@ function GrnDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening GRN..." />;
+  if (!doc) return <PageLoader variant="page" label="Opening GRN..." />;
   const receipt = doc.receipt;
   const grnStatus = String(receipt.status);
   const qc = async (result: 'PASSED' | 'FAILED' | 'QUARANTINED') => {
@@ -2749,7 +2787,7 @@ function GrnDesk({ id }: { id: number }) {
                   <div key={String(r.id)} className="related-item">
                     <span className="cell-mono">{String(r.inspectionNo ?? r.id)}</span>
                     <Badge value={r.result ?? r.status} />
-                    <button className="btn btn-sm" onClick={() => openDocument('inspection', r.id, 'print', String(r.inspectionNo ?? 'inspection') + '.pdf').catch((e) => window.alert(e instanceof Error ? e.message : String(e)))}>Print</button>
+                    <button className="btn btn-sm" onClick={() => openDocument('inspection', r.id, 'print', String(r.inspectionNo ?? 'inspection') + '.pdf').catch((e) => toast.fromError('Could not generate the inspection document.', e))}>Print</button>
                   </div>
                 ))}
               </div>
@@ -2764,7 +2802,7 @@ function GrnDesk({ id }: { id: number }) {
                   <div key={String(r.id)} className="related-item">
                     <span className="cell-mono">{String(r.returnNo ?? r.id)}</span>
                     <Badge value={r.status} />
-                    <button className="btn btn-sm" onClick={() => openDocument('purchase-return', r.id, 'print', String(r.returnNo ?? 'return') + '.pdf').catch((e) => window.alert(e instanceof Error ? e.message : String(e)))}>Print</button>
+                    <button className="btn btn-sm" onClick={() => openDocument('purchase-return', r.id, 'print', String(r.returnNo ?? 'return') + '.pdf').catch((e) => toast.fromError('Could not generate the purchase return document.', e))}>Print</button>
                   </div>
                 ))}
               </div>
@@ -2859,7 +2897,7 @@ function InvoiceDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening invoice..." />;
+  if (!doc) return <PageLoader variant="page" label="Opening invoice..." />;
   const inv = doc.invoice;
   const invStatus = String(inv.status);
   const act = async (path: string, body: Rec = {}, ok = 'Done') => {
@@ -3044,7 +3082,7 @@ function PricesDesk() {
     load(p.toString());
   };
   if (error && !rows) return <ErrorBanner error={error} />;
-  if (!rows) return <PageLoader label="Opening price intelligence..." />;
+  if (!rows) return <PageLoader variant="page" label="Opening price intelligence..." />;
   const counts = ((summary?.counts as Rec | undefined) ?? {}) as Rec;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   return (
@@ -3178,7 +3216,7 @@ function MatchDesk() {
     load(p.toString());
   };
   if (error && !rows) return <ErrorBanner error={error} />;
-  if (!rows) return <PageLoader label="Opening match desk..." />;
+  if (!rows) return <PageLoader variant="page" label="Opening match desk..." />;
   const counts: Record<string, number> = { MATCHED: 0, PARTIAL: 0, DIFFERENCE: 0, PENDING: 0 };
   for (const r of rows) {
     const m = String(r.matchStatus ?? 'PENDING');
@@ -3291,7 +3329,7 @@ function MatchDetail({ poId }: { poId: number }) {
     } finally { setBusy(false); }
   };
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Computing three-way match..." />;
+  if (!doc) return <PageLoader variant="page" label="Computing three-way match..." />;
   const po = (doc.po ?? {}) as Rec;
   const summary = (doc.summary ?? {}) as Rec;
   const lines = (doc.lines ?? []) as Rec[];
@@ -3426,7 +3464,7 @@ function PaymentDesk({ id }: { id: number }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader label="Opening payment…" />;
+  if (!doc) return <PageLoader variant="page" label="Opening payment…" />;
   const p = doc.payment;
   const status = String(p.status);
   const act = async (path: string, ok: string) => {

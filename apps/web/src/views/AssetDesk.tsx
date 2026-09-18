@@ -117,7 +117,7 @@ export default function AssetDesk({ id }: { id: number }) {
   const openTab = (k: string) => navigate(`/assets/${id}?tab=${k}`, { replace: true });
 
   if (error && !data) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Opening asset 360" />;
+  if (!data) return <PageLoader variant="page" label="Opening asset 360" />;
 
   const asset = (data.asset as Rec) ?? {};
   const tags = (data.tags as Rec[]) ?? [];

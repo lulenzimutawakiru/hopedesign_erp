@@ -105,7 +105,7 @@ export default function SecuritySettings() {
     }
   };
 
-  if (loading && !status) return <PageLoader label="Loading security settings" />;
+  if (loading && !status) return <PageLoader variant="page" label="Loading security settings" />;
 
   const enabled = Boolean(status?.mfaEnabled);
   const onFile = status?.personalEmail ?? null;

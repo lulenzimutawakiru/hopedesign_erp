@@ -233,7 +233,7 @@ export default function ServiceDeskQueues() {
 
           <SecCard title="Queues" sub="Open a queue in the workspace to work it. Targets here are the fallback when no SLA policy matches.">
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th style={{ width: 190 }}>Queue</th>
@@ -296,7 +296,7 @@ export default function ServiceDeskQueues() {
           sub="Impact plus urgency sets the priority; the policy attached to that priority sets the clocks. Business calendars decide whether the clock runs 24x7 or only during working hours."
         >
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th style={{ width: 150 }}>Policy</th>
@@ -377,7 +377,7 @@ export default function ServiceDeskQueues() {
             sub="Rules are evaluated per category and priority. The trigger says whether the clock measures time without a first response, time without a resolution, or the SLA warning point."
           >
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th style={{ width: 170 }}>Rule</th>
@@ -434,7 +434,7 @@ export default function ServiceDeskQueues() {
             sub="A team is a named group of technicians that can own a queue. Open a team to see its roster."
           >
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th>Team</th>
@@ -478,7 +478,7 @@ export default function ServiceDeskQueues() {
             sub="Skill-based routing matches a ticket to the technician who holds the skill the category needs."
           >
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th>Skill</th>
@@ -521,7 +521,7 @@ export default function ServiceDeskQueues() {
           sub="A calendar defines the working week, the working day and the public holidays. SLA clocks that are not 24x7 only tick inside these windows."
         >
           <div className="table-wrap">
-            <table className="table">
+            <table className="data">
               <thead>
                 <tr>
                   <th>Calendar</th>
@@ -579,7 +579,7 @@ export default function ServiceDeskQueues() {
           {!membersBusy && members.length === 0 && <p className="muted">No members on this team yet.</p>}
           {!membersBusy && members.length > 0 && (
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th>Member</th>
@@ -623,7 +623,7 @@ export default function ServiceDeskQueues() {
           {!holidayBusy && holidays.length === 0 && <p className="muted">No holidays recorded on this calendar.</p>}
           {!holidayBusy && holidays.length > 0 && (
             <div className="table-wrap">
-              <table className="table">
+              <table className="data">
                 <thead>
                   <tr>
                     <th style={{ width: 160 }}>Date</th>

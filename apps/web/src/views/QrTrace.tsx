@@ -21,7 +21,7 @@ export default function QrTrace({ code }: { code: string }) {
   }, [code]);
 
   if (error) return <ErrorBanner error={error} />;
-  if (!data) return <PageLoader label="Tracing QR…" />;
+  if (!data) return <PageLoader variant="page" label="Tracing QR…" />;
 
   const qr = data.qr;
 
