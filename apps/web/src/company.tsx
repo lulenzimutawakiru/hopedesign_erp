@@ -58,7 +58,8 @@ export async function fetchCompanyProfile(): Promise<CompanyProfile> {
         const body = (await res.json()) as { data?: Partial<CompanyProfile> } | null;
         const data = body?.data;
         if (!data || typeof data !== 'object') return FALLBACK_COMPANY;
-        return { ...FALLBACK_COMPANY, ...data };
+        // Memoize only a real profile: a transient failure must stay retryable.
+        return (cached = { ...FALLBACK_COMPANY, ...data });
       } catch {
         return FALLBACK_COMPANY;
       } finally {

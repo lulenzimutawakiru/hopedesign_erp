@@ -589,6 +589,16 @@
   .auth-footer { padding: 10px 16px; }
 }
 
+/* A 768px-tall desktop window puts the split layout slightly over its own
+   height: the credential card plus the security notice ask for ~677px inside a
+   669px pane, so the panel gains a scrollbar it does not need. Only the two
+   gaps that are pure air at this size give, which leaves the rhythm on larger
+   desktops -- where the pane has no overflow at all -- untouched. */
+@media (min-width: 961px) and (max-height: 820px) {
+  .auth-panel-head .muted { margin-bottom: 14px; }
+  .auth-security { margin-top: 12px; }
+}
+
 @media (max-width: 640px) {
   /* The bar wraps rather than dropping anything: the security chip and the
      language name are both statements the brief requires, and at this width
