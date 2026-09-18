@@ -5,7 +5,7 @@ import ApprovalQueue, { type ApprovalRow } from './ApprovalQueue';
 
 export default function Approvals() {
   const [rows, setRows] = useState<ApprovalRow[]>([]);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -15,7 +15,9 @@ export default function Approvals() {
 
   useEffect(() => {
     setBusy(true);
-    load().catch((e) => setError(e instanceof Error ? e.message : 'Failed to load approvals')).finally(() => setBusy(false));
+    load()
+      .catch((err) => setError(err))
+      .finally(() => setBusy(false));
   }, [load]);
 
   const decide = useCallback(
@@ -43,7 +45,7 @@ export default function Approvals() {
           <div className="queue-count"><b>{rows.length}</b> on your desk</div>
         )}
       </header>
-      {error && <ErrorBanner error={error} />}
+      {error ? <ErrorBanner error={error} /> : null}
       {busy ? (
         <PageLoader label="Loading approvals…" />
       ) : (
