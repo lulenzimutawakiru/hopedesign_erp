@@ -488,8 +488,9 @@ const MODULES = {
 };
 
 // Module-level permissions that do not follow the {module}.{resource}.{action}
-// shape. Declared explicitly so RBAC checks such as `service_desk.admin`
-// resolve, and so `service_desk.*` wildcards still pick them up.
+// shape, together with the flat `documents.*` codes the Document Management
+// module checks. Declared explicitly so RBAC checks such as `service_desk.admin`
+// resolve, and so the `service_desk.*` and `documents.*` wildcards pick them up.
 const EXTRA_PERMISSIONS = [
   {
     code: "service_desk.admin",
@@ -498,6 +499,20 @@ const EXTRA_PERMISSIONS = [
     action: "admin",
     description: "Administer the HOPE DESIGN Service Desk (taxonomy, queues, SLAs, escalation, settings)",
   },
+  // Flat document codes (introduced by migration 0116). The documents routes and
+  // nav check these exact codes, so they have to exist in the catalogue for a
+  // `documents.*` grant to resolve to anything and for reconcileRbac to keep
+  // their permission rows alive across re-seeds.
+  { code: "documents.command.view", module: "documents", resource: "command", action: "view", description: "View the document command centre" },
+  { code: "documents.view", module: "documents", resource: "library", action: "view", description: "View documents in the library" },
+  { code: "documents.create", module: "documents", resource: "library", action: "create", description: "Create documents" },
+  { code: "documents.edit", module: "documents", resource: "library", action: "edit", description: "Edit document metadata" },
+  { code: "documents.upload", module: "documents", resource: "library", action: "upload", description: "Upload document files and new versions" },
+  { code: "documents.download", module: "documents", resource: "library", action: "download", description: "Download document files" },
+  { code: "documents.approve", module: "documents", resource: "library", action: "approve", description: "Approve, reject and release documents" },
+  { code: "documents.delete", module: "documents", resource: "library", action: "delete", description: "Delete or archive documents" },
+  { code: "documents.folders.manage", module: "documents", resource: "folders", action: "manage", description: "Manage document folders" },
+  { code: "documents.settings.manage", module: "documents", resource: "settings", action: "manage", description: "Configure document management settings" },
 ];
 
 function buildPermissions() {
@@ -719,6 +734,45 @@ const ROLES = [
     "service_desk.dashboards.*","service_desk.reports.*","service_desk.settings.*",
     "service_desk.audit.view","service_desk.admin",
   ] },
+  // Executive and operational structure (org chart, migration 0167 section 1).
+  { code: "operations_manager", name: "Operations Manager", grants: [
+    "workflows.instances.*",
+    "production.*","quality.*","maintenance.*","inventory.*",
+    "procurement.*","expenditure.*","logistics.*","reports.*",
+    "communication.*","documents.*","dashboard.*","notifications.*",
+    "service_desk.*","hr.attendance.*",
+    "organisation.manufacturing.manage","organisation.inventory.manage",
+    "organisation.structure.manage","organisation.audit.view",
+    "organisation.settings.view",
+    "governance.delegations.view","governance.acting_roles.view",
+    "governance.document_signatures.view","governance.document_signatures.create",
+    "governance.document_signatures.verify","governance.signature_profiles.view",
+    "governance.signature_authority_scopes.view",
+  ] },
+  { code: "md_assistant", name: "Managing Director Assistant", grants: [
+    "dashboard.*","notifications.*","documents.*","communication.*",
+    "service_desk.*","workflows.instances.view",
+    "reports.executive.*","reports.dashboards.*","reports.kpis.*",
+    "organisation.settings.view","organisation.audit.view",
+    "organisation.documents.manage",
+    "governance.delegations.view","governance.acting_roles.view",
+    "governance.document_signatures.view","governance.signature_profiles.view",
+    "governance.signature_authority_scopes.view",
+  ] },
+  { code: "operations_assistant", name: "Operations Assistant", grants: [
+    "dashboard.*","notifications.*","documents.*","communication.*",
+    "service_desk.*","workflows.instances.view",
+    "reports.dashboards.*","reports.kpis.*","reports.operations.*",
+    "inventory.*.view","production.*.view","procurement.*.view",
+    "expenditure.*.view","logistics.*.view","quality.*.view",
+  ] },
+  { code: "office_attendant", name: "Office Attendant", grants: [
+    "dashboard.*","notifications.*",
+    "documents.documents.view","documents.library.view",
+    "communication.announcements.view","communication.messages.view",
+    "communication.messages.create",
+    "service_desk.tickets.view","service_desk.tickets.create",
+  ] },
 ];
 
 // ---------------------------------------------------------------------------
@@ -806,10 +860,35 @@ const ORGANISATION_ROLE_EXTENSIONS = {
   service_desk_manager: [OPERM.view, OPERM.documents],
 };
 
+// ---------------------------------------------------------------------------
+// Workflow decision grants (migration 0167 section 2).
+// Every role that appears on a workflow step has to be able to decide one:
+// decideTask authorises through role_permissions, not through the roles.permissions
+// cache, so a step assigned to a role without this module silently deadlocks.
+// Declared centrally for the same reason as the Service Desk grants above.
+// ---------------------------------------------------------------------------
+const WORKFLOW_INSTANCE_ROLE_EXTENSIONS = {
+  accountant: ["workflows.instances.*"],
+  asset_manager: ["workflows.instances.*"],
+  production_supervisor: ["workflows.instances.*"],
+  quality_inspector: ["workflows.instances.*"],
+  warehouse_manager: ["workflows.instances.*"],
+  procurement_manager: ["workflows.instances.*"],
+  finance_manager: ["workflows.instances.*"],
+  cfo: ["workflows.instances.*"],
+  chief_accountant: ["workflows.instances.*"],
+  hr_manager: ["workflows.instances.*"],
+  payroll_manager: ["workflows.instances.*"],
+  sales_manager: ["workflows.instances.*"],
+  secure_job_approver: ["workflows.instances.*"],
+  operations_manager: ["workflows.instances.*"],
+};
+
 for (const role of ROLES) {
   const extra = [
     ...(SERVICE_DESK_ROLE_EXTENSIONS[role.code] || []),
     ...(ORGANISATION_ROLE_EXTENSIONS[role.code] || []),
+    ...(WORKFLOW_INSTANCE_ROLE_EXTENSIONS[role.code] || []),
   ];
   if (extra.length) role.grants = [...role.grants, ...extra];
 }
