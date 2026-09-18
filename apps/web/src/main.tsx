@@ -5,6 +5,7 @@ import App from './App';
 import { applyPrefs } from './prefs';
 import { startBuildWatch } from './buildwatch';
 import './styles.css';
+import './styles/auth.css';
 
 applyPrefs();
 startBuildWatch();

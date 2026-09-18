@@ -1,0 +1,704 @@
+/* ============================================================================
+   HOPE DESIGN ERP — enterprise sign-in surface
+   ----------------------------------------------------------------------------
+   Loaded after `styles.css`, so anything here layers on top of the existing
+   `.login-page` / `.login-hero` / `.login-card` composition rather than
+   replacing it. Three jobs:
+
+     1. Supply the chrome the new sign-in shell needs (top bar, panel header,
+        footer) that the application stylesheet has no opinion about.
+     2. Style the `.auth-*` primitives in `components/auth/*`. Those deliberately
+        do not reuse `.field` / `.btn` / `.alert`, so every one of their rules
+        has to exist here — including the ones the old `.login-card .field`
+        selectors used to supply.
+     3. Hold the sign-in surface to the brand: white panel, sky-blue structure,
+        a single controlled red used only for security and refusal.
+
+   Palette comes from the `:root` tokens in `styles.css`. Nothing is invented.
+   ========================================================================= */
+
+/* ---------- Shell ---------------------------------------------------------
+   A three-band column: enterprise bar, the photographic gatehouse, the legal
+   strip. `min-height` rather than `height` so a short viewport scrolls the page
+   instead of clipping the notice that sits under the form. */
+
+.auth-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  background: var(--navy);
+}
+
+/* The gatehouse fills whatever the two bars leave over, and scrolls its own
+   panel when the card is taller than that. Beats the `min-height: 100dvh` on
+   `.login-page` and the `100svh` restatement in the <=960px block, both of
+   which assume login owns the whole viewport. */
+.auth-shell .login-page {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* ---------- Enterprise top bar ------------------------------------------- */
+
+.auth-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--navy);
+  color: #F1F5F9;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.auth-brand-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #FFFFFF;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.auth-brand-sep {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.auth-brand-product {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #7ED4D4;
+  white-space: nowrap;
+}
+
+.auth-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Only rendered when the page is actually served over TLS. The claim is
+   conditional in the markup, so it is never a decorative badge. */
+.auth-secure-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: #B9E7E7;
+  background: rgba(0, 166, 166, 0.16);
+  border: 1px solid rgba(0, 166, 166, 0.35);
+}
+
+/* Not a control: this deployment ships one language, and `title` says so
+   instead of presenting a picker that cannot pick anything. */
+.auth-lang {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--rail-text);
+  white-space: nowrap;
+}
+
+.auth-topbar-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  font-size: 12px;
+  font-weight: 600;
+  color: #FFFFFF;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.auth-topbar-link:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* ---------- Panel header ------------------------------------------------- */
+
+.auth-panel-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.auth-panel-head .brand-mark { margin-bottom: 14px; }
+
+.auth-kicker {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hope);
+}
+
+.auth-panel-head h1 {
+  margin: 6px 0 0;
+  font-size: 26px;
+  line-height: 1.15;
+}
+
+.auth-stage-title {
+  margin: 4px 0 0;
+  font-family: var(--font);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+
+.auth-panel-head .muted {
+  margin: 8px 0 20px;
+  max-width: 42ch;
+}
+
+/* 16px rather than the 18px in `styles.css`: the panel reads as a credential
+   card, not a landing tile, and 16 keeps the radius inside the system. */
+.login-card { border-radius: 16px; }
+
+/* ---------- Fields --------------------------------------------------------
+   `AuthInput` renders its own `.auth-field` rather than the application's
+   `.field`, so none of the `.field` rules reach it. Everything the old
+   `.login-card .field` selectors used to contribute -- full width, 44px,
+   16px text on touch -- is restated here against the new class names. */
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 16px;
+}
+
+.auth-field-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+/* Positioning context for the decorative glyph and the trailing control, both
+   of which sit inside the field's own box so the input never has to reserve a
+   hard-coded column of padding for a button that may not exist. */
+.auth-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.auth-control-icon {
+  position: absolute;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted-2);
+  pointer-events: none;
+  transition: color 0.14s ease;
+}
+
+.auth-control-trailing {
+  position: absolute;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.auth-input {
+  width: 100%;
+  max-width: 100%;
+  min-height: 46px;
+  padding: 11px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--sheet);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.35;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background-color 0.14s ease;
+}
+
+.auth-input.has-icon { padding-left: 38px; }
+.auth-input.has-trailing { padding-right: 46px; }
+
+.auth-input::placeholder { color: var(--muted-2); }
+
+.auth-input:hover:not(:disabled) { border-color: var(--muted-2); }
+
+/* Focus is carried on the box-shadow rather than the outline so the field keeps
+   its radius; `:focus-visible` on the input would miss mouse focus, and a
+   text field always warrants a visible indicator. The ring is opaque rather
+   than tinted: a 16%-alpha sky blue composites to 1.3:1 against the card, and
+   WCAG 2.2 SC 2.4.11 asks for a 2px perimeter at 3:1. */
+.auth-input:focus {
+  outline: none;
+  border-color: var(--hope);
+  box-shadow: 0 0 0 3px var(--hope);
+}
+
+.auth-input:disabled {
+  background: var(--paper-2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* Refused credentials. The whole field -- border, focus ring and glyph -- goes
+   red, and both credential fields take it at once: the refusal is never
+   attributed to one control, which would disclose whether the account exists. */
+.auth-field.is-invalid .auth-input { border-color: var(--danger); }
+
+.auth-field.is-invalid .auth-input:focus {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger);
+}
+
+.auth-field.is-invalid .auth-control-icon { color: var(--danger); }
+
+.auth-field-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.auth-field-error {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--danger);
+}
+
+/* The reveal toggle is a real button inside the field box: quiet by default so
+   it does not compete with the text, blue once the password is on screen. */
+.auth-reveal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted-2);
+  cursor: pointer;
+  transition: color 0.14s ease, background-color 0.14s ease;
+}
+
+.auth-reveal:hover {
+  color: var(--hope);
+  background: var(--paper-2);
+}
+
+.auth-reveal[aria-pressed='true'] { color: var(--hope); }
+
+/* ---------- Buttons -------------------------------------------------------
+   Sized for a credential card: 48px tall, which clears the 44px touch minimum
+   without the panel having to grow. */
+
+.auth-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.auth-btn-block { display: flex; width: 100%; }
+
+.auth-btn-primary {
+  background: var(--hope);
+  border-color: var(--hope);
+  color: #FFFFFF;
+}
+
+.auth-btn-primary:hover:not(:disabled) {
+  background: var(--hope-hover);
+  border-color: var(--hope-hover);
+}
+
+.auth-btn-secondary {
+  background: var(--sheet);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.auth-btn-secondary:hover:not(:disabled) {
+  border-color: var(--hope);
+  color: var(--hope);
+}
+
+/* Recomputed rather than inherited from `.spinner`, whose colours assume the
+   spinner sits on a light surface. On the blue CTA it has to be white. */
+.auth-btn-spinner {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-width: 2px;
+  border-color: rgba(255, 255, 255, 0.45);
+  border-top-color: #FFFFFF;
+}
+
+.auth-btn-secondary .auth-btn-spinner {
+  border-color: var(--line-strong);
+  border-top-color: var(--hope);
+}
+
+.auth-btn-icon { display: inline-flex; align-items: center; }
+
+.auth-icon { flex: none; }
+
+/* ---------- Alerts --------------------------------------------------------
+   Same palette as `.alert-error` / `.alert-success` so a failure looks the same
+   here as it does everywhere else in the ERP. The margin is restated because
+   `.alert` is not in play anymore. */
+
+.auth-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.auth-alert-icon {
+  flex: none;
+  display: inline-flex;
+  margin-top: 1px;
+}
+
+.auth-alert-text { margin: 0; }
+
+.auth-alert-error {
+  background: #FDECEC;
+  border-color: #F3C4C4;
+  color: #8B1E1E;
+}
+
+.auth-alert-error .auth-alert-icon { color: var(--danger); }
+
+.auth-alert-success {
+  background: #E6F4EE;
+  border-color: #B8DCCB;
+  color: #0F4A32;
+}
+
+.auth-alert-success .auth-alert-icon { color: var(--success); }
+
+.auth-alert-info {
+  background: var(--sd-workspace);
+  border-color: var(--sd-line);
+  color: var(--ink);
+}
+
+.auth-alert-info .auth-alert-icon { color: var(--hope); }
+
+/* ---------- Authenticator enrolment --------------------------------------
+   The QR block, the manual key and the copy button as one centred group. */
+
+.auth-enroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 20px;
+}
+
+.auth-enroll .login-setup-key { width: 100%; }
+
+/* `.login-setup-key` only knows how to hold the plain `.btn`; the copy control
+   is an `.auth-btn`, so it has to be told not to stretch or to impose its
+   full-size height on that row. */
+.login-setup-key .auth-btn {
+  flex: none;
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+/* ---------- Security notice ----------------------------------------------
+   Sits at the foot of the panel, separated by a rule, deliberately quieter than
+   the form: it is a standing warning, not a step. */
+
+.auth-security {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.auth-security-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--secure);
+}
+
+.auth-security-text {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.auth-security-text:last-child { margin-bottom: 0; }
+
+/* ---------- Footer --------------------------------------------------------
+   The legal strip. Deliberately the quietest band on the page: it carries the
+   organisation's identity and the two things a locked-out member of staff
+   actually needs at the point of failure (support, and the authenticity check
+   for a printed code they are holding). No dead links are rendered -- the
+   markup only emits a link when the organisation has configured a destination
+   for it. */
+
+.auth-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 12px 20px;
+  background: var(--navy);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  color: var(--rail-dim);
+}
+
+.auth-footer-copy { white-space: nowrap; }
+
+.auth-footer-links {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.auth-footer-links a {
+  flex: none;
+  color: var(--rail-text);
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.14s ease;
+}
+
+.auth-footer-links a:hover {
+  color: #FFFFFF;
+  text-decoration: underline;
+}
+
+/* ---------- Panel entrance ------------------------------------------------
+   A 6px rise on the credential card. Enough to signal that the screen has
+   settled; short enough that a returning user never waits for it. Suppressed
+   outright under reduced motion. */
+
+@keyframes auth-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.login-card { animation: auth-rise 0.22s ease-out both; }
+
+/* ---------- Compact viewports -------------------------------------------- */
+
+/* Below the split layout the sign-in surface is one column, so there is no
+   second pane worth pinning. Undo the viewport clamp the desktop rule above
+   applies: `flex: 1 0 auto` lets the gatehouse grow to its content, so the
+   document scrolls once instead of the panel scrolling invisibly inside a page
+   that already looks finished -- while still filling the viewport when the card
+   is short, which keeps the footer on the baseline. */
+@media (max-width: 960px) {
+  .auth-shell .login-page {
+    flex: 1 0 auto;
+    min-height: 0;
+  }
+
+  .auth-shell .login-panel { overflow: visible; }
+
+  /* No application rule reaches `.auth-field`, so the field spacing the old
+     `.login-card .field` selector used to supply has to be restated at the
+     breakpoint that relied on it. 16px text and a 46px floor keep the control
+     at or above iOS's zoom threshold, which is what stops the page jumping
+     when a field takes focus. */
+  .auth-field { margin: 0 0 14px; }
+
+  .auth-input {
+    min-height: 46px;
+    padding: 11px 12px;
+    font-size: 16px;
+  }
+
+  .auth-input.has-icon { padding-left: 40px; }
+  .auth-input.has-trailing { padding-right: 48px; }
+
+  .auth-btn { min-height: 50px; font-size: 15px; }
+
+  /* Below this width the document is what scrolls, and the bar carries the
+     brand, the language name and Help -- the trust framing this surface is
+     built on. It pins rather than sliding away on a short phone. The navy
+     fill is opaque, so nothing shows through as the card passes under it. */
+  .auth-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 10px 16px;
+  }
+
+  .auth-footer { padding: 10px 16px; }
+}
+
+@media (max-width: 640px) {
+  /* The bar wraps rather than dropping anything: the security chip and the
+     language name are both statements the brief requires, and at this width
+     they fit on a second row more honestly than they fit truncated. */
+  .auth-topbar {
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    padding: 10px 12px;
+  }
+
+  .auth-topbar-actions { gap: 8px; }
+  .auth-brand-name { font-size: 14px; }
+  .auth-brand-product { font-size: 10px; letter-spacing: 0.16em; }
+  .auth-topbar-link { padding: 6px 8px; }
+
+  .auth-footer {
+    justify-content: center;
+    gap: 6px 14px;
+    padding: 10px 12px;
+    text-align: center;
+  }
+
+  .auth-footer-copy { white-space: normal; }
+
+  .auth-security {
+    margin-top: 18px;
+    padding-top: 14px;
+  }
+}
+
+/* ---------- Dark theme ----------------------------------------------------
+   Most of this surface is token-driven and inverts on its own. What has to be
+   restated is anything with a literal colour in it: the alert fills (which
+   mirror the dark `.alert-error` / `.alert-success` pair in `styles.css`), the
+   focus ring, and the security heading, whose `--secure` maroon is legible on
+   white and nearly invisible on `--paper`. */
+
+html[data-theme='dark'] .auth-input:focus {
+  box-shadow: 0 0 0 3px var(--hope);
+}
+
+html[data-theme='dark'] .auth-field.is-invalid .auth-input:focus {
+  box-shadow: 0 0 0 3px var(--danger);
+}
+
+html[data-theme='dark'] .auth-alert-error {
+  background: #3A1C1C;
+  border-color: #5A2A2A;
+  color: #F0A0A0;
+}
+
+html[data-theme='dark'] .auth-alert-error .auth-alert-icon { color: #F0A0A0; }
+
+html[data-theme='dark'] .auth-alert-success {
+  background: #14352A;
+  border-color: #1F4A38;
+  color: #7ED4A8;
+}
+
+html[data-theme='dark'] .auth-alert-success .auth-alert-icon { color: #7ED4A8; }
+
+html[data-theme='dark'] .auth-alert-info {
+  background: #163247;
+  border-color: #254154;
+  color: var(--ink);
+}
+
+html[data-theme='dark'] .auth-alert-info .auth-alert-icon { color: #7EB8E8; }
+
+html[data-theme='dark'] .auth-security-title { color: #F0A0A0; }
+
+html[data-theme='dark'] .auth-field-error { color: #F0A0A0; }
+
+html[data-theme='dark'] .auth-topbar-link:hover { background: rgba(255, 255, 255, 0.12); }
+
+/* ---------- Focus ---------------------------------------------------------
+   `.btn`, `.tab`, `.chip` and `.link-btn` get a `--mod-hr` outline from the
+   interactive rule in `styles.css`. The `.auth-*` primitives are not in that
+   selector list, and on the sign-in surface the accent is the sky blue rather
+   than the module purple, so they carry their own. `.link-btn` is the one
+   `styles.css` primitive the recovery and "back to sign in" controls borrow, so
+   its outline colour is restated below rather than left module purple on the
+   gatehouse. The text field signals focus by recolouring its border and laying
+   a ring inside its own radius, which reads better on a 10px corner than an
+   offset outline; the ring is opaque because a translucent one composites to
+   1.3:1 against the card and misses WCAG 2.2 SC 2.4.11. */
+
+.auth-btn:focus-visible,
+.auth-reveal:focus-visible,
+.auth-topbar-link:focus-visible,
+.auth-footer-links a:focus-visible,
+.login-card .link-btn:focus-visible {
+  outline: 2px solid var(--hope);
+  outline-offset: 2px;
+}
+
+.auth-topbar-link:focus-visible,
+.auth-footer-links a:focus-visible {
+  outline-color: #7ED4D4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-card { animation: none; }
+
+  .auth-btn,
+  .auth-reveal,
+  .auth-input,
+  .auth-control-icon,
+  .auth-topbar-link,
+  .auth-footer-links a {
+    transition: none;
+  }
+}
