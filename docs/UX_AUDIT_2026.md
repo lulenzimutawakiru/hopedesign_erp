@@ -146,7 +146,7 @@ release. No step was added. This is intentional and should not be "fixed".
 Unblocked by 2.1. Any new workflow inherits the `operations_manager` MD-approval pattern by
 design. None were invented in this cycle: inventing new approval chains for business
 processes nobody has specified would be fabricating business rules, which the brief's §46
-forbids. See §9.3 for the recommended path.
+forbids. See §12.1 step 7 for the recommended path.
 
 ---
 
@@ -1086,7 +1086,7 @@ design question.
 ### 11.3 The Managing Director and the Operations Manager share one role code — decided, with a known limit
 
 **Established and already decided (§2.1).** On all 32 active HDG workflows the MD final-approval
-step is keyed to role code `operations_manager`, held by both John Paul and Nkuzungoma
+step is keyed to role code `operations_manager`, held by both John Paul and Nkuzingoma
 Diuedonne. This is intentional: it is precisely what makes the MD-absence delegation rule
 decidable, because the Operations Manager can legitimately act in that seat.
 
@@ -1105,7 +1105,7 @@ deliberate future change, not a drive-by. See §12.4.
 
 ### 11.4 The KCB joint-signatory mandate is declarative — P2
 
-**Established.** The mandate (both John Paul and Nkuzungoma Diuedonne must jointly authorize)
+**Established.** The mandate (both John Paul and Nkuzingoma Diuedonne must jointly authorize)
 and the KCB account configuration exist. What was **not** found is an engine-level guard that
 refuses to release a payment whose two signatories are the same person, or that asserts both
 signatures were captured on the same instrument. SoD is enforced for *approvals*; the
