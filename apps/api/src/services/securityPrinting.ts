@@ -270,8 +270,12 @@ export async function handleSecureJobTaskApproved(
     if (String(job.status) !== 'APPROVED') {
       throw badRequest(`Security job must be APPROVED (current: ${job.status})`);
     }
-    if (job.approved_by && Number(job.approved_by) === user) {
-      throw forbidden('Dual control: the job approver cannot also authorize materials');
+    // Fail closed: if the approving user is unknown the second checker cannot be
+    // proven distinct, so the materials authorization is refused.
+    if (job.approved_by == null || Number(job.approved_by) === user) {
+      throw forbidden(
+        'Dual control: the job approver cannot also authorize materials (this user has already decided an earlier step on this approval chain)'
+      );
     }
     await client.query(
       `UPDATE security_jobs SET status = 'MATERIALS_AUTHORIZED', materials_authorized_by = $2, materials_authorized_at = now() WHERE id = $1`,

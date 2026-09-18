@@ -361,6 +361,28 @@ export async function decideTask(
     await sec.handleSecureJobTaskApproved(client, ctx, Number(task.entity_id), Number(task.step_seq));
   }
 
+  // Segregation of duties: one person may not carry the same approval chain
+  // through more than one stage. A user holding two role codes that appear on
+  // different steps (for example managing_director and operations_manager)
+  // would otherwise be able to clear both the verification and the final
+  // approval on the same document. Delegating to another user remains the
+  // documented escape hatch when a stage's approver pool is exhausted.
+  //
+  // Evaluated after the security-printing hook so the more specific
+  // dual-control rule reports first for security_printing.jobs; a throw here
+  // still rolls the whole decision back because the caller wraps decideTask
+  // in a single transaction.
+  const priorStepRes = await client.query(
+    `SELECT 1 FROM approval_tasks
+     WHERE instance_id = $1 AND decided_by = $2 AND step_seq < $3
+        AND status IN ('APPROVED', 'REJECTED', 'RETURNED')
+     LIMIT 1`,
+    [task.instance_id, user, task.step_seq]
+  );
+  if (priorStepRes.rows.length > 0) {
+    throw forbidden('Segregation of duties: you have already decided an earlier step on this approval chain');
+  }
+
   if (decision === 'REJECTED' || decision === 'RETURNED') {
     await rejectWorkflow(client, ctx, task.instance_id, comment);
     await notifyRoleAdvanced(client, ctx, ['system_administrator'], {
