@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { fmtDate, fmtMoney } from '../api';
-import { Badge } from '../components/ui';
+import { Badge, ErrorBanner } from '../components/ui';
 import { pick } from '../helpers';
 import { navigate } from '../router';
 import { pathForEntity } from '../work';
@@ -22,6 +22,10 @@ export interface ApprovalRow {
   amount?: number | null;
   company?: string | null;
   branch?: string | null;
+  /** False when the API would refuse a decision right now. Absent means decidable. */
+  actionable?: boolean;
+  /** Why the row cannot be decided yet: an earlier stage is open, or SoD. */
+  blocked_reason?: string | null;
   [key: string]: unknown;
 }
 
@@ -46,6 +50,18 @@ function entityChip(entityType: string): string {
   return entityType || 'workflow';
 }
 
+/**
+ * Plain-language reason a row cannot be decided yet. startWorkflow opens every
+ * stage at submission, so a later-stage holder sees rows the API will refuse
+ * until the earlier stage closes. The row stays visible; the reason stays
+ * visible too, so nobody is left guessing why the buttons are inert.
+ */
+function blockedLabel(reason: string | null): string {
+  if (reason === 'EARLIER_STEP_PENDING') return 'Waiting on an earlier step';
+  if (reason === 'ALREADY_DECIDED_EARLIER_STEP') return 'You already decided an earlier step';
+  return 'Not ready for you to decide';
+}
+
 interface Props {
   rows: ApprovalRow[];
   /** Custom empty-state body rendered when the queue is clear. */
@@ -61,10 +77,12 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
 
   const overdueCount = rows.filter((r) => dueState(pick(r, 'due_at', 'dueAt'))?.kind === 'overdue').length;
   const soonCount = rows.filter((r) => dueState(pick(r, 'due_at', 'dueAt'))?.kind === 'soon').length;
+  const blockedCount = rows.filter((r) => pick(r, 'actionable') === false).length;
 
   const decide = async (row: ApprovalRow, decision: string) => {
     const taskId = Number(row.task_id ?? row.taskId);
     if (!taskId) return;
+    if (pick(row, 'actionable') === false) return;
     setActingId(taskId);
     setError('');
     try {
@@ -100,9 +118,14 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
           <b>{rows.length}</b> waiting
           {overdueCount > 0 && <span className="due-chip crit">{overdueCount} overdue</span>}
           {soonCount > 0 && <span className="due-chip warn">{soonCount} due soon</span>}
+          {blockedCount > 0 && <span className="due-chip hold">{blockedCount} waiting on earlier steps</span>}
         </span>
       </div>
-      {error && <div className="error-banner" style={{ margin: '8px 14px 0' }}>{error}</div>}
+      {error && (
+        <div style={{ margin: '8px 14px 0' }}>
+          <ErrorBanner error={error} />
+        </div>
+      )}
       <div className="queue">
         {rows.map((row) => {
           const entityType = String(pick(row, 'entity_type', 'entityType') ?? '');
@@ -121,10 +144,14 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
           const due = dueState(pick(row, 'due_at', 'dueAt'));
           const comment = commentByTask[taskId] ?? '';
           const noteIsOpen = !!noteOpen[taskId];
+          const blockedRaw = pick<string>(row, 'blocked_reason', 'blockedReason');
+          const actionable = pick(row, 'actionable') !== false;
+          const blockedText = actionable ? '' : blockedLabel(blockedRaw == null ? null : String(blockedRaw));
+          const busyRow = actingId === taskId;
 
           return (
             <div
-              className={`queue-row${due?.kind === 'overdue' ? ' overdue' : ''}${due?.kind === 'soon' ? ' due-soon' : ''}`}
+              className={`queue-row${due?.kind === 'overdue' ? ' overdue' : ''}${due?.kind === 'soon' ? ' due-soon' : ''}${actionable ? '' : ' queue-row-blocked'}`}
               key={taskId}
             >
               <div className="queue-row-main">
@@ -132,6 +159,11 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
                   <span className="cell-mono">{String(pick(row, 'entity_code', 'entityCode') ?? `#${entityId}`)}</span>
                   <Badge value={stepLabel} />
                   {workflowName && <span className="queue-row-workflow">{workflowName}</span>}
+                  {blockedText && (
+                    <span className="queue-blocked-chip" title={blockedText}>
+                      {blockedText}
+                    </span>
+                  )}
                 </span>
                 <span className="queue-row-meta">
                   <span>{entityChip(entityType)}</span>
@@ -178,29 +210,32 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
                 <span className="queue-actions">
                   <button
                     className="btn btn-sm btn-ghost"
-                    disabled={actingId === taskId}
+                    disabled={busyRow || !actionable}
                     onClick={() => setNoteOpen((m) => ({ ...m, [taskId]: !noteIsOpen }))}
-                    title="Add a note"
+                    title={actionable ? 'Add a note' : blockedText}
                   >
                     ✎
                   </button>
                   <button
                     className="btn btn-sm btn-success"
-                    disabled={actingId === taskId}
+                    disabled={busyRow || !actionable}
+                    title={actionable ? undefined : blockedText}
                     onClick={() => decide(row, 'APPROVED')}
                   >
                     Approve
                   </button>
                   <button
                     className="btn btn-sm"
-                    disabled={actingId === taskId}
+                    disabled={busyRow || !actionable}
+                    title={actionable ? undefined : blockedText}
                     onClick={() => decide(row, 'RETURNED')}
                   >
                     Return
                   </button>
                   <button
                     className="btn btn-sm btn-danger"
-                    disabled={actingId === taskId}
+                    disabled={busyRow || !actionable}
+                    title={actionable ? undefined : blockedText}
                     onClick={() => decide(row, 'REJECTED')}
                   >
                     Reject
@@ -219,4 +254,3 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
     </div>
   );
 }
-

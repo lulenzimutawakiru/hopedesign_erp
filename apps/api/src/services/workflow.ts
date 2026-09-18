@@ -455,10 +455,55 @@ export async function decideTask(
   return { status: 'APPROVED', completed: false };
 }
 
-export async function getApprovalsQueue(ctx: Ctx, userId: number) {
+/** Why a visible approval row cannot be decided by the caller right now. */
+export type ApprovalBlockedReason = 'EARLIER_STEP_PENDING' | 'ALREADY_DECIDED_EARLIER_STEP';
+
+/**
+ * One row of the approval queue: the `v_approvals_pending` columns joined in by
+ * the query below, plus the actionability annotation.
+ *
+ * The pg index signature is kept deliberately. The view's column list lives in
+ * SQL, and a bare object spread drops that signature, which would silently
+ * narrow every consumer down to just the two annotated fields.
+ */
+export interface ApprovalQueueRow extends pg.QueryResultRow {
+  actionable: boolean;
+  blocked_reason: ApprovalBlockedReason | null;
+}
+
+/**
+ * Approval tasks visible to a user, annotated with whether that user may decide
+ * them *now*.
+ *
+ * startWorkflow seeds every applicable stage as PENDING at submission time, so a
+ * holder of a later stage can see a row that decideTask will refuse: either an
+ * earlier stage of the same chain is still open, or the holder has already
+ * decided an earlier stage (the segregation-of-duties rule). Rows stay visible
+ * so the holder knows the document is coming, but the caller needs to be able to
+ * explain why no decision is available yet rather than offering a button that
+ * returns 403.
+ *
+ * `actionable` is the single derived flag the UI should act on; `blocked_reason`
+ * says why. Neither is an authorization decision - decideTask re-checks both
+ * rules inside its own transaction.
+ */
+export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<ApprovalQueueRow[]> {
   const { query } = await import('../db.js');
   const res = await query(
-    `SELECT v.*, t.approver_user_id
+    `SELECT v.*, t.approver_user_id,
+            NOT EXISTS (
+              SELECT 1 FROM approval_tasks e
+               WHERE e.instance_id = t.instance_id
+                 AND e.step_seq < t.step_seq
+                 AND e.status = 'PENDING'
+            ) AS stage_ready,
+            EXISTS (
+              SELECT 1 FROM approval_tasks p
+               WHERE p.instance_id = t.instance_id
+                 AND p.decided_by = $1
+                 AND p.step_seq < t.step_seq
+                 AND p.status IN ('APPROVED', 'REJECTED', 'RETURNED')
+            ) AS prior_decided_by_me
      FROM v_approvals_pending v
      JOIN approval_tasks t ON t.id = v.task_id
      WHERE t.approver_user_id = $1
@@ -471,5 +516,13 @@ export async function getApprovalsQueue(ctx: Ctx, userId: number) {
     [userId],
     { tenantId: ctx.tenantId, userId }
   );
-  return res.rows;
+  return res.rows.map((row) => {
+    const blockedReason: ApprovalBlockedReason | null =
+      row.stage_ready !== true
+        ? 'EARLIER_STEP_PENDING'
+        : row.prior_decided_by_me === true
+          ? 'ALREADY_DECIDED_EARLIER_STEP'
+          : null;
+    return { ...row, actionable: blockedReason === null, blocked_reason: blockedReason };
+  });
 }

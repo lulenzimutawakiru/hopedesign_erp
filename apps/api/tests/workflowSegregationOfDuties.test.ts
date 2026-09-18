@@ -180,3 +180,98 @@ describe('Approval chain segregation of duties', () => {
     expect(untouched.rows[0].status).toBe('SUBMITTED');
   });
 });
+/**
+ * The queue annotation that lets the UI explain a chain rule instead of
+ * offering a button the API will refuse. getApprovalsQueue derives `actionable`
+ * and `blocked_reason` from the same two conditions decideTask enforces, so the
+ * two must agree: whatever the annotation calls blocked, a decision must fail,
+ * and whatever it calls actionable, a decision must succeed.
+ */
+describe('Approval queue actionability annotation', () => {
+  /** The queue row for one task, exactly as the signed-in user is served it. */
+  async function queueRow(token: string, taskId: number) {
+    const res = await api.get('/api/approvals').set(auth(token));
+    expect(res.status).toBe(200);
+    return res.body.data.find((r: { task_id: unknown }) => Number(r.task_id) === taskId);
+  }
+
+  it('leaves a first stage actionable', async () => {
+    const first = await userByUsername(FIRST_APPROVER);
+    const second = await userByUsername(SECOND_APPROVER);
+    const chain = await fixtureChain(first.id, second.id, second.id);
+
+    const row = await queueRow((await loginAs(FIRST_APPROVER)).token, chain.firstTaskId);
+    expect(row).toBeTruthy();
+    expect(row.actionable).toBe(true);
+    expect(row.blocked_reason).toBeNull();
+  });
+
+  it('marks a later stage as waiting while an earlier stage is still open', async () => {
+    const first = await userByUsername(FIRST_APPROVER);
+    const second = await userByUsername(SECOND_APPROVER);
+    const chain = await fixtureChain(first.id, second.id, second.id);
+
+    const row = await queueRow((await loginAs(SECOND_APPROVER)).token, chain.secondTaskId);
+    expect(row).toBeTruthy();
+    expect(row.actionable).toBe(false);
+    expect(row.blocked_reason).toBe('EARLIER_STEP_PENDING');
+
+    // The row stays visible so the holder knows the document is coming, and the
+    // annotation matches what a decision would do.
+    const attempt = await api
+      .post(`/api/approvals/${chain.secondTaskId}/decide`)
+      .set(auth((await loginAs(SECOND_APPROVER)).token))
+      .send({ decision: 'APPROVED', comment: 'must not be accepted out of order' });
+    expect(attempt.status).toBe(403);
+  });
+
+  it('moves a later stage from waiting to actionable once the earlier stage clears', async () => {
+    const first = await userByUsername(FIRST_APPROVER);
+    const second = await userByUsername(SECOND_APPROVER);
+    const chain = await fixtureChain(first.id, second.id, second.id);
+    const secondToken = (await loginAs(SECOND_APPROVER)).token;
+
+    const before = await queueRow(secondToken, chain.secondTaskId);
+    expect(before.actionable).toBe(false);
+    expect(before.blocked_reason).toBe('EARLIER_STEP_PENDING');
+
+    const cleared = await api
+      .post(`/api/approvals/${chain.firstTaskId}/decide`)
+      .set(auth((await loginAs(FIRST_APPROVER)).token))
+      .send({ decision: 'APPROVED', comment: 'stage one cleared' });
+    expect(cleared.status).toBe(200);
+
+    const after = await queueRow(secondToken, chain.secondTaskId);
+    expect(after.actionable).toBe(true);
+    expect(after.blocked_reason).toBeNull();
+  });
+
+  it('reports the segregation-of-duties rule once the holder decided an earlier stage', async () => {
+    const approver = await userByUsername(FIRST_APPROVER);
+    const chain = await fixtureChain(approver.id, approver.id, approver.id);
+    const { token } = await loginAs(FIRST_APPROVER);
+
+    const before = await queueRow(token, chain.secondTaskId);
+    expect(before.actionable).toBe(false);
+    expect(before.blocked_reason).toBe('EARLIER_STEP_PENDING');
+
+    const decided = await api
+      .post(`/api/approvals/${chain.firstTaskId}/decide`)
+      .set(auth(token))
+      .send({ decision: 'APPROVED', comment: 'stage one cleared' });
+    expect(decided.status).toBe(200);
+
+    // The reason changes from "not your turn yet" to "not yours to decide",
+    // which is what the user needs to be told instead of a bare refusal.
+    const after = await queueRow(token, chain.secondTaskId);
+    expect(after.actionable).toBe(false);
+    expect(after.blocked_reason).toBe('ALREADY_DECIDED_EARLIER_STEP');
+
+    const attempt = await api
+      .post(`/api/approvals/${chain.secondTaskId}/decide`)
+      .set(auth(token))
+      .send({ decision: 'APPROVED', comment: 'must not be accepted' });
+    expect(attempt.status).toBe(403);
+    expect(String(attempt.body.error.message)).toMatch(/already decided an earlier step/i);
+  });
+});
