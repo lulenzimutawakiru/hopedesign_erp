@@ -10,6 +10,10 @@
  *   node deploy/vps-deploy.mjs --check      verify only, no rollout
  *   node deploy/vps-deploy.mjs --dry-run    print the command, run nothing
  *
+ * Verification compares /build.json against the newest commit that touched
+ * anything the images are built from, so a commit that only changes docs/
+ * does not read as a failed rollout.
+ *
  * Endpoint comes from --host/--port/--user/--domain or VPS_HOST/VPS_PORT/
  * VPS_USER/VPS_DOMAIN, defaulting to the documented production host.
  *
@@ -86,6 +90,26 @@ function minutesSince(iso) {
   if (Number.isNaN(then)) return null;
   return Math.round((Date.now() - then) / 60000);
 }
+const BUILD_INPUTS = [
+  'apps/api',
+  'apps/web',
+  'packages/db',
+  'Dockerfile',
+  'package.json',
+  'package-lock.json',
+];
+
+// The newest commit that touched anything the images are built from. A commit
+// that only touches docs/ does not move this, so a docs-only push legitimately
+// leaves the running image - and /build.json - unchanged.
+function newestInputChange() {
+  const result = spawnSync('git', ['log', '-1', '--format=%cI', '--', ...BUILD_INPUTS], {
+    encoding: 'utf8',
+  });
+  if (result.error || result.status !== 0) return null;
+  const iso = (result.stdout ?? '').trim();
+  return iso.length > 0 ? iso : null;
+}
 
 async function verify(domain) {
   const base = 'https://' + domain;
@@ -110,13 +134,27 @@ async function verify(domain) {
 
   if (build && typeof build.builtAt === 'string') {
     const age = minutesSince(build.builtAt);
-    if (age === null) {
+    const builtMs = Date.parse(build.builtAt);
+    const inputsIso = newestInputChange();
+    const inputsMs = inputsIso === null ? NaN : Date.parse(inputsIso);
+
+    if (Number.isNaN(builtMs)) {
       console.log('  warn build.json has an unreadable builtAt: ' + build.builtAt);
-    } else if (age > FRESH_MINUTES) {
-      console.log('  warn live build is ' + age + ' minutes old - the rollout may not have shipped');
-      healthy = false;
+    } else if (!Number.isNaN(inputsMs) && builtMs >= inputsMs) {
+      console.log('  ok   live build ' + build.buildId + ' postdates the newest change to its');
+      console.log('       own sources (' + inputsIso + '); built ' + age + ' minutes ago');
+    } else if (Number.isNaN(inputsMs)) {
+      if (age === null || age > FRESH_MINUTES) {
+        console.log('  warn live build is ' + age + ' minutes old and this is not a git');
+        console.log('       checkout, so freshness cannot be confirmed');
+        healthy = false;
+      } else {
+        console.log('  ok   live build ' + build.buildId + ' is ' + age + ' minutes old');
+      }
     } else {
-      console.log('  ok   live build ' + build.buildId + ' is ' + age + ' minutes old');
+      healthy = false;
+      console.log('  FAIL live build predates the newest change to its own sources');
+      console.log('       built ' + build.builtAt + ' but that source changed ' + inputsIso);
     }
   }
   return healthy;
