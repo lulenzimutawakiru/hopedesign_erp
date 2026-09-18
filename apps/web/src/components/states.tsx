@@ -14,14 +14,7 @@ export {
   DashboardSkeleton,
 } from './skeleton';
 
-export function safeMessage(error: unknown): string | undefined {
-  if (!(error instanceof Error)) return undefined;
-  const message = error.message.trim();
-  if (!message || message.length > 180) return undefined;
-  if (/select |insert |update |delete |pg_|syntax|stack|at \w+ \(/i.test(message)) return undefined;
-  if (!/^[A-Z]/.test(message)) return undefined;
-  return message;
-}
+export { safeMessage } from './errorText';
 
 /**
  * User-facing failure state. Technical detail stays server-side; the reference id

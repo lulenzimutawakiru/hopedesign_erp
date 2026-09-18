@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { getToken } from '../api';
+import { describeError } from './errorText';
 import { CardSkeleton, TableSkeleton } from './skeleton';
 
 export type StatusKind =
@@ -115,8 +116,14 @@ export function PageLoader({
 
 export function ErrorBanner({ error }: { error: unknown }) {
   if (!error) return null;
-  const msg = error instanceof Error ? error.message : String(error);
-  return <div className="error-banner">{msg}</div>;
+  return (
+    <div className="error-banner" role="alert">
+      <span className="error-banner-mark" aria-hidden>
+        !
+      </span>
+      <span className="error-banner-text">{describeError(error)}</span>
+    </div>
+  );
 }
 
 export function Notice({ children }: { children: ReactNode }) {

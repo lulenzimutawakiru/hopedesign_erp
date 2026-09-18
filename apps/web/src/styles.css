@@ -463,6 +463,14 @@ button, input, select, textarea { font-family: inherit; }
 .alert { border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 12px; }
 .alert-error, .error-banner { background: #FDECEC; color: #8B1E1E; border: 1px solid #F3C4C4; }
 .error-banner { border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+.error-banner { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
+.error-banner-mark {
+  flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; line-height: 1;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+.error-banner-text { min-width: 0; }
 .alert-success, .notice-banner { background: #E6F4EE; color: #0F4A32; border: 1px solid #B8DCCB; }
 .notice-banner { border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
 
