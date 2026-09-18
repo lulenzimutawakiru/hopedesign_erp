@@ -21,7 +21,10 @@ const run = (permission: string, fn: OpFn) => [
 securityOpsRouter.get('/jobs', requirePermission('security_printing.jobs.view'), asyncHandler(async (req, res) => {
   const scope = scopeFilter('t')(req);
   const out = await query(
-    `SELECT t.* FROM security_jobs t WHERE ${scope} ORDER BY t.id DESC LIMIT 500`,
+    `SELECT t.*, c.name AS customer_name
+       FROM security_jobs t
+       LEFT JOIN customers c ON c.id = t.customer_id
+      WHERE ${scope} ORDER BY t.id DESC LIMIT 500`,
     [],
     req.ctx
   );

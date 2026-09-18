@@ -1,5 +1,5 @@
 ﻿import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { useAuth } from '../auth';
+import { can, useAuth } from '../auth';
 import { useHashRoute, navigate, matchRoute } from '../router';
 import { api } from '../api';
 import Dashboard from './Dashboard';
@@ -62,6 +62,13 @@ import { isFocusPath, itemVisible, normalizePath, requiredPermForPath, track } f
 import { BrandMark, BrandWordmark, hasBrandAsset } from '../components/BrandMark';
 import { useCompanyProfile } from '../company';
 
+/** Badge counts keyed by dashboard exception code (low_stock, ncr, secure, ...). */
+function countsByCode(rows?: { code: string; count: number }[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const row of rows ?? []) out[row.code] = row.count;
+  return out;
+}
+
 export default function Shell() {
   const { user, logout } = useAuth();
   const company = useCompanyProfile();
@@ -70,6 +77,7 @@ export default function Shell() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [approvalCount, setApprovalCount] = useState(0);
+  const [moduleCounts, setModuleCounts] = useState<Record<string, number>>({});
   const [helpOpen, setHelpOpen] = useState(false);
   const [sideOpen, setSideOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -115,7 +123,7 @@ export default function Shell() {
       // on. Only the chords handled above are modifier-aware.
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 's' || e.key === 'S') { setScannerOpen(true); return; }
-  if (e.key === 'a' || e.key === 'A') { navigate('/approvals'); return; }
+      if (e.key === 'a' || e.key === 'A') { navigate('/approvals'); return; }
       if (e.key === 'n' || e.key === 'N') { setCmdOpen(true); return; }
       if (e.key === '?') { setHelpOpen(true); return; }
       if (gMode) {
@@ -137,17 +145,31 @@ export default function Shell() {
     return () => window.removeEventListener('keydown', onKey);
   }, [gMode]);
 
+  // Module badges come from the same exception feed the dashboard uses; only
+  // fetch it for users who can actually see one of those modules.
+  const wantsModuleCounts = useMemo(
+    () =>
+      can(user, 'inventory.stock.view') ||
+      can(user, 'quality.inspections.view') ||
+      can(user, 'security_printing.jobs.view'),
+    [user]
+  );
+
   useEffect(() => {
     let alive = true;
     const load = () => {
       api<{ count: number }>('/api/approvals/pending-count')
         .then((r) => { if (alive) setApprovalCount(r.count); })
         .catch(() => undefined);
+      if (!wantsModuleCounts) return;
+      api<{ data: { exceptions?: { code: string; count: number }[] } }>('/api/dashboard/work')
+        .then((r) => { if (alive) setModuleCounts(countsByCode(r.data?.exceptions)); })
+        .catch(() => undefined);
     };
     load();
     const iv = setInterval(load, 45000);
     return () => { alive = false; clearInterval(iv); };
-  }, []);
+  }, [wantsModuleCounts]);
 
   const listMatch = matchRoute(path, '/records/:module/:resource');
   const detailMatch = matchRoute(path, '/records/:module/:resource/:id');
@@ -209,9 +231,9 @@ export default function Shell() {
   const counts = {
     approvals: approvalCount,
     exceptions: approvalCount,
-    inventory: 0,
-    quality: 0,
-    security: 0,
+    inventory: moduleCounts.low_stock ?? 0,
+    quality: moduleCounts.ncr ?? 0,
+    security: moduleCounts.secure ?? 0,
   };
 
   const go = (href: string) => {
@@ -330,7 +352,7 @@ export default function Shell() {
             <div className="modal-head"><h3 id="kbd-title">Keyboard</h3></div>
             <div className="modal-body">
               <p><kbd>Ctrl</kbd>+<kbd>K</kbd> command · <kbd>/</kbd> search · <kbd>S</kbd> scan · <kbd>A</kbd> tasks · <kbd>N</kbd> create</p>
-              <p><kbd>G</kbd> then <kbd>D</kbd> dashboard · <kbd>I</kbd> inventory · <kbd>P</kbd> plant · <kbd>H</kbd> warehouse · <kbd>W</kbd> work · <kbd>F</kbd> finance</p>
+              <p><kbd>G</kbd> then <kbd>D</kbd> dashboard · <kbd>I</kbd> inventory · <kbd>P</kbd> plant · <kbd>H</kbd> warehouse · <kbd>W</kbd> work · <kbd>F</kbd> finance · <kbd>B</kbd> buy · <kbd>C</kbd> CRM · <kbd>E</kbd> people</p>
               <p><kbd>Esc</kbd> closes overlays. <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> move focus.</p>
             </div>
           </div>

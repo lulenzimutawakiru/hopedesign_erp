@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { EntityMeta } from '../api';
 import { fmtBool, fmtDate, fmtMoney, fmtNum } from '../api';
 import { pick, titleCase } from '../helpers';
-import { Badge } from './ui';
+import { Badge, Pager } from './ui';
 import { EmptyState } from './os';
 import { ErrorState, TableSkeleton, safeMessage } from './states';
 import { loadPrefs, type Density } from '../prefs';
@@ -68,6 +68,25 @@ function fmtCell(name: string, value: unknown): string {
   return String(value);
 }
 
+export type DataTableQuery = {
+  page: number;
+  pageSize: number;
+  q: string;
+  sort: string | null;
+  order: 'asc' | 'desc';
+};
+
+export type DataTableServer = {
+  query: DataTableQuery;
+  total: number;
+  onQuery: (next: Partial<DataTableQuery>) => void;
+  /**
+   * Set when the page already renders its own search box that owns the query
+   * string, so the table does not show a second competing one.
+   */
+  hideSearch?: boolean;
+};
+
 export function DataTable({
   meta,
   rows,
@@ -81,6 +100,7 @@ export function DataTable({
   loading,
   error,
   onRetry,
+  server,
 }: {
   meta: EntityMeta;
   rows: Record<string, unknown>[];
@@ -94,6 +114,7 @@ export function DataTable({
   loading?: boolean;
   error?: unknown;
   onRetry?: () => void;
+  server?: DataTableServer;
 }) {
   const all = useMemo(() => pickColumns(meta, 10), [meta]);
   const [hidden, setHidden] = useState<string[]>([]);
@@ -107,6 +128,37 @@ export function DataTable({
   const [widths, setWidths] = useState<Record<string, number>>({});
   const [view, setView] = useState<'table' | 'cards'>(() => (typeof window !== 'undefined' && window.innerWidth < 768 ? 'cards' : 'table'));
   const sentinel = useRef<HTMLDivElement>(null);
+
+  const isServer = Boolean(server);
+  const serverQ = server?.query.q ?? '';
+  const serverSort = server?.query.sort ?? null;
+  const serverOrder = server?.query.order ?? 'asc';
+  const sortCol = isServer ? serverSort : sort?.col ?? null;
+  const sortDir = isServer ? serverOrder : sort?.dir ?? 'asc';
+  const [term, setTerm] = useState(serverQ);
+  const queryRef = useRef<((next: Partial<DataTableQuery>) => void) | undefined>(server?.onQuery);
+
+  const clearSearch = () => {
+    setTerm('');
+    queryRef.current?.({ q: '', page: 1 });
+  };
+
+  // Keep the newest callback reachable from the debounce timer without making the
+  // timer depend on the parent render identity, which would restart it each render.
+  useEffect(() => {
+    queryRef.current = server?.onQuery;
+  });
+
+  // The parent owns the query string, so mirror it back in when it changes.
+  useEffect(() => {
+    setTerm((cur) => (cur === serverQ ? cur : serverQ));
+  }, [serverQ]);
+
+  useEffect(() => {
+    if (!isServer || term === serverQ) return;
+    const t = window.setTimeout(() => queryRef.current?.({ q: term, page: 1 }), 350);
+    return () => window.clearTimeout(t);
+  }, [term, serverQ, isServer]);
 
   useEffect(() => {
     const sync = () => setDensity(loadPrefs().density);
@@ -142,6 +194,7 @@ export function DataTable({
   };
 
   const visible = useMemo(() => {
+    if (isServer) return rows;
     const q = filter.trim().toLowerCase();
     let list = rows;
     if (q) {
@@ -156,21 +209,29 @@ export function DataTable({
       });
     }
     return list;
-  }, [rows, filter, sort, columns]);
+  }, [rows, filter, sort, columns, isServer]);
 
   const toggleSort = (c: string) => {
+    if (isServer) {
+      const dir: 'asc' | 'desc' | null = serverSort !== c ? 'asc' : serverOrder === 'asc' ? 'desc' : null;
+      queryRef.current?.({ sort: dir ? c : null, order: dir === 'desc' ? 'desc' : 'asc', page: 1 });
+      return;
+    }
     setSort((s) => !s || s.col !== c ? { col: c, dir: 'asc' } : s.dir === 'asc' ? { col: c, dir: 'desc' } : null);
   };
 
   if (loading) return <TableSkeleton cols={Math.min(columns.length || 5, 8)} />;
   if (error) return <ErrorState message={safeMessage(error)} onRetry={onRetry} />;
   if (rows.length === 0) {
+    const searching = isServer && serverQ.trim().length > 0;
     return (
       <EmptyState
-        title={emptyTitle ?? `No ${meta.label.toLowerCase()}s`}
-        body={emptyBody ?? 'Nothing matches this view. Create a record or clear filters.'}
-        action={onCreate ? `New ${meta.label}` : undefined}
-        onAction={onCreate}
+        title={searching ? `No matching ${meta.label.toLowerCase()}s` : emptyTitle ?? `No ${meta.label.toLowerCase()}s`}
+        body={searching
+          ? 'No records match your search. Try a different term, or clear the search to see everything.'
+          : emptyBody ?? 'Nothing matches this view. Create a record or clear filters.'}
+        action={searching ? 'Clear search' : onCreate ? `New ${meta.label}` : undefined}
+        onAction={searching ? clearSearch : onCreate}
       />
     );
   }
@@ -178,7 +239,15 @@ export function DataTable({
   return (
     <div>
       <div className="toolbar">
-        <input className="search-input" placeholder="Filter this page…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        {!(isServer && server?.hideSearch) && (
+          <input
+            className="search-input"
+            placeholder={isServer ? 'Search all records…' : 'Filter this page…'}
+            value={isServer ? term : filter}
+            onChange={(e) => (isServer ? setTerm(e.target.value) : setFilter(e.target.value))}
+            aria-label={isServer ? `Search ${meta.label.toLowerCase()}s` : 'Filter this page'}
+          />
+        )}
         <button className="btn btn-sm hide-phone" onClick={() => setShowCols((v) => !v)}>Columns</button>
         <button className="btn btn-sm" onClick={() => setView((v) => v === 'table' ? 'cards' : 'table')}>{view === 'table' ? 'Cards' : 'Table'}</button>
         {showCols && (
@@ -221,10 +290,10 @@ export function DataTable({
           <thead>
             <tr>
               {columns.map((c) => (
-                <th key={c} style={widths[c] ? { width: widths[c], minWidth: widths[c] } : { minWidth: 96 }}>
+                <th key={c} style={widths[c] ? { width: widths[c], minWidth: widths[c] } : { minWidth: 96 }} aria-sort={sortCol === c ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}>
                   <button className="th-btn" onClick={() => toggleSort(c)}>
                     {titleCase(c.replace(/Id$/, ''))}
-                    {sort?.col === c ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
+                    {sortCol === c ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
                   </button>
                   <span className="col-resizer" onMouseDown={(e) => startResize(c, e)} />
                 </th>
@@ -267,6 +336,15 @@ export function DataTable({
           </tbody>
         </table>
       </div>}
+      {isServer && server && (
+        <Pager
+          page={server.query.page}
+          pageSize={server.query.pageSize}
+          total={server.total}
+          onPage={(p) => queryRef.current?.({ page: p })}
+          onPageSize={(n) => queryRef.current?.({ pageSize: n, page: 1 })}
+        />
+      )}
       {hasMore && <div ref={sentinel} className="infinite-sent">{loadingMore ? 'Loading more…' : 'Scroll for more'}</div>}
     </div>
   );
