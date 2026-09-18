@@ -38,6 +38,24 @@
   min-height: 0;
 }
 
+/* A centred flex child inside a scroll container is a trap: `justify-content:
+   center` parks the overflow above the scroll origin, so the panel's own 36px
+   top padding stops being a reachable scroll position and the top of the card
+   becomes unreachable at `scrollTop: 0`.
+
+   `safe center` is the spec'd repair -- it centres while the card fits and
+   reverts to start alignment the moment it does not, which keeps the padding as
+   a real first scroll position. Scoped to the split layout because that is the
+   only place the defect exists: below 961px `overflow` is visible and the
+   document scrolls, and the application rules already start-align the panel
+   there. The `max-height` fallback further down restates the same alignment for
+   engines that predate the safe/unsafe keywords. */
+@media (min-width: 961px) {
+  .auth-shell .login-panel {
+    justify-content: safe center;
+  }
+}
+
 /* ---------- Enterprise top bar ------------------------------------------- */
 
 .auth-topbar {
@@ -589,14 +607,32 @@
   .auth-footer { padding: 10px 16px; }
 }
 
-/* A 768px-tall desktop window puts the split layout slightly over its own
-   height: the credential card plus the security notice ask for ~677px inside a
-   669px pane, so the panel gains a scrollbar it does not need. Only the two
-   gaps that are pure air at this size give, which leaves the rhythm on larger
-   desktops -- where the pane has no overflow at all -- untouched. */
+/* A 768px-tall desktop window puts the split layout over its own height: the
+   credential card plus the security notice ask for more than the pane holds, so
+   it scrolls. Two adjustments follow from that.
+
+   First, the same start alignment the `safe center` rule above requests,
+   restated for engines old enough to lack the safe/unsafe keywords. Without it
+   those engines inherit `center`, which parks the top of the card above the
+   scroll origin where it cannot be scrolled back into view.
+
+  Second, the gaps that are air at this size give a little, which trims the
+  scroll rather than hiding anything. Larger desktops have no overflow and keep
+  the roomier rhythm.
+
+  The two adjustments sit behind different thresholds deliberately. With the
+  gaps trimmed the card needs 668px and the pane measures `viewport - 98.8px`,
+  so the card fits from 768px of window height upward and only truly overflows
+  below that. Pinning the alignment override to the same 820px threshold as the
+  trims would start-align windows whose card fits, de-centering the panel in the
+  768-820px band for no gain. */
 @media (min-width: 961px) and (max-height: 820px) {
   .auth-panel-head .muted { margin-bottom: 14px; }
   .auth-security { margin-top: 12px; }
+}
+
+@media (min-width: 961px) and (max-height: 767px) {
+  .auth-shell .login-panel { justify-content: flex-start; }
 }
 
 @media (max-width: 640px) {
