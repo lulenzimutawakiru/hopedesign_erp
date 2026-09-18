@@ -40,6 +40,7 @@ export const ENTITIES: Record<
   'assets.transfers': { table: 'asset_transfers', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by', onApprove: 'post' },
   'assets.disposals': { table: 'asset_disposals', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by', onApprove: 'post' },
   'assets.impairments': { table: 'asset_impairments', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by', onApprove: 'post' },
+  'assets.maintenance': { table: 'asset_maintenance_work_orders', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by', onApprove: 'post' },
   'ops.requisitions': { table: 'requisitions', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'requested_by' },
   'ops.expenses': { table: 'expense_transactions', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
   'ops.claims': { table: 'employee_expense_claims', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },

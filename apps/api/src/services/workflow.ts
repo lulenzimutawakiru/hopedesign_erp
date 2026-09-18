@@ -361,6 +361,22 @@ export async function decideTask(
     await sec.handleSecureJobTaskApproved(client, ctx, Number(task.entity_id), Number(task.step_seq));
   }
 
+  // Approval stages are sequential: a later stage may not be decided while an
+  // earlier stage of the same chain is still awaiting a decision. Without this
+  // an approver could clear the final stage first, which would complete the
+  // chain and release the document with the earlier sign-offs never given.
+  // Evaluated after the security-printing hook so the more specific
+  // dual-control rule still reports first for security_printing.jobs.
+  const earlierPendingRes = await client.query(
+    `SELECT 1 FROM approval_tasks
+     WHERE instance_id = $1 AND step_seq < $2 AND status = 'PENDING'
+     LIMIT 1`,
+    [task.instance_id, task.step_seq]
+  );
+  if (earlierPendingRes.rows.length > 0) {
+    throw forbidden('Approval out of order: an earlier step on this approval chain has not been decided');
+  }
+
   // Segregation of duties: one person may not carry the same approval chain
   // through more than one stage. A user holding two role codes that appear on
   // different steps (for example managing_director and operations_manager)

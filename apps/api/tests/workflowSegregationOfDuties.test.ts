@@ -2,15 +2,20 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { api, auth, loginAs, db } from './helpers.js';
 
 /**
- * Segregation of duties across the stages of one approval chain.
+ * Chain-integrity rules across the stages of one approval chain.
  *
  * startWorkflow seeds every applicable step as PENDING at submission time, and a
  * role-based step is decidable by anyone holding that role code. A user holding
  * two role codes that appear on different steps would otherwise be able to clear
  * more than one stage of the same document. decideTask rejects that.
  *
+ * The same seeding also makes the steps order-independent: without a guard an
+ * approver could clear the final stage first, which would complete the chain and
+ * release the document with the earlier sign-offs never given. decideTask
+ * rejects that too.
+ *
  * Every fixture is a dedicated three-stage instance built on a real submitted
- * requisition. Only the first two stages are ever decided, so the instance cannot
+ * requisition. No test ever decides the final stage, so the instance cannot
  * complete and the requisition row is never transitioned by these tests.
  */
 
@@ -146,6 +151,30 @@ describe('Approval chain segregation of duties', () => {
     expect(secondDecision.status).toBe(200);
     expect(secondDecision.body.data.status).toBe('APPROVED');
     expect(secondDecision.body.data.completed).toBe(false);
+
+    const untouched = await db('SELECT status FROM requisitions WHERE id = $1', [chain.requisitionId]);
+    expect(untouched.rows[0].status).toBe('SUBMITTED');
+  });
+
+  it('blocks deciding the final stage while an earlier stage is still pending', async () => {
+    const first = await userByUsername(FIRST_APPROVER);
+    const second = await userByUsername(SECOND_APPROVER);
+    const chain = await fixtureChain(first.id, second.id, second.id);
+
+    // A different user from the one who would decide the earlier stages, so the
+    // segregation-of-duties rules are not what rejects this decision.
+    const token = (await loginAs(SECOND_APPROVER)).token;
+    const outOfOrder = await api
+      .post(`/api/approvals/${chain.thirdTaskId}/decide`)
+      .set(auth(token))
+      .send({ decision: 'APPROVED', comment: 'must not be accepted out of order' });
+    expect(outOfOrder.status).toBe(403);
+    expect(outOfOrder.body.error.code).toBe('FORBIDDEN');
+    expect(String(outOfOrder.body.error.message)).toMatch(/out of order/i);
+
+    const blocked = await db('SELECT status, decided_by FROM approval_tasks WHERE id = $1', [chain.thirdTaskId]);
+    expect(blocked.rows[0].status).toBe('PENDING');
+    expect(blocked.rows[0].decided_by).toBeNull();
 
     const untouched = await db('SELECT status FROM requisitions WHERE id = $1', [chain.requisitionId]);
     expect(untouched.rows[0].status).toBe('SUBMITTED');
