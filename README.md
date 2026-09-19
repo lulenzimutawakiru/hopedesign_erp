@@ -9,7 +9,7 @@ Integrated ERP for a paper manufacturing and security-printing company: CRM to S
 
 ## Quickstart
 ```bash
-docker compose up -d
+docker compose -f docker-compose.dev.yml up -d
 npm install
 cp .env.example .env
 npm run db:migrate

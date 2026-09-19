@@ -1,3 +1,11 @@
+# ---- LOCAL DEVELOPMENT ONLY - never deploy this file to a server. ----------
+# Deliberately NOT named docker-compose.yml. Compose auto-discovers
+# compose.yaml, compose.yml, docker-compose.yaml and docker-compose.yml, so on
+# a production host a bare `docker compose up -d` would pick this file up and
+# start a second postgres with the well-known password below, unrelated to the
+# running stack. The production stack is docker-compose.prod.yml.
+# Start local dev services with:
+#   docker compose -f docker-compose.dev.yml up -d
 services:
   postgres:
     image: postgres:16-alpine

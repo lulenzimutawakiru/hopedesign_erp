@@ -151,6 +151,74 @@ cluster down, not just this node. Check what grew:
   problems=$((problems + 1))
 fi
 
+# ---------- 4b. data-plane role ----------
+# Which database is this node's API ACTUALLY pointed at?
+#
+# On 2026-09-19 the peer node needed TWO compose files to be correct:
+# docker-compose.prod.yml hardcodes POSTGRES_HOST=postgres in the shared *api
+# anchor, and deploy/docker-compose.peer.yml is what repoints the colours at the
+# primary over WireGuard. Bring the peer up without the overlay - a typo, a
+# stray hook, a future script - and its API silently returns on the peer's own
+# local database: two nodes, two copies of the same data, each authenticating
+# half the logins against rows the other cannot see. Nothing in the cluster
+# looked at this, so nothing saw it.
+#
+# This reads the configuration each API container was CREATED with - inspect,
+# not exec, so it still reports while the container is down - and refuses to
+# accept the wrong data plane whatever the cause.
+if [ "$ROLE" = "primary" ]; then
+  expected_db_host="postgres"
+else
+  expected_db_host="$PEER_WG"
+fi
+db_wrong=""
+for c in hopedesign-erp-api-a hopedesign-erp-api-b; do
+  dbh="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null \
+    | sed -n 's/^POSTGRES_HOST=//p' | tail -n 1)"
+  # No POSTGRES_HOST at all means the container does not exist yet; check 3
+  # already owns missing containers, so do not report it twice here.
+  [ -n "$dbh" ] || continue
+  [ "$dbh" = "$expected_db_host" ] || db_wrong="$db_wrong ${c#hopedesign-erp-}=$dbh"
+done
+if [ -z "$db_wrong" ]; then
+  resolve data-plane-wrong-host
+else
+  if [ "$ROLE" = "peer" ]; then
+    db_why="This node holds no data of its own, so the address above is its own
+local database: an idle, stale copy of the cluster's data. While the API runs
+against it, this node authenticates logins against rows that stopped changing,
+and every write it accepts is invisible to the primary. That is a split brain -
+which copy of the truth you get then depends on which node answered."
+    db_fix="cd $APP_DIR && docker compose -f docker-compose.prod.yml -f deploy/docker-compose.peer.yml --env-file .env.production up -d --no-deps api-a api-b"
+  else
+    db_why="This node is the data primary, so its colours must use the local
+postgres service. A colour pointed anywhere else is reading and writing a
+database that is not the cluster's; treat every row it touched as suspect."
+    db_fix="cd $APP_DIR && docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps api-a api-b"
+  fi
+  notify CRITICAL data-plane-wrong-host \
+    "API on $(hostname) is pointed at the wrong database" \
+"node-watch.sh read the POSTGRES_HOST that each API container on $(hostname)
+was created with, and it is wrong for a node whose role is $ROLE:
+
+$(for c in $db_wrong; do printf '  %s\n' "$c"; done)
+
+$db_why
+
+The usual cause is a compose invocation on this node that used the wrong -f
+list. Put this node's colours back on the right data plane with:
+
+  $db_fix
+
+Neither node sets COMPOSE_FILE and neither has a project .env, so no overlay is
+ever added implicitly - the explicit -f list above is the only supported
+invocation. A bare docker compose up -d in $APP_DIR does not load
+docker-compose.prod.yml at all, and if a stray docker-compose.yml is left in
+that directory then Compose loads that file instead: a dev postgres with a
+well-known password and no connection to the cluster."
+  problems=$((problems + 1))
+fi
+
 # ---------- 5. the other node ----------
 if [ -n "$PEER_WG" ]; then
   if ping -c 3 -W 2 "$PEER_WG" >/dev/null 2>&1; then

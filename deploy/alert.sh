@@ -36,8 +36,17 @@ action="${1:-}"; shift 2>/dev/null || true
 
 if [ "$action" = "clear" ]; then
   key="${1:-}"
-  [ -n "$key" ] && rm -f "$STATE_DIR/$(printf '%s' "$key" | tr -c 'A-Za-z0-9._-' '_')"
-  log "cleared alert state for key=$key"
+  [ -n "$key" ] || exit 0
+  sfile="$STATE_DIR/$(printf '%s' "$key" | tr -c 'A-Za-z0-9._-' '_')"
+  # Only record a line when an alert was actually outstanding. Every healthy
+  # check calls `clear` for its own key, so logging unconditionally turned
+  # alerts.log into a wall of no-op "cleared" lines - measured 2026-09-19 at
+  # ~9 lines per 3-minute watchdog cycle (~4,300 lines/day/node), which buried
+  # the SENT events this file exists to record.
+  if [ -f "$sfile" ]; then
+    rm -f "$sfile"
+    log "RECOVERED key=$key"
+  fi
   exit 0
 fi
 
