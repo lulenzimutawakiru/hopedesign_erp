@@ -120,6 +120,7 @@ hrOpsRouter.post('/employees', ...run('hr.employees.create', (c, ctx, b) => hr.c
   bankName: b.bankName != null ? String(b.bankName) : null,
   bankAccountNo: b.bankAccountNo != null ? String(b.bankAccountNo) : null,
   status: b.status != null ? String(b.status) : undefined,
+  payrollEnabled: b.payrollEnabled != null ? Boolean(b.payrollEnabled) : undefined,
   userId: b.userId != null && b.userId !== '' ? Number(b.userId) : null,
 })));
 hrOpsRouter.patch('/employees/:id', ...run('hr.employees.update', (c, ctx, b, p) => hr.updateEmployee(c, ctx, Number(p.id), {
@@ -137,6 +138,7 @@ hrOpsRouter.patch('/employees/:id', ...run('hr.employees.update', (c, ctx, b, p)
   bankName: b.bankName !== undefined ? (b.bankName === null || b.bankName === '' ? null : String(b.bankName)) : undefined,
   bankAccountNo: b.bankAccountNo !== undefined ? (b.bankAccountNo === null || b.bankAccountNo === '' ? null : String(b.bankAccountNo)) : undefined,
   status: b.status !== undefined && b.status !== null ? String(b.status) : undefined,
+  payrollEnabled: b.payrollEnabled != null ? Boolean(b.payrollEnabled) : undefined,
 })));
 hrOpsRouter.post('/employees/:id/terminate', ...run('hr.employees.terminate', (c, ctx, b, p) => hr.terminateEmployee(c, ctx, Number(p.id), b.terminationDate != null ? String(b.terminationDate) : null)));
 hrOpsRouter.post('/employees/:id/clock-in', ...run('hr.attendance.create', (c, ctx, _b, p) => hr.clockIn(c, ctx, Number(p.id))));

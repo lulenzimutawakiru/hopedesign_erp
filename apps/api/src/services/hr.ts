@@ -73,6 +73,7 @@ export async function createEmployee(
     bankName?: string | null;
     bankAccountNo?: string | null;
     status?: string;
+    payrollEnabled?: boolean;
     userId?: number | null;
   }
 ) {
@@ -85,16 +86,16 @@ export async function createEmployee(
     `INSERT INTO employees
        (company_id, tenant_id, branch_id, department_id, employee_no, first_name, last_name,
         phone, email, tin, nssf_no, position, hire_date, salary_type, base_salary,
-        bank_name, bank_account_no, status,
+        bank_name, bank_account_no, status, payroll_enabled,
         employee_number, short_employee_number)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, ctx.branchId ?? null, input.departmentId ?? null, no,
       input.firstName.trim(), input.lastName.trim(), input.phone ?? null, input.email ?? null,
       input.tin ?? null, input.nssfNo ?? null, input.position ?? null,
       input.hireDate ?? new Date().toISOString().slice(0, 10),
       input.salaryType ?? 'MONTHLY', Number(input.baseSalary ?? 0),
-      input.bankName ?? null, input.bankAccountNo ?? null, status, official, short,
+      input.bankName ?? null, input.bankAccountNo ?? null, status, input.payrollEnabled ?? true, official, short,
     ]
   );
   const employeeId = Number(ins.rows[0].id);
@@ -153,6 +154,7 @@ export async function updateEmployee(
     bankName?: string | null;
     bankAccountNo?: string | null;
     status?: string;
+    payrollEnabled?: boolean;
   }
 ) {
   const exists = await client.query(
@@ -200,6 +202,7 @@ export async function updateEmployee(
     }
     push('status', status);
   }
+  if (input.payrollEnabled !== undefined) push('payroll_enabled', Boolean(input.payrollEnabled));
 
   if (sets.length === 0) throw badRequest('Nothing to update');
   params.push(employeeId, ctx.tenantId);
@@ -239,7 +242,7 @@ export async function listEmployees(
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
     `SELECT e.id, e.employee_no, e.first_name, e.last_name, e.position, e.status, e.base_salary, e.salary_type,
-            e.hire_date, e.phone, e.email, e.photo_path, e.user_id,
+            e.hire_date, e.phone, e.email, e.photo_path, e.user_id, e.payroll_enabled,
             d.code AS department_code, d.name AS department_name,
             u.username AS user_username, u.email AS user_email, u.status AS user_status,
             (e.photo_path IS NOT NULL) AS has_photo
@@ -677,6 +680,42 @@ export async function createPayroll(
   return { payrollId, payrollNo };
 }
 
+/**
+ * HR-confirmed absence days inside the run period, taken only from LOCKED
+ * attendance periods. Terminal punches never create absence on their own, so
+ * this always reflects a reviewer's decision; a day carrying several shift
+ * records is counted once, and an ABSENT shift outranks a HALF_DAY shift.
+ */
+async function loadAttendanceUnpaidDays(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  periodStart: string,
+  periodEnd: string
+): Promise<Map<number, number>> {
+  const res = await client.query(
+    `SELECT d.employee_id, sum(d.days)::numeric AS days
+       FROM (
+         SELECT ar.employee_id, ar.work_date,
+                CASE WHEN bool_or(ar.attendance_status = 'ABSENT') THEN 1 ELSE 0.5 END AS days
+           FROM attendance_records ar
+           JOIN attendance_periods ap
+             ON ap.id = ar.period_id
+            AND ap.tenant_id = ar.tenant_id
+            AND ap.company_id = ar.company_id
+          WHERE ar.tenant_id = $1 AND ar.company_id = $2
+            AND ar.attendance_status IN ('ABSENT', 'HALF_DAY')
+            AND ap.status = 'LOCKED'
+            AND ar.work_date BETWEEN $3::date AND $4::date
+          GROUP BY ar.employee_id, ar.work_date
+       ) d
+      GROUP BY d.employee_id`,
+    [ctx.tenantId, ctx.companyId, periodStart, periodEnd]
+  );
+  const map = new Map<number, number>();
+  for (const row of res.rows) map.set(Number(row.employee_id), round2(Number(row.days) || 0));
+  return map;
+}
+
 export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollId: number) {
   const run = await client.query(`SELECT * FROM payrolls WHERE id = $1 AND tenant_id = $2 FOR UPDATE`, [payrollId, ctx.tenantId]);
   if (run.rows.length === 0) throw notFound('Payroll not found');
@@ -739,6 +778,7 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
          WHERE e.tenant_id = $1 AND e.company_id = $2
            AND e.status IN ('ACTIVE','ON_LEAVE','PROBATION')
            AND (e.termination_date IS NULL OR e.termination_date >= $3)
+           AND e.payroll_enabled
            ${payrollGroupId !== null ? `AND EXISTS (
              SELECT 1 FROM employee_payroll_profiles p
              WHERE p.employee_id = e.id AND p.payroll_group_id = $4
@@ -753,6 +793,10 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
   // salaries) are loaded once for the whole staff; every loader is a no-op
   // when the enterprise tables are empty, keeping legacy runs identical.
   const modern = await loadModernPayrollInputs(client, ctx, staff.rows.map((r) => Number(r.id)), periodStart, periodEnd);
+  // Attendance-derived unpaid days. The terminal alone never marks anyone
+  // absent and only LOCKED attendance periods count, so a run whose attendance
+  // has not been reviewed produces exactly the numbers it produced before.
+  const attendanceUnpaidDays = await loadAttendanceUnpaidDays(client, ctx, periodStart, periodEnd);
   const componentEntries: { employeeId: number; componentId: number; amount: number }[] = [];
   let grossTotal = 0;
   let deductionTotal = 0;
@@ -771,7 +815,7 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
          AND start_date <= $3 AND end_date >= $2`,
       [emp.id, periodStart, periodEnd]
     );
-    const unpaidDays = Number(unpaid.rows[0].days) || 0;
+    const unpaidDays = round2((Number(unpaid.rows[0].days) || 0) + (attendanceUnpaidDays.get(employeeId) ?? 0));
     const proration = prorateEmployment(emp.hire_date, emp.termination_date, periodStart, periodEnd, unpaidDays);
     const effectiveSalary = modern.salaries.get(employeeId);
     const baseSalary = effectiveSalary ? effectiveSalary.basicSalary : (Number(emp.base_salary) || 0);
@@ -888,6 +932,9 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
       deductions,
       benefits: { employee: benefitsEmployee, employer: benefitsEmployer },
       proration,
+      ...(attendanceUnpaidDays.has(employeeId)
+        ? { attendanceUnpaidDays: attendanceUnpaidDays.get(employeeId) }
+        : {}),
     };
     await client.query(
       `INSERT INTO payroll_items

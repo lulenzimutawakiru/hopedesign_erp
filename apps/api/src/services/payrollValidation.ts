@@ -61,6 +61,7 @@ async function loadEligibleStaff(
          WHERE e.tenant_id = $1 AND e.company_id = $2
            AND e.status IN ('ACTIVE','ON_LEAVE','PROBATION')
            AND (e.termination_date IS NULL OR e.termination_date >= $3)
+           AND e.payroll_enabled
            ${run.payroll_group_id ? `AND EXISTS (
              SELECT 1 FROM employee_payroll_profiles p
              WHERE p.employee_id = e.id AND p.payroll_group_id = $4
@@ -101,6 +102,7 @@ export async function validatePayroll(
   if (run.rows.length === 0) throw notFound('Payroll not found');
   const r = run.rows[0] as RunRow;
   const periodStart = toISODate(r.period_start) ?? '';
+  const periodEnd = toISODate(r.period_end) ?? '';
   const isOffCycle = String(r.run_type) === 'OFF_CYCLE';
   const staff = await loadEligibleStaff(client, ctx, r);
 
@@ -146,6 +148,32 @@ export async function validatePayroll(
     }
   }
 
+  // Employees paid outside payroll (payroll_enabled = false) are deliberately
+  // absent from the eligible-staff pool, so the run would omit them silently.
+  // Surface each one as a warning: the exclusion is then a visible, reviewed
+  // decision rather than something that looks like a missing salary.
+  if (!isOffCycle) {
+    const outsidePayroll = await client.query(
+      `SELECT e.id, e.employee_no, e.first_name, e.last_name
+       FROM employees e
+       WHERE e.tenant_id = $1 AND e.company_id = $2
+         AND NOT e.payroll_enabled
+         AND e.status IN ('ACTIVE','ON_LEAVE','PROBATION')
+         AND (e.termination_date IS NULL OR e.termination_date >= $3)
+       ORDER BY e.employee_no`,
+      [ctx.tenantId, ctx.companyId, periodStart]
+    );
+    for (const row of outsidePayroll.rows) {
+      checks.push({
+        employeeId: Number(row.id),
+        exceptionType: 'PAID_OUTSIDE_PAYROLL',
+        severity: 'WARNING',
+        message: `${row.first_name} ${row.last_name} (${row.employee_no}) is paid outside payroll and is excluded from this run`,
+        referenceData: { employeeNo: String(row.employee_no) },
+      });
+    }
+  }
+
   // Group-scoped runs: flag every eligible employee who is not assigned to the
   // run's payroll group (they would be paid outside the group) plus any
   // configuration problem on the group itself.
@@ -173,6 +201,7 @@ export async function validatePayroll(
        WHERE e.tenant_id = $1 AND e.company_id = $2
          AND e.status IN ('ACTIVE','ON_LEAVE','PROBATION')
          AND (e.termination_date IS NULL OR e.termination_date >= $3)
+         AND e.payroll_enabled
          AND (p.id IS NULL OR p.payroll_group_id IS DISTINCT FROM $4)`,
       [ctx.tenantId, ctx.companyId, periodStart, r.payroll_group_id]
     );
@@ -200,6 +229,35 @@ export async function validatePayroll(
       severity: 'ERROR',
       message: 'Net pay is negative after deductions',
       referenceData: { netPay: Number(row.net_pay) },
+    });
+  }
+
+  // Attendance linkage: the unpaid-day deduction reads HR-reviewed attendance,
+  // so surface attendance for this run period that sits outside a LOCKED
+  // period. A warning never blocks payment, but it tells the reviewer that
+  // absence for this period has not been signed off, so no absence days are
+  // being deducted from pay.
+  const attendance = await client.query(
+    `SELECT count(*)::int AS total,
+            count(*) FILTER (WHERE ap.status = 'LOCKED')::int AS locked,
+            count(*) FILTER (WHERE ap.id IS NULL)::int AS unattached
+       FROM attendance_records ar
+       LEFT JOIN attendance_periods ap
+         ON ap.id = ar.period_id
+        AND ap.tenant_id = ar.tenant_id
+        AND ap.company_id = ar.company_id
+      WHERE ar.tenant_id = $1 AND ar.company_id = $2
+        AND ar.work_date BETWEEN $3::date AND $4::date`,
+    [ctx.tenantId, ctx.companyId, periodStart, periodEnd]
+  );
+  const att = attendance.rows[0] ?? { total: 0, locked: 0, unattached: 0 };
+  if (Number(att.total) > Number(att.locked)) {
+    checks.push({
+      employeeId: null,
+      exceptionType: 'ATTENDANCE_PERIOD_NOT_LOCKED',
+      severity: 'WARNING',
+      message: 'Attendance for this period is not fully locked, so no absence days are deducted from pay',
+      referenceData: { records: Number(att.total), locked: Number(att.locked), unattached: Number(att.unattached) },
     });
   }
 
