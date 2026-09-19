@@ -106,15 +106,17 @@ export interface MultipartResult {
 export function parseMultipartBody(buffer: Buffer | string, contentType: string): MultipartResult | null {
   const boundaryMatch = /boundary\s*=\s*"?([^";,\s]+)"?/i.exec(String(contentType ?? ''));
   if (!boundaryMatch) return null;
-  const delimiter = `--${boundaryMatch[1]}`;
+  const delimiter = boundaryMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const text = typeof buffer === 'string' ? buffer : buffer.toString('utf8');
   const raw: Record<string, unknown> = {};
-  for (const chunk of text.split(delimiter)) {
+  // The terminal advertises the boundary as `mime_boundary` but actually
+  // delimits the body with `MIME_boundary`, so the split must ignore case.
+  for (const chunk of text.split(new RegExp(`--${delimiter}`, 'gi'))) {
     const sep = chunk.includes('\r\n\r\n') ? '\r\n\r\n' : chunk.includes('\n\n') ? '\n\n' : null;
     if (!sep) continue;
     const idx = chunk.indexOf(sep);
     const head = chunk.slice(0, idx);
-    const bodyText = chunk.slice(idx + sep.length).replace(/\r?\n--\s*$/, '').trim();
+    const bodyText = chunk.slice(idx + sep.length).replace(/\r?\n?--\s*$/, '').trim();
     if (!bodyText) continue;
     const nameMatch = /name\s*=\s*"([^"]+)"/i.exec(head) ?? /name\s*=\s*([^;\r\n]+)/i.exec(head);
     if (!nameMatch) continue;
@@ -125,7 +127,19 @@ export function parseMultipartBody(buffer: Buffer | string, contentType: string)
       try {
         value = JSON.parse(bodyText);
       } catch {
-        value = bodyText;
+        // A stray delimiter can survive inside the part; fall back to the
+        // outermost JSON literal before storing the raw text.
+        const start = bodyText.search(/[{[]/);
+        const end = Math.max(bodyText.lastIndexOf('}') , bodyText.lastIndexOf(']'));
+        if (start >= 0 && end > start) {
+          try {
+            value = JSON.parse(bodyText.slice(start, end + 1));
+          } catch {
+            value = bodyText;
+          }
+        } else {
+          value = bodyText;
+        }
       }
     }
     raw[name] = value;

@@ -109,4 +109,26 @@ describe('hikvision multipart decoding', () => {
   it('returns null when the multipart boundary is missing', () => {
     expect(parseMultipartBody(multipartPayload(PUNCH), 'multipart/form-data')).toBeNull();
   });
+
+  it('decodes when the advertised boundary case differs from the body', () => {
+    // Production sends boundary=mime_boundary in Content-Type while delimiting
+    // the body with MIME_boundary; a case-sensitive split finds no parts at all.
+    const ct = 'multipart/form-data; boundary=mime_boundary';
+    const decoded = parseMultipartBody(multipartPayload(PUNCH), ct);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.fields.employeeNoString).toBe('000015');
+    const parsed = parseEventPayload(decoded!.fields, ct, TZ);
+    expect(parsed.employeeIdentifier).toBe('000015');
+    expect(parsed.eventTimeIso).toBe('2026-09-18T23:32:11.000Z');
+  });
+
+  it('recovers the JSON part when a stray delimiter trails the payload', () => {
+    const messy = Buffer.from(
+      `--${BOUNDARY}\r\nContent-Disposition: form-data; name="AccessControllerEvent"\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(HEARTBEAT)}\r\n--SomeOtherBoundary--\r\n`,
+      'utf8'
+    );
+    const decoded = parseMultipartBody(messy, CONTENT_TYPE);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.fields.eventType).toBe('heartBeat');
+  });
 });
