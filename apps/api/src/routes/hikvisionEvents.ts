@@ -8,7 +8,7 @@
  * allow_query_key). JSON bodies are parsed by the global express.json parser;
  * XML bodies are read as strict text. Every event is validated, stored raw and
  * queued by ingestDeviceEvent; this route only acknowledges receipt so the
- * terminal can move on (202). All error responses are deliberately opaque.
+ * terminal can move on (200). All error responses are deliberately opaque.
  */
 import express, { NextFunction, Request, Response, Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
@@ -39,7 +39,10 @@ const xmlParser = express.text({ type: ['application/xml', 'text/xml'], limit: '
  * No multipart middleware is mounted app-wide, so the body is read as a raw
  * buffer here and decoded with parseMultipartBody in the handler.
  */
-const multipartParser = express.raw({ type: ['multipart/form-data'], limit: '2mb' });
+// 25mb matches the Caddy request_body max_size on this route: a verification
+// event carries a JPEG snapshot, and a 3mb body was previously rejected with a
+// 500 (PayloadTooLargeError) that the terminal retried forever.
+const multipartParser = express.raw({ type: ['multipart/form-data'], limit: '25mb' });
 
 hikvisionEventsRouter.post(
   '/events',
@@ -52,10 +55,14 @@ hikvisionEventsRouter.post(
     // AccessControllerEvent; flatten it so the shared alias lookups apply.
     let body: unknown = req.body;
     let rawText: string | null = typeof req.body === 'string' ? req.body : null;
+    // Multipart diagnostics carry the decoded parts. The raw byte stream is
+    // never used: its binary JPEG snapshot decodes to NUL bytes, which jsonb
+    // rejects (SQLSTATE 22P05) and which would fail the whole ingest.
+    let rawPayload: unknown;
     if (Buffer.isBuffer(req.body)) {
-      rawText = req.body.toString('utf8');
       const multipart = parseMultipartBody(req.body, contentType);
       body = multipart ? multipart.fields : {};
+      rawPayload = multipart ? multipart.raw : null;
     }
     const credentials: WebhookCredentials = {
       headerSerial: null,
@@ -68,10 +75,17 @@ hikvisionEventsRouter.post(
       contentType,
       body,
       rawText,
+      rawPayload,
       headers: req.headers as unknown as HeaderMap,
       ip: req.ip ?? req.socket.remoteAddress ?? '',
     });
-    res.status(202).json({
+    // The ISAPI listening host treats any status other than 200 as a failed
+    // delivery and re-posts the event; the old 202 produced a ~1.3s retry
+    // storm. statusCode 1 (OK) is included for firmwares that parse the body.
+    res.status(200).json({
+      statusCode: 1,
+      statusString: 'OK',
+      subStatusCode: 'ok',
       received: true,
       eventId: result.rawEventId,
       status: result.status,
@@ -91,6 +105,12 @@ export function hikvisionWebhookErrorFilter(err: unknown, req: Request, res: Res
     return;
   }
   const syntax = err as { type?: string; status?: number; message?: string };
+  // A body that exceeds the parser limit must not surface as a 500: the
+  // terminal reads 5xx as "retry" and floods the endpoint.
+  if (syntax?.type === 'entity.too.large') {
+    res.status(413).json({ error: { code: 'PAYLOAD_TOO_LARGE', message: 'Payload too large' } });
+    return;
+  }
   const parseFailure =
     syntax?.type === 'entity.parse.failed' ||
     syntax?.type === 'encoding.unsupported' ||

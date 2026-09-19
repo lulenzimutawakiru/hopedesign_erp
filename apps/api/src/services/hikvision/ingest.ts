@@ -13,7 +13,7 @@ import pg from 'pg';
 import { pool, tx } from '../../db.js';
 import { logAudit } from '../audit.js';
 import { badRequest, unauthorized } from '../../utils.js';
-import { parseEventPayload, PayloadFormat } from './parser.js';
+import { parseEventPayload, sanitizeForJson, PayloadFormat } from './parser.js';
 import { sha256Hex, normalizeIp } from './security.js';
 import { Ctx } from '../../db.js';
 
@@ -122,10 +122,12 @@ export async function ingestDeviceEvent(opts: {
   contentType: string;
   body: unknown; // parsed JSON/FORM object, or raw XML text
   rawText: string | null;
+  /** Multipart diagnostics (binary parts are descriptors, never decoded text). */
+  rawPayload?: unknown;
   headers: HeaderMap;
   ip: string;
 }): Promise<IngestResult> {
-  const { credentials, contentType, body, rawText, headers } = opts;
+  const { credentials, contentType, body, rawText, rawPayload, headers } = opts;
   const ip = normalizeIp(opts.ip);
 
   let serial = readHeader(headers, 'x-hikvision-serial') ?? credentials.headerSerial;
@@ -202,7 +204,8 @@ export async function ingestDeviceEvent(opts: {
       ? sha256Hex(`${serial}:${employeeIdentifier}:${Math.floor(evMs / 1000)}`)
       : null;
 
-  const payload = buildStoredPayload(parsed.format, rawText ?? body, parsed);
+  // Defensive: jsonb rejects \u0000, so no string may reach the INSERT unscrubbed.
+  const payload = sanitizeForJson(buildStoredPayload(parsed.format, rawPayload ?? rawText ?? body, parsed));
   const format = parsed.format;
   const rawEventType = parsed.eventTypeRaw ?? 'UNKNOWN';
   const deviceEventTime = eventTimeIso;

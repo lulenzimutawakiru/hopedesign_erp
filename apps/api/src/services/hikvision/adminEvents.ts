@@ -115,6 +115,16 @@ export async function listRawEvents(
     params.push(format.toUpperCase());
     conds.push(`r.payload_format = $${params.length}`);
   }
+  // Heartbeats are device telemetry, not attendance activity, so they are
+  // hidden from the journal by default and only surfaced on request:
+  //   telemetry=all  -> include everything
+  //   telemetry=only -> heartbeats only
+  const telemetry = (cleanStr(q.telemetry, 8) ?? '').toLowerCase();
+  if (telemetry === 'only') {
+    conds.push("r.event_type = 'heartBeat'");
+  } else if (telemetry !== 'all') {
+    conds.push("COALESCE(r.event_type, '') <> 'heartBeat'");
+  }
   const deviceId = q.deviceId !== undefined ? cleanInt(q.deviceId) : null;
   if (deviceId !== null) {
     params.push(deviceId);

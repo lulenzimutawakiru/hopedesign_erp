@@ -103,46 +103,148 @@ export interface MultipartResult {
  * one JSON part per event (named `AccessControllerEvent`), so a small,
  * dependency-free reader is enough and avoids adding a multipart middleware.
  */
+/** Postgres `jsonb` rejects the NUL escape; strip NULs from everything we persist. */
+export function stripNul(value: string): string {
+  return value.includes('\u0000') ? value.split('\u0000').join('') : value;
+}
+
+/** Recursively strip NUL characters so a payload is always safe for `jsonb`. */
+export function sanitizeForJson<T>(value: T): T {
+  if (typeof value === 'string') return stripNul(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((entry) => sanitizeForJson(entry)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      out[stripNul(key)] = sanitizeForJson(entry);
+    }
+    return out as unknown as T;
+  }
+  return value;
+}
+
+/** Case-insensitive byte search; the terminal's boundary casing is unreliable. */
+function indexOfBytesCi(haystack: Buffer, needle: Buffer, from: number): number {
+  const lower = (b: number) => (b >= 0x41 && b <= 0x5a ? b + 0x20 : b);
+  const first = needle[0];
+  const firstLower = lower(first);
+  outer: for (let i = Math.max(0, from); i <= haystack.length - needle.length; i += 1) {
+    const b = haystack[i];
+    if (b !== first && b !== firstLower) continue;
+    for (let let_j = 1; let_j < needle.length; let_j += 1) {
+      if (lower(haystack[i + let_j]) !== lower(needle[let_j])) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+/** Split the raw body on `--boundary`, returning the bytes between delimiters. */
+function splitMultipartChunks(buffer: Buffer, delimiter: string): Buffer[] {
+  const needle = Buffer.from(`--${delimiter}`, 'latin1');
+  const positions: number[] = [];
+  let from = 0;
+  for (;;) {
+    const idx = indexOfBytesCi(buffer, needle, from);
+    if (idx < 0) break;
+    positions.push(idx);
+    from = idx + needle.length;
+  }
+  const chunks: Buffer[] = [];
+  for (let i = 0; i < positions.length; i += 1) {
+    const start = positions[i] + needle.length;
+    const end = i + 1 < positions.length ? positions[i + 1] : buffer.length;
+    chunks.push(buffer.subarray(start, end));
+  }
+  return chunks;
+}
+
+const CRLFCRLF = Buffer.from('\r\n\r\n');
+const LFLF = Buffer.from('\n\n');
+
+/** Drop the CRLF that separates a part body from the following boundary. */
+function trimPartTail(body: Buffer): Buffer {
+  let end = body.length;
+  if (end >= 2 && body[end - 2] === 0x0d && body[end - 1] === 0x0a) end -= 2;
+  else if (end >= 1 && body[end - 1] === 0x0a) end -= 1;
+  return body.subarray(0, end);
+}
+
+function partName(head: string): string | null {
+  const m = /name\s*=\s*"([^"]+)"/i.exec(head) ?? /name\s*=\s*([^;\r\n]+)/i.exec(head);
+  const name = m?.[1]?.trim();
+  return name ? name : null;
+}
+
+function partContentType(head: string): string | null {
+  const m = /content-type\s*:\s*([^;\r\n]+)/i.exec(head);
+  const value = m?.[1]?.trim();
+  return value ? value.toLowerCase() : null;
+}
+
+const TEXT_PART_TYPE = /^(text\/|application\/(json|xml|x-www-form-urlencoded|problem\+json))/i;
+const BINARY_PART_TYPE = /^(image\/|audio\/|video\/|application\/(octet-stream|pdf|zip))/i;
+
+/**
+ * A JPEG snapshot (pictureURLType=binary) arrives as a binary part. Decoding
+ * its bytes as UTF-8 turns them into replacement characters and NUL bytes,
+ * and Postgres `jsonb` rejects \u0000 outright - so keep it as a descriptor.
+ */
+function isBinaryPart(name: string, type: string | null, body: Buffer): boolean {
+  if (body.includes(0)) return true;
+  if (type && BINARY_PART_TYPE.test(type)) return true;
+  if (type && !TEXT_PART_TYPE.test(type)) return true;
+  if (!type && /picture|image|photo|snap|face|finger/i.test(name)) return true;
+  return false;
+}
+
+/** Decode a text part: prefer JSON, recovering a JSON literal from stray delimiters. */
+function decodeTextPart(bodyText: string): unknown {
+  if (bodyText.startsWith('{') || bodyText.startsWith('[')) {
+    try {
+      return JSON.parse(bodyText);
+    } catch {
+      const start = bodyText.search(/[{[]/);
+      const end = Math.max(bodyText.lastIndexOf('}'), bodyText.lastIndexOf(']'));
+      if (start >= 0 && end > start) {
+        try {
+          return JSON.parse(bodyText.slice(start, end + 1));
+        } catch {
+          return bodyText;
+        }
+      }
+      return bodyText;
+    }
+  }
+  return bodyText;
+}
+
 export function parseMultipartBody(buffer: Buffer | string, contentType: string): MultipartResult | null {
   const boundaryMatch = /boundary\s*=\s*"?([^";,\s]+)"?/i.exec(String(contentType ?? ''));
   if (!boundaryMatch) return null;
-  const delimiter = boundaryMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const text = typeof buffer === 'string' ? buffer : buffer.toString('utf8');
+  const delimiter = boundaryMatch[1];
+  const bytes = typeof buffer === 'string' ? Buffer.from(buffer, 'utf8') : buffer;
   const raw: Record<string, unknown> = {};
   // The terminal advertises the boundary as `mime_boundary` but actually
   // delimits the body with `MIME_boundary`, so the split must ignore case.
-  for (const chunk of text.split(new RegExp(`--${delimiter}`, 'gi'))) {
-    const sep = chunk.includes('\r\n\r\n') ? '\r\n\r\n' : chunk.includes('\n\n') ? '\n\n' : null;
-    if (!sep) continue;
-    const idx = chunk.indexOf(sep);
-    const head = chunk.slice(0, idx);
-    const bodyText = chunk.slice(idx + sep.length).replace(/\r?\n?--\s*$/, '').trim();
-    if (!bodyText) continue;
-    const nameMatch = /name\s*=\s*"([^"]+)"/i.exec(head) ?? /name\s*=\s*([^;\r\n]+)/i.exec(head);
-    if (!nameMatch) continue;
-    const name = nameMatch[1].trim();
+  for (const chunk of splitMultipartChunks(bytes, delimiter)) {
+    const crlfAt = chunk.indexOf(CRLFCRLF);
+    const lfAt = crlfAt >= 0 ? -1 : chunk.indexOf(LFLF);
+    const idx = crlfAt >= 0 ? crlfAt : lfAt;
+    if (idx < 0) continue;
+    const sepLen = crlfAt >= 0 ? 4 : 2;
+    const head = chunk.subarray(0, idx).toString('latin1');
+    const bodyBytes = trimPartTail(chunk.subarray(idx + sepLen));
+    if (bodyBytes.length === 0) continue;
+    const name = partName(head);
     if (!name) continue;
-    let value: unknown = bodyText;
-    if (bodyText.startsWith('{') || bodyText.startsWith('[')) {
-      try {
-        value = JSON.parse(bodyText);
-      } catch {
-        // A stray delimiter can survive inside the part; fall back to the
-        // outermost JSON literal before storing the raw text.
-        const start = bodyText.search(/[{[]/);
-        const end = Math.max(bodyText.lastIndexOf('}') , bodyText.lastIndexOf(']'));
-        if (start >= 0 && end > start) {
-          try {
-            value = JSON.parse(bodyText.slice(start, end + 1));
-          } catch {
-            value = bodyText;
-          }
-        } else {
-          value = bodyText;
-        }
-      }
+    const partType = partContentType(head);
+    if (isBinaryPart(name, partType, bodyBytes)) {
+      raw[name] = { binary: true, contentType: partType ?? 'application/octet-stream', bytes: bodyBytes.length };
+      continue;
     }
-    raw[name] = value;
+    const bodyText = stripNul(bodyBytes.toString('utf8')).trim();
+    if (!bodyText) continue;
+    raw[name] = decodeTextPart(bodyText);
   }
   if (Object.keys(raw).length === 0) return null;
   // Merge every object part into one flat namespace; the part name is kept so
@@ -150,13 +252,14 @@ export function parseMultipartBody(buffer: Buffer | string, contentType: string)
   const merged: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(raw)) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
+      if ((value as { binary?: boolean }).binary) continue; // diagnostics only
       for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
         if (merged[childKey] === undefined) merged[childKey] = childValue;
       }
     }
     merged[name] = value;
   }
-  return { fields: hoistEventFields(merged), raw };
+  return { fields: hoistEventFields(sanitizeForJson(merged)), raw: sanitizeForJson(raw) };
 }
 
 /** Collect XML leaf nodes (element path -> first text value). */

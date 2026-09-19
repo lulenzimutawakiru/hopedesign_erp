@@ -17,6 +17,10 @@ const FORMAT_OPTIONS = [
   { value: 'xml', label: 'XML' },
   { value: 'form', label: 'Form' },
 ];
+const TELEMETRY_OPTIONS = [
+  { value: 'all', label: 'Show telemetry too' },
+  { value: 'only', label: 'Telemetry only' },
+];
 
 function pretty(v: unknown): string {
   if (v === null || v === undefined) return '';
@@ -24,6 +28,11 @@ function pretty(v: unknown): string {
     try { return JSON.stringify(JSON.parse(v), null, 2); } catch { return v; }
   }
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
+/** Heartbeats are device telemetry, not attendance activity. */
+function isTelemetry(e: Rec, rawType: string): boolean {
+  return toStr(e.eventType).toLowerCase() === 'heartbeat' || rawType.toLowerCase() === 'heartbeat';
 }
 
 function typeLabel(raw: unknown): string {
@@ -41,6 +50,7 @@ export default function EventsView({ failed }: { failed: boolean }) {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [format, setFormat] = useState('');
+  const [telemetry, setTelemetry] = useState('');
   const [serial, setSerial] = useState('');
   const [employeeIdentifier, setEmployeeIdentifier] = useState('');
   const [from, setFrom] = useState(failed ? isoDaysAgo(7) : isoToday());
@@ -65,6 +75,7 @@ export default function EventsView({ failed }: { failed: boolean }) {
       const query = qs({
         status: failed ? undefined : status || undefined,
         format: format || undefined,
+        telemetry: telemetry || undefined,
         serial: serial.trim() || undefined,
         employeeIdentifier: employeeIdentifier.trim() || undefined,
         dateFrom: from || undefined,
@@ -79,7 +90,7 @@ export default function EventsView({ failed }: { failed: boolean }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Events failed to load');
     }
-  }, [base, failed, status, format, serial, employeeIdentifier, from, to, q, page, pageSize]);
+  }, [base, failed, status, format, telemetry, serial, employeeIdentifier, from, to, q, page, pageSize]);
   useEffect(() => { void load(); }, [load, tick]);
 
   const openDetail = useCallback(async (id: string) => {
@@ -158,6 +169,9 @@ export default function EventsView({ failed }: { failed: boolean }) {
         <Field label="Format">
           <Sel value={format} onChange={(v) => { setFormat(v); setPage(1); }} options={FORMAT_OPTIONS} placeholder="All formats" />
         </Field>
+        <Field label="Telemetry">
+          <Sel value={telemetry} onChange={(v) => { setTelemetry(v); setPage(1); }} options={TELEMETRY_OPTIONS} placeholder="Hide telemetry" />
+        </Field>
         <Field label="Serial">
           <Inp value={serial} onChange={setSerial} placeholder="DSK1T-XXXX" />
         </Field>
@@ -177,7 +191,7 @@ export default function EventsView({ failed }: { failed: boolean }) {
             placeholder="Device, serial or employee" />
         </div>
         <button type="button" className="btn btn-sm" onClick={() => { setPage(1); void load(); }}>Apply</button>
-        <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setStatus(''); setFormat(''); setSerial(''); setEmployeeIdentifier(''); setFrom(failed ? isoDaysAgo(7) : isoToday()); setTo(isoToday()); setQ(''); setPage(1); }}>Reset</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setStatus(''); setFormat(''); setTelemetry(''); setSerial(''); setEmployeeIdentifier(''); setFrom(failed ? isoDaysAgo(7) : isoToday()); setTo(isoToday()); setQ(''); setPage(1); }}>Reset</button>
         <span style={{ flex: 1 }} />
         <span className="muted">{total} event{total === 1 ? '' : 's'}</span>
       </div>
@@ -233,6 +247,11 @@ export default function EventsView({ failed }: { failed: boolean }) {
                           <div>
                             <div>{empName(emp)}</div>
                             <div className="muted" style={{ fontSize: 11.5 }}>{empNo(emp)}</div>
+                          </div>
+                        ) : isTelemetry(e, rawType) ? (
+                          <div>
+                            <div className="muted" style={{ fontWeight: 600 }}>Heartbeat</div>
+                            <div className="muted" style={{ fontSize: 11.5 }}>device telemetry</div>
                           </div>
                         ) : (
                           <div>

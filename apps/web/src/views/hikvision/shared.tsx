@@ -157,6 +157,7 @@ export const EVENT_TYPE_LABEL: Record<string, string> = {
   ACCESS_GRANTED: 'Access granted',
   ACCESS_DENIED: 'Access denied',
   UNKNOWN: 'Unknown',
+  HEARTBEAT: 'Heartbeat',
 };
 
 export const EXCEPTION_TYPE_LABEL: Record<string, string> = {

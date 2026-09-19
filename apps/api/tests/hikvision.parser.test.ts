@@ -131,4 +131,37 @@ describe('hikvision multipart decoding', () => {
     expect(decoded).not.toBeNull();
     expect(decoded!.fields.eventType).toBe('heartBeat');
   });
+  it('keeps a binary JPEG part out of the text decode so jsonb stays valid', () => {
+    const json = JSON.stringify({ ...PUNCH, pictureURL: 'Picture1' });
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x00]);
+    const body = Buffer.concat([
+      Buffer.from(`--${BOUNDARY}\r\nContent-Disposition: form-data; name="AccessControllerEvent"\r\nContent-Type: application/json\r\n\r\n${json}\r\n`, 'utf8'),
+      Buffer.from(`--${BOUNDARY}\r\nContent-Disposition: form-data; name="picture"\r\nContent-Type: image/jpeg\r\n\r\n`, 'utf8'),
+      jpeg,
+      Buffer.from(`\r\n--${BOUNDARY}--\r\n`, 'utf8'),
+    ]);
+    const decoded = parseMultipartBody(body, CONTENT_TYPE);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.fields.employeeNoString).toBe('000015');
+    // Regression: decoding the JPEG as UTF-8 produced NUL bytes, and Postgres
+    // rejected the whole INSERT with SQLSTATE 22P05 (unsupported Unicode escape).
+    expect(JSON.stringify(decoded!.raw)).not.toContain('\\u0000');
+    expect(JSON.stringify(decoded!.fields)).not.toContain('\\u0000');
+    const picture = decoded!.raw.picture as { binary: boolean; contentType: string; bytes: number };
+    expect(picture.binary).toBe(true);
+    expect(picture.contentType).toBe('image/jpeg');
+    expect(picture.bytes).toBe(jpeg.length);
+  });
+
+  it('never leaves a NUL byte in the payload, even from a text part', () => {
+    const body = Buffer.from(
+      `--${BOUNDARY}\r\nContent-Disposition: form-data; name="AccessControllerEvent"\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ ...PUNCH, name: 'bad\u0000name' })}\r\n--${BOUNDARY}--\r\n`,
+      'utf8'
+    );
+    const decoded = parseMultipartBody(body, CONTENT_TYPE);
+    expect(decoded).not.toBeNull();
+    expect(JSON.stringify(decoded!.raw)).not.toContain('\\u0000');
+    expect(JSON.stringify(decoded!.fields)).not.toContain('\\u0000');
+    expect(decoded!.fields.name).toBe('badname');
+  });
 });
