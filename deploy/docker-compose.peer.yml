@@ -1,0 +1,34 @@
+# ---- Peer-node overlay (added 2026-09-19) ---------------------------------
+# This VPS is a SECOND COMPUTE NODE, not a second data primary.
+#
+# The API is not stateless: every authenticated request re-checks the
+# `sessions` table (apps/api/src/middleware/auth.ts), rate-limit counters and
+# the BullMQ queue live in redis, and the worker consumes that same queue. A
+# second database therefore splits writes and makes logins flap between the two
+# machines. This overlay points this node's api colors at the PRIMARY node's
+# postgres + redis, reached over the WireGuard tunnel (see the primary's
+# deploy/docker-compose.peer-db.yml, which publishes them on 10.77.0.1:9101
+# and 10.77.0.1:9102 - those ports are bound to the tunnel address only, so
+# they are never exposed publicly).
+#
+# The worker is profile-gated on purpose. Scheduled work (invoices, backups,
+# email queues) must run EXACTLY once cluster-wide; only the data primary runs
+# it. Putting the worker behind a profile means a plain `docker compose up -d`
+# - including the one InterServer's @reboot hack runs - no longer resurrects a
+# second copy. `docker compose --profile data-primary-only up -d worker` is the
+# deliberate opt-in, and must never be used on this node while the primary runs.
+#
+# Portable: on the data primary this file is not used at all.
+services:
+  api-a:
+    environment: &peer-db-env
+      POSTGRES_HOST: 10.77.0.1
+      POSTGRES_PORT: "9101"
+      DATABASE_URL: postgres://${POSTGRES_USER:-hopedesign}:${POSTGRES_PASSWORD}@10.77.0.1:9101/${POSTGRES_DB:-hopedesign}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.production}@10.77.0.1:9102/0
+
+  api-b:
+    environment: *peer-db-env
+
+  worker:
+    profiles: ["data-primary-only"]

@@ -1,4 +1,5 @@
 	lb_policy least_conn
+	import /etc/caddy/live/peer*.caddy
 	health_uri /api/health
 	health_interval 5s
 	health_timeout 2s

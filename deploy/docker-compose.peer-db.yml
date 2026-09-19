@@ -1,0 +1,41 @@
+# ---- Cross-node data-plane bridge (added 2026-09-19) ----------------------
+# Published ONLY on the WireGuard address 10.77.0.1, so these listeners are
+# invisible to the public internet: the packets arrive from the peer VPS over
+# wg0 and nothing else can reach them.
+#
+# Why this exists: the API in this cluster is NOT stateless - every
+# authenticated request re-checks the `sessions` table (apps/api/src/
+# middleware/auth.ts), rate limits live in redis, and the queue worker reads
+# the same redis. Running a second API node against a second database makes
+# logins flap and splits writes. Funnelling the peer's API/worker onto THIS
+# node's postgres + redis restores the single-source-of-truth invariant while
+# still letting both machines serve HTTP.
+#
+# Portable: on a node that is not the data primary, this file is simply not
+# used, so nothing here is node-name specific except the bind address.
+services:
+  pgbridge:
+    image: alpine/socat:latest
+    container_name: hopedesign-erp-pgbridge
+    restart: unless-stopped
+    command: ["TCP-LISTEN:5432,fork,reuseaddr", "TCP:postgres:5432"]
+    ports:
+      - "10.77.0.1:9101:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  redisbridge:
+    image: alpine/socat:latest
+    container_name: hopedesign-erp-redisbridge
+    restart: unless-stopped
+    command: ["TCP-LISTEN:6379,fork,reuseaddr", "TCP:redis:6379"]
+    ports:
+      - "10.77.0.1:9102:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - internal

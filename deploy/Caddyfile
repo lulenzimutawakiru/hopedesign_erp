@@ -40,6 +40,11 @@
 		# Keep this list in sync with deploy.replicas; deploy/stack-watchdog.sh
 		# reconciles the replica count.
 		reverse_proxy hopedesign-erp-web-1:80 hopedesign-erp-web-2:80 {
+			# Pool membership is node-local: deploy/caddy-live/webpeer.caddy (untracked)
+			# carries the peer VPS as an extra upstream, reached only over the
+			# WireGuard tunnel. The glob makes this import a no-op on a node without
+			# that file, so one tracked Caddyfile stays correct on every node.
+			import /etc/caddy/live/webpeer*.caddy
 			lb_policy least_conn
 			health_uri /
 			health_interval 15s
