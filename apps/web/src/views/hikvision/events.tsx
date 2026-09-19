@@ -30,9 +30,15 @@ function pretty(v: unknown): string {
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
 }
 
-/** Heartbeats are device telemetry, not attendance activity. */
+/**
+ * Device telemetry is anything the terminal pushed without an employee number:
+ * heartbeats, door open/close and device operation logs. A row that carries an
+ * employee number the ERP could not match is a real mapping gap and must stay
+ * visible as "Unmapped" rather than be labelled telemetry.
+ */
 function isTelemetry(e: Rec, rawType: string): boolean {
-  return toStr(e.eventType).toLowerCase() === 'heartbeat' || rawType.toLowerCase() === 'heartbeat';
+  if (toStr(e.eventType).toLowerCase() === 'heartbeat' || rawType.toLowerCase() === 'heartbeat') return true;
+  return pickS(e, 'employeeIdentifier').trim() === '';
 }
 
 function typeLabel(raw: unknown): string {

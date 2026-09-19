@@ -375,13 +375,17 @@ async function processRowInTx(
         WHERE id = $1`,
       [row.raw_event_id, 'INVALID_TIMESTAMP_MISSING']
     );
-    await createException(client, device, {
-      exceptionType: 'INVALID_TIMESTAMP',
-      severity: 'WARN',
-      summary: 'Event arrived without a usable device timestamp and was preserved without processing.',
-      rawEventId: row.raw_event_id,
-      employeeIdentifier,
-    });
+    // Only raise a reviewable exception when the payload actually names an
+    // employee. A nameless, timeless device log is telemetry, not a punch.
+    if (employeeIdentifier) {
+      await createException(client, device, {
+        exceptionType: 'INVALID_TIMESTAMP',
+        severity: 'WARN',
+        summary: 'Event arrived without a usable device timestamp and was preserved without processing.',
+        rawEventId: row.raw_event_id,
+        employeeIdentifier,
+      });
+    }
     await logAudit(client, ctx, {
       action: 'hikvision.event.rejected',
       resource: 'hikvision_raw_events',
@@ -416,17 +420,20 @@ async function processRowInTx(
       lastPunchType,
     });
 
-  // --- Unknown employee -------------------------------------------------------
-  // --- Device heartbeat / keep-alive ------------------------------------------
-  // Telemetry only: no employee, no punch, no exception. Without this guard a
-  // keep-alive would raise an UNKNOWN_EMPLOYEE exception on every beat.
-  if (!employeeIdentifier && /heart\s*-?\s*beat|keep\s*-?\s*alive/i.test(String(rawEventType ?? ''))) {
+  // --- Device telemetry -------------------------------------------------------
+  // Heartbeats, door open/close and device operation logs carry no employee at
+  // all. They are telemetry: mark them processed and never raise a review item,
+  // otherwise every keep-alive and every door report becomes an
+  // UNKNOWN_EMPLOYEE exception. A genuine unknown badge still carries an
+  // employee number, so it keeps flowing to the branch below and stays visible.
+  if (!employeeIdentifier) {
+    const isHeartbeat = /heart\s*-?\s*beat|keep\s*-?\s*alive/i.test(String(rawEventType ?? ''));
     await markProcessed(client, row, device, ctx, {
       employeeIdentifier: null,
       employeeId: null,
       eventType: 'UNKNOWN',
       verificationMethod,
-      metadata: { heartbeat: true, rawEventType },
+      metadata: { telemetry: true, heartbeat: isHeartbeat, rawEventType },
     });
     return true;
   }

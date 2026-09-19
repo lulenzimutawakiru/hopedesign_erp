@@ -115,15 +115,19 @@ export async function listRawEvents(
     params.push(format.toUpperCase());
     conds.push(`r.payload_format = $${params.length}`);
   }
-  // Heartbeats are device telemetry, not attendance activity, so they are
-  // hidden from the journal by default and only surfaced on request:
+  // Device telemetry is anything the terminal pushed without an employee
+  // number: heartbeats, door open/close and device operation logs. It is hidden
+  // from the journal by default and only surfaced on request:
   //   telemetry=all  -> include everything
-  //   telemetry=only -> heartbeats only
+  //   telemetry=only -> telemetry only
+  // A row that carries an employee number but no ERP match is a real mapping
+  // gap, not telemetry, and stays in the default journal.
   const telemetry = (cleanStr(q.telemetry, 8) ?? '').toLowerCase();
+  const telemetrySql = "(COALESCE(r.event_type, '') = 'heartBeat' OR NULLIF(r.payload->>'employee_identifier', '') IS NULL)";
   if (telemetry === 'only') {
-    conds.push("r.event_type = 'heartBeat'");
+    conds.push(telemetrySql);
   } else if (telemetry !== 'all') {
-    conds.push("COALESCE(r.event_type, '') <> 'heartBeat'");
+    conds.push('NOT ' + telemetrySql);
   }
   const deviceId = q.deviceId !== undefined ? cleanInt(q.deviceId) : null;
   if (deviceId !== null) {

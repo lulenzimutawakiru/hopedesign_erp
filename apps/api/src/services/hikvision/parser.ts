@@ -33,7 +33,14 @@ export interface ParsedEvent {
 }
 
 const VERIFY_ALIASES = ['verifyNo', 'verifyMode', 'verificationMethod', 'verifyMethod', 'verifyType', 'VerifyNo', 'VerifyMode'];
-const SERIAL_ALIASES = ['serialNo', 'serialNumber', 'deviceSerial', 'SerialNo', 'SerialNumber'];
+/**
+ * Device-serial aliases. `serialNo`/`SerialNo` are deliberately excluded: in
+ * access-control payloads they are the per-event sequence counter
+ * (`serialNo: 217`, `frontSerialNo: 216`), never the device serial. Hoisting
+ * them would make the payload/source cross-check in ingest.ts compare an event
+ * counter against the authenticated serial and reject every real event.
+ */
+const SERIAL_ALIASES = ['serialNumber', 'SerialNumber', 'deviceSerial', 'deviceSerialNumber'];
 const EMP_ALIASES = ['employeeNoString', 'employeeNo', 'employeeNumber', 'empNo', 'cardNo', 'EmployeeNoString', 'EmployeeNo', 'CardNo', 'personId', 'employeeID'];
 const TIME_ALIASES = [
   'dateTime', 'DateTime', 'eventTime', 'EventTime', 'time', 'Time',
@@ -71,23 +78,54 @@ function toStringOrNull(v: unknown): string | null {
   return s;
 }
 
-/** Flatten nested Hikvision event containers (up to three levels deep). */
+/** Container nesting is walked to this depth; production payloads nest two deep. */
+const MAX_CONTAINER_DEPTH = 16;
+
+const CONTAINER_KEY_SET = new Set(EVENT_CONTAINER_KEYS);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Flatten nested Hikvision event containers so the alias lookups below see the
+ * identity fields however deep the device buried them.
+ *
+ * The DS-K1T terminal we integrate with emits
+ * `AccessControllerEvent.AccessControllerEvent.employeeNoString`: an outer
+ * container that repeats its own name for the inner, event-specific object.
+ * A single-level merge stops at the outer container, never reaches the inner
+ * one, and silently turns every real punch into an unmapped event with no
+ * employee number (which also disabled dedupe and left punch rows at zero).
+ *
+ * Scalars are hoisted inner-most-wins: a member found deeper overwrites a
+ * same-named member from a shallower container, because the deeper one is the
+ * event-specific value. The outermost container is kept under its own key for
+ * diagnostics and never overwrites a flattened member.
+ */
 export function hoistEventFields(input: Record<string, unknown>): Record<string, unknown> {
-  const fields: Record<string, unknown> = { ...input };
-  for (let depth = 0; depth < 3; depth += 1) {
-    let changed = false;
-    for (const key of EVENT_CONTAINER_KEYS) {
-      const nested = fields[key];
-      if (!nested || typeof nested !== 'object' || Array.isArray(nested)) continue;
-      for (const [childKey, childValue] of Object.entries(nested as Record<string, unknown>)) {
-        if (fields[childKey] === undefined) {
-          fields[childKey] = childValue;
-          changed = true;
-        }
+  const fields: Record<string, unknown> = {};
+
+  const walk = (obj: Record<string, unknown>, depth: number): void => {
+    if (depth > MAX_CONTAINER_DEPTH) return;
+    for (const [key, value] of Object.entries(obj)) {
+      if (isPlainObject(value) && CONTAINER_KEY_SET.has(key)) {
+        // Hoist the container's members first so deeper values win...
+        walk(value, depth + 1);
+        // ...then keep the outermost container for diagnostics.
+        if (fields[key] === undefined) fields[key] = value;
+        continue;
       }
+      if (isPlainObject(value)) {
+        // A non-container object is opaque: keep the first one we meet.
+        if (fields[key] === undefined) fields[key] = value;
+        continue;
+      }
+      fields[key] = value;
     }
-    if (!changed) break;
-  }
+  };
+
+  walk(input, 0);
   return fields;
 }
 
@@ -256,8 +294,15 @@ export function parseMultipartBody(buffer: Buffer | string, contentType: string)
       for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
         if (merged[childKey] === undefined) merged[childKey] = childValue;
       }
+      // Keep the container for diagnostics, but never let the part name
+      // overwrite a member just flattened out of it: the part is named
+      // `AccessControllerEvent` and nests a second `AccessControllerEvent`
+      // that holds the employee identity, so an unconditional assignment here
+      // hides the employee number behind the outer container.
+      if (merged[name] === undefined) merged[name] = value;
+    } else {
+      merged[name] = value;
     }
-    merged[name] = value;
   }
   return { fields: hoistEventFields(sanitizeForJson(merged)), raw: sanitizeForJson(raw) };
 }

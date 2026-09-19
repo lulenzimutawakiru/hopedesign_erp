@@ -164,4 +164,66 @@ describe('hikvision multipart decoding', () => {
     expect(JSON.stringify(decoded!.fields)).not.toContain('\\u0000');
     expect(decoded!.fields.name).toBe('badname');
   });
+
+  it('reads the employee number out of a doubly nested AccessControllerEvent part', () => {
+    // Exact shape captured from the production terminal (hikvision_raw_events
+    // payload): the multipart part is itself named AccessControllerEvent and
+    // contains an outer container that repeats the name for the inner,
+    // event-specific object. The employee number lives in the INNER object,
+    // one level deeper than a single-pass hoist reaches.
+    const REAL = {
+      portNo: 443,
+      dateTime: '2026-09-19T18:02:38+03:00',
+      protocol: 'HTTPS',
+      channelID: 1,
+      eventType: 'AccessControllerEvent',
+      ipAddress: '10.70.18.20',
+      eventState: 'active',
+      macAddress: '88:de:39:7a:22:cf',
+      activePostCount: 1,
+      eventDescription: 'Access Controller Event',
+      shortSerialNumber: 'GS7020902',
+      AccessControllerEvent: {
+        name: 'lulenzi Mutawakiru',
+        label: '',
+        serialNo: 217,
+        userType: 'custom1',
+        deviceName: 'Access Controller',
+        cardReaderNo: 1,
+        subEventType: 38,
+        frontSerialNo: 216,
+        majorEventType: 5,
+        employeeNoString: '000015',
+        currentVerifyMode: 'cardOrFaceOrFp',
+      },
+    };
+
+    const decoded = parseMultipartBody(multipartPayload(REAL), CONTENT_TYPE)!;
+    expect(decoded.fields.employeeNoString).toBe('000015');
+    expect(decoded.fields.majorEventType).toBe(5);
+    expect(decoded.fields.subEventType).toBe(38);
+
+    const parsed = parseEventPayload(decoded.fields, CONTENT_TYPE, TZ);
+    expect(parsed.format).toBe('MULTIPART');
+    expect(parsed.employeeIdentifier).toBe('000015');
+    expect(parsed.eventTimeIso).toBe('2026-09-19T15:02:38.000Z');
+    // serialNo is the per-event sequence counter. If it were picked up as the
+    // device serial, ingest's payload/source cross-check would reject the event.
+    expect(parsed.serialRaw).toBeNull();
+  });
+
+  it('flattens containers nested more than one level in a plain JSON body', () => {
+    const parsed = parseEventPayload(
+      {
+        EventNotificationAlert: {
+          dateTime: '2026-09-19T18:02:38+03:00',
+          AccessControllerEvent: { employeeNoString: '000015', majorEventType: 5 },
+        },
+      },
+      'application/json',
+      TZ
+    );
+    expect(parsed.employeeIdentifier).toBe('000015');
+    expect(parsed.eventTimeIso).toBe('2026-09-19T15:02:38.000Z');
+  });
 });
