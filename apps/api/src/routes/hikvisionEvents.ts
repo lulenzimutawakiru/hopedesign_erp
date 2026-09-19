@@ -13,6 +13,7 @@
 import express, { NextFunction, Request, Response, Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { ingestDeviceEvent, HeaderMap, WebhookCredentials } from '../services/hikvision/ingest.js';
+import { parseMultipartBody } from '../services/hikvision/parser.js';
 import { ApiError, asyncHandler } from '../utils.js';
 
 export const hikvisionEventsRouter = Router();
@@ -33,12 +34,29 @@ const eventLimiter = rateLimit({
 /** Parse XML/plain-text payloads; JSON is already handled by express.json(). */
 const xmlParser = express.text({ type: ['application/xml', 'text/xml'], limit: '2mb' });
 
+/**
+ * A terminal configured with an HTTP listening host posts multipart/form-data.
+ * No multipart middleware is mounted app-wide, so the body is read as a raw
+ * buffer here and decoded with parseMultipartBody in the handler.
+ */
+const multipartParser = express.raw({ type: ['multipart/form-data'], limit: '2mb' });
+
 hikvisionEventsRouter.post(
   '/events',
   eventLimiter,
   xmlParser,
+  multipartParser,
   asyncHandler(async (req, res) => {
     const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
+    // The listening host wraps each event as a JSON part named
+    // AccessControllerEvent; flatten it so the shared alias lookups apply.
+    let body: unknown = req.body;
+    let rawText: string | null = typeof req.body === 'string' ? req.body : null;
+    if (Buffer.isBuffer(req.body)) {
+      rawText = req.body.toString('utf8');
+      const multipart = parseMultipartBody(req.body, contentType);
+      body = multipart ? multipart.fields : {};
+    }
     const credentials: WebhookCredentials = {
       headerSerial: null,
       headerKey: null,
@@ -48,8 +66,8 @@ hikvisionEventsRouter.post(
     const result = await ingestDeviceEvent({
       credentials,
       contentType,
-      body: req.body,
-      rawText: typeof req.body === 'string' ? req.body : null,
+      body,
+      rawText,
       headers: req.headers as unknown as HeaderMap,
       ip: req.ip ?? req.socket.remoteAddress ?? '',
     });

@@ -22,6 +22,12 @@
 
 	@api path /api /api/*
 	handle @api {
+		# Hikvision terminals cap the webhook URL at 128 characters and cannot
+		# send custom headers, so credentials must travel in the query string.
+		# The canonical path plus ?serial=<44>&key=<48> exceeds that limit; this
+		# alias keeps the device-facing URL short. Same handler, same auth.
+		@hik path /api/hik
+		rewrite @hik /api/integrations/hikvision/events
 		# The ACTIVE API color is chosen by deploy/zero-downtime-deploy.sh and
 		# deploy/stack-watchdog.sh. They rewrite active.caddy and atomically
 		# `caddy reload`, so /api traffic always hits exactly one healthy color.

@@ -171,12 +171,20 @@ export async function ingestDeviceEvent(opts: {
   const eventTimeIso = parsed.eventTimeIso;
   const employeeIdentifier = parsed.employeeIdentifier;
 
+  // A heartbeat / keep-alive is device telemetry, not an attendance punch: it
+  // carries no employee and must never surface as an unmapped employee event.
+  const isHeartbeat =
+    !employeeIdentifier &&
+    /heart\s*-?\s*beat|keep\s*-?\s*alive/i.test(
+      `${parsed.eventTypeRaw ?? ''} ${parsed.attendanceStatus ?? ''} ${parsed.accessStatus ?? ''}`
+    );
+
   // Replay / timestamp validation (future events and events older than the
   // device's configured window are preserved but flagged REJECTED).
   let status: 'RECEIVED' | 'DUPLICATE' | 'REJECTED' = 'RECEIVED';
   let rejectionReason: string | null = null;
   let evMs: number | null = null;
-  if (eventTimeIso) {
+  if (eventTimeIso && !isHeartbeat) {
     evMs = Date.parse(eventTimeIso);
     if (Number.isFinite(evMs)) {
       if (evMs > nowMs + device.allow_future_minutes * 60000) {
@@ -253,7 +261,11 @@ export async function ingestDeviceEvent(opts: {
         [
           device.tenant_id, device.company_id, device.id, serial, JSON.stringify(payload), format,
           deviceEventTime, rawEventType, ip, JSON.stringify(sourceHeaders),
-          dedupeKey, finalStatus, rejectionReason,
+          dedupeKey,
+          // Heartbeats are telemetry: store them already PROCESSED so the queue
+          // worker never raises UNKNOWN_EMPLOYEE for a device keep-alive.
+          isHeartbeat && finalStatus === 'RECEIVED' ? 'PROCESSED' : finalStatus,
+          isHeartbeat ? 'device heartbeat (telemetry only)' : rejectionReason,
         ]
       );
       rawId = Number(ins.rows[0].id);

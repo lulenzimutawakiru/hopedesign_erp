@@ -417,6 +417,20 @@ async function processRowInTx(
     });
 
   // --- Unknown employee -------------------------------------------------------
+  // --- Device heartbeat / keep-alive ------------------------------------------
+  // Telemetry only: no employee, no punch, no exception. Without this guard a
+  // keep-alive would raise an UNKNOWN_EMPLOYEE exception on every beat.
+  if (!employeeIdentifier && /heart\s*-?\s*beat|keep\s*-?\s*alive/i.test(String(rawEventType ?? ''))) {
+    await markProcessed(client, row, device, ctx, {
+      employeeIdentifier: null,
+      employeeId: null,
+      eventType: 'UNKNOWN',
+      verificationMethod,
+      metadata: { heartbeat: true, rawEventType },
+    });
+    return true;
+  }
+
   if (!employee) {
     const classification = classify(0, false, false, null);
     await insertNormalizedEvent(client, device, row, {
