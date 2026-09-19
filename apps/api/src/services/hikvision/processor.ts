@@ -815,23 +815,48 @@ async function processRowInTx(
   if (punchType === 'BREAK_START' && !fresh.break_start) patch.break_start = eventTimeIso;
   if (punchType === 'BREAK_END' && !fresh.break_end) patch.break_end = eventTimeIso;
 
-  if (punchType === 'CHECK_IN' && fresh.check_in && fresh.check_in !== eventTimeIso) {
-    patch.check_in = fresh.check_in < eventTimeIso ? fresh.check_in : eventTimeIso;
+  // pg returns timestamptz columns as Date objects, so comparing them directly against
+  // the ISO string coerces both operands through Number() (NaN) and is always true.
+  // Normalise to ISO strings first so the merge really is a min/max.
+  const freshCheckInIso = toIso(fresh.check_in);
+  const freshCheckOutIso = toIso(fresh.check_out);
+  const freshBreakStartIso = toIso(fresh.break_start);
+  const freshBreakEndIso = toIso(fresh.break_end);
+
+  if (punchType === 'CHECK_IN' && freshCheckInIso && freshCheckInIso !== eventTimeIso) {
+    patch.check_in = freshCheckInIso < eventTimeIso ? freshCheckInIso : eventTimeIso;
   }
-  if (punchType === 'CHECK_OUT' && fresh.check_out && fresh.check_out !== eventTimeIso) {
-    patch.check_out = fresh.check_out > eventTimeIso ? fresh.check_out : eventTimeIso;
+  if (punchType === 'CHECK_OUT' && freshCheckOutIso && freshCheckOutIso !== eventTimeIso) {
+    patch.check_out = freshCheckOutIso > eventTimeIso ? freshCheckOutIso : eventTimeIso;
   }
-  if (punchType === 'BREAK_START' && fresh.break_start && fresh.break_start !== eventTimeIso) {
-    patch.break_start = fresh.break_start < eventTimeIso ? fresh.break_start : eventTimeIso;
+  if (punchType === 'BREAK_START' && freshBreakStartIso && freshBreakStartIso !== eventTimeIso) {
+    patch.break_start = freshBreakStartIso < eventTimeIso ? freshBreakStartIso : eventTimeIso;
   }
-  if (punchType === 'BREAK_END' && fresh.break_end && fresh.break_end !== eventTimeIso) {
-    patch.break_end = fresh.break_end > eventTimeIso ? fresh.break_end : eventTimeIso;
+  if (punchType === 'BREAK_END' && freshBreakEndIso && freshBreakEndIso !== eventTimeIso) {
+    patch.break_end = freshBreakEndIso > eventTimeIso ? freshBreakEndIso : eventTimeIso;
   }
 
-  const mergedCheckIn = (patch.check_in as string | undefined) ?? toIso(fresh.check_in);
-  const mergedCheckOut = (patch.check_out as string | undefined) ?? toIso(fresh.check_out);
+  // The punch table is the source of truth for a record. Recomputing the extremes
+  // from it makes the merge order-independent: replayed or out-of-order events
+  // converge on the same record instead of leaving a stale check_out behind when
+  // a replayed punch is classified differently the second time round.
+  const punchExtremes = await client.query<{ first_in: Date | string | null; last_out: Date | string | null }>(
+    `SELECT min(punch_time) FILTER (WHERE punch_type = 'CHECK_IN') AS first_in,
+            max(punch_time) FILTER (WHERE punch_type = 'CHECK_OUT') AS last_out
+       FROM attendance_punch_events
+      WHERE attendance_record_id = $1`,
+    [recordId]
+  );
+  const firstInIso = toIso(punchExtremes.rows[0]?.first_in);
+  const lastOutIso = toIso(punchExtremes.rows[0]?.last_out);
+
+  let mergedCheckIn = (patch.check_in as string | undefined) ?? toIso(fresh.check_in);
+  let mergedCheckOut = (patch.check_out as string | undefined) ?? toIso(fresh.check_out);
   const mergedBreakStart = (patch.break_start as string | undefined) ?? toIso(fresh.break_start);
   const mergedBreakEnd = (patch.break_end as string | undefined) ?? toIso(fresh.break_end);
+
+  if (firstInIso && (mergedCheckIn === null || firstInIso < mergedCheckIn)) mergedCheckIn = firstInIso;
+  if (lastOutIso && (mergedCheckOut === null || lastOutIso > mergedCheckOut)) mergedCheckOut = lastOutIso;
 
   const metrics = computeMetrics({
     scheduledStartIso: win.startIso,
