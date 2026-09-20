@@ -16,6 +16,21 @@ export function isResendConfigured(): boolean {
  * Returns the shared provider result shape so callers can route without
  * changing their code.
  */
+/**
+ * Resolve the RFC 5322 `from` header.
+ *
+ * A per-message sender (a company mailbox identity) always wins over the
+ * platform default so department mail leaves from the department address.
+ * The value is normalised to `Name <address>` when a bare address is given.
+ */
+function resolveFrom(input: BirdEmailInput, fromName: string, fromEmail: string): string {
+  const explicit = input.from?.trim();
+  if (explicit) return explicit;
+  const name = fromName.trim();
+  const address = fromEmail.trim();
+  return name ? `${name} <${address}>` : address;
+}
+
 export async function sendEmailViaResend(input: BirdEmailInput): Promise<BirdSendResult> {
   const { apiKey, fromEmail, fromName } = config.resend;
   if (!apiKey.trim() || !fromEmail.trim()) {
@@ -33,11 +48,15 @@ export async function sendEmailViaResend(input: BirdEmailInput): Promise<BirdSen
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: fromName.trim() ? `${fromName.trim()} <${fromEmail.trim()}>` : fromEmail.trim(),
+        from: resolveFrom(input, fromName, fromEmail),
         to: input.to,
         subject: input.subject,
         ...(input.html ? { html: input.html } : {}),
         ...(input.text ? { text: input.text } : {}),
+        ...(input.cc?.length ? { cc: input.cc } : {}),
+        ...(input.bcc?.length ? { bcc: input.bcc } : {}),
+        ...(input.replyTo?.trim() ? { reply_to: input.replyTo.trim() } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       }),
     });
     const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;

@@ -38,6 +38,7 @@ const WorkOrderWizard = lazy(() => import('./WorkOrderWizard'));
 const AssetsFlow = lazy(() => import('./AssetsFlow'));
 const AdminFlow = lazy(() => import('./AdminFlow'));
 const CommunicationFlow = lazy(() => import('./CommunicationFlow'));
+const MailWorkspace = lazy(() => import('../features/mail/MailWorkspace'));
 const DocumentsFlow = lazy(() => import('./DocumentsFlow'));
 const InventoryIntel = lazy(() => import('./InventoryIntel'));
 const ServiceDeskFlow = lazy(() => import('./ServiceDeskFlow'));
@@ -222,6 +223,7 @@ export default function Shell() {
   else if (assetsPath) body = <AssetsFlow path={path} />;
   else if (path.startsWith('/admin/organisation-settings')) body = <OrganisationSettings path={path} />;
   else if (path === '/admin' || path.startsWith('/admin/')) body = <AdminFlow path={path} />;
+  else if (path === '/communication/mail' || path.startsWith('/communication/mail/')) body = <MailWorkspace path={path} />;
   else if (path === '/communication' || path.startsWith('/communication/')) body = <CommunicationFlow path={path} />;
   else if (path === '/documents' || path.startsWith('/documents/')) body = <DocumentsFlow path={path} />;
   else if (detailMatch) body = <EntityDetail route={detailMatch} />;

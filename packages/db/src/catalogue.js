@@ -16,6 +16,26 @@ const MODULES = {
     templates: ["view", "manage"],
     delivery_logs: ["view"],
     settings: ["manage"],
+    // Company Mailing System (migration 0169). Kept inside the existing
+    // `communication` module so every current `communication.*` holder keeps a
+    // single coherent mail namespace and no parallel permission module appears.
+    mailboxes: ["view", "create", "update", "delete", "manage"],
+    mailbox_members: ["view", "create", "update", "delete", "manage"],
+    mailbox_delegations: ["view", "create", "revoke", "manage"],
+    mail_drafts: ["view", "create", "update", "delete"],
+    mail_scheduled: ["view", "create", "update", "cancel"],
+    mail_labels: ["view", "create", "update", "delete"],
+    mail_rules: ["view", "create", "update", "delete", "manage"],
+    mail_signatures: ["view", "create", "update", "delete", "manage"],
+    mail_distribution_lists: ["view", "create", "update", "delete", "manage"],
+    mail_approvals: ["view", "submit", "approve", "reject", "manage"],
+    mail_classifications: ["view", "manage"],
+    mail_contacts: ["view", "export"],
+    mail_attachments: ["view", "upload", "download", "delete"],
+    mail_scheduler: ["view", "manage"],
+    mail_providers: ["view", "manage"],
+    mail_audit: ["view", "export"],
+    mail_admin: ["view", "manage"],
   },
   crm: {
     leads: ["view","create","update","delete","submit","convert","assign","export","import"],
@@ -884,11 +904,212 @@ const WORKFLOW_INSTANCE_ROLE_EXTENSIONS = {
   operations_manager: ["workflows.instances.*"],
 };
 
+// ---------------------------------------------------------------------------
+// Company Mailing System (migration 0169) role grants.
+//
+// The `communication` module gained 17 mail sub-resources (see MODULES above).
+// Roles holding a broad `communication.*` grant pick those up automatically
+// through expandGrants(); every other role that legitimately works with mail is
+// enumerated here, because reconcileRbac() rebuilds role_permissions from
+// ROLES[].grants on every reseed and therefore wipes any INSERT a migration
+// performs.
+//
+// Tiers are additive and declared once so the intent of each tier stays
+// reviewable rather than diffused across 100+ hand-written arrays. Note that
+// these deliberately do NOT grant `communication.settings.manage` or the
+// broader messaging/announcement resources: mail capability must not silently
+// widen into transport-credential control.
+// ---------------------------------------------------------------------------
+const MAIL_VIEW = [
+  "communication.mailboxes.view",
+  "communication.mail_contacts.view",
+  "communication.mail_classifications.view",
+  "communication.mail_attachments.view",
+];
+const MAIL_COMPOSE = [
+  ...MAIL_VIEW,
+  "communication.emails.view",
+  "communication.mail_drafts.*",
+  "communication.mail_labels.*",
+  "communication.mail_scheduled.view",
+  "communication.mail_scheduled.create",
+  "communication.mail_attachments.upload",
+  "communication.mail_signatures.view",
+  "communication.mail_signatures.create",
+  "communication.mail_signatures.update",
+];
+const MAIL_SEND = [
+  ...MAIL_COMPOSE,
+  "communication.emails.send",
+  "communication.mail_attachments.download",
+  "communication.mail_approvals.view",
+  "communication.mail_approvals.submit",
+  "communication.mail_distribution_lists.view",
+  "communication.mail_scheduler.view",
+];
+const MAIL_MANAGE = [
+  ...MAIL_SEND,
+  "communication.emails.manage",
+  "communication.mailboxes.create",
+  "communication.mailboxes.update",
+  "communication.mailboxes.manage",
+  "communication.mailbox_members.*",
+  "communication.mailbox_delegations.*",
+  "communication.mail_approvals.approve",
+  "communication.mail_approvals.reject",
+  "communication.mail_approvals.manage",
+  "communication.mail_distribution_lists.create",
+  "communication.mail_distribution_lists.update",
+  "communication.mail_distribution_lists.manage",
+  "communication.mail_rules.*",
+  "communication.mail_signatures.manage",
+  "communication.mail_classifications.manage",
+  "communication.mail_audit.view",
+  "communication.mail_admin.view",
+  "communication.mail_scheduler.manage",
+];
+const MAIL_ADMIN = [
+  ...MAIL_MANAGE,
+  "communication.mail_providers.*",
+  "communication.mail_admin.manage",
+  "communication.mail_audit.export",
+  "communication.mail_contacts.export",
+  "communication.mail_attachments.delete",
+];
+
+const MAIL_ROLE_EXTENSIONS = {
+  // --- Platform, security and compliance governance of the mail subsystem ---
+  security_administrator: MAIL_ADMIN,
+  it_support_administrator: MAIL_ADMIN,
+  integration_administrator: MAIL_ADMIN,
+  audit_administrator: MAIL_ADMIN,
+  data_protection_officer: MAIL_ADMIN,
+  backup_administrator: MAIL_ADMIN,
+
+  // --- Directors, functional heads and approvers: departmental mailbox control ---
+  operations_director: MAIL_MANAGE,
+  cfo: MAIL_MANAGE,
+  finance_manager: MAIL_MANAGE,
+  chief_accountant: MAIL_MANAGE,
+  financial_controller: MAIL_MANAGE,
+  internal_auditor: MAIL_MANAGE,
+  hr_manager: MAIL_MANAGE,
+  sales_director: MAIL_MANAGE,
+  sales_manager: MAIL_MANAGE,
+  crm_manager: MAIL_MANAGE,
+  procurement_director: MAIL_MANAGE,
+  procurement_manager: MAIL_MANAGE,
+  supply_chain_manager: MAIL_MANAGE,
+  warehouse_manager: MAIL_MANAGE,
+  production_director: MAIL_MANAGE,
+  production_manager: MAIL_MANAGE,
+  quality_director: MAIL_MANAGE,
+  quality_manager: MAIL_MANAGE,
+  security_printing_director: MAIL_MANAGE,
+  security_printing_manager: MAIL_MANAGE,
+  logistics_manager: MAIL_MANAGE,
+  asset_manager: MAIL_MANAGE,
+  service_desk_manager: MAIL_MANAGE,
+  bi_manager: MAIL_MANAGE,
+  payroll_manager: MAIL_MANAGE,
+  maintenance_manager: MAIL_MANAGE,
+
+  // --- Officers, executives and analysts: full compose/send/receive ---
+  accountant: MAIL_SEND,
+  ar_officer: MAIL_SEND,
+  ap_officer: MAIL_SEND,
+  cashier: MAIL_SEND,
+  treasury_officer: MAIL_SEND,
+  budget_officer: MAIL_SEND,
+  tax_officer: MAIL_SEND,
+  payroll_accountant: MAIL_SEND,
+  sales_executive: MAIL_SEND,
+  sales_representative: MAIL_SEND,
+  crm_officer: MAIL_SEND,
+  account_manager: MAIL_SEND,
+  customer_service_officer: MAIL_SEND,
+  sales_coordinator: MAIL_SEND,
+  procurement_officer: MAIL_SEND,
+  purchasing_officer: MAIL_SEND,
+  procurement_assistant: MAIL_SEND,
+  supplier_relationship_manager: MAIL_SEND,
+  procurement_evaluator: MAIL_SEND,
+  procurement_approver: MAIL_SEND,
+  warehouse_supervisor: MAIL_SEND,
+  storekeeper: MAIL_SEND,
+  inventory_controller: MAIL_SEND,
+  inventory_officer: MAIL_SEND,
+  receiving_officer: MAIL_SEND,
+  dispatch_officer: MAIL_SEND,
+  dispatch_manager: MAIL_SEND,
+  logistics_officer: MAIL_SEND,
+  fleet_manager: MAIL_SEND,
+  fleet_officer: MAIL_SEND,
+  delivery_coordinator: MAIL_SEND,
+  production_planner: MAIL_SEND,
+  production_scheduler: MAIL_SEND,
+  production_supervisor: MAIL_SEND,
+  production_officer: MAIL_SEND,
+  work_order_manager: MAIL_SEND,
+  production_cost_analyst: MAIL_SEND,
+  maintenance_supervisor: MAIL_SEND,
+  maintenance_planner: MAIL_SEND,
+  maintenance_technician: MAIL_SEND,
+  electrical_technician: MAIL_SEND,
+  mechanical_technician: MAIL_SEND,
+  machine_controller: MAIL_SEND,
+  quality_supervisor: MAIL_SEND,
+  quality_inspector: MAIL_SEND,
+  qc_officer: MAIL_SEND,
+  ncr_officer: MAIL_SEND,
+  qa_auditor: MAIL_SEND,
+  security_production_supervisor: MAIL_SEND,
+  security_printing_officer: MAIL_SEND,
+  security_printing_auditor: MAIL_SEND,
+  secure_materials_controller: MAIL_SEND,
+  secure_stock_controller: MAIL_SEND,
+  secure_job_approver: MAIL_SEND,
+  spoilage_controller: MAIL_SEND,
+  hr_officer: MAIL_SEND,
+  hr_assistant: MAIL_SEND,
+  recruitment_officer: MAIL_SEND,
+  training_officer: MAIL_SEND,
+  performance_officer: MAIL_SEND,
+  payroll_officer: MAIL_SEND,
+  time_attendance_officer: MAIL_SEND,
+  onboarding_officer: MAIL_SEND,
+  benefits_officer: MAIL_SEND,
+  workforce_planner: MAIL_SEND,
+  relations_officer: MAIL_SEND,
+  asset_officer: MAIL_SEND,
+  asset_custodian: MAIL_SEND,
+  asset_auditor: MAIL_SEND,
+  asset_storekeeper: MAIL_SEND,
+  asset_finance: MAIL_SEND,
+  data_analyst: MAIL_SEND,
+  reporting_officer: MAIL_SEND,
+  department_analyst: MAIL_SEND,
+  executive_viewer: MAIL_SEND,
+  service_desk_agent: MAIL_SEND,
+  service_desk_technician: MAIL_SEND,
+  receptionist: MAIL_SEND,
+  healthcare_admin: MAIL_SEND,
+  medical_auditor: MAIL_SEND,
+  insurance_officer: MAIL_SEND,
+  stock_auditor: MAIL_SEND,
+  stock_counter: MAIL_SEND,
+
+  // --- Read-only mail awareness for roles without a primary desk ---
+  office_attendant: MAIL_VIEW,
+  employee_self_service: MAIL_VIEW,
+};
+
 for (const role of ROLES) {
   const extra = [
     ...(SERVICE_DESK_ROLE_EXTENSIONS[role.code] || []),
     ...(ORGANISATION_ROLE_EXTENSIONS[role.code] || []),
     ...(WORKFLOW_INSTANCE_ROLE_EXTENSIONS[role.code] || []),
+    ...(MAIL_ROLE_EXTENSIONS[role.code] || []),
   ];
   if (extra.length) role.grants = [...role.grants, ...extra];
 }

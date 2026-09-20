@@ -1155,6 +1155,7 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [varList, setVarList] = useState<string[]>([]);
   const [vars, setVars] = useState<Record<string, string>>({});
   const [err, setErr] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api<{ data: Rec[] }>('/api/ops/communication/templates')
@@ -1188,15 +1189,20 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const save = async (send: boolean) => {
     if (busy) return;
     setErr('');
+    setNotice('');
     setBusy(true);
     try {
+      // A message is only ever created as a DRAFT. Whether it actually leaves
+      // the building is decided by the send endpoint, which applies mailbox
+      // authorisation, classification policy and the approval gate -- writing
+      // SENT here would forge a delivery that never happened.
       const payload: Rec = {
         subject: subject.trim(),
         body,
         to: split(to),
         cc: split(cc),
         bcc: split(bcc),
-        status: send ? 'SENT' : 'DRAFT',
+        status: 'DRAFT',
         templateCode: templateCode || undefined,
         entityType: entityType.trim() || undefined,
         entityId: entityId.trim() || undefined,
@@ -1207,9 +1213,33 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      if (send) await api(`/api/ops/communication/emails/${String((r.data as Rec).id)}/send`, { method: 'POST' });
+      const id = String((r.data as Rec).id);
+      if (!send) {
+        onSaved();
+        onClose();
+        return;
+      }
+      const res = await api<{ data: Rec }>(`/api/ops/communication/emails/${id}/send`, { method: 'POST' });
       onSaved();
-      onClose();
+      const outcome = String(pick(res.data, 'status') ?? '').toUpperCase();
+      const failure = String(pick(res.data, 'error') ?? '');
+      if (outcome === 'SENT') {
+        onClose();
+        return;
+      }
+      if (outcome === 'SCHEDULED') {
+        setNotice('Scheduled. This email is queued and will be sent automatically at the time you chose.');
+        return;
+      }
+      if (outcome === 'PENDING_APPROVAL') {
+        setNotice('Submitted for approval. It will be sent once an approver releases it.');
+        return;
+      }
+      // FAILED: the message is parked in the outbox by the backend, not sent.
+      setErr(
+        failure ||
+          'This email was not sent. It has been kept in the outbox so you can retry it.'
+      );
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Could not save email');
     } finally {
@@ -1230,6 +1260,11 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
       }
     >
       {err ? <ErrorBanner error={err} /> : null}
+      {notice ? (
+        <div className="notice-banner" role="status">
+          {notice}
+        </div>
+      ) : null}
       <div className="form-grid">
         <div className="field">
           <label>Template</label>

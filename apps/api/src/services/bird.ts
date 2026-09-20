@@ -29,6 +29,13 @@ export interface BirdSendResult {
  */
 export type ProviderOverride = 'auto' | 'africastalking' | 'resend';
 
+export interface EmailAttachmentInput {
+  /** File name shown to the recipient (extension included). */
+  filename: string;
+  /** Base64-encoded file bytes - Resend's `content` field. */
+  content: string;
+}
+
 export interface BirdEmailInput {
   to: string[];
   subject: string;
@@ -36,6 +43,20 @@ export interface BirdEmailInput {
   text?: string;
   button?: EmailActionButton | null;
   preheader?: string | null;
+  /** Carbon-copy recipients. */
+  cc?: string[];
+  /** Blind carbon-copy recipients - never disclosed to other recipients. */
+  bcc?: string[];
+  /** Reply-To address. */
+  replyTo?: string;
+  /**
+   * Explicit RFC 5322 sender, e.g. `HOPE DESIGN HR <hr@hopedesign.jorlentech.com>`.
+   * Set when the message is sent from a company mailbox rather than the
+   * platform default sender. Falls back to the configured Resend identity.
+   */
+  from?: string;
+  /** File attachments, base64-encoded. */
+  attachments?: EmailAttachmentInput[];
   /** Overrides the tenant brand assets resolved from app_settings. */
   company?: CompanyBrand;
 }

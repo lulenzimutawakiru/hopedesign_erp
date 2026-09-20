@@ -436,13 +436,17 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       {
         id: 'communication_center', label: 'Comm Center', href: '/communication', perm: 'communication.command.view', module: 'communication', accent: 'com',
-        keywords: 'inbox messages notifications email announcements templates delivery logs chat comms communication health sms test',
+        keywords: 'inbox messages notifications email announcements templates delivery logs chat comms communication health sms test mail mailbox signature outbox approval classification distribution',
         children: [
           { id: 'com_center', label: 'Command Center', href: '/communication', perm: 'communication.command.view' },
           { id: 'com_health', label: 'Health', href: '/communication/admin', perm: 'communication.command.view' },
           { id: 'com_messages', label: 'Messages', href: '/communication/messages', perm: 'communication.messages.view' },
           { id: 'com_notifications', label: 'Notifications', href: '/communication/notifications', perm: 'communication.notifications.view' },
           { id: 'com_email', label: 'Email', href: '/communication/email', perm: 'communication.emails.view' },
+          { id: 'com_mail', label: 'Company Mail', href: '/communication/mail', perm: 'communication.emails.view' },
+          { id: 'com_mail_approvals', label: 'Mail Approvals', href: '/communication/mail/approvals', perm: 'communication.mail_approvals.view' },
+          { id: 'com_mailboxes', label: 'Mailboxes', href: '/communication/mail/mailboxes', perm: 'communication.mailboxes.view' },
+          { id: 'com_mail_settings', label: 'Mail Settings', href: '/communication/mail/settings', perm: 'communication.mailboxes.manage' },
           { id: 'com_announcements', label: 'Announcements', href: '/communication/announcements', perm: 'communication.announcements.view' },
           { id: 'com_templates', label: 'Templates', href: '/communication/templates', perm: 'communication.templates.view' },
           { id: 'com_deliveries', label: 'Delivery Logs', href: '/communication/deliveries', perm: 'communication.delivery_logs.view' },
@@ -830,14 +834,24 @@ export function requiredPermForPath(path: string): string | undefined {
       deliveries: 'communication.delivery_logs.view',
       settings: 'communication.settings.manage',
     };
+    if (parts[1] === 'mail') {
+      const mailMap: Record<string, string> = {
+        '': 'communication.emails.view',
+        approvals: 'communication.mail_approvals.view',
+        mailboxes: 'communication.mailboxes.view',
+        settings: 'communication.mailboxes.manage',
+        outbox: 'communication.mail_scheduler.view',
+      };
+      return mailMap[parts[2] ?? ''] ?? 'communication.emails.view';
+    }
     return map[parts[1] ?? ''] ?? 'communication.command.view';
+  }
   if (parts[0] === 'documents') {
     const map: Record<string, string> = {
       library: 'documents.view', folders: 'documents.view', approvals: 'documents.approve',
       audit: 'documents.command.view', settings: 'documents.settings.manage',
     };
     return map[parts[1] ?? ''] ?? 'documents.command.view';
-  }
   }
   if (parts[0] === 'assets') {
     const map: Record<string, string> = {

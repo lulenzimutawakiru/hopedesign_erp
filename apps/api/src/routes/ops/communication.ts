@@ -13,10 +13,11 @@ import {
 import {
   auditComms,
   notifyUsers,
-  renderEmailForSend,
   renderTemplate,
 } from '../../services/communication.js';
 import { sendEmail, sendSms, sendWhatsApp, type ProviderOverride } from '../../services/bird.js';
+import { sendStoredEmail } from '../../services/mail/send.js';
+import type { AuthUser } from '../../types.js';
 import { isResendConfigured } from '../../services/resend.js';
 import { isAfricasTalkingConfigured } from '../../services/africastalking.js';
 import { config } from '../../config.js';
@@ -24,13 +25,25 @@ import { messagingLimiter } from '../../middleware/rateLimits.js';
 
 export const communicationOpsRouter = Router();
 
-type OpFn = (client: pg.PoolClient, ctx: Ctx, body: any, params: Record<string, string>) => Promise<unknown>;
-type QueryFn = (client: pg.PoolClient, ctx: Ctx, query: Record<string, unknown>, params: Record<string, string>) => Promise<unknown>;
+type OpFn = (
+  client: pg.PoolClient,
+  ctx: Ctx,
+  body: any,
+  params: Record<string, string>,
+  auth?: AuthUser
+) => Promise<unknown>;
+type QueryFn = (
+  client: pg.PoolClient,
+  ctx: Ctx,
+  query: Record<string, unknown>,
+  params: Record<string, string>,
+  auth?: AuthUser
+) => Promise<unknown>;
 
 const run = (permission: string | string[], fn: OpFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
-    const out = await tx((client) => fn(client, req.ctx, req.body ?? {}, req.params as Record<string, string>), req.ctx);
+    const out = await tx((client) => fn(client, req.ctx, req.body ?? {}, req.params as Record<string, string>, req.auth), req.ctx);
     res.json({ data: out });
   }),
 ];
@@ -39,7 +52,13 @@ const runGet = (permission: string | string[], fn: QueryFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
     const out = await tx(
-      (client) => fn(client, req.ctx, req.query as Record<string, unknown>, req.params as Record<string, string>),
+      (client) => fn(
+        client,
+        req.ctx,
+        req.query as Record<string, unknown>,
+        req.params as Record<string, string>,
+        req.auth
+      ),
       req.ctx
     );
     res.json({ data: out });
@@ -802,119 +821,23 @@ communicationOpsRouter.post(
 communicationOpsRouter.post(
   '/emails/:id/send',
   messagingLimiter,
-...run('communication.emails.send', async (c, ctx, _b, p) => {
+...run('communication.emails.send', async (c, ctx, _b, p, auth) => {
     const id = Number(p.id);
-    const tenantId = ctx.tenantId ?? 0;
-    const { rows } = await c.query(
-      `SELECT * FROM emails WHERE id = $1 AND tenant_id = $2`,
-      [id, tenantId]
-    );
-    if (rows.length === 0) throw notFound('Email not found');
-    const email = rows[0] as Record<string, unknown>;
-    const scheduledAt = email.scheduled_at ? new Date(String(email.scheduled_at)) : null;
-    if (scheduledAt && scheduledAt.getTime() > Date.now()) {
-      await c.query(
-        `UPDATE emails SET status = 'SCHEDULED', updated_at = now() WHERE id = $1`,
-        [id]
-      );
-      await auditComms(c, ctx, 'EMAIL_SCHEDULED', 'email', id, { scheduledAt: scheduledAt.toISOString() });
-      return toCamelRow({ ...email, status: 'SCHEDULED' } as Record<string, unknown>);
-    }
-    const toAddresses: string[] = [];
-    const collect = (entry: unknown) => {
-      if (typeof entry === 'string') {
-        const addr = entry.trim();
-        if (addr) toAddresses.push(addr);
-      } else if (entry && typeof entry === 'object' && 'email' in entry) {
-        const maybe = (entry as { email?: unknown }).email;
-        if (typeof maybe === 'string') {
-          const addr = maybe.trim();
-          if (addr) toAddresses.push(addr);
-        }
-      }
-    };
-    // A re-send of a previously FAILED email must reactivate its recipients;
-    // otherwise the post-send update below would have no QUEUED rows to update.
-    await c.query(
-      `UPDATE email_recipients SET status = 'QUEUED', error = NULL WHERE email_id = $1 AND kind = 'TO'`,
-      [id]
-    );
-    // email_recipients is the authoritative recipient store; fall back to the
-    // emails."to" JSON column when no recipient rows exist yet.
-    const { rows: recRows } = await c.query(
-      'SELECT email FROM email_recipients WHERE email_id = $1 AND kind = $2 AND status = $3 ORDER BY id ASC',
-      [id, 'TO', 'QUEUED']
-    );
-    for (const row of recRows) collect(row.email);
-    if (toAddresses.length === 0) {
-      const rawTo = email.to;
-      if (Array.isArray(rawTo)) {
-        for (const entry of rawTo) collect(entry);
-      } else if (rawTo != null && String(rawTo) !== '[]') {
-        try {
-          const parsed = JSON.parse(String(rawTo)) as unknown;
-          if (Array.isArray(parsed)) {
-            for (const entry of parsed) collect(entry);
-          } else {
-            collect(parsed);
-          }
-        } catch {
-          // invalid JSON in "to" -> email marked failed below
-        }
-      }
-    }
-    const dedup = new Set<string>();
-    const uniqueTo: string[] = [];
-    for (const addr of toAddresses) {
-      const key = addr.toLowerCase();
-      if (!dedup.has(key)) {
-        dedup.add(key);
-        uniqueTo.push(addr);
-      }
-    }
-    toAddresses.splice(0, toAddresses.length, ...uniqueTo);
-    if (toAddresses.length === 0) {
-      await c.query(
-        `UPDATE emails SET status = 'FAILED', sent_at = now(), updated_at = now() WHERE id = $1`,
-        [id]
-      );
-      await c.query(
-        `UPDATE email_recipients SET status = 'FAILED', error = $2 WHERE email_id = $1 AND status = 'QUEUED'`,
-        [id, 'No recipients']
-      );
-      await auditComms(c, ctx, 'EMAIL_SEND_FAILED', 'email', id, { error: 'No recipients' });
-      throw badRequest('Email has no recipients');
-    }
-    // Render {{VAR}} placeholders server-side before dispatch so recipients
-    // never see raw template tokens (template_vars + linked entity + company).
-    const rendered = await renderEmailForSend(c, email);
-    const subject = rendered.subject;
-    const body = rendered.body;
-    const result = await sendEmail({ to: toAddresses, subject, html: body, text: body });
-    if (result.ok) {
-      await c.query(
-        `UPDATE emails SET status = 'SENT', sent_at = now(), subject = $2, body = $3, updated_at = now() WHERE id = $1`,
-        [id, subject, body]
-      );
-      await c.query(
-        `UPDATE email_recipients
-            SET status = 'SENT', sent_at = now(), provider_message_id = $1, error = NULL
-          WHERE email_id = $2 AND status = 'QUEUED'`,
-        [result.providerMessageId ?? null, id]
-      );
-      await auditComms(c, ctx, 'EMAIL_SENT', 'email', id, { providerMessageId: result.providerMessageId ?? null });
-      return toCamelRow({ ...email, status: 'SENT', subject, body, sentAt: new Date().toISOString() } as Record<string, unknown>);
-    }
-    await c.query(
-      `UPDATE emails SET status = 'FAILED', sent_at = now(), subject = $2, body = $3, updated_at = now() WHERE id = $1`,
-      [id, subject, body]
-    );
-    await c.query(
-      `UPDATE email_recipients SET status = 'FAILED', error = $1 WHERE email_id = $2 AND status = 'QUEUED'`,
-      [result.error ?? 'Sending failed', id]
-    );
-    await auditComms(c, ctx, 'EMAIL_SEND_FAILED', 'email', id, { error: result.error ?? null });
-    return toCamelRow({ ...email, status: 'FAILED', subject, body, error: result.error ?? null } as Record<string, unknown>);
+    // Single outbound pipeline. Mailbox authorisation, classification policy,
+    // the approval gate, recipient validation, signature and attachment
+    // release, provider id recording and the delivery event all happen inside
+    // sendStoredEmail(). This route is RBAC-gated, but it can no longer be
+    // used to put a message on the wire past an approval or a policy check.
+    const out = await sendStoredEmail(c, ctx, auth?.permissions, id, {});
+    const { rows } = await c.query(`SELECT * FROM emails WHERE id = $1 AND tenant_id = $2`, [
+      id,
+      ctx.tenantId ?? 0,
+    ]);
+    return toCamelRow({
+      ...((rows[0] ?? {}) as Record<string, unknown>),
+      status: out.outcome,
+      error: out.error,
+    } as Record<string, unknown>);
   })
 );
 
