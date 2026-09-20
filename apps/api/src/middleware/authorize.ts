@@ -3,9 +3,12 @@ import { query } from '../db.js';
 import { forbidden, unauthorized } from '../utils.js';
 
 /** Pure permission check (RBAC wildcards included). Deny by default. */
-export function can(user: { permissions: string[] } | string[] | undefined, permission: string): boolean {
+export function can(
+  user: { permissions: readonly string[] } | readonly string[] | undefined,
+  permission: string
+): boolean {
   if (!user) return false;
-  const perms = Array.isArray(user) ? user : user.permissions;
+  const perms: readonly string[] = 'permissions' in user ? user.permissions : user;
   if (perms.includes('system.admin.all') || perms.includes('*')) return true;
   const [m, r] = permission.split('.');
   return (

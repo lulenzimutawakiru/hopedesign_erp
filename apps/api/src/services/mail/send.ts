@@ -20,6 +20,7 @@ import {
   type MailboxAccess,
 } from './access.js';
 import { recordDeliveryEvent } from './delivery.js';
+import { attachErpDocumentForEmail } from './erpAttachment.js';
 
 /**
  * The single outbound mail pipeline.
@@ -550,6 +551,11 @@ export async function sendStoredEmail(
   );
 
   // --- Attachments --------------------------------------------------------
+  // A message linked to a business record carries that record's own document:
+  // the sender asked for the invoice, not for the invoice to be exported and
+  // re-uploaded by hand. Non-fatal by design - a document that cannot be
+  // generated leaves the message intact and the reason in the audit trail.
+  await attachErpDocumentForEmail(client, ctx, permissions, email);
   const prepared = await prepareAttachments(client, ctx, emailId, options.attachments);
 
   // --- Dispatch -----------------------------------------------------------
