@@ -208,7 +208,11 @@ for host in "${PEERS[@]}"; do
     RC=1
     continue
   fi
-  log "ok   $host serves $LOCAL_IDS across $(echo "$PEER_IDS" | grep -c . || true) web replica(s)"
+  # Count replicas, not distinct image ids: the assertion above has already
+  # proved every replica agrees, so they all collapse into one unique id and a
+  # `sort -u | grep -c .` would report 1 even when the pool runs several.
+  PEER_REPLICAS="$(web_containers_on "root@$host" | grep -c . || true)"
+  log "ok   $host serves $LOCAL_IDS across $PEER_REPLICAS web replica(s)"
 done
 
 if [[ "$RC" != "0" ]]; then
