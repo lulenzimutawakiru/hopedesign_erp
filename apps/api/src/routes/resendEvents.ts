@@ -11,12 +11,13 @@
  * reader below captures them for a body sent under a non-JSON content type.
  *
  * This router is a boundary adapter and nothing more. It reads the request,
- * hands it to the ingest service, and acknowledges. Every delivery is answered
- * HTTP 200, including a refusal - Resend retries a non-2xx response, and a
- * retry cannot repair a bad signature or a destination no mailbox owns, so a
- * 200 ends the retry loop while the specific reason goes to the audit trail
- * and the server log. Only a malformed body is answered 400, because a
- * truncated body may be transport damage worth retrying.
+ * hands it to the ingest service, and acknowledges. A permanent outcome is
+ * answered HTTP 200, including a refusal - Resend retries a non-2xx response,
+ * and a retry cannot repair a bad signature or a destination no mailbox owns,
+ * so a 200 ends the retry loop while the specific reason goes to the audit
+ * trail and the server log. A malformed body is answered 400, because a
+ * truncated body may be transport damage worth retrying, and a transient fetch
+ * failure is answered 503, because there a retry is exactly what repairs it.
  */
 import express, { NextFunction, Request, Response, Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
@@ -126,6 +127,14 @@ resendEventsRouter.post(
   asyncHandler(async (req, res) => {
     const { options } = prepare(req);
     const result = await ingestResendEmail(options);
+    // A transient fetch failure is the one outcome a retry can repair, so it is
+    // the one outcome answered with a retryable status: Resend redelivers and
+    // the message is filed on a later attempt. Every permanent outcome -
+    // including every refusal - stays 200 to end the retry loop.
+    if (!result.accepted && result.retryable) {
+      res.status(503).json(acknowledgement(result));
+      return;
+    }
     res.status(200).json(acknowledgement(result));
   })
 );

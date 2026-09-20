@@ -168,20 +168,80 @@ export function isInboundConfigured(): boolean {
   return Boolean(config.resend.apiKey.trim() && config.resend.webhookSecret.trim());
 }
 
-/** One authenticated call to the Received-emails API. */
-async function resendGet<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
-  const apiKey = config.resend.apiKey.trim();
-  if (!apiKey) return { ok: false, error: 'RESEND_API_KEY missing' };
-  try {
-    const res = await fetch(`${RESEND_RECEIVING_URL}${path}`, {
-      method: 'GET',
-      headers: { Authorization: 'Bearer ' + apiKey },
-    });
-    if (!res.ok) return { ok: false, error: `Resend error ${res.status}` };
-    return { ok: true, data: (await res.json()) as T };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+/**
+ * Longest one Received-emails request may run before it is abandoned. The
+ * webhook handler holds Resend's request open for as long as this call is in
+ * flight, so the bound exists to stop an unattended socket from stalling the
+ * acknowledgement - undici's own default is measured in minutes.
+ */
+const RECEIVING_TIMEOUT_MS = 15_000;
+
+/**
+ * Attempts per call, and the pause between them. Resend's webhook is answered
+ * HTTP 200 for every permanent outcome, so a transient blip that is not retried
+ * here would leave the message unfiled until an operator re-ran the backfill.
+ */
+const RECEIVING_ATTEMPTS = 3;
+const RECEIVING_BACKOFF_MS = 400;
+
+/** A status worth retrying: the message is not wrong, the moment is. */
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+/**
+ * undici collapses every network fault into `TypeError: fetch failed` and keeps
+ * the real reason - the DNS, connect or TLS error - on `cause`. Without that
+ * detail a recorded FETCH_FAILED says only that something went wrong.
+ */
+function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause: unknown = err.cause;
+  if (cause instanceof Error) {
+    const code = (cause as { code?: unknown }).code;
+    const detail =
+      typeof code === 'string' && code.length > 0 ? `${cause.message} (${code})` : cause.message;
+    return `${err.name}: ${err.message}; cause ${cause.name}: ${detail}`;
   }
+  if (typeof cause === 'string' && cause.length > 0) return `${err.name}: ${err.message}; cause ${cause}`;
+  return `${err.name}: ${err.message}`;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * One authenticated call to the Received-emails API, retried on a transient
+ * fault.
+ *
+ * A 4xx is terminal and returns at once: the key or the id is wrong and no
+ * retry changes that. Everything else - a timeout, a socket fault, a 429, a 5xx
+ * - is tried again in place, and the caller is told whether the failure stayed
+ * retryable so the webhook can hand the delivery back to Resend rather than
+ * drop it.
+ */
+async function resendGet<T>(
+  path: string
+): Promise<{ ok: true; data: T } | { ok: false; error: string; retryable: boolean }> {
+  const apiKey = config.resend.apiKey.trim();
+  if (!apiKey) return { ok: false, error: 'RESEND_API_KEY missing', retryable: false };
+
+  let error = 'Resend request failed';
+  for (let attempt = 1; attempt <= RECEIVING_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) await sleep(RECEIVING_BACKOFF_MS * (attempt - 1));
+    try {
+      const res = await fetch(`${RESEND_RECEIVING_URL}${path}`, {
+        method: 'GET',
+        headers: { Authorization: 'Bearer ' + apiKey },
+        signal: AbortSignal.timeout(RECEIVING_TIMEOUT_MS),
+      });
+      if (res.ok) return { ok: true, data: (await res.json()) as T };
+      error = `Resend error ${res.status}`;
+      if (!isRetryableStatus(res.status)) return { ok: false, error, retryable: false };
+    } catch (err) {
+      error = describeError(err);
+    }
+  }
+  return { ok: false, error, retryable: true };
 }
 
 /** Normalise one attachment descriptor from either API shape. */
@@ -200,18 +260,27 @@ function normalizeAttachment(raw: unknown): ReceivedAttachment | null {
   };
 }
 
+/** One message, or the reason it could not be retrieved. */
+export type FetchReceivedResult =
+  | { ok: true; email: ReceivedEmail }
+  | { ok: false; error: string; retryable: boolean };
+
 /**
  * Fetch one received message in full: body, headers, envelope and attachment
- * descriptors. Returns null when Resend cannot serve it, so the caller can
- * record the delivery as unprocessed instead of writing a half-message.
+ * descriptors. A failure is reported rather than thrown, so the caller can
+ * record the delivery as unprocessed instead of writing a half-message, and it
+ * carries whether the failure was transient so a delivery can be retried
+ * instead of dropped.
  */
-export async function fetchReceivedEmail(id: string): Promise<ReceivedEmail | null> {
+export async function fetchReceivedEmail(id: string): Promise<FetchReceivedResult> {
   const emailId = clean(id);
-  if (!emailId) return null;
+  if (!emailId) return { ok: false, error: 'MISSING_EMAIL_ID', retryable: false };
   const result = await resendGet<Record<string, unknown>>(`/${encodeURIComponent(emailId)}`);
   if (!result.ok) {
-    console.error(`[mail][inbound] received-email fetch failed id=${emailId}: ${result.error}`);
-    return null;
+    console.error(
+      `[mail][inbound] received-email fetch failed id=${emailId} retryable=${result.retryable}: ${result.error}`
+    );
+    return { ok: false, error: result.error, retryable: result.retryable };
   }
   const raw = result.data ?? {};
   const headers =
@@ -221,7 +290,7 @@ export async function fetchReceivedEmail(id: string): Promise<ReceivedEmail | nu
   const attachments = Array.isArray(raw.attachments)
     ? raw.attachments.map(normalizeAttachment).filter((a): a is ReceivedAttachment => a !== null)
     : [];
-  return {
+  const email: ReceivedEmail = {
     id: clean(raw.id) ?? emailId,
     to: addressList(raw.to),
     from: clean(raw.from),
@@ -237,6 +306,7 @@ export async function fetchReceivedEmail(id: string): Promise<ReceivedEmail | nu
     received_for: addressList(raw.received_for),
     attachments,
   };
+  return { ok: true, email };
 }
 
 /** List stored received messages, newest first. Used by the backfill script. */

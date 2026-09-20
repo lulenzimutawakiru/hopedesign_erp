@@ -67,6 +67,13 @@ export interface IngestResult {
   duplicate: boolean;
   mailboxId: number | null;
   tenantId: number | null;
+  /**
+   * True when the refusal was a transient fault rather than a permanent one, so
+   * the caller may ask the provider to deliver the message again. A permanent
+   * refusal - a bad signature, an address no mailbox owns - is never retryable:
+   * a retry cannot repair it and only repeats the work.
+   */
+  retryable: boolean;
 }
 
 interface MailboxRow {
@@ -122,13 +129,18 @@ function recipientLists(email: ReceivedEmail): { to: string[]; cc: string[]; bcc
   return { to: clean(email.to), cc: clean(email.cc), bcc: clean(email.bcc) };
 }
 
-const refused = (reason: string, tenantId: number | null = null): IngestResult => ({
+const refused = (
+  reason: string,
+  tenantId: number | null = null,
+  retryable = false
+): IngestResult => ({
   accepted: false,
   reason,
   emailRowId: null,
   duplicate: false,
   mailboxId: null,
   tenantId,
+  retryable,
 });
 
 /**
@@ -368,7 +380,8 @@ async function deliver(opts: DeliveryOptions): Promise<IngestResult> {
 
   // delivered_to is the authoritative record, but it lives on the message, so
   // the fetch comes first and the envelope addresses are only a fallback.
-  const email = await fetchReceivedEmail(emailId);
+  const fetched = await fetchReceivedEmail(emailId);
+  const email = fetched.ok ? fetched.email : null;
   const addresses = candidateAddresses(email, opts.recipients);
   const mailbox = await resolveMailbox(addresses);
   if (!mailbox) {
@@ -390,7 +403,10 @@ async function deliver(opts: DeliveryOptions): Promise<IngestResult> {
 
   const tenantId = num(mailbox.tenant_id);
   if (email === null) {
-    console.warn(`[mail][inbound] refused FETCH_FAILED id=${emailId}`);
+    // A transient fault is worth handing back to Resend: the message is still in
+    // the account, and a later delivery will file it. A permanent one is not.
+    const retryable = !fetched.ok && fetched.retryable;
+    console.warn(`[mail][inbound] refused FETCH_FAILED id=${emailId} retryable=${retryable}`);
     await recordEvent({
       tenantId,
       eventType: opts.eventType,
@@ -401,7 +417,7 @@ async function deliver(opts: DeliveryOptions): Promise<IngestResult> {
       signatureValid: !opts.backfilled,
       error: 'FETCH_FAILED',
     });
-    return refused('FETCH_FAILED', tenantId);
+    return refused('FETCH_FAILED', tenantId, retryable);
   }
 
   // The webhook's message_id is the same header the fetched message carries, so
@@ -426,6 +442,7 @@ async function deliver(opts: DeliveryOptions): Promise<IngestResult> {
     duplicate: filed.duplicate,
     mailboxId: num(mailbox.mailbox_id),
     tenantId,
+    retryable: false,
   };
 }
 
