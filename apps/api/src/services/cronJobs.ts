@@ -899,6 +899,125 @@ async function parkUnsendableEmail(
 
 
 
+/**
+ * Retry the messages the outbox is holding on to.
+ *
+ * `emailQueueFlush` only ever sees a message that has never been attempted: the
+ * moment a send fails, `sendStoredEmail` marks the message FAILED and leaves it
+ * in the OUTBOX, which the flush then skips. Without this job a delivery that
+ * failed once stays parked until somebody retries it by hand, so a provider blip
+ * on a message nobody is watching becomes a message that is never sent.
+ *
+ * The attempt cap is this job's boundary, not something it works around. Only
+ * rows below `max_attempts` are read, a row that has reached the cap is moved
+ * out of the eligible set and marked exhausted, and nothing here raises
+ * `max_attempts`. Pushing a message past that line stays a manual decision.
+ */
+async function emailOutboxDrain(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
+  const tenantId = ctx.tenantId ?? 0;
+
+  // Rows at the cap are no longer eligible, so they are marked rather than left
+  // looking queued forever with nothing describing why they stopped.
+  const exhausted = await client.query(
+    `UPDATE email_outbox
+        SET status = 'FAILED', next_attempt_at = NULL, updated_at = now(),
+            last_error = COALESCE(last_error, 'Delivery attempts exhausted')
+      WHERE tenant_id = $1 AND status IN ('QUEUED','SENDING') AND attempts >= max_attempts`,
+    [tenantId]
+  );
+
+  const { rows } = await client.query(
+    `SELECT o.id, o.email_id, o.attempts, e.created_by
+       FROM email_outbox o
+       JOIN emails e ON e.id = o.email_id
+      WHERE o.tenant_id = $1
+        AND o.status IN ('QUEUED','SENDING')
+        AND o.attempts < o.max_attempts
+        AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= now())
+      ORDER BY o.queued_at ASC
+      LIMIT 50`,
+    [tenantId]
+  );
+  let sent = 0;
+  let failed = 0;
+  let skipped = 0;
+  const reasons: Record<string, number> = {};
+  const note = (reason: string) => {
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
+  };
+
+  for (const r of rows as Record<string, unknown>[]) {
+    const outboxId = Number(r.id);
+    const emailId = Number(r.email_id);
+    const attempts = Number(r.attempts ?? 0);
+    try {
+      const authorId = Number(r.created_by ?? 0);
+      if (!authorId) throw new Error('This message has no author, so it cannot be sent.');
+      // Acting as the author is what makes the mailbox check mean anything: the
+      // message carries the mailbox it was composed from, and the permissions
+      // used are the author's, as they were when the send was first attempted.
+      const author = await loadAuthUser(authorId, tenantId);
+      const authorCtx: Ctx = {
+        ...ctx,
+        userId: author.id,
+        companyId: author.company_id ?? ctx.companyId ?? null,
+        branchId: author.branch_id ?? ctx.branchId ?? null,
+      };
+      const result = await sendStoredEmail(client, authorCtx, author.permissions, emailId, {
+        forceNow: true,
+      });
+      if (result.outcome === 'SENT') {
+        sent += 1;
+        await client.query(
+          `UPDATE email_outbox
+              SET status = 'SENT', sent_at = now(), last_error = NULL, next_attempt_at = NULL,
+                  provider = $2, provider_message_id = $3, updated_at = now()
+            WHERE id = $1`,
+          [outboxId, result.provider ?? null, result.providerMessageId ?? null]
+        );
+      } else if (result.outcome === 'FAILED') {
+        failed += 1;
+        // sendStoredEmail has already counted this attempt and left the row
+        // queued with no spacing, so the backoff is applied here.
+        const reason = result.error ?? 'Sending failed';
+        note(reason);
+        await client.query(
+          `UPDATE email_outbox
+              SET next_attempt_at = now()
+                    + (LEAST(30 * POWER(2, $2::int), 3600) * interval '1 second'),
+                  last_error = $3, updated_at = now()
+            WHERE id = $1`,
+          [outboxId, attempts, reason]
+        );
+      } else {
+        // A message held back for an approval decision is not this job's to
+        // release; it is pushed out of the retry window so it does not spin.
+        skipped += 1;
+        note(result.outcome);
+        await client.query(
+          `UPDATE email_outbox
+              SET next_attempt_at = now() + interval '1 hour', updated_at = now()
+            WHERE id = $1`,
+          [outboxId]
+        );
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Could not be sent';
+      failed += 1;
+      note(reason);
+      await parkUnsendableEmail(client, ctx, emailId, reason);
+    }
+  }
+  return {
+    checked: rows.length,
+    sent,
+    failed,
+    skipped,
+    exhausted: exhausted.rowCount ?? 0,
+    reasons,
+  };
+}
+
 async function governanceAuthoritySweep(client: pg.PoolClient, ctx: Ctx): Promise<Record<string, unknown>> {
   const result = await governanceSweep(client, ctx);
   return {
@@ -938,6 +1057,8 @@ async function runHandler(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Pro
       return passwordExpiryCheck(client, ctx, job);
     case 'EMAIL_QUEUE_FLUSH':
       return emailQueueFlush(client, ctx, job);
+    case 'EMAIL_OUTBOX_DRAIN':
+      return emailOutboxDrain(client, ctx, job);
     case 'GOVERNANCE_AUTHORITY_SWEEP':
       return governanceAuthoritySweep(client, ctx);
     default:

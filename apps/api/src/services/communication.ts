@@ -3,6 +3,7 @@ import { Ctx, query } from '../db.js';
 import { dispatchBird } from './bird.js';
 import { config } from '../config.js';
 import { normalizeE164 } from './africastalking.js';
+import { renderButton } from './emailBranding.js';
 
 export type NotificationPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT' | 'CRITICAL';
 export type NotificationSeverity = 'INFO' | 'SUCCESS' | 'WARN' | 'ERROR';
@@ -193,6 +194,244 @@ function filterChannelsByPrefs(channels: string[], prefs: UserChannelPrefs): str
   });
 }
 
+// ---------------------------------------------------------------------------
+// System-generated outbound mail
+// ---------------------------------------------------------------------------
+
+/**
+ * Permissions a system-generated message is sent under.
+ *
+ * `sendStoredEmail` evaluates mailbox authorisation with the same `permissions`
+ * value it then uses for the ERP document attachment, so a notification helper
+ * cannot simply act as its caller: the person who triggered the notification
+ * normally holds no grant on the system mailbox the message must leave from.
+ * Mail-administration rights are what the tenant's own mailboxes are governed
+ * by, and are exactly what a system notification acts under.
+ */
+export const MAIL_SYSTEM_PERMISSIONS: readonly string[] = ['communication.mail_admin.manage'];
+
+export interface InsertOutboundEmailOptions {
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  body: string;
+  /** Rich-text body; the pipeline applies the mailbox signature on top. */
+  html?: string | null;
+  /** Business record this message belongs to - drives vars and the PDF attach. */
+  entityType?: string | null;
+  entityId?: number | null;
+  /** Send from this mailbox. Defaults to the tenant's notification mailbox. */
+  mailboxId?: number | null;
+  /** Author of record, for the audit trail and the signature. */
+  createdBy?: number | null;
+  /**
+   * Permissions the document attachment runs under. Defaults to
+   * MAIL_SYSTEM_PERMISSIONS; pass the author's rights to keep an attached
+   * document subject to what they are allowed to read.
+   */
+  authorPermissions?: readonly string[];
+  /** 'PUBLIC' for customer-facing mail, 'INTERNAL' for staff mail. */
+  classification?: string;
+  /** The pipeline sends immediately unless the stored row is scheduled. */
+  forceNow?: boolean;
+}
+
+export interface InsertOutboundEmailResult {
+  emailId: number | null;
+  outcome: 'SENT' | 'FAILED' | 'SCHEDULED' | 'PENDING_APPROVAL';
+  error?: string | null;
+  providerMessageId?: string | null;
+}
+
+/** Pick the mailbox a system-generated message leaves from. */
+async function resolveSystemMailboxId(
+  client: pg.PoolClient,
+  tenantId: number,
+  requested?: number | null
+): Promise<number | null> {
+  if (requested) return Number(requested);
+  const preferred = await client.query(
+    `SELECT id FROM mailboxes
+      WHERE tenant_id = $1 AND is_active = true AND kind = 'SYSTEM'
+        AND code = ANY($2::text[])
+      ORDER BY array_position($2::text[], code)
+      LIMIT 1`,
+    [tenantId, ['MAIL-NOTIFICATIONS', 'MAIL-NOREPLY']]
+  );
+  if (preferred.rows[0]) return Number(preferred.rows[0].id);
+  const anySystem = await client.query(
+    `SELECT id FROM mailboxes
+      WHERE tenant_id = $1 AND is_active = true AND kind = 'SYSTEM'
+      ORDER BY id
+      LIMIT 1`,
+    [tenantId]
+  );
+  return anySystem.rows[0] ? Number(anySystem.rows[0].id) : null;
+}
+
+/**
+ * Store a system-generated message and push it through the one outbound
+ * pipeline, so a notification receives what a hand-composed message receives:
+ * the mailbox signature, the classification policy, template rendering and the
+ * ERP document for the linked record.
+ *
+ * This never throws. A notification failing must not fail the leave approval or
+ * order status change that triggered it, so every error becomes a FAILED
+ * result and a parked OUTBOX row an operator can see and retry.
+ */
+export async function insertOutboundEmail(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  opts: InsertOutboundEmailOptions
+): Promise<InsertOutboundEmailResult> {
+  const tenantId = ctx.tenantId ?? 0;
+  const norm = (list: string[] | undefined): string[] =>
+    (list ?? []).map((a) => String(a ?? '').trim()).filter((a) => a.length > 0);
+  const to = norm(opts.to);
+  const cc = norm(opts.cc);
+  const bcc = norm(opts.bcc);
+  if (to.length === 0) {
+    return { emailId: null, outcome: 'FAILED', error: 'No recipients' };
+  }
+
+  const mailboxId = await resolveSystemMailboxId(client, tenantId, opts.mailboxId);
+  if (!mailboxId) {
+    return { emailId: null, outcome: 'FAILED', error: 'No system mailbox is configured for this tenant.' };
+  }
+
+  const createdBy = opts.createdBy ?? ctx.userId ?? null;
+
+  // The author's own rights decide what may be attached. Assuming the mail-admin
+  // grant here silently skipped every document for notification mail, because
+  // mail-admin is a mailbox permission and not a document permission.
+  let authorPermissions: readonly string[] = opts.authorPermissions ?? MAIL_SYSTEM_PERMISSIONS;
+  let companyId = ctx.companyId ?? null;
+  let branchId = ctx.branchId ?? null;
+  if (!opts.authorPermissions && createdBy) {
+    try {
+      const { loadAuthUser } = await import('../middleware/auth.js');
+      const author = await loadAuthUser(Number(createdBy), tenantId);
+      authorPermissions = author.permissions;
+      companyId = author.company_id ?? companyId;
+      branchId = author.branch_id ?? branchId;
+    } catch {
+      // An author that cannot be loaded keeps the system grant. The message
+      // still sends; it simply travels without an auto-attached document.
+    }
+  }
+
+  // Store first: the pipeline loads a message back out of `emails`, and a
+  // stored row is what makes a failed send visible and retryable.
+  const inserted = await client.query(
+    `INSERT INTO emails
+       (tenant_id, company_id, branch_id, direction, subject, body, "to", cc, bcc,
+        status, folder, mailbox_id, entity_type, entity_id, created_by,
+        classification, approval_state)
+     VALUES ($1,$2,$3,'OUT',$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,
+             'QUEUED','OUTBOX',$9,$10,$11,$12,$13,'NOT_REQUIRED')
+     RETURNING id`,
+    [
+      tenantId,
+      companyId,
+      branchId,
+      opts.subject,
+      String(opts.body ?? ''),
+      JSON.stringify(to),
+      JSON.stringify(cc),
+      JSON.stringify(bcc),
+      mailboxId,
+      opts.entityType ?? null,
+      opts.entityId ?? null,
+      createdBy,
+      opts.classification ?? 'INTERNAL',
+    ]
+  );
+  const emailId = Number(inserted.rows[0]?.id ?? 0);
+  if (!emailId) {
+    return { emailId: null, outcome: 'FAILED', error: 'Could not store the message' };
+  }
+
+  const recipients: Array<[string, string]> = [
+    ...to.map((e): [string, string] => ['TO', e]),
+    ...cc.map((e): [string, string] => ['CC', e]),
+    ...bcc.map((e): [string, string] => ['BCC', e]),
+  ];
+  for (const [kind, email] of recipients) {
+    await client.query(
+      `INSERT INTO email_recipients (tenant_id, email_id, kind, email, status)
+       VALUES ($1,$2,$3,$4,'QUEUED')`,
+      [tenantId, emailId, kind, email]
+    );
+  }
+
+  // Imported lazily: send.ts imports back into this module, so a static import
+  // would close that cycle at module-load time.
+  const { sendStoredEmail } = await import('./mail/send.js');
+  const systemCtx: Ctx = { ...ctx, userId: createdBy };
+
+  try {
+    // Attach first, so the author's own rights govern the document they asked
+    // for. The call inside sendStoredEmail is a no-op once it is attached.
+    if (opts.entityType && Number(opts.entityId ?? 0) > 0) {
+      const { attachErpDocumentForEmail } = await import('./mail/erpAttachment.js');
+      const stored = await client.query(
+        `SELECT * FROM emails WHERE id = $1 AND tenant_id = $2`,
+        [emailId, tenantId]
+      );
+      if (stored.rows[0]) {
+        await attachErpDocumentForEmail(
+          client,
+          ctx,
+          authorPermissions,
+          stored.rows[0] as Record<string, unknown>
+        );
+      }
+    }
+
+    const result = await sendStoredEmail(client, systemCtx, MAIL_SYSTEM_PERMISSIONS, emailId, {
+      forceNow: opts.forceNow !== false,
+      mailboxId,
+      html: opts.html ?? null,
+    });
+    return {
+      emailId,
+      outcome: result.outcome,
+      error: result.error,
+      providerMessageId: result.providerMessageId,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Could not be sent';
+    // A policy or permission throw parks the message rather than losing it; a
+    // delivery failure was already parked inside sendStoredEmail.
+    try {
+      await client.query(
+        `UPDATE emails SET status = 'FAILED', folder = 'OUTBOX', updated_at = now()
+          WHERE id = $1 AND tenant_id = $2`,
+        [emailId, tenantId]
+      );
+      await client.query(
+        `UPDATE email_recipients SET status = 'FAILED', error = $2, updated_at = now()
+          WHERE email_id = $1 AND status = 'QUEUED'`,
+        [emailId, reason]
+      );
+      await client.query(
+        `INSERT INTO email_outbox (tenant_id, email_id, status, attempts, last_error)
+         VALUES ($1,$2,'QUEUED',1,$3)
+         ON CONFLICT (email_id) DO UPDATE
+           SET status = 'QUEUED',
+               last_error = EXCLUDED.last_error,
+               updated_at = now()`,
+        [tenantId, emailId, reason]
+      );
+      await auditComms(client, ctx, 'EMAIL_SEND_FAILED', 'email', emailId, { error: reason });
+    } catch {
+      // Nothing more can be done here; the message is still stored and retryable.
+    }
+    return { emailId, outcome: 'FAILED', error: reason };
+  }
+}
+
 /** Create notifications (and per-channel deliveries) for a set of users. */
 export async function notifyUsers(
   client: pg.PoolClient,
@@ -259,7 +498,7 @@ export async function notifyUsers(
     const notificationId = Number(rows[0].id);
     created.push(notificationId);
     for (const ch of channels) {
-      await client.query(
+      const { rows: deliveryRows } = await client.query(
         `INSERT INTO notification_deliveries
            (tenant_id, notification_id, user_id, channel, recipient, status, provider, sent_at)
          VALUES ($1,$2,$3,$4,
@@ -267,9 +506,43 @@ export async function notifyUsers(
                       ELSE (SELECT email FROM users WHERE id = $3) END,
                  CASE WHEN $4 IN ('IN_APP','PUSH') THEN 'DELIVERED' ELSE 'QUEUED' END,
                  $5, now())
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT DO NOTHING
+         RETURNING id, recipient`,
         [tenantId, notificationId, uid, ch, ch.toLowerCase()]
       );
+      // The EMAIL copy leaves through the same pipeline as hand-composed mail,
+      // so it carries the mailbox signature and the ERP document of the record
+      // it is about. The delivery row is closed out with the outcome: left
+      // QUEUED, the delivery worker would pick it up and send a second copy.
+      const delivery = deliveryRows[0];
+      if (ch === 'EMAIL' && delivery) {
+        const recipient = String(delivery.recipient ?? '').trim();
+        const sent: InsertOutboundEmailResult = recipient
+          ? await insertOutboundEmail(client, ctx, {
+              to: [recipient],
+              subject: input.title,
+              body: input.body ?? '',
+              classification: 'INTERNAL',
+              entityType: input.entityType ?? null,
+              entityId: input.entityId ?? null,
+              createdBy: uid,
+            })
+          : { emailId: null, outcome: 'FAILED', error: 'No email address on file' };
+        await client.query(
+          `UPDATE notification_deliveries
+              SET status = $2, provider = $3, provider_message_id = $4, error = $5,
+                  sent_at = CASE WHEN $2 = 'SENT' THEN now() ELSE sent_at END,
+                  updated_at = now()
+            WHERE id = $1`,
+          [
+            Number(delivery.id),
+            sent.outcome === 'SENT' ? 'SENT' : 'FAILED',
+            ch.toLowerCase(),
+            sent.providerMessageId ?? null,
+            sent.error ?? null,
+          ]
+        );
+      }
     }
   }
   return created;
@@ -604,47 +877,22 @@ export async function notifyCustomer(
     if (!emailAddr) {
       out.email = { ok: false, error: 'Customer has no email address' };
     } else {
-      const result = await dispatchBird('EMAIL', emailAddr, {
-        title: input.title,
+      // Customer mail leaves through the ERP's own pipeline rather than
+      // straight to the provider, so the message is stored, signed and
+      // classified like every other outbound message. The call-to-action
+      // button is folded into the body html, which the pipeline brand-wraps.
+      const button =
+        input.button && input.button.label && input.button.url ? input.button : null;
+      const sent = await insertOutboundEmail(client, ctx, {
+        to: [emailAddr],
+        subject: input.title,
         body: input.body,
-        button: input.button ?? undefined,
+        html: button ? renderButton(button) : null,
+        classification: 'PUBLIC',
+        entityType: input.entityType ?? null,
+        entityId: input.entityId ?? null,
       });
-      out.email = { ok: result.ok, error: result.error };
-      const { rows } = await client.query(
-        `INSERT INTO emails
-           (tenant_id, company_id, branch_id, direction, subject, body, "to", status, sent_at,
-            entity_type, entity_id, created_by)
-         VALUES ($1,$2,$3,'OUT',$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-        [
-          tenantId,
-          ctx.companyId ?? null,
-          ctx.branchId ?? null,
-          input.title,
-          input.body,
-          JSON.stringify([emailAddr]),
-          result.ok ? 'SENT' : 'FAILED',
-          result.ok ? new Date() : null,
-          input.entityType ?? null,
-          input.entityId ?? null,
-          ctx.userId ?? null,
-        ]
-      );
-      const emailId = Number(rows[0]?.id);
-      if (emailId) {
-        await client.query(
-          `INSERT INTO email_recipients (tenant_id, email_id, kind, email, status, provider_message_id, error, sent_at)
-           VALUES ($1,$2,'TO',$3,$4,$5,$6,$7)`,
-          [
-            tenantId,
-            emailId,
-            emailAddr,
-            result.ok ? 'SENT' : 'FAILED',
-            result.providerMessageId ?? null,
-            result.error ?? null,
-            result.ok ? new Date() : null,
-          ]
-        );
-      }
+      out.email = { ok: sent.outcome === 'SENT', error: sent.error ?? undefined };
     }
   }
 

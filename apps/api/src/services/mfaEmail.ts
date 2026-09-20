@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { generateEmailOtp, hashOtp, safeEqualHex } from '../auth.js';
 import { sendEmail } from './bird.js';
 import { BRAND_COLORS, escapeHtml } from './emailBranding.js';
+import { renderTemplate } from './communication.js';
 
 /**
  * MFA-002 - emailed one-time sign-in codes.
@@ -89,6 +90,82 @@ const defaultSender: EmailCodeSender = async ({ to, name, code, purpose, ttlMinu
   });
   return { ok: res.ok, error: res.error };
 };
+
+/**
+ * The tenant SECURITY_CODE template, when the tenant has one.
+ *
+ * The sign-in code was the last system message whose wording lived in code.
+ * Reading it from email_templates puts it under the same administrative edit
+ * path as every other system mail. A tenant that was never seeded keeps the
+ * built-in wording below: a missing template must never be able to stop
+ * somebody signing in.
+ */
+interface CodeTemplate {
+  subject: string;
+  body: string;
+  html: string | null;
+}
+
+async function loadSecurityCodeTemplate(tenantId: number): Promise<CodeTemplate | null> {
+  const res = await query(
+    `SELECT subject, body, body_html
+       FROM email_templates
+      WHERE tenant_id = $1 AND code = 'SECURITY_CODE' AND is_active = true
+      ORDER BY id
+      LIMIT 1`,
+    [tenantId],
+    { tenantId }
+  );
+  const row = res.rows[0] as
+    | { subject: string; body: string; body_html: string | null }
+    | undefined;
+  if (!row) return null;
+  return {
+    subject: String(row.subject ?? ''),
+    body: String(row.body ?? ''),
+    html: row.body_html ?? null,
+  };
+}
+
+/** Bind this recipient and code into the template placeholders. */
+function codeTemplateSender(tpl: CodeTemplate): EmailCodeSender {
+  return async ({ to, name, code, purpose, ttlMinutes }) => {
+    const who = name.trim() || 'there';
+    const greeting = `Hello ${who},`;
+    const rendered = renderTemplate(tpl.subject, tpl.body, {
+      RECIPIENT_NAME: who,
+      CODE: code,
+      PURPOSE: PURPOSE_COPY[purpose],
+      TTL_MINUTES: ttlMinutes,
+      COMPANY_NAME: 'HOPE DESIGN GROUP LTD',
+    });
+    const res = await sendEmail({
+      to: [to],
+      subject: rendered.subject,
+      // The seeded row leaves body_html empty on purpose: the code panel is
+      // markup rather than wording, so the branded shell keeps rendering it.
+      html: tpl.html ?? renderCodeEmailHtml({ greeting, code, purpose, ttlMinutes }),
+      text: rendered.body,
+      preheader: `Your one-time code expires in ${ttlMinutes} minutes.`,
+    });
+    return { ok: res.ok, error: res.error };
+  };
+}
+
+/** The tenant template sender, or the built-in one. Never throws. */
+async function defaultSenderFor(tenantId: number): Promise<EmailCodeSender> {
+  try {
+    const tpl = await loadSecurityCodeTemplate(tenantId);
+    return tpl ? codeTemplateSender(tpl) : defaultSender;
+  } catch (error) {
+    // A template lookup must not be able to lock anybody out of their account.
+    console.error(
+      '[mfaEmail] could not load the SECURITY_CODE template; using the built-in wording',
+      error instanceof Error ? error.message : String(error)
+    );
+    return defaultSender;
+  }
+}
 
 export interface IssueEmailCodeOptions {
   tenantId: number;
@@ -179,7 +256,7 @@ export async function issueEmailCode(opts: IssueEmailCodeOptions): Promise<Issue
     { tenantId: opts.tenantId, userId: opts.userId }
   );
 
-  const sender = opts.send ?? defaultSender;
+  const sender = opts.send ?? (await defaultSenderFor(opts.tenantId));
   const delivered = await sender({
     to: opts.email,
     name: String(opts.name ?? ''),

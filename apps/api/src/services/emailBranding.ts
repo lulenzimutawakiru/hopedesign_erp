@@ -89,7 +89,7 @@ function styleAnchors(html: string): string {
 }
 
 /** Render a primary call-to-action button block. */
-function renderButton(button: EmailActionButton): string {
+export function renderButton(button: EmailActionButton): string {
   const href = escapeHtml(button.url);
   const label = escapeHtml(button.label);
   return `

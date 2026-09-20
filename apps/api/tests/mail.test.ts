@@ -12,6 +12,17 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { api, auth, db, loginAs } from './helpers.js';
 import { runCronJobById } from '../src/services/cronJobs.js';
 import { config } from '../src/config.js';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { tx } from '../src/db.js';
+import type { Ctx } from '../src/db.js';
+import {
+  insertOutboundEmail,
+  notifyCustomer,
+  notifyUserAdvanced,
+  renderTemplate,
+} from '../src/services/communication.js';
+import { resolveDocumentType } from '../src/services/mail/erpAttachment.js';
 
 const BASE = '/api/ops/mail';
 const MAIL_INFO = 3; // seeded SHARED mailbox (MAIL-INFO)
@@ -804,5 +815,394 @@ describe('mail: queue flush sends due messages', () => {
     const run = await db('SELECT details FROM cron_job_runs WHERE job_id = $1 ORDER BY id DESC LIMIT 1', [flushJobId]);
     const details = run.rows[0].details as Record<string, unknown>;
     expect(Number((details.reasons as Record<string, number>)[reason])).toBe(1);
+  });
+});
+
+/**
+ * The gaps these cases close all concern mail the system puts on the wire
+ * without a person pressing send: retrying what a provider outage parked,
+ * messages the notification helpers raise, the record a message is about, and
+ * the wording of the sign-in code. Every assertion is made against stored rows,
+ * because a stored row is what an operator can actually see and act on.
+ */
+describe('mail: outbox drain and system-generated mail', () => {
+  const drainState: Record<string, unknown> = {};
+  const flushState: Record<string, unknown> = {};
+  const testStart = new Date();
+  let drainJobId = 0;
+  let flushJobId = 0;
+  let savedApiKey = '';
+  let savedFromEmail = '';
+  const createdNotifications: number[] = [];
+  const writtenAttachments: string[] = [];
+
+  const snapshot = (row: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const key of ['enabled', 'next_run_at', 'last_run_at', 'last_status', 'last_error', 'last_run_duration_ms']) {
+      out[key] = row[key];
+    }
+    return out;
+  };
+
+  const findJob = async (jobType: string): Promise<Record<string, unknown>> => {
+    const res = await db(
+      `SELECT * FROM cron_jobs
+        WHERE job_type = $1
+          AND tenant_id = (SELECT tenant_id FROM users WHERE id = $2)
+        ORDER BY id
+        LIMIT 1`,
+      [jobType, adminUserId]
+    );
+    if (res.rows.length === 0) throw new Error(`this tenant has no ${jobType} cron job`);
+    return res.rows[0] as Record<string, unknown>;
+  };
+
+  beforeAll(async () => {
+    const drain = await findJob('EMAIL_OUTBOX_DRAIN');
+    drainJobId = Number(drain.id);
+    Object.assign(drainState, snapshot(drain));
+    const flush = await findJob('EMAIL_QUEUE_FLUSH');
+    flushJobId = Number(flush.id);
+    Object.assign(flushState, snapshot(flush));
+    // Both jobs are run explicitly below. The in-process scheduler would
+    // otherwise fire them on its own cadence and race those runs;
+    // runCronJobById ignores `enabled`, so each run is still the real handler.
+    await db('UPDATE cron_jobs SET enabled = false WHERE id = ANY($1::int[])', [[drainJobId, flushJobId]]);
+    savedApiKey = config.resend.apiKey;
+    savedFromEmail = config.resend.fromEmail;
+  });
+
+  afterAll(async () => {
+    config.resend.apiKey = savedApiKey;
+    config.resend.fromEmail = savedFromEmail;
+    for (const file of writtenAttachments) rmSync(file, { force: true });
+    if (createdNotifications.length) {
+      await db('DELETE FROM notifications WHERE id = ANY($1::int[])', [createdNotifications]);
+    }
+    for (const job of [{ id: drainJobId, state: drainState }, { id: flushJobId, state: flushState }]) {
+      if (!job.id) continue;
+      await db(
+        `UPDATE cron_jobs
+            SET enabled = $2, next_run_at = $3, last_run_at = $4, last_status = $5,
+                last_error = $6, last_run_duration_ms = $7
+          WHERE id = $1`,
+        [
+          job.id,
+          job.state.enabled,
+          job.state.next_run_at,
+          job.state.last_run_at,
+          job.state.last_status,
+          job.state.last_error,
+          job.state.last_run_duration_ms,
+        ]
+      );
+      await db('DELETE FROM cron_job_runs WHERE job_id = $1 AND started_at >= $2', [job.id, testStart]);
+    }
+  });
+
+  /** Run a cron job with the provider blanked, so nothing reaches the wire. */
+  const runBlanked = async (jobId: number): Promise<{ ok: boolean; error?: string }> => {
+    config.resend.apiKey = '';
+    config.resend.fromEmail = '';
+    try {
+      return await runCronJobById(jobId);
+    } finally {
+      config.resend.apiKey = savedApiKey;
+      config.resend.fromEmail = savedFromEmail;
+    }
+  };
+
+  /** Seed a message the provider refused, with its retry bookkeeping row. */
+  const seedParked = async (subject: string, attempts: number, maxAttempts: number): Promise<number> => {
+    const inserted = await db(
+      `INSERT INTO emails
+         (tenant_id, mailbox_id, subject, body, status, folder, classification, created_by)
+       SELECT u.tenant_id, $1, $2, 'The provider refused this once.', 'FAILED', 'OUTBOX', 'INTERNAL', $3
+         FROM users u WHERE u.id = $3
+       RETURNING id`,
+      [MAIL_INFO, subject, adminUserId]
+    );
+    const emailId = Number(inserted.rows[0].id);
+    createdMessages.push(emailId);
+    await db(
+      `INSERT INTO email_recipients (tenant_id, email_id, kind, email, status)
+       SELECT tenant_id, id, 'TO', 'info@hopedesign.jorlentech.com', 'FAILED' FROM emails WHERE id = $1`,
+      [emailId]
+    );
+    await db(
+      `INSERT INTO email_outbox (tenant_id, email_id, status, attempts, max_attempts, next_attempt_at)
+       SELECT tenant_id, id, 'QUEUED', $2, $3, NULL FROM emails WHERE id = $1`,
+      [emailId, attempts, maxAttempts]
+    );
+    return emailId;
+  };
+
+  it('retries a parked message through the send pipeline and spaces the next attempt', async () => {
+    const emailId = await seedParked(`Drain retry ${stamp}`, 1, 3);
+
+    const result = await runBlanked(drainJobId);
+    expect(result.ok).toBe(true);
+
+    const run = await db('SELECT details FROM cron_job_runs WHERE job_id = $1 ORDER BY id DESC LIMIT 1', [drainJobId]);
+    const details = run.rows[0].details as Record<string, unknown>;
+    expect(Number(details.checked)).toBeGreaterThanOrEqual(1);
+    expect(Number(details.failed)).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(details.reasons as Record<string, number>).some((r) => r.includes('Resend'))).toBe(true);
+
+    const outbox = await db(
+      'SELECT status, attempts, next_attempt_at, last_error FROM email_outbox WHERE email_id = $1',
+      [emailId]
+    );
+    expect(outbox.rows).toHaveLength(1);
+    // Still queued and one attempt further along, but pushed into the future: a
+    // provider blip must not turn into a tight retry loop.
+    expect(outbox.rows[0].status).toBe('QUEUED');
+    expect(Number(outbox.rows[0].attempts)).toBe(2);
+    expect(outbox.rows[0].next_attempt_at).not.toBeNull();
+    expect(new Date(outbox.rows[0].next_attempt_at as string).getTime()).toBeGreaterThan(Date.now());
+    expect(String(outbox.rows[0].last_error)).toContain('Resend');
+  });
+
+  it('stops retrying a message that has reached its own attempt cap', async () => {
+    const emailId = await seedParked(`Drain exhausted ${stamp}`, 3, 3);
+
+    const result = await runBlanked(drainJobId);
+    expect(result.ok).toBe(true);
+
+    const run = await db('SELECT details FROM cron_job_runs WHERE job_id = $1 ORDER BY id DESC LIMIT 1', [drainJobId]);
+    const details = run.rows[0].details as Record<string, unknown>;
+    expect(Number(details.exhausted)).toBeGreaterThanOrEqual(1);
+
+    const outbox = await db(
+      'SELECT status, attempts, next_attempt_at, last_error FROM email_outbox WHERE email_id = $1',
+      [emailId]
+    );
+    expect(outbox.rows).toHaveLength(1);
+    // The cap is the drain's boundary, not something it works around: the row is
+    // marked and taken out of the retry set rather than retried forever.
+    expect(outbox.rows[0].status).toBe('FAILED');
+    expect(outbox.rows[0].next_attempt_at).toBeNull();
+    expect(outbox.rows[0].last_error).toBe('Delivery attempts exhausted');
+    expect(Number(outbox.rows[0].attempts)).toBe(3);
+  });
+
+  it('sends a QUEUED message, not only a SCHEDULED one', async () => {
+    const inserted = await db(
+      `INSERT INTO emails
+         (tenant_id, mailbox_id, subject, body, status, folder, classification, scheduled_at, created_by)
+       SELECT u.tenant_id, $1, $2, 'Queued, never attempted.', 'QUEUED', 'OUTBOX', 'INTERNAL', NULL, $3
+         FROM users u WHERE u.id = $3
+       RETURNING id`,
+      [MAIL_INFO, `Flush queued ${stamp}`, adminUserId]
+    );
+    const emailId = Number(inserted.rows[0].id);
+    createdMessages.push(emailId);
+    await db(
+      `INSERT INTO email_recipients (tenant_id, email_id, kind, email, status)
+       SELECT tenant_id, id, 'TO', 'info@hopedesign.jorlentech.com', 'QUEUED' FROM emails WHERE id = $1`,
+      [emailId]
+    );
+
+    const result = await runBlanked(flushJobId);
+    expect(result.ok).toBe(true);
+
+    const email = await db('SELECT status, folder FROM emails WHERE id = $1', [emailId]);
+    expect(email.rows[0].status).toBe('FAILED');
+    expect(email.rows[0].folder).toBe('OUTBOX');
+
+    const outbox = await db('SELECT status, attempts FROM email_outbox WHERE email_id = $1', [emailId]);
+    expect(outbox.rows).toHaveLength(1);
+    expect(outbox.rows[0].status).toBe('QUEUED');
+    expect(Number(outbox.rows[0].attempts)).toBe(1);
+  });
+
+  it('routes notifications from the helpers through the same pipeline', async () => {
+    const ctx: Ctx = {
+      correlationId: 'test',
+      ip: null,
+      userAgent: null,
+      device: null,
+      tenantId: 2,
+      companyId: 2,
+      branchId: 2,
+      userId: adminUserId,
+    };
+    const customerSubject = `Customer notice ${stamp}`;
+    const staffSubject = `Staff notice ${stamp}`;
+    const staffType = `TEST_NOTIFY_${stamp}`;
+
+    config.resend.apiKey = '';
+    config.resend.fromEmail = '';
+    try {
+      await tx(async (client, c) => {
+        const customer = await notifyCustomer(client, c, {
+          email: 'customer@example.test',
+          title: customerSubject,
+          body: 'Your order is ready for collection.',
+          channels: ['EMAIL'],
+        });
+        // Reaching the provider at all is the point: it means the customer mail
+        // was stored, signed and classified instead of handed straight out.
+        expect(customer.email?.ok).toBe(false);
+        expect(String(customer.email?.error)).toContain('Resend');
+
+        const staff = await notifyUserAdvanced(client, c, lowUserId, {
+          type: staffType,
+          title: staffSubject,
+          body: 'A record needs your attention.',
+          channels: ['EMAIL'],
+          entityType: 'employee-identities',
+          entityId: 291,
+        });
+        expect(staff.length).toBeGreaterThanOrEqual(1);
+        createdNotifications.push(...staff);
+      }, ctx);
+    } finally {
+      config.resend.apiKey = savedApiKey;
+      config.resend.fromEmail = savedFromEmail;
+    }
+
+    const customerEmail = await db('SELECT id, classification, created_by FROM emails WHERE subject = $1', [
+      customerSubject,
+    ]);
+    expect(customerEmail.rows).toHaveLength(1);
+    const customerId = Number(customerEmail.rows[0].id);
+    createdMessages.push(customerId);
+    expect(customerEmail.rows[0].classification).toBe('PUBLIC');
+    expect(Number(customerEmail.rows[0].created_by)).toBe(adminUserId);
+    const customerTo = await db('SELECT status FROM email_recipients WHERE email_id = $1', [customerId]);
+    expect(customerTo.rows).toHaveLength(1);
+    expect(customerTo.rows[0].status).toBe('FAILED');
+    const customerOutbox = await db('SELECT status FROM email_outbox WHERE email_id = $1', [customerId]);
+    expect(customerOutbox.rows).toHaveLength(1);
+
+    const staffEmail = await db(
+      'SELECT id, classification, created_by, entity_type, entity_id FROM emails WHERE subject = $1',
+      [staffSubject]
+    );
+    expect(staffEmail.rows).toHaveLength(1);
+    const staffId = Number(staffEmail.rows[0].id);
+    createdMessages.push(staffId);
+    expect(staffEmail.rows[0].classification).toBe('INTERNAL');
+    expect(Number(staffEmail.rows[0].created_by)).toBe(lowUserId);
+    // The notification carries the record it is about, which is what gives the
+    // attachment step a document to look up.
+    expect(staffEmail.rows[0].entity_type).toBe('employee-identities');
+    expect(Number(staffEmail.rows[0].entity_id)).toBe(291);
+
+    // A delivery left QUEUED would be picked up by the delivery worker and send
+    // a second copy of a message that has already been through the pipeline.
+    const open = await db(
+      `SELECT count(*)::int AS n FROM notification_deliveries
+        WHERE notification_id = ANY($1::int[]) AND channel = 'EMAIL' AND status = 'QUEUED'`,
+      [createdNotifications]
+    );
+    expect(Number(open.rows[0].n)).toBe(0);
+  });
+
+  it('renders the seeded sign-in code template with every variable it uses', async () => {
+    const tpl = await db(
+      `SELECT subject, body FROM email_templates
+        WHERE code = 'SECURITY_CODE' AND is_active = true
+          AND tenant_id = (SELECT tenant_id FROM users WHERE id = $1)
+        ORDER BY id
+        LIMIT 1`,
+      [adminUserId]
+    );
+    expect(tpl.rows).toHaveLength(1);
+    const row = tpl.rows[0] as Record<string, unknown>;
+
+    const values: Record<string, string> = {
+      RECIPIENT_NAME: 'Lulenzi',
+      CODE: 'VNWE34KV',
+      PURPOSE: 'sign in to HOPE DESIGN',
+      TTL_MINUTES: '10',
+      COMPANY_NAME: 'HOPE DESIGN GROUP LTD',
+    };
+
+    // The template is only adopted if the live renderer can fill it, so every
+    // placeholder it uses has to be one the caller actually supplies.
+    const used = new Set<string>();
+    for (const text of [String(row.subject), String(row.body)]) {
+      for (const match of text.matchAll(/\{\{(\w+)\}\}/g)) used.add(match[1]);
+    }
+    expect(used.size).toBeGreaterThan(0);
+    for (const key of used) expect(Object.keys(values)).toContain(key);
+
+    const rendered = renderTemplate(String(row.subject), String(row.body), values);
+    expect(rendered.subject).not.toMatch(/\{\{\w+\}\}/);
+    expect(rendered.body).not.toMatch(/\{\{\w+\}\}/);
+    expect(rendered.body).toContain('VNWE34KV');
+  });
+
+  it('maps module entity types onto the documents this system can render', () => {
+    expect(resolveDocumentType('customer-invoices')).toBe('sales-invoice');
+    expect(resolveDocumentType('employee-identities')).toBe('employee-id');
+    expect(resolveDocumentType('purchase-orders')).toBe('purchase-order');
+    // A record with no document behind it must resolve to nothing rather than be
+    // handed a key the attachment step would trip over.
+    expect(resolveDocumentType('not-a-document')).toBeNull();
+    expect(resolveDocumentType(null)).toBeNull();
+  });
+
+  it('attaches the record a message is about as a PDF', async () => {
+    const employee = await db(
+      `SELECT id FROM employees WHERE tenant_id = 2 AND company_id = 2 ORDER BY id LIMIT 1`
+    );
+    expect(employee.rows).toHaveLength(1);
+    const employeeId = Number(employee.rows[0].id);
+
+    const subject = `Document attach ${stamp}`;
+    const ctx: Ctx = {
+      correlationId: 'test',
+      ip: null,
+      userAgent: null,
+      device: null,
+      tenantId: 2,
+      companyId: 2,
+      branchId: 2,
+      userId: adminUserId,
+    };
+
+    config.resend.apiKey = '';
+    config.resend.fromEmail = '';
+    let emailId = 0;
+    try {
+      await tx(async (client, c) => {
+        const res = await insertOutboundEmail(client, c, {
+          to: ['info@hopedesign.jorlentech.com'],
+          subject,
+          body: 'The document you asked for is attached.',
+          classification: 'INTERNAL',
+          createdBy: adminUserId,
+          entityType: 'employee-identities',
+          entityId: employeeId,
+        });
+        expect(res.emailId).toBeTruthy();
+        emailId = Number(res.emailId);
+      }, ctx);
+    } finally {
+      config.resend.apiKey = savedApiKey;
+      config.resend.fromEmail = savedFromEmail;
+    }
+    createdMessages.push(emailId);
+
+    const attached = await db(
+      `SELECT file_name, file_size, storage_path FROM email_attachments
+        WHERE email_id = $1 AND source = 'ERP_DOCUMENT'`,
+      [emailId]
+    );
+    expect(attached.rows).toHaveLength(1);
+    const row = attached.rows[0] as Record<string, unknown>;
+    expect(String(row.file_name).toLowerCase()).toMatch(/\.pdf$/);
+    expect(Number(row.file_size)).toBeGreaterThan(0);
+
+    const abs = path.join(config.storageRoot, String(row.storage_path));
+    writtenAttachments.push(abs);
+    expect(existsSync(abs)).toBe(true);
+    expect(statSync(abs).size).toBeGreaterThan(0);
+    // The bytes have to be a real PDF, not an empty placeholder: the whole point
+    // of attaching the record is that the recipient can open it.
+    expect(readFileSync(abs).subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
 });

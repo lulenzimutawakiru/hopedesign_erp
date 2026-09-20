@@ -74,6 +74,8 @@ const DOCUMENT_TYPE_ALIASES: Record<string, string> = {
   'purchase-orders': 'purchase-order',
   'procurement-supplier-invoices': 'purchase-invoice',
   'supplier-invoices': 'purchase-invoice',
+  'procurement-supplier-quotations': 'supplier-quotation',
+  'supplier-quotations': 'supplier-quotation',
   'procurement-payments': 'supplier-payment',
   'supplier-payments': 'supplier-payment',
   'procurement-goods-receipts': 'goods-receipt',
@@ -92,6 +94,8 @@ const DOCUMENT_TYPE_ALIASES: Record<string, string> = {
   'employment-contracts': 'employment-contract',
   'hr-payslips': 'payslip',
   'hr-payrolls': 'payroll-register',
+  'employee-identities': 'employee-id',
+  'employee-id-cards': 'employee-id-card',
   'quality-inspections': 'inspection',
   expenses: 'expense',
   journals: 'journal',
@@ -109,17 +113,33 @@ function normalizeEntityType(raw: unknown): string {
 }
 
 /**
+ * Resolve a key to itself when this system can actually render it, else null.
+ * The alias table is plain text, so nothing stops an entry from naming a
+ * document that was never built; without this check the attachment step would
+ * be handed such a key and trip over `DOCUMENT_TYPES[type]` being undefined.
+ * Every alias resolves today - this only keeps that true by construction as
+ * the table grows.
+ */
+function documentTypeKey(key: string | undefined): string | null {
+  if (!key) return null;
+  return Object.prototype.hasOwnProperty.call(DOCUMENT_TYPES, key) ? key : null;
+}
+
+/**
  * Map `emails.entity_type` onto a DOCUMENT_TYPES key, or null when the linked
  * record is not a document this system can generate.
  */
 export function resolveDocumentType(entityType: unknown): string | null {
   const key = normalizeEntityType(entityType);
   if (!key) return null;
-  if (DOCUMENT_TYPES[key]) return key;
-  if (DOCUMENT_TYPE_ALIASES[key]) return DOCUMENT_TYPE_ALIASES[key];
+  const direct = documentTypeKey(key);
+  if (direct) return direct;
+  const alias = documentTypeKey(DOCUMENT_TYPE_ALIASES[key]);
+  if (alias) return alias;
   const singular = key.replace(/s$/, '');
-  if (DOCUMENT_TYPES[singular]) return singular;
-  return DOCUMENT_TYPE_ALIASES[singular] ?? null;
+  const singularDirect = documentTypeKey(singular);
+  if (singularDirect) return singularDirect;
+  return documentTypeKey(DOCUMENT_TYPE_ALIASES[singular]);
 }
 
 export interface ErpAttachmentOutcome {
