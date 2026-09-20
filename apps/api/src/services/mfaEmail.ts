@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { query } from '../db.js';
 import { generateEmailOtp, hashOtp, safeEqualHex } from '../auth.js';
 import { sendEmail } from './bird.js';
+import { BRAND_COLORS, escapeHtml } from './emailBranding.js';
 
 /**
  * MFA-002 - emailed one-time sign-in codes.
@@ -30,21 +31,59 @@ const PURPOSE_COPY: Record<EmailCodePurpose, string> = {
   CHANGE_EMAIL: 'confirm your new sign-in email address',
 };
 
+/**
+ * Inner body of the "Confirm it's you" mail.
+ *
+ * Only the body is rendered here: sendEmail() wraps every message in the
+ * HOPE DESIGN shell (logo, header band, contact block, copyright) through
+ * brandEmailContent(), so a full document here would double that up.
+ * Email-client safe - tables and inline styles only.
+ */
+export function renderCodeEmailHtml(opts: {
+  greeting: string;
+  code: string;
+  purpose: EmailCodePurpose;
+  ttlMinutes: number;
+}): string {
+  const purposeLine = `Here is the security code needed to ${PURPOSE_COPY[opts.purpose]}.`;
+  return [
+    `<h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;font-weight:800;color:${BRAND_COLORS.navy};">Confirm it's you</h1>`,
+    `<p style="margin:0 0 14px;">${escapeHtml(opts.greeting)}</p>`,
+    `<p style="margin:0 0 6px;">${escapeHtml(purposeLine)}</p>`,
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 18px;"><tr>',
+    `<td align="center" style="background:${BRAND_COLORS.canvas};border:1px solid ${BRAND_COLORS.border};border-radius:10px;padding:22px 12px;">`,
+    `<div style="font-family:'Courier New',Courier,monospace;font-size:34px;font-weight:700;letter-spacing:10px;text-indent:10px;line-height:1.2;color:${BRAND_COLORS.navy};">${escapeHtml(opts.code)}</div>`,
+    '</td></tr></table>',
+    `<p style="margin:0 0 14px;font-weight:700;color:${BRAND_COLORS.red};">Do NOT share this code with anyone.</p>`,
+    `<p style="margin:0 0 14px;">It expires in ${Number(opts.ttlMinutes)} minutes and can only be used once.</p>`,
+    `<p style="margin:0;font-size:13.5px;color:${BRAND_COLORS.muted};">If you didn't request this email, there's nothing to worry about - you can safely ignore it. To keep your account secure, please don't forward this email to anyone.</p>`,
+  ].join('');
+}
+
 const defaultSender: EmailCodeSender = async ({ to, name, code, purpose, ttlMinutes }) => {
   const greeting = name.trim() ? `Hello ${name.trim()},` : 'Hello,';
+  // Explicit text alternative: stripTags() cannot separate the heading from the
+  // code panel, so text-only clients get a hand-built version.
   const text = [
+    "Confirm it's you",
+    '',
     greeting,
     '',
-    `Your one-time code to ${PURPOSE_COPY[purpose]} is: ${code}`,
+    `Here is the security code needed to ${PURPOSE_COPY[purpose]}.`,
+    '',
+    code,
+    '',
+    'Do NOT share this code with anyone.',
     '',
     `It expires in ${ttlMinutes} minutes and can only be used once.`,
-    'If you did not try to sign in, do not share this code - change your password and tell your system administrator.',
+    "If you didn't request this email, there's nothing to worry about - you can safely ignore it. To keep your account secure, please don't forward this email to anyone.",
     '',
     'HOPE DESIGN GROUP LTD',
   ].join('\n');
   const res = await sendEmail({
     to: [to],
     subject: `${code} is your HOPE DESIGN sign-in code`,
+    html: renderCodeEmailHtml({ greeting, code, purpose, ttlMinutes }),
     text,
     preheader: `Your one-time code expires in ${ttlMinutes} minutes.`,
   });
