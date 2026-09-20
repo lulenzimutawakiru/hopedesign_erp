@@ -10,6 +10,8 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { api, auth, db, loginAs } from './helpers.js';
+import { runCronJobById } from '../src/services/cronJobs.js';
+import { config } from '../src/config.js';
 
 const BASE = '/api/ops/mail';
 const MAIL_INFO = 3; // seeded SHARED mailbox (MAIL-INFO)
@@ -629,5 +631,178 @@ describe('mail: mailbox membership', () => {
     const gone = await api.delete(`${BASE}/mailboxes/${MAIL_INFO}/members/${lowUserId}`).set(auth(adminToken));
     expect(gone.status).toBe(404);
     expect(gone.body.error.message).toBe('Mailbox member not found');
+  });
+});
+
+/**
+ * Scheduling a message only stores it; the queue flush is what sends it. The
+ * flush must not grow a second send path, so these cases assert on where the
+ * message itself ends up: a due message leaves through the same pipeline a
+ * direct send uses (mailbox authorisation, the author's signature,
+ * classification policy), and a message whose author cannot be authorised is
+ * parked in the OUTBOX rather than going out unattributed.
+ */
+describe('mail: queue flush sends due messages', () => {
+  const jobState: Record<string, unknown> = {};
+  const testStart = new Date();
+  let flushJobId = 0;
+  let savedApiKey = '';
+  let savedFromEmail = '';
+
+  beforeAll(async () => {
+    const job = await db(
+      `SELECT * FROM cron_jobs
+        WHERE job_type = 'EMAIL_QUEUE_FLUSH'
+          AND tenant_id = (SELECT tenant_id FROM users WHERE id = $1)
+        ORDER BY id
+        LIMIT 1`,
+      [adminUserId]
+    );
+    if (job.rows.length === 0) throw new Error('this tenant has no EMAIL_QUEUE_FLUSH cron job');
+    const row = job.rows[0] as Record<string, unknown>;
+    flushJobId = Number(row.id);
+    for (const key of ['enabled', 'next_run_at', 'last_run_at', 'last_status', 'last_error', 'last_run_duration_ms']) {
+      jobState[key] = row[key];
+    }
+    // The in-process scheduler would otherwise fire this job on its own cadence
+    // and race the runs below. runCronJobById ignores `enabled`, so each run
+    // here is still the real handler doing the real work.
+    await db('UPDATE cron_jobs SET enabled = false WHERE id = $1', [flushJobId]);
+    savedApiKey = config.resend.apiKey;
+    savedFromEmail = config.resend.fromEmail;
+  });
+
+  afterAll(async () => {
+    config.resend.apiKey = savedApiKey;
+    config.resend.fromEmail = savedFromEmail;
+    if (!flushJobId) return;
+    await db(
+      `UPDATE cron_jobs
+          SET enabled = $2, next_run_at = $3, last_run_at = $4, last_status = $5,
+              last_error = $6, last_run_duration_ms = $7
+        WHERE id = $1`,
+      [
+        flushJobId,
+        jobState.enabled,
+        jobState.next_run_at,
+        jobState.last_run_at,
+        jobState.last_status,
+        jobState.last_error,
+        jobState.last_run_duration_ms,
+      ]
+    );
+    await db('DELETE FROM cron_job_runs WHERE job_id = $1 AND started_at >= $2', [flushJobId, testStart]);
+  });
+
+  it('sends a due scheduled message through the send pipeline, and records the provider failure', async () => {
+    const created = await api
+      .post(`${BASE}/messages`)
+      .set(auth(adminToken))
+      .send({
+        mailboxId: MAIL_INFO,
+        to: 'info@hopedesign.jorlentech.com',
+        subject: `Flush scheduled ${stamp}`,
+        body: 'Composed now, sent by the queue flush.',
+        classification: 'INTERNAL',
+      });
+    expect(created.status).toBe(200);
+    const emailId = Number(created.body.data.id);
+    createdMessages.push(emailId);
+    expect(created.body.data.status).toBe('DRAFT');
+
+    const scheduled = await api
+      .post(`${BASE}/messages/${emailId}/schedule`)
+      .set(auth(adminToken))
+      .send({ scheduledAt: new Date(Date.now() + 60_000).toISOString() });
+    expect(scheduled.status).toBe(200);
+    expect(scheduled.body.data.status).toBe('SCHEDULED');
+    expect(scheduled.body.data.folder).toBe('SCHEDULED');
+
+    // The flush only takes messages whose time has come. Which pipeline the
+    // message goes through is what is under test here, not the passing of a
+    // minute, so the due time is moved up rather than waited out.
+    await db(`UPDATE emails SET scheduled_at = now() - interval '1 minute' WHERE id = $1`, [emailId]);
+
+    // Resend is configured in this environment, and a test must not put mail on
+    // the wire. Blanking the credentials for the duration of the run keeps the
+    // provider branch deterministic while still proving that a scheduled
+    // message reaches the provider at all.
+    config.resend.apiKey = '';
+    config.resend.fromEmail = '';
+    let result: { ok: boolean; error?: string };
+    try {
+      result = await runCronJobById(flushJobId);
+    } finally {
+      config.resend.apiKey = savedApiKey;
+      config.resend.fromEmail = savedFromEmail;
+    }
+    expect(result.ok).toBe(true);
+
+    const email = await db('SELECT status, folder, sent_at FROM emails WHERE id = $1', [emailId]);
+    expect(email.rows[0].status).toBe('FAILED');
+    expect(email.rows[0].folder).toBe('OUTBOX');
+    // A message the provider refused has not been sent, and must not say it was.
+    expect(email.rows[0].sent_at).toBeNull();
+
+    const recipients = await db('SELECT status, error FROM email_recipients WHERE email_id = $1', [emailId]);
+    expect(recipients.rows).toHaveLength(1);
+    expect(recipients.rows[0].status).toBe('FAILED');
+    expect(String(recipients.rows[0].error)).toContain('Resend');
+
+    const outbox = await db('SELECT attempts, last_error FROM email_outbox WHERE email_id = $1', [emailId]);
+    expect(outbox.rows).toHaveLength(1);
+    expect(Number(outbox.rows[0].attempts)).toBe(1);
+    expect(String(outbox.rows[0].last_error)).toContain('Resend');
+
+    const run = await db('SELECT details FROM cron_job_runs WHERE job_id = $1 ORDER BY id DESC LIMIT 1', [flushJobId]);
+    const details = run.rows[0].details as Record<string, unknown>;
+    expect(Number(details.checked)).toBeGreaterThanOrEqual(1);
+    expect(Number(details.failed)).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(details.reasons as Record<string, number>).some((r) => r.includes('Resend'))).toBe(true);
+  });
+
+  it('parks a due message that has no author instead of sending it unattributed', async () => {
+    const inserted = await db(
+      `INSERT INTO emails
+         (tenant_id, mailbox_id, subject, body, status, folder, classification, scheduled_at, created_by)
+       SELECT u.tenant_id, $1, $2, 'Has no author.', 'SCHEDULED', 'SCHEDULED', 'INTERNAL',
+              now() - interval '1 minute', NULL
+         FROM users u WHERE u.id = $3
+       RETURNING id`,
+      [MAIL_INFO, `Flush orphan ${stamp}`, adminUserId]
+    );
+    const emailId = Number(inserted.rows[0].id);
+    createdMessages.push(emailId);
+    await db(
+      `INSERT INTO email_recipients (tenant_id, email_id, kind, email, status)
+       SELECT tenant_id, id, 'TO', 'info@hopedesign.jorlentech.com', 'QUEUED'
+         FROM emails WHERE id = $1`,
+      [emailId]
+    );
+
+    const result = await runCronJobById(flushJobId);
+    expect(result.ok).toBe(true);
+
+    const reason = 'This message has no author, so it cannot be sent.';
+    const email = await db('SELECT status, folder FROM emails WHERE id = $1', [emailId]);
+    expect(email.rows[0].status).toBe('FAILED');
+    expect(email.rows[0].folder).toBe('OUTBOX');
+
+    const recipients = await db('SELECT status, error FROM email_recipients WHERE email_id = $1', [emailId]);
+    expect(recipients.rows).toHaveLength(1);
+    expect(recipients.rows[0].status).toBe('FAILED');
+    expect(recipients.rows[0].error).toBe(reason);
+
+    // Parked, not dropped: the message stays visible in the OUTBOX with the
+    // reason attached, so somebody can act on it.
+    const outbox = await db('SELECT status, attempts, last_error FROM email_outbox WHERE email_id = $1', [emailId]);
+    expect(outbox.rows).toHaveLength(1);
+    expect(outbox.rows[0].status).toBe('QUEUED');
+    expect(Number(outbox.rows[0].attempts)).toBe(1);
+    expect(outbox.rows[0].last_error).toBe(reason);
+
+    const run = await db('SELECT details FROM cron_job_runs WHERE job_id = $1 ORDER BY id DESC LIMIT 1', [flushJobId]);
+    const details = run.rows[0].details as Record<string, unknown>;
+    expect(Number((details.reasons as Record<string, number>)[reason])).toBe(1);
   });
 });

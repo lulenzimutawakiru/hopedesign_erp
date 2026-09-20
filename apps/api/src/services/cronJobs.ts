@@ -1,8 +1,9 @@
 import pg from 'pg';
 import { Ctx, query, tx } from '../db.js';
 import { logAudit } from './audit.js';
-import { notifyUsers, renderEmailForSend, resolveRecipients } from './communication.js';
-import { sendEmail } from './bird.js';
+import { notifyUsers, resolveRecipients } from './communication.js';
+import { loadAuthUser } from '../middleware/auth.js';
+import { sendStoredEmail } from './mail/send.js';
 import { computeNextRun } from './reportScheduler.js';
 import { governanceSweep } from './governance.js';
 
@@ -789,10 +790,20 @@ async function passwordExpiryCheck(client: pg.PoolClient, ctx: Ctx, job: CronJob
   return { checked: rows.length, expiring: rows.length, notified };
 }
 
+/**
+ * Send the messages users queued, or scheduled for later.
+ *
+ * The flush never talks to the provider itself: it hands each due message to
+ * `sendStoredEmail`, acting as that message's author, so a queued or scheduled
+ * send goes out through exactly the same pipeline as a direct one -- mailbox
+ * authorisation, classification and the approval gate, the author's signature,
+ * and the message's ERP document attachment. A message whose author can no
+ * longer be authorised is parked in the OUTBOX instead of being sent with those
+ * pieces silently missing.
+ */
 async function emailQueueFlush(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
   const { rows } = await client.query(
-    `SELECT e.id, e.subject, e.body, e.to, e.entity_type, e.entity_id,
-              e.template_vars, e.company_id
+    `SELECT e.id, e.created_by
        FROM emails e
       WHERE e.tenant_id = $1
         AND e.status IN ('QUEUED','SCHEDULED')
@@ -803,45 +814,87 @@ async function emailQueueFlush(client: pg.PoolClient, ctx: Ctx, job: CronJobRow)
   );
   let sent = 0;
   let failed = 0;
+  let skipped = 0;
+  const reasons: Record<string, number> = {};
+  const note = (reason: string) => {
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
+  };
+
   for (const r of rows as Record<string, unknown>[]) {
     const id = Number(r.id);
-    const toAddresses: string[] = [];
+    const authorId = Number(r.created_by ?? 0);
     try {
-      const raw = JSON.parse(String(r.to ?? '[]')) as unknown[];
-      for (const entry of raw) {
-        if (typeof entry === 'string') toAddresses.push(entry);
-        else if (entry && typeof entry === 'object' && 'email' in entry) {
-          const maybe = (entry as { email?: unknown }).email;
-          if (typeof maybe === 'string') toAddresses.push(maybe);
-        }
+      if (!authorId) throw new Error('This message has no author, so it cannot be sent.');
+      // Acting as the author is what makes the mailbox check mean anything: the
+      // message carries the mailbox it was composed from, and the permissions
+      // used are the author's, as they were when the send was scheduled.
+      const author = await loadAuthUser(authorId, ctx.tenantId ?? 0);
+      const authorCtx: Ctx = {
+        ...ctx,
+        userId: author.id,
+        companyId: author.company_id ?? ctx.companyId ?? null,
+        branchId: author.branch_id ?? ctx.branchId ?? null,
+      };
+      // The row is due now, so the future-scheduled_at check must not park it
+      // again; whatever the clock skew, this run is the one that sends it.
+      const result = await sendStoredEmail(client, authorCtx, author.permissions, id, {
+        forceNow: true,
+      });
+      if (result.outcome === 'SENT') {
+        sent += 1;
+      } else if (result.outcome === 'FAILED') {
+        failed += 1;
+        note(result.error ?? 'Sending failed');
+      } else {
+        // PENDING_APPROVAL: the classification needs a decision that was never
+        // obtained, so the message correctly stops here rather than going out.
+        skipped += 1;
+        note(result.outcome);
       }
-    } catch {
-      // invalid JSON in "to" -> leave empty, email will be marked failed below
-    }
-    if (toAddresses.length === 0) {
-      await client.query(`UPDATE emails SET status = 'FAILED', sent_at = now() WHERE id = $1`, [id]);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Could not be sent';
       failed += 1;
-      continue;
-    }
-    const rendered = await renderEmailForSend(client, r);
-    const subject = rendered.subject;
-    const body = rendered.body;
-    const result = await sendEmail({ to: toAddresses, subject, html: body, text: body });
-    if (result.ok) {
-      await client.query(
-        `UPDATE emails SET status = 'SENT', sent_at = now(), subject = $2, body = $3 WHERE id = $1`,
-        [id, subject, body]
-      );
-      sent += 1;
-    } else {
-      await client.query(
-        `UPDATE emails SET status = 'FAILED', sent_at = now(), subject = $2, body = $3 WHERE id = $1`,
-        [id, subject, body]
-      );
-      failed += 1;
+      note(reason);
+      await parkUnsendableEmail(client, ctx, id, reason);
     }
   }
-  return { checked: rows.length, sent, failed };
+  return { checked: rows.length, sent, failed, skipped, reasons };
+}
+
+/**
+ * Park a message this flush could not authorise: no author, an author who is no
+ * longer active, or a mailbox the author may not send from. Marking it FAILED and
+ * moving it to the OUTBOX keeps it visible and manually retryable, and takes it
+ * out of the queue so it is not sent the moment the missing authorisation is
+ * restored, which is an administrator's decision to make rather than the cron's.
+ */
+async function parkUnsendableEmail(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  emailId: number,
+  reason: string
+): Promise<void> {
+  const tenantId = ctx.tenantId ?? 0;
+  await client.query(
+    `UPDATE emails SET status = 'FAILED', folder = 'OUTBOX', updated_at = now()
+      WHERE id = $1 AND tenant_id = $2`,
+    [emailId, tenantId]
+  );
+  await client.query(
+    `UPDATE email_recipients SET status = 'FAILED', error = $2, updated_at = now()
+      WHERE email_id = $1 AND status = 'QUEUED'`,
+    [emailId, reason]
+  );
+  await client.query(
+    `INSERT INTO email_outbox (tenant_id, email_id, status, attempts, last_error)
+     VALUES ($1,$2,'QUEUED',1,$3)
+     ON CONFLICT (email_id) DO UPDATE
+       SET status = 'QUEUED',
+           attempts = email_outbox.attempts + 1,
+           last_error = EXCLUDED.last_error,
+           updated_at = now()`,
+    [tenantId, emailId, reason]
+  );
 }
 
 
