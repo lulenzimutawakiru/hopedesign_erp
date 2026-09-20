@@ -31,6 +31,7 @@ import {
 } from './mailApi';
 import {
   useMailClassifications,
+  useMailEntityTypes,
   useMailMessage,
   useMailSignatures,
   useMailboxes,
@@ -94,6 +95,7 @@ export default function MailComposer({ draftId }: { draftId: number | null }) {
   const mailboxes = useMailboxes();
   const classes = useMailClassifications();
   const signatures = useMailSignatures();
+  const entityTypes = useMailEntityTypes();
 
   const [version, setVersion] = useState<number>(0);
   const [mailboxId, setMailboxId] = useState<string>('');
@@ -108,6 +110,19 @@ export default function MailComposer({ draftId }: { draftId: number | null }) {
   const [signatureId, setSignatureId] = useState<string>('');
   const [scheduledAt, setScheduledAt] = useState<string>('');
   const [approvalReason, setApprovalReason] = useState<string>('');
+  const [entityType, setEntityType] = useState<string>('');
+  const [entityId, setEntityId] = useState<string>('');
+
+  // The API stores `entity_type` in upper case, so fold the stored value back to
+  // the registry spelling. A value this caller can no longer attach stays in the
+  // list as a labelled entry, so the field never looks empty while the message
+  // still points at a record.
+  const entityTypeOptions = (() => {
+    const list = entityTypes.data ?? [];
+    return entityType && !list.some((o) => o.entityType === entityType)
+      ? [{ entityType, label: entityType + ' (not attachable)' }, ...list]
+      : list;
+  })();
   const [erpDocId, setErpDocId] = useState<string>('');
   const [busy, setBusy] = useState<string>('');
   const [notice, setNotice] = useState<string>('');
@@ -133,6 +148,8 @@ export default function MailComposer({ draftId }: { draftId: number | null }) {
     setClassification(s(m.classification));
     setMailboxId(m.mailboxId ? String(m.mailboxId) : '');
     setSignatureId(m.signatureId ? String(m.signatureId) : '');
+    setEntityType(s(m.entityType).toLowerCase());
+    setEntityId(m.entityId ? String(m.entityId) : '');
     setScheduledAt(toLocalInput(m.scheduledAt));
     setVersion(num(m.version));
     setTo(of('TO'));
@@ -179,6 +196,8 @@ export default function MailComposer({ draftId }: { draftId: number | null }) {
       classification: classification || undefined,
       priority,
       signatureId: signatureId ? num(signatureId) : null,
+      entityType: entityType || null,
+      entityId: entityId ? num(entityId) : null,
     };
   }
 
@@ -507,6 +526,47 @@ export default function MailComposer({ draftId }: { draftId: number | null }) {
               ))}
             </select>
           </label>
+        </div>
+
+        <div className="stack-row" style={{ flexWrap: 'wrap', gap: 12, marginTop: 12 }}>
+          <label className="field" style={{ flex: '1 1 260px' }}>
+            <span>Related ERP record</span>
+            <select
+              className="hk-select"
+              value={entityType}
+              disabled={immutable}
+              onChange={(e) => setEntityType(e.target.value)}
+            >
+              <option value="">None</option>
+              {entityTypeOptions.map((opt) => (
+                <option key={opt.entityType} value={opt.entityType}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field" style={{ flex: '0 1 150px' }}>
+            <span>Record id</span>
+            <input
+              className="hk-input"
+              type="number"
+              min={1}
+              value={entityId}
+              disabled={immutable || !entityType}
+              onChange={(e) => setEntityId(e.target.value)}
+            />
+          </label>
+
+          <p className="cell-sub" style={{ flex: '1 1 300px', margin: 0, alignSelf: 'flex-end' }}>
+            {!entityTypes.loading && (entityTypes.data ?? []).length === 0
+              ? 'You cannot attach any generated ERP document with your permissions.'
+              : entityType
+                ? entityId
+                  ? 'The document for this record is generated and attached when the message is sent.'
+                  : 'Enter the record id so the document can be generated.'
+                : 'Link an ERP record to attach its generated PDF on send.'}
+          </p>
         </div>
 
         {mb ? (

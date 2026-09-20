@@ -21,6 +21,7 @@ import type {
   MailboxMember,
   MailboxView,
   MailClassification,
+  MailEntityType,
   MailListResponse,
   MailSignature,
   MailSummary,
@@ -278,3 +279,10 @@ export const useMailDistributionMembers = (
 
 export const useMailClassifications = (): AsyncState<MailClassification[]> =>
   useAsync('classifications', () => mailApi.listClassifications());
+
+/**
+ * Document types the caller may link a message to. One shared request - the
+ * list is small, permission-derived and valid for the whole session.
+ */
+export const useMailEntityTypes = (): AsyncState<MailEntityType[]> =>
+  useAsync('entity-types', () => mailApi.listMailEntityTypes());

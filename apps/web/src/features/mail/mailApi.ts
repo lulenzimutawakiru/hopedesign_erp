@@ -13,6 +13,7 @@ import type {
   DistributionMember,
   EmailApprovalRow,
   MailClassification,
+  MailEntityType,
   MailboxDelegation,
   MailboxMember,
   MailboxView,
@@ -111,6 +112,18 @@ export const listClassifications = () =>
 
 export const updateClassification = (id: number | string, body: Rec) =>
   patch<Rec>('/classifications/' + id, body);
+
+// ---------------------------------------------------------------------------
+// Entity types
+// ---------------------------------------------------------------------------
+
+/**
+ * The ERP document types the caller may attach to a message. The server
+ * filters by each renderer's own permission, so whatever comes back is
+ * genuinely attachable by this user.
+ */
+export const listMailEntityTypes = () =>
+  get<{ entityTypes: MailEntityType[] }>('/entity-types').then((r) => r.entityTypes ?? []);
 
 // ---------------------------------------------------------------------------
 // Message lists

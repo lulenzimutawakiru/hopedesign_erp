@@ -19,7 +19,7 @@
 import { Router } from 'express';
 import pg from 'pg';
 import { tx, pool, Ctx } from '../../db.js';
-import { requirePermission } from '../../middleware/authorize.js';
+import { can, requirePermission } from '../../middleware/authorize.js';
 import {
   asyncHandler,
   badRequest,
@@ -77,6 +77,7 @@ import path from 'node:path';
 import multer from 'multer';
 import { config } from '../../config.js';
 import { encryptSecret } from '../../services/companyConfig.js';
+import { DOCUMENT_TYPES } from '../../services/documents.js';
 
 export const mailOpsRouter = Router();
 
@@ -312,6 +313,32 @@ function mailboxView(access: MailboxAccess): Record<string, unknown> {
     globalAdmin: access.globalAdmin,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Entity types - the ERP records a message may point at
+// ---------------------------------------------------------------------------
+
+/**
+ * The document types this caller may attach, in registry order.
+ *
+ * A type is offered only when the caller holds the permission the renderer
+ * itself demands, so the composer cannot present a link that would be refused
+ * at send time. `entityType` is the exact key `resolveDocumentType` folds onto
+ * a DOCUMENT_TYPES entry - the value the auto-attach step reads back.
+ */
+mailOpsRouter.get(
+  '/entity-types',
+  ...runGet(
+    ['communication.emails.view', 'communication.emails.send', 'communication.mail_drafts.create'],
+    async (_c, _ctx, _q, _p, auth) => {
+      const permissions = auth?.permissions ?? [];
+      const entityTypes = Object.values(DOCUMENT_TYPES)
+        .filter((def) => can(permissions, def.permission))
+        .map((def) => ({ entityType: def.type, label: def.label, permission: def.permission }));
+      return { entityTypes };
+    }
+  )
+);
 
 // ---------------------------------------------------------------------------
 // Mailboxes

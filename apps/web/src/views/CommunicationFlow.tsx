@@ -5,6 +5,7 @@ import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { eventLabel, pick, titleCase } from '../helpers';
 import { pathForEntity } from '../work';
+import { useMailEntityTypes } from '../features/mail/useMail';
 
 type Rec = Record<string, unknown>;
 
@@ -1037,7 +1038,7 @@ function MessagesView({ initialId }: { initialId: string | null }) {
               {convDetail.entityType && Number(convDetail.entityId) ? (
                 <button className="btn btn-primary" type="button" onClick={() => {
                   const target = pathForEntity(String(convDetail.entityType), Number(convDetail.entityId));
-                  if (target && !target.startsWith('/records//')) navigate(target);
+                  if (target && !target.startsWith('/records//') && !target.includes('/undefined/')) navigate(target);
                 }}>Open record</button>
               ) : null}
             </div>
@@ -1150,6 +1151,7 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [templateCode, setTemplateCode] = useState('');
   const [templates, setTemplates] = useState<Rec[]>([]);
   const [scheduledAt, setScheduledAt] = useState('');
+  const entityTypes = useMailEntityTypes();
   const [entityType, setEntityType] = useState('');
   const [entityId, setEntityId] = useState('');
   const [varList, setVarList] = useState<string[]>([]);
@@ -1293,13 +1295,17 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
         </div>
         <div className="field">
           <label>Related record type</label>
-          <input value={entityType} onChange={(e) => setEntityType(e.target.value)} list="com-entity-types" placeholder="employee, leave_request, customer, supplier" />
-          <datalist id="com-entity-types">
-            <option value="employee" />
-            <option value="leave_request" />
-            <option value="customer" />
-            <option value="supplier" />
-          </datalist>
+          <select value={entityType} onChange={(e) => setEntityType(e.target.value)}>
+            <option value="">None</option>
+            {(entityTypes.data ?? []).map((opt) => (
+              <option key={opt.entityType} value={opt.entityType}>{opt.label}</option>
+            ))}
+          </select>
+          <small className="muted">
+            {entityType
+              ? 'The document for this record is generated and attached when the email is sent.'
+              : 'Link the ERP record this email is about to attach its generated PDF on send.'}
+          </small>
         </div>
         <div className="field">
           <label>Related record ID</label>
@@ -1318,7 +1324,7 @@ function ComposeEmail({ onClose, onSaved }: { onClose: () => void; onSaved: () =
             <span className="cell-mono">{entityId.trim()}</span>
             <button className="btn btn-sm btn-ghost" type="button" onClick={() => {
               const target = pathForEntity(entityType.trim(), Number(entityId.trim()));
-              if (target && !target.startsWith('/records//')) navigate(target);
+              if (target && !target.startsWith('/records//') && !target.includes('/undefined/')) navigate(target);
             }}>Open</button>
           </div>
         </div>

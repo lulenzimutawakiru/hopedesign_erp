@@ -323,6 +323,17 @@ export interface MailSignature {
   isDefault?: boolean;
 }
 
+/**
+ * One ERP document type a message may be linked to. `entityType` is the value
+ * to store on the message: it is the exact key the server folds onto a
+ * document renderer, so sending it back unchanged is what lets the generated
+ * PDF attach itself on send.
+ */
+export interface MailEntityType {
+  entityType: string;
+  label: string;
+  permission: string;
+}
 export interface DistributionList {
   id: number;
   code: string;
