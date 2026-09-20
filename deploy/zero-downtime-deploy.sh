@@ -13,7 +13,8 @@
 #   4. brings up the queue broker (redis) and the background worker,
 #   5. recreates ONLY the idle color (the active color keeps serving),
 #   6. waits for the new color to become Docker-healthy,
-#   7. rebuilds the web (SPA) replicas so the frontend ships with the API,
+#   7. rebuilds the web (SPA) replicas on this node and on every peer node in
+#      the web pool, so the frontend ships with the API everywhere at once,
 #   8. atomically flips Caddy to the new color (`caddy reload`),
 #   9. health-gates through the public endpoint and flips back on failure.
 # The old color is left running so rollback is instant and the next deploy
@@ -204,6 +205,32 @@ if [[ "$WEB_OK" != "1" ]]; then
   exit 1
 fi
 log "      web is healthy"
+
+# 7b) The same recreation on every PEER node in the web pool. The peer serves
+#     public HTML from its own replicas - deploy/caddy-live/webpeer*.caddy on
+#     this node adds it to the reverse_proxy pool above - so rebuilding only the
+#     local replicas leaves that pool split across two bundles. A split pool
+#     does not look stale, it *alternates* between builds on every reload, and
+#     the single-request health gate below cannot see it: on 2026-09-20 a
+#     rollout reported success while 4 of 8 public responses carried the
+#     morning's build. Aborting here keeps the old colour live and Caddy serving
+#     one consistent frontend, so a failed peer sync is a failed deploy rather
+#     than a warning nobody reads.
+log "[7b/8] syncing the web image to every peer node in the web pool"
+shopt -s nullglob
+WEBPEER_FILES=("$LIVE_DIR"/webpeer*.caddy)
+shopt -u nullglob
+if [[ ${#WEBPEER_FILES[@]} -eq 0 ]]; then
+  log "      no peer node is in the web pool; nothing to sync"
+elif [[ -f deploy/sync-web-to-peer.sh ]]; then
+  bash deploy/sync-web-to-peer.sh || {
+    log "ABORT: a peer node could not be put onto the new bundle; the API is still on $ACTIVE and untouched, so Caddy keeps serving one consistent frontend. The failing node is named in the web-sync output above."
+    exit 1
+  }
+else
+  log "ABORT: $LIVE_DIR pools a peer node into the web upstreams but deploy/sync-web-to-peer.sh is missing; refusing to finish a rollout that would leave two frontends in the pool."
+  exit 1
+fi
 
 # 8) Atomic flip + public health gate.
 log "[8/8] flipping Caddy to api-$IDLE"
