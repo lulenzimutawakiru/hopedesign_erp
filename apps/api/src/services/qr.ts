@@ -137,7 +137,22 @@ export async function scanQr(
     entityCode: input.code,
     payload: { action: input.action, result, location: input.location },
   });
-  return { qrId: Number(qr.id), code: input.code, result, scanId, status: qr.status };
+  return {
+    qrId: Number(qr.id),
+    code: input.code,
+    result,
+    scanId,
+    status: qr.status,
+    // Context the scanning console needs to render what was just authenticated.
+    // Additive and read-only: secret_hash and every other confidential column stay server-side.
+    entityType: qr.entity_type ?? null,
+    entityId: qr.entity_id === null || qr.entity_id === undefined ? null : Number(qr.entity_id),
+    productId: qr.product_id === null || qr.product_id === undefined ? null : Number(qr.product_id),
+    productName: qr.product_name ?? null,
+    batchId: qr.batch_id === null || qr.batch_id === undefined ? null : Number(qr.batch_id),
+    batchNo: qr.batch_no ?? null,
+    warehouseCode: qr.warehouse_code ?? null,
+  };
 }
 
 /** Public verification via the SECURITY DEFINER function ? returns safe data only. */

@@ -22,6 +22,16 @@ describe('QR lifecycle, anti-counterfeit verification and traceability', () => {
     expect(scan.body.data.qrId).toBe(qr.id);
     expect(scan.body.data.result).toBe('AUTHENTIC');
     expect(typeof scan.body.data.scanId).toBe('number');
+    // The scanning console renders the authenticated record from this response alone.
+    expect(scan.body.data.entityType).toBe('PRODUCT');
+    expect(scan.body.data.entityId).toBe(null);
+    expect(scan.body.data.productId).toBe(3);
+    expect(scan.body.data.productName).toBeTruthy();
+    expect(scan.body.data).toHaveProperty('batchNo');
+    expect(scan.body.data).toHaveProperty('warehouseCode');
+    // Operational scans must not leak the anti-counterfeit secret.
+    expect(scan.body.data).not.toHaveProperty('secret');
+    expect(scan.body.data).not.toHaveProperty('secret_hash');
 
     // Public verification: first scan AUTHENTIC, second ALREADY_VERIFIED.
     const v1 = await api.post('/api/public/verify').send({ payload: qr.payload });

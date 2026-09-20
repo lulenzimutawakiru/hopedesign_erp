@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import jsQR from 'jsqr';
 import { api } from '../api';
 import { useAuth, can } from '../auth';
+import { qrRecordHref } from '../entityRoutes';
 import { navigate } from '../router';
 
 export interface QrScanResult {
@@ -10,9 +11,12 @@ export interface QrScanResult {
   result?: string;
   entityType?: string | null;
   entityId?: number | null;
+  productId?: number | null;
   productCode?: string | null;
   productName?: string | null;
+  batchId?: number | null;
   batchNo?: string | null;
+  warehouseCode?: string | null;
   message?: string;
   [key: string]: unknown;
 }
@@ -136,6 +140,8 @@ export default function QrScanner({ onClose, sheet }: { onClose: () => void; she
     await postCode(code);
   };
 
+  const entityLink = qrRecordHref(user, result);
+
   return (
     <div className={`modal-backdrop ${sheet ? 'sheet-backdrop' : ''}`} onClick={onClose}>
       <div className={`modal qr-modal ${sheet ? 'sheet-modal' : ''}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Scan QR">
@@ -213,17 +219,20 @@ export default function QrScanner({ onClose, sheet }: { onClose: () => void; she
                 {result.result ?? result.status ?? 'OK'}
               </span>
             </div>
-            {result.productCode && (
+            {(result.productName ?? result.productCode) && (
               <div className="result-row"><span>Product</span><strong>{result.productName ?? result.productCode}</strong></div>
             )}
             {result.batchNo && (
               <div className="result-row"><span>Batch</span><strong>{result.batchNo}</strong></div>
             )}
+            {result.warehouseCode && (
+              <div className="result-row"><span>Warehouse</span><strong>{result.warehouseCode}</strong></div>
+            )}
             {result.message && (
               <div className="result-row"><span>Detail</span><strong>{result.message}</strong></div>
             )}
             <div className="quick-actions scan-actions">
-              {result.entityId && <button className="btn" onClick={() => { onClose(); navigate(`/inventory/items/${result.entityId}`); }}>View</button>}
+              {entityLink && <button className="btn" onClick={() => { onClose(); navigate(entityLink); }}>View</button>}
               <button className="btn btn-primary" onClick={() => { onClose(); navigate(`/qr/${result.code}`); }}>Trace</button>
               {can(user, 'inventory.transfers.create') && <button className="btn" onClick={() => { onClose(); navigate('/inventory/transfers/new'); }}>Move</button>}
               {can(user, 'inventory.adjustments.create') && <button className="btn" onClick={() => { onClose(); navigate('/inventory/adjustments/new'); }}>Count</button>}
