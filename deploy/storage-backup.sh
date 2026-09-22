@@ -30,7 +30,12 @@ if docker exec "$API_CONTAINER" tar -czf - -C "$VOLUME_MOUNT" . > "$TMP_FILE" 2>
     mv "$TMP_FILE" "$OUT_FILE"
     chmod 600 "$OUT_FILE"
     echo "Storage backup created: $OUT_FILE"
-    find "$BACKUP_DIR" -type f -name "storage_backup_*.tar.gz" -mtime +14 -delete
+    # Keep uploads exactly as long as the database dumps. postgres-backup.sh
+    # prunes at 30 days and so does the peer's offsite sync, so one number means
+    # an archive is never deleted locally while the peer still expects it. The
+    # old 14-day window made this the only deleter on a different schedule,
+    # which is what raced the 02:30 offsite sync into a false CRITICAL alert.
+    find "$BACKUP_DIR" -type f -name "storage_backup_*.tar.gz" -mtime +30 -delete
   else
     echo "ERROR: storage archive empty/invalid; keeping no backup." >&2
     rm -f "$TMP_FILE"
