@@ -11,8 +11,50 @@ import {
 } from '../utils.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
+import * as payrollSettings from './payrollSettings.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * How an employee is paid can be declared on the HR record
+ * (`BANK|MOBILE_MONEY|CASH|CHEQUE`, 0164) or on the payroll profile
+ * (`BANK_TRANSFER|MOBILE_MONEY|CASH|OTHER`, 0023). Normalise both onto the
+ * payment-batch vocabulary before falling back to instrument inference.
+ */
+const DECLARED_PAYMENT_METHODS: Record<string, string> = {
+  BANK: 'BANK_TRANSFER',
+  BANK_TRANSFER: 'BANK_TRANSFER',
+  MOBILE_MONEY: 'MOBILE_MONEY',
+  CASH: 'CASH',
+  CHEQUE: 'OTHER',
+  OTHER: 'OTHER',
+};
+
+/**
+ * Prefer the declared method, but only when the employee actually holds the
+ * instrument it needs: a declared bank transfer with no account on file (or a
+ * declared wallet with no number) fails batch validation, so those fall back to
+ * whichever instrument the record does carry.
+ *
+ * `fallback` is the company's configured DEFAULT_PAYMENT_METHOD, used only when
+ * the employee declares nothing and holds no instrument at all. Instrument
+ * inference still outranks it - an employee with a bank account on file should
+ * not be paid in cash just because cash is the company default.
+ */
+export function resolvePaymentMethod(
+  declared: unknown,
+  hasBank: boolean,
+  hasPhone: boolean,
+  fallback: string = 'BANK_TRANSFER'
+): string {
+  const mapped = DECLARED_PAYMENT_METHODS[String(declared ?? '').trim().toUpperCase()];
+  if (mapped === 'CASH' || mapped === 'OTHER') return mapped;
+  if (mapped === 'MOBILE_MONEY' && hasPhone) return mapped;
+  if (mapped === 'BANK_TRANSFER' && hasBank) return mapped;
+  if (hasBank) return 'BANK_TRANSFER';
+  if (hasPhone) return 'MOBILE_MONEY';
+  return DECLARED_PAYMENT_METHODS[String(fallback ?? '').trim().toUpperCase()] ?? 'BANK_TRANSFER';
+}
 
 async function nextDoc(client: pg.PoolClient, ctx: Ctx, prefix: string): Promise<string> {
   const res = await client.query('SELECT next_doc_no($1,$2,8) AS code', [ctx.tenantId, prefix]);
@@ -58,11 +100,15 @@ export async function createPaymentBatch(
     throw badRequest(`Payment batch ${existing.rows[0].batch_no} already exists for this payroll (${existing.rows[0].status})`);
   }
   const items = await client.query(
-    `SELECT i.*, e.employee_no, e.first_name, e.last_name, e.bank_name, e.bank_account_no, e.phone
+    `SELECT i.*, e.employee_no, e.first_name, e.last_name, e.bank_name, e.bank_account_no, e.phone,
+            e.payment_method AS employee_payment_method,
+            p.payment_method AS profile_payment_method
      FROM payroll_items i
      JOIN employees e ON e.id = i.employee_id
+     LEFT JOIN employee_payroll_profiles p
+       ON p.employee_id = e.id AND p.company_id = $2 AND p.tenant_id = $3
      WHERE i.payroll_id = $1 ORDER BY e.last_name, e.first_name`,
-    [input.payrollId]
+    [input.payrollId, ctx.companyId, ctx.tenantId]
   );
   if (items.rows.length === 0) throw badRequest('Payroll has no calculated employees to pay');
 
@@ -82,10 +128,16 @@ export async function createPaymentBatch(
     ]
   );
   const batchId = Number(batch.rows[0].id);
+  const fallbackMethod = await payrollSettings.getDefaultPaymentMethod(client, ctx);
   for (const it of items.rows) {
     const hasBank = Boolean(it.bank_account_no);
     const hasPhone = Boolean(it.phone);
-    const method = hasBank ? 'BANK_TRANSFER' : hasPhone ? 'MOBILE_MONEY' : 'BANK_TRANSFER';
+    const method = resolvePaymentMethod(
+      it.profile_payment_method ?? it.employee_payment_method,
+      hasBank,
+      hasPhone,
+      fallbackMethod
+    );
     const masked = hasBank ? '****' + String(it.bank_account_no).slice(-4) : null;
     const mobile = !hasBank && hasPhone ? String(it.phone) : null;
     await client.query(

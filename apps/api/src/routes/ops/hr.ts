@@ -12,6 +12,7 @@ import * as payrollValidation from '../../services/payrollValidation.js';
 import * as payments from '../../services/payments.js';
 import * as loansService from '../../services/loans.js';
 import * as identityLink from '../../services/identityLink.js';
+import * as payrollSettings from '../../services/payrollSettings.js';
 
 export const hrOpsRouter = Router();
 const photoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -40,6 +41,7 @@ const runGet = (permission: string, fn: QueryFn) => [
 
 hrOpsRouter.get('/board', ...runGet('hr.employees.view', (c, ctx) => hr.hrBoard(c, ctx)));
 hrOpsRouter.get('/departments', ...runGet('hr.employees.view', (c, ctx) => hr.listDepartments(c, ctx)));
+hrOpsRouter.get('/payroll-groups', ...runGet('hr.employees.view', (c, ctx) => hr.listPayrollGroups(c, ctx)));
 
 hrOpsRouter.get('/exceptions', ...runGet('hr.payrolls.view', (c, ctx, q) => payrollValidation.exceptionCentre(c, ctx, {
   status: q.status != null && q.status !== '' ? String(q.status) : undefined,
@@ -119,10 +121,13 @@ hrOpsRouter.post('/employees', ...run('hr.employees.create', (c, ctx, b) => hr.c
   nssfNo: b.nssfNo != null ? String(b.nssfNo) : null,
   bankName: b.bankName != null ? String(b.bankName) : null,
   bankAccountNo: b.bankAccountNo != null ? String(b.bankAccountNo) : null,
-  status: b.status != null ? String(b.status) : undefined,
-  payrollEnabled: b.payrollEnabled != null ? Boolean(b.payrollEnabled) : undefined,
-  userId: b.userId != null && b.userId !== '' ? Number(b.userId) : null,
-})));
+    status: b.status != null ? String(b.status) : undefined,
+    payrollEnabled: b.payrollEnabled != null ? Boolean(b.payrollEnabled) : undefined,
+    paymentMethod: b.paymentMethod != null ? String(b.paymentMethod) : null,
+    payrollCurrency: b.payrollCurrency != null ? String(b.payrollCurrency) : null,
+    payrollGroupId: b.payrollGroupId != null ? String(b.payrollGroupId) : null,
+    userId: b.userId != null && b.userId !== '' ? Number(b.userId) : null,
+  })));
 hrOpsRouter.patch('/employees/:id', ...run('hr.employees.update', (c, ctx, b, p) => hr.updateEmployee(c, ctx, Number(p.id), {
   firstName: b.firstName !== undefined && b.firstName !== null ? String(b.firstName) : undefined,
   lastName: b.lastName !== undefined && b.lastName !== null ? String(b.lastName) : undefined,
@@ -137,9 +142,12 @@ hrOpsRouter.patch('/employees/:id', ...run('hr.employees.update', (c, ctx, b, p)
   nssfNo: b.nssfNo !== undefined ? (b.nssfNo === null || b.nssfNo === '' ? null : String(b.nssfNo)) : undefined,
   bankName: b.bankName !== undefined ? (b.bankName === null || b.bankName === '' ? null : String(b.bankName)) : undefined,
   bankAccountNo: b.bankAccountNo !== undefined ? (b.bankAccountNo === null || b.bankAccountNo === '' ? null : String(b.bankAccountNo)) : undefined,
-  status: b.status !== undefined && b.status !== null ? String(b.status) : undefined,
-  payrollEnabled: b.payrollEnabled != null ? Boolean(b.payrollEnabled) : undefined,
-})));
+    status: b.status !== undefined && b.status !== null ? String(b.status) : undefined,
+    payrollEnabled: b.payrollEnabled != null ? Boolean(b.payrollEnabled) : undefined,
+    paymentMethod: b.paymentMethod !== undefined ? (b.paymentMethod === null || b.paymentMethod === '' ? null : String(b.paymentMethod)) : undefined,
+    payrollCurrency: b.payrollCurrency !== undefined ? (b.payrollCurrency === null || b.payrollCurrency === '' ? null : String(b.payrollCurrency)) : undefined,
+    payrollGroupId: b.payrollGroupId !== undefined ? (b.payrollGroupId === null || b.payrollGroupId === '' ? null : String(b.payrollGroupId)) : undefined,
+  })));
 hrOpsRouter.post('/employees/:id/terminate', ...run('hr.employees.terminate', (c, ctx, b, p) => hr.terminateEmployee(c, ctx, Number(p.id), b.terminationDate != null ? String(b.terminationDate) : null)));
 hrOpsRouter.post('/employees/:id/clock-in', ...run('hr.attendance.create', (c, ctx, _b, p) => hr.clockIn(c, ctx, Number(p.id))));
 hrOpsRouter.post('/employees/:id/clock-out', ...run('hr.attendance.create', (c, ctx, _b, p) => hr.clockOut(c, ctx, Number(p.id))));
@@ -276,3 +284,57 @@ hrOpsRouter.post('/final-settlements/:id/reject', ...run('hr.final_settlements.r
 hrOpsRouter.post('/final-settlements/:id/pay', ...run('hr.final_settlements.pay', (c, ctx, b, p) => finalSettlement.payFinalSettlement(c, ctx, Number(p.id), {
   paymentMethod: b.paymentMethod != null ? String(b.paymentMethod) : undefined,
 })));
+
+// --- Payroll settings and statutory configuration ---------------------------
+// Configuration rather than data entry: the settings service owns the key
+// catalogue and its validation, and the statutory endpoints publish the
+// engine's own resolver and arithmetic so a configuration screen can never
+// describe precedence, bands or rates differently from the way a payslip is
+// actually calculated.
+
+/** undefined keeps the caller's company, 'null' asks for the tenant-wide scope. */
+const scopeParam = (raw: unknown): number | null | undefined => {
+  if (raw === undefined || raw === '') return undefined;
+  if (raw === null || raw === 'null') return null;
+  return Number(raw);
+};
+
+const optionalText = (raw: unknown): string | undefined =>
+  raw != null && raw !== '' ? String(raw) : undefined;
+
+hrOpsRouter.get('/payroll-settings', ...runGet('hr.payroll_settings.view', (c, ctx) =>
+  payrollSettings.getPayrollSettings(c, ctx)));
+
+hrOpsRouter.put('/payroll-settings', ...run('hr.payroll_settings.update', (c, ctx, b) =>
+  payrollSettings.savePayrollSettings(c, ctx, b)));
+
+hrOpsRouter.get('/statutory-configs', ...runGet('hr.statutory_configs.view', (c, ctx, q) =>
+  payrollSettings.listStatutoryConfigs(c, ctx, {
+    asOf: optionalText(q.asOf),
+    companyId: scopeParam(q.companyId),
+    category: optionalText(q.category),
+    country: optionalText(q.country),
+  })));
+
+hrOpsRouter.post('/statutory-configs/preview', ...run('hr.statutory_configs.view', (c, ctx, b) =>
+  payrollSettings.previewStatutory(c, ctx, {
+    asOf: optionalText(b.asOf),
+    country: optionalText(b.country),
+    companyId: scopeParam(b.companyId),
+    gross: b.gross,
+    chargeableIncome: b.chargeableIncome,
+    periodStart: optionalText(b.periodStart),
+    periodEnd: optionalText(b.periodEnd),
+  })));
+
+hrOpsRouter.post('/statutory-configs', ...run('hr.statutory_configs.create', (c, ctx, b) =>
+  payrollSettings.createStatutoryConfig(c, ctx, b)));
+
+hrOpsRouter.patch('/statutory-configs/:id', ...run('hr.statutory_configs.update', (c, ctx, b, p) =>
+  payrollSettings.updateStatutoryConfig(c, ctx, p.id, b)));
+
+hrOpsRouter.post('/statutory-configs/:id/supersede', ...run('hr.statutory_configs.activate', (c, ctx, b, p) =>
+  payrollSettings.supersedeStatutoryConfig(c, ctx, p.id, b)));
+
+hrOpsRouter.post('/statutory-configs/:id/restore', ...run('hr.statutory_configs.activate', (c, ctx, b, p) =>
+  payrollSettings.restoreStatutoryConfig(c, ctx, p.id, b)));

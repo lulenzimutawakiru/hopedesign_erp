@@ -45,6 +45,7 @@ const ServiceDeskFlow = lazy(() => import('./ServiceDeskFlow'));
 const ComplianceFlow = lazy(() => import('./CompliancePdpo'));
 const OrganisationSettings = lazy(() => import('./OrganisationSettings'));
 const Account = lazy(() => import('./Account'));
+const PayrollSettings = lazy(() => import('./PayrollSettings'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
   AccessDenied,
@@ -201,6 +202,7 @@ export default function Shell() {
   else if (path === '/spend' || path.startsWith('/spend/')) body = <SpendFlow path={path} />;
   else if (path === '/buy' || path.startsWith('/buy/')) body = <ProcurementFlow path={path} />;
   else if (path === '/crm' || path.startsWith('/crm/')) body = <CrmFlow path={path} />;
+  else if (path === '/people/payroll-settings' || path === '/people/statutory-configs') body = <PayrollSettings path={path} />;
   else if (path === '/people' || path.startsWith('/people/')) body = <HrFlow path={path} />;
   else if (path === '/hikvision' || path.startsWith('/hikvision/')) body = <HikvisionFlow path={path} />;
   else if (path === '/operator') body = <OperatorFloor />;

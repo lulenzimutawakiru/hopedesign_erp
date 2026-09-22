@@ -1165,6 +1165,13 @@ function EmployeeDesk({ id }: { id: number }) {
             <div><span className="emp-hero-k">Hire date</span><span className="emp-hero-v">{shortDate(e.hireDate)}</span></div>
             <div><span className="emp-hero-k">Current contract</span><span className="emp-hero-v">{currentContract ? String(currentContract.contractNo) : 'None on file'}</span></div>
             <div><span className="emp-hero-k">ERP login</span><span className="emp-hero-v">{doc.account ? String((doc.account as Rec).username || (doc.account as Rec).email) : 'Not linked'}</span></div>
+            <div>
+              <span className="emp-hero-k">Payroll</span>
+              <span className="emp-hero-v">
+                {e.payrollEnabled ? 'Enrolled' : 'Not enrolled'}
+                {e.payrollGroupName ? ` (${String(e.payrollGroupName)})` : ''}
+              </span>
+            </div>
           </div>
         </div>
         <div className="emp-hero-actions">
@@ -1460,15 +1467,22 @@ function EmployeeEditor({ id }: { id: number }) {
   const [bankName, setBankName] = useState('');
   const [bankAccountNo, setBankAccountNo] = useState('');
   const [status, setStatus] = useState('ACTIVE');
+  const [groups, setGroups] = useState<Rec[]>([]);
+  const [payrollGroupId, setPayrollGroupId] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [payrollCurrency, setPayrollCurrency] = useState('');
+  const [payrollEnabled, setPayrollEnabled] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     Promise.all([
       api<{ data: Rec[] }>('/api/ops/hr/departments'),
+      api<{ data: Rec[] }>('/api/ops/hr/payroll-groups'),
       api<{ data: Rec }>(`/api/ops/hr/employees/${id}`),
     ])
-      .then(([deptRes, empRes]) => {
+      .then(([deptRes, groupRes, empRes]) => {
         setDepts(deptRes.data ?? []);
+        setGroups(groupRes.data ?? []);
         const e = empRes.data.employee as Rec;
         setDoc(empRes.data);
         setFirstName(String(e.firstName ?? ''));
@@ -1485,6 +1499,10 @@ function EmployeeEditor({ id }: { id: number }) {
         setBankName(String(e.bankName ?? ''));
         setBankAccountNo(String(e.bankAccountNo ?? ''));
         setStatus(String(e.status ?? 'ACTIVE'));
+        setPayrollGroupId(e.payrollGroupId != null ? String(e.payrollGroupId) : '');
+        setPaymentMethod(String(e.paymentMethod ?? ''));
+        setPayrollCurrency(String(e.payrollCurrency ?? ''));
+        setPayrollEnabled(Boolean(e.payrollEnabled));
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Employee failed'));
   }, [id]);
@@ -1509,6 +1527,10 @@ function EmployeeEditor({ id }: { id: number }) {
           bankName: bankName.trim() || null,
           bankAccountNo: bankAccountNo.trim() || null,
           status,
+          payrollEnabled,
+          payrollGroupId: payrollGroupId ? Number(payrollGroupId) : null,
+          paymentMethod: paymentMethod || null,
+          payrollCurrency: payrollCurrency.trim() || null,
         }),
       });
       navigate(`/people/employees/${id}`);
@@ -1567,6 +1589,32 @@ function EmployeeEditor({ id }: { id: number }) {
           <div className="field"><label>NSSF no</label><input value={nssfNo} onChange={(ev) => setNssfNo(ev.target.value)} /></div>
           <div className="field"><label>Bank</label><input value={bankName} onChange={(ev) => setBankName(ev.target.value)} /></div>
           <div className="field"><label>Account no</label><input value={bankAccountNo} onChange={(ev) => setBankAccountNo(ev.target.value)} /></div>
+          <div className="field">
+            <label>Payroll group</label>
+            <select value={payrollGroupId} onChange={(ev) => setPayrollGroupId(ev.target.value)}>
+              <option value="">Not in a group</option>
+              {groups.map((g) => <option key={String(g.id)} value={String(g.id)}>{String(g.name)}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Pay method</label>
+            <select value={paymentMethod} onChange={(ev) => setPaymentMethod(ev.target.value)}>
+              <option value="">Not set</option>
+              <option value="BANK">Bank</option>
+              <option value="MOBILE_MONEY">Mobile money</option>
+              <option value="CASH">Cash</option>
+              <option value="CHEQUE">Cheque</option>
+            </select>
+          </div>
+          <div className="field"><label>Payroll currency</label><input maxLength={3} value={payrollCurrency} onChange={(ev) => setPayrollCurrency(ev.target.value.toUpperCase())} placeholder="UGX" /></div>
+          <div className="field">
+            <label>Payroll enrolment</label>
+            <select value={payrollEnabled ? 'yes' : 'no'} onChange={(ev) => setPayrollEnabled(ev.target.value === 'yes')}>
+              <option value="yes">Included in payroll runs</option>
+              <option value="no">Excluded from payroll runs</option>
+            </select>
+            <p className="muted">Staff who are not enrolled are left out of every payroll run.</p>
+          </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={busy || !canEdit} onClick={save}>Save changes</button>
       </section>
@@ -1582,6 +1630,11 @@ function EmployeeComposer() {
   const [departmentId, setDepartmentId] = useState('');
   const [baseSalary, setBaseSalary] = useState('1500000');
   const [email, setEmail] = useState('');
+  const [groups, setGroups] = useState<Rec[]>([]);
+  const [payrollGroupId, setPayrollGroupId] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [payrollCurrency, setPayrollCurrency] = useState('');
+  const [payrollEnabled, setPayrollEnabled] = useState(true);
   const [userId, setUserId] = useState('');
   const [userQ, setUserQ] = useState('');
   const [userHits, setUserHits] = useState<Rec[]>([]);
@@ -1589,6 +1642,7 @@ function EmployeeComposer() {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api<{ data: Rec[] }>('/api/ops/hr/departments').then((r) => setDepts(r.data ?? [])).catch(() => undefined);
+    api<{ data: Rec[] }>('/api/ops/hr/payroll-groups').then((r) => setGroups(r.data ?? [])).catch(() => undefined);
   }, []);
   const searchUsers = async () => {
     if (!userQ.trim()) { setUserHits([]); return; }
@@ -1609,6 +1663,10 @@ function EmployeeComposer() {
           firstName, lastName, position, departmentId: departmentId ? Number(departmentId) : null,
           baseSalary: Number(baseSalary) || 0,
           email: email.trim() || null,
+          payrollEnabled,
+          payrollGroupId: payrollGroupId ? Number(payrollGroupId) : null,
+          paymentMethod: paymentMethod || null,
+          payrollCurrency: payrollCurrency.trim() || null,
           userId: userId ? Number(userId) : null,
         }),
       });
@@ -1641,6 +1699,31 @@ function EmployeeComposer() {
           </div>
           <div className="field field-required"><label>Monthly basic</label><input inputMode="decimal" value={baseSalary} onChange={(e) => setBaseSalary(e.target.value)} /></div>
           <div className="field"><label>Work email</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Used to match an existing ERP login" /></div>
+          <div className="field">
+            <label>Payroll group</label>
+            <select value={payrollGroupId} onChange={(e) => setPayrollGroupId(e.target.value)}>
+              <option value="">Not in a group</option>
+              {groups.map((g) => <option key={String(g.id)} value={String(g.id)}>{String(g.name)}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Pay method</label>
+            <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+              <option value="">Not set</option>
+              <option value="BANK">Bank</option>
+              <option value="MOBILE_MONEY">Mobile money</option>
+              <option value="CASH">Cash</option>
+              <option value="CHEQUE">Cheque</option>
+            </select>
+          </div>
+          <div className="field"><label>Payroll currency</label><input maxLength={3} value={payrollCurrency} onChange={(e) => setPayrollCurrency(e.target.value.toUpperCase())} placeholder="UGX" /></div>
+          <div className="field">
+            <label>Payroll enrolment</label>
+            <select value={payrollEnabled ? 'yes' : 'no'} onChange={(e) => setPayrollEnabled(e.target.value === 'yes')}>
+              <option value="yes">Included in payroll runs</option>
+              <option value="no">Excluded from payroll runs</option>
+            </select>
+          </div>
         </div>
         <div className="field" style={{ marginTop: 12 }}>
           <label>ERP user account</label>

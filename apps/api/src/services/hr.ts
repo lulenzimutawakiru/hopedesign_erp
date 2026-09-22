@@ -13,6 +13,7 @@ import * as payrollValidation from './payrollValidation.js';
 import { loadModernPayrollInputs, prorateEmployment, prorateBasic, resolveComponentAmount, emptyVariablePay } from './payrollEngine.js';
 import * as identityLink from './identityLink.js';
 import { mintEmployeeIdentity } from './employeeIdentity.js';
+import * as payrollSettings from './payrollSettings.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -55,6 +56,113 @@ export async function listDepartments(client: pg.PoolClient, ctx: Ctx) {
   return toCamelRows(res.rows);
 }
 
+/** Payment methods HR records on the employee file (0164 employees_payment_method_check). */
+const EMPLOYEE_PAYMENT_METHODS = ['BANK', 'MOBILE_MONEY', 'CASH', 'CHEQUE'];
+/** employee_payroll_profiles.payment_method uses the payment-batch vocabulary. */
+const PROFILE_PAYMENT_METHODS: Record<string, string> = {
+  BANK: 'BANK_TRANSFER',
+  MOBILE_MONEY: 'MOBILE_MONEY',
+  CASH: 'CASH',
+  CHEQUE: 'OTHER',
+};
+
+function normalizeEmployeePaymentMethod(value: unknown): string {
+  const method = String(value ?? '').trim().toUpperCase();
+  if (!EMPLOYEE_PAYMENT_METHODS.includes(method)) {
+    throw badRequest('Payment method must be BANK, MOBILE_MONEY, CASH or CHEQUE');
+  }
+  return method;
+}
+
+function normalizePayrollCurrency(value: unknown): string {
+  const currency = String(value ?? '').trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw badRequest('Payroll currency must be a three-letter code, for example UGX');
+  return currency;
+}
+
+function normalizePayrollGroupId(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) throw badRequest('Payroll group must be a valid id');
+  return id;
+}
+
+export async function listPayrollGroups(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT id, code, name, frequency, salary_currency, default_payment_method, status
+       FROM payroll_groups
+      WHERE tenant_id = $1 AND company_id = $2
+      ORDER BY name`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  return toCamelRows(res.rows);
+}
+
+/**
+ * Mirror the payroll fields HR edits on the employee file onto the employee's
+ * payroll profile. The profile is what group-scoped runs and the payment batch
+ * read, so a payroll-group assignment that never reaches it looks to the run
+ * like an unassigned employee. The profile is created on first group
+ * assignment; later edits only touch the fields that were actually supplied.
+ */
+async function syncPayrollProfile(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  employeeId: number,
+    input: { payrollGroupId?: number | string | null; paymentMethod?: string | null; payrollCurrency?: string | null }
+) {
+  const hasGroup = input.payrollGroupId !== undefined;
+  const hasMethod = input.paymentMethod !== undefined;
+  const hasCurrency = input.payrollCurrency !== undefined;
+  if (!hasGroup && !hasMethod && !hasCurrency) return;
+
+  const groupId = hasGroup ? normalizePayrollGroupId(input.payrollGroupId) : null;
+  if (hasGroup && groupId !== null) {
+    const grp = await client.query(
+      `SELECT id FROM payroll_groups
+        WHERE id = $1 AND tenant_id = $2 AND company_id = $3 AND status = 'ACTIVE'`,
+      [groupId, ctx.tenantId, ctx.companyId]
+    );
+    if (grp.rows.length === 0) throw badRequest('Payroll group not found or inactive for this company');
+  }
+
+  if (groupId === null) {
+    // Nothing to attach yet: without a group there is no reason to create a
+    // profile row, and an existing row is only edited where a field changed.
+    const existing = await client.query(
+      `SELECT 1 FROM employee_payroll_profiles WHERE company_id = $1 AND employee_id = $2`,
+      [ctx.companyId, employeeId]
+    );
+    if (existing.rows.length === 0) return;
+  }
+
+  const method = hasMethod && input.paymentMethod ? PROFILE_PAYMENT_METHODS[String(input.paymentMethod)] : null;
+  const currency = hasCurrency && input.payrollCurrency ? String(input.payrollCurrency) : null;
+  // Only the INSERT path needs a default value, and the configured default is
+  // what a brand new profile should carry: a hard-coded BANK_TRANSFER/UGX here
+  // would silently contradict whatever the payroll settings screen declares.
+  const defaultMethod = method ?? (await payrollSettings.getDefaultPaymentMethod(client, ctx));
+  const defaultCurrency = currency ?? (await payrollSettings.getDefaultCurrency(client, ctx));
+  const updates = ['updated_at = now()'];
+  if (hasGroup) updates.push('payroll_group_id = EXCLUDED.payroll_group_id');
+  if (hasMethod && method) updates.push('payment_method = EXCLUDED.payment_method');
+  if (hasCurrency && currency) updates.push('currency = EXCLUDED.currency');
+
+  await client.query(
+    `INSERT INTO employee_payroll_profiles
+       (company_id, tenant_id, branch_id, employee_id, payroll_group_id, payment_method, currency, status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'ACTIVE',$8)
+     ON CONFLICT (company_id, employee_id) DO UPDATE SET ${updates.join(', ')}`,
+    [
+      ctx.companyId, ctx.tenantId, ctx.branchId ?? null, employeeId,
+      hasGroup ? groupId : null,
+      defaultMethod,
+      defaultCurrency,
+      ctx.userId ?? null,
+    ]
+  );
+}
+
 export async function createEmployee(
   client: pg.PoolClient,
   ctx: Ctx,
@@ -74,6 +182,9 @@ export async function createEmployee(
     bankAccountNo?: string | null;
     status?: string;
     payrollEnabled?: boolean;
+    paymentMethod?: string | null;
+    payrollCurrency?: string | null;
+    payrollGroupId?: number | string | null;
     userId?: number | null;
   }
 ) {
@@ -82,23 +193,39 @@ export async function createEmployee(
   const { official, short } = await mintEmployeeIdentity(client, ctx);
   const no = official;
   const status = input.status && ['ACTIVE', 'PROBATION'].includes(input.status) ? input.status : 'ACTIVE';
+  const payrollGroupId =
+    input.payrollGroupId != null && String(input.payrollGroupId) !== '' ? normalizePayrollGroupId(input.payrollGroupId) : null;
+  const paymentMethod =
+    input.paymentMethod != null && String(input.paymentMethod).trim() !== ''
+      ? normalizeEmployeePaymentMethod(input.paymentMethod)
+      : null;
+  const payrollCurrency =
+    input.payrollCurrency != null && String(input.payrollCurrency).trim() !== ''
+      ? normalizePayrollCurrency(input.payrollCurrency)
+      : null;
   const ins = await client.query(
     `INSERT INTO employees
        (company_id, tenant_id, branch_id, department_id, employee_no, first_name, last_name,
         phone, email, tin, nssf_no, position, hire_date, salary_type, base_salary,
-        bank_name, bank_account_no, status, payroll_enabled,
+        bank_name, bank_account_no, status, payroll_enabled, payment_method, payroll_currency,
         employee_number, short_employee_number)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, ctx.branchId ?? null, input.departmentId ?? null, no,
       input.firstName.trim(), input.lastName.trim(), input.phone ?? null, input.email ?? null,
       input.tin ?? null, input.nssfNo ?? null, input.position ?? null,
       input.hireDate ?? new Date().toISOString().slice(0, 10),
       input.salaryType ?? 'MONTHLY', Number(input.baseSalary ?? 0),
-      input.bankName ?? null, input.bankAccountNo ?? null, status, input.payrollEnabled ?? true, official, short,
+      input.bankName ?? null, input.bankAccountNo ?? null, status, input.payrollEnabled ?? true,
+      paymentMethod, payrollCurrency, official, short,
     ]
   );
   const employeeId = Number(ins.rows[0].id);
+  await syncPayrollProfile(client, ctx, employeeId, {
+    payrollGroupId,
+    paymentMethod: paymentMethod ?? undefined,
+    payrollCurrency: payrollCurrency ?? undefined,
+  });
   const requestedUserId = input.userId != null ? Number(input.userId) : 0;
   const matchedUserId = requestedUserId || (await identityLink.findUnlinkedUserByEmail(client, ctx, input.email));
   if (matchedUserId) {
@@ -155,6 +282,9 @@ export async function updateEmployee(
     bankAccountNo?: string | null;
     status?: string;
     payrollEnabled?: boolean;
+    paymentMethod?: string | null;
+    payrollCurrency?: string | null;
+    payrollGroupId?: number | string | null;
   }
 ) {
   const exists = await client.query(
@@ -203,6 +333,16 @@ export async function updateEmployee(
     push('status', status);
   }
   if (input.payrollEnabled !== undefined) push('payroll_enabled', Boolean(input.payrollEnabled));
+  const paymentMethod =
+    input.paymentMethod !== undefined && input.paymentMethod !== null && String(input.paymentMethod).trim() !== ''
+      ? normalizeEmployeePaymentMethod(input.paymentMethod)
+      : null;
+  if (input.paymentMethod !== undefined) push('payment_method', paymentMethod);
+  const payrollCurrency =
+    input.payrollCurrency !== undefined && input.payrollCurrency !== null && String(input.payrollCurrency).trim() !== ''
+      ? normalizePayrollCurrency(input.payrollCurrency)
+      : null;
+  if (input.payrollCurrency !== undefined) push('payroll_currency', payrollCurrency);
 
   if (sets.length === 0) throw badRequest('Nothing to update');
   params.push(employeeId, ctx.tenantId);
@@ -219,6 +359,19 @@ export async function updateEmployee(
     recordCode: String(res.rows[0].employee_no),
     metadata: { fields: Object.keys(input) },
   });
+  if (
+    input.payrollGroupId !== undefined ||
+    input.paymentMethod !== undefined ||
+    input.payrollCurrency !== undefined
+  ) {
+    // employee_payroll_profiles is what group-scoped runs and the payment batch read,
+    // so an edit on the employee file has to land on the profile as well.
+    await syncPayrollProfile(client, ctx, employeeId, {
+      payrollGroupId: input.payrollGroupId,
+      paymentMethod: input.paymentMethod === undefined ? undefined : paymentMethod,
+      payrollCurrency: input.payrollCurrency === undefined ? undefined : payrollCurrency,
+    });
+  }
   return { employeeId, employeeNo: String(res.rows[0].employee_no) };
 }
 
@@ -259,8 +412,14 @@ export async function listEmployees(
 
 export async function getEmployee(client: pg.PoolClient, ctx: Ctx, employeeId: number) {
   const res = await client.query(
-    `SELECT e.*, d.code AS department_code, d.name AS department_name
-     FROM employees e LEFT JOIN departments d ON d.id = e.department_id
+    `SELECT e.*, d.code AS department_code, d.name AS department_name,
+            p.payroll_group_id, p.payment_method AS profile_payment_method,
+            p.currency AS payroll_profile_currency, g.name AS payroll_group_name
+     FROM employees e
+     LEFT JOIN departments d ON d.id = e.department_id
+     LEFT JOIN employee_payroll_profiles p
+            ON p.employee_id = e.id AND p.tenant_id = e.tenant_id AND p.company_id = e.company_id
+     LEFT JOIN payroll_groups g ON g.id = p.payroll_group_id
      WHERE e.id = $1 AND e.tenant_id = $2`,
     [employeeId, ctx.tenantId]
   );
@@ -659,7 +818,7 @@ export async function createPayroll(
     );
     if (clash.rows.length) throw badRequest(`Overlaps payroll ${clash.rows[0].payroll_no}`);
   }
-  const payrollNo = await nextDoc(client, ctx, 'PAY');
+  const payrollNo = await nextDoc(client, ctx, await payrollSettings.getPayrollRunPrefix(client, ctx));
   const ins = await client.query(
     `INSERT INTO payrolls (company_id, tenant_id, payroll_no, period_start, period_end, status, created_by,
         run_type, off_cycle_type, reason, employee_ids, extra_earnings, extra_deductions, deduct_loans, deduct_advances, payment_date, payroll_group_id)
@@ -724,7 +883,9 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
   }
   const periodStart = toISODate(run.rows[0].period_start) ?? '';
   const periodEnd = toISODate(run.rows[0].period_end) ?? '';
-  const currency = String(run.rows[0].currency ?? 'UGX');
+  const currency = run.rows[0].currency
+    ? String(run.rows[0].currency)
+    : await payrollSettings.getDefaultCurrency(client, ctx);
   const runType = String(run.rows[0].run_type ?? 'NORMAL');
   const isOffCycle = runType === 'OFF_CYCLE';
   const employeeIds = isOffCycle && Array.isArray(run.rows[0].employee_ids)
@@ -922,7 +1083,7 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     const otherDeductions = round2(extraDeductions + componentDeductions + employeeDeductions + benefitsEmployee);
     const totalDeductions = round2(paye + nssf.employee + lst + loans + advances + otherDeductions);
     const net = round2(gross - totalDeductions);
-    const slip = await nextDoc(client, ctx, 'PS');
+    const slip = await nextDoc(client, ctx, await payrollSettings.getPayslipPrefix(client, ctx));
     const breakdown = {
       paye: { configId: payeCfg.id, code: payeCfg.code, version: payeCfg.version, taxableIncome, tax: paye },
       nssf: { configId: nssfCfg.id, code: nssfCfg.code, version: nssfCfg.version, employee: nssf.employee, employer: nssf.employer, base: nssf.base, ceiling: nssf.ceiling },
