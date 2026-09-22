@@ -32,6 +32,25 @@ MAX_ALERTS_PER_CYCLE="${MAX_ALERTS_PER_CYCLE:-10}"
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" >> "$SELF_LOG"; }
 
+# Fingerprint the *condition*, not the log line.
+#
+# A raw line carries a timestamp, a byte count, a duration and sometimes a
+# date-stamped file name, so one recurring failure produced a different
+# dedupe key on every cycle - and every new key is a new email. On
+# 2026-09-22 the self-recovering offsite-sync warning alone minted 6 fresh
+# keys inside a single cycle. Stripping the volatile tokens collapses every
+# repetition of one problem onto one key, so alert.sh's own throttle takes
+# over instead of the tripwire inventing a brand-new alert each time.
+normalize() {
+  printf '%s' "$1" \
+    | sed -E \
+        -e 's/\[[0-9]{4}-[0-9]{2}-[0-9]{2}[^]]*\]//g' \
+        -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}([T_][0-9:.-]+)?/<ts>/g' \
+        -e 's/[0-9]+(\.[0-9]+)?(ms|s|m|h|d|B|KB|MB|GB)\b/<n>\2/g' \
+        -e 's/[0-9]+/<n>/g' \
+    | tr -s ' '
+}
+
 notify() { # severity key subject body
   "$ALERT" send "$1" "$2" "$3" "$4" >/dev/null 2>&1 || log "alert.sh failed for key=$2"
 }
@@ -127,8 +146,12 @@ scan_log() { # $1 = absolute path
             log "suppressed further alerts from $(basename "$file") (cycle cap $MAX_ALERTS_PER_CYCLE reached)"
             break
           fi
-          hash="$(printf '%s' "$file$line" | md5sum | cut -c1-12)"
-          notify CRITICAL "log-$hash" "log alert in $(basename "$file")" \
+          hash="$(normalize "$file$line" | md5sum | cut -c1-12)"
+          case "$line" in
+            *CRITICAL*|*critical*|*ERROR*|*error*|*FAILED*|*failed*) severity=CRITICAL ;;
+            *) severity=WARN ;;
+          esac
+          notify "$severity" "log-$hash" "log alert in $(basename "$file")" \
 "$(basename "$file") reported a problem on $(hostname).
 
 $line

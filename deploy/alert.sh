@@ -24,13 +24,39 @@ ENV_FILE="/opt/hopedesign_erp/.env.production"
 LOG_DIR="/opt/hopedesign_erp/logs"
 LOG_FILE="$LOG_DIR/alerts.log"
 STATE_DIR="$LOG_DIR/alert-state"
+# Operator-supplied overrides (ALERT_EMAIL, ALERT_DAILY_MAX, ...) live in a
+# separate file on purpose - see deploy/alert.env for why .env.production is
+# off limits here.
+ALERT_ENV_FILE="/opt/hopedesign_erp/deploy/alert.env"
+if [ -f "$ALERT_ENV_FILE" ]; then
+  set -a
+  . "$ALERT_ENV_FILE"
+  set +a
+fi
 THROTTLE_SECONDS="${ALERT_THROTTLE_SECONDS:-3600}"
+# Hard ceiling on host alert mail per UTC day.
+#
+# These alerts leave through the same Resend account - and the same
+# RESEND_API_KEY - the ERP uses for sign-in codes and password mail. On
+# 2026-09-20/21 the shared daily quota ran out and 41 alerts died with
+# `http=429 daily_quota_exceeded`; a sign-in code issued in that same window
+# would have died exactly the same way. A noisy watchdog must never be able
+# to spend the quota the security mail needs, so host alerts get a budget
+# and simply stop once the day's budget is gone.
+DAILY_MAX="${ALERT_DAILY_MAX:-40}"
 
 mkdir -p "$LOG_DIR" "$STATE_DIR"
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" >> "$LOG_FILE"; }
 
-envget() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1 | tr -d '\r'; }
+# Look up a setting: an already-exported environment variable wins over
+# .env.production. Without this, the operator override file (deploy/alert.env,
+# loaded with `set -a` above) had no effect - envget read the file directly.
+envget() {
+  local name="$1"
+  if [ -n "${!name-}" ]; then printf '%s' "${!name}"; return 0; fi
+  sed -n "s/^$name=//p" "$ENV_FILE" 2>/dev/null | tail -1 | tr -d '\r'
+}
 
 action="${1:-}"; shift 2>/dev/null || true
 
@@ -83,6 +109,17 @@ if [ "${ALERT_FORCE:-0}" != "1" ] && [ -f "$state_file" ]; then
   fi
 fi
 
+# Daily budget - the last gate before we touch the shared Resend quota.
+daily_file="$STATE_DIR/daily-$(date -u +%Y-%m-%d).count"
+daily_used=0
+[ -f "$daily_file" ] && daily_used="$(cat "$daily_file" 2>/dev/null || echo 0)"
+case "$daily_used" in ''|*[!0-9]*) daily_used=0 ;; esac
+
+if [ "${ALERT_FORCE:-0}" != "1" ] && [ "$daily_used" -ge "$DAILY_MAX" ]; then
+  log "suppressed (daily cap ${daily_used}/${DAILY_MAX}) key=$key severity=$severity"
+  exit 0
+fi
+
 payload_file="$(mktemp /tmp/hopedesign-alert.XXXXXX)"
 chmod 600 "$payload_file"
 export ALERT_PAYLOAD_FILE="$payload_file"
@@ -123,6 +160,7 @@ body_out="$(printf '%s' "$response" | sed '$d' | tr -d '\n')"
 case "$http_code" in
   2*)
     touch "$state_file"
+    printf '%s' "$(( daily_used + 1 ))" > "$daily_file"
     log "SENT severity=$severity key=$key to=$to_addr subject=$subject"
     exit 0
     ;;

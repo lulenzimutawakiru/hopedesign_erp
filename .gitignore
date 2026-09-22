@@ -33,6 +33,9 @@ deploy/caddy-live/Caddyfile.applied
 env/
 backups/
 
+# Operator host-alert overrides (ALERT_EMAIL etc) - read by deploy/alert.sh only.
+deploy/alert.env
+
 # Vercel/Supabase diagnostic scratch
 hv-*.json
 hv-*.jsonl
