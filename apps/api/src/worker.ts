@@ -69,7 +69,7 @@ function summarise(result: unknown): Record<string, number> | undefined {
   if (!result || typeof result !== 'object') return undefined;
   const source = result as Record<string, unknown>;
   const counts: Record<string, number> = {};
-  for (const key of ['processed', 'ok', 'failed']) {
+  for (const key of ['processed', 'ok', 'failed', 'deferred']) {
     const value = source[key];
     if (typeof value === 'number') counts[key] = value;
   }

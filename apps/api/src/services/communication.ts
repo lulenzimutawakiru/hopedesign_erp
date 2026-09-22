@@ -739,6 +739,20 @@ export async function renderEmailForSend(
 
 const RETRY_DELAYS_SECONDS = [30, 120, 600];
 const MAX_DELIVERY_RETRIES = 3;
+/**
+ * Backoff for a provider *allowance* refusal - "quota exhausted", "rate
+ * limited". The message is fine, the allowance is not, and an allowance resets
+ * on its own clock (Resend's daily quota at midnight), so these are deferred
+ * hourly rather than on the transport backoff above.
+ */
+const THROTTLE_DEFER_SECONDS = 3600;
+/**
+ * Ceiling on hourly allowance deferrals - 72 hours. Generous enough that a
+ * forgotten top-up costs a security email hours rather than its delivery, and
+ * finite so a permanently dead provider still surfaces as a FAILED row instead
+ * of an eternal RETRYING one.
+ */
+const MAX_THROTTLE_DEFERRALS = 72;
 
 let deliveryLoopRunning = false;
 
@@ -747,26 +761,36 @@ let deliveryLoopRunning = false;
  * Called on an interval from the API server (single-flight). On failure the
  * delivery is retried with an exponential backoff, then marked FAILED.
  */
-export async function processNotificationDeliveries(): Promise<{ processed: number; ok: number; failed: number }> {
-  if (deliveryLoopRunning) return { processed: 0, ok: 0, failed: 0 };
+export async function processNotificationDeliveries(): Promise<{
+  processed: number;
+  ok: number;
+  failed: number;
+  deferred: number;
+}> {
+  if (deliveryLoopRunning) return { processed: 0, ok: 0, failed: 0, deferred: 0 };
   deliveryLoopRunning = true;
   try {
+    // This worker runs on a timer with no request context, so row security on
+    // notification_deliveries, notifications and users is fail-closed and would
+    // hide every row below. The reader is a SECURITY DEFINER function that
+    // returns only what it takes to send one message (migration 0174).
     const res = await query(
-      `SELECT d.id, d.tenant_id, d.user_id, d.channel, d.recipient, d.retry_count,
-              n.title, n.body, n.action_label, n.action_target, u.email, u.phone
-         FROM notification_deliveries d
-         JOIN notifications n ON n.id = d.notification_id
-         JOIN users u ON u.id = d.user_id
-        WHERE d.channel IN ('EMAIL','SMS','WHATSAPP')
-          AND d.status IN ('QUEUED','RETRYING')
-          AND (d.next_retry_at IS NULL OR d.next_retry_at <= now())
-        ORDER BY d.created_at ASC
-        LIMIT 100`
+      `SELECT id, tenant_id, user_id, channel, recipient, retry_count,
+              title, body, action_label, action_target, email, phone
+         FROM get_dispatchable_notification_deliveries($1)`,
+      [100]
     );
     let ok = 0;
     let failed = 0;
+    // Deferred rows are not failures: the provider refused on its allowance, not
+    // on the message. Counting them separately keeps the worker log honest.
+    let deferred = 0;
     for (const row of res.rows as Record<string, unknown>[]) {
       const deliveryId = Number(row.id);
+      // The queue is read cross-tenant, but every write below stays tenant
+      // scoped: notification_deliveries and sms_messages are FORCE RLS, so the
+      // row's own tenant has to be published or the policy rejects the write.
+      const rowCtx: Ctx = { tenantId: Number(row.tenant_id) };
       const channel = String(row.channel);
       const fallbackProvider = channel === 'EMAIL' ? 'resend' : 'africastalking';
       const recipient = String(row.recipient ?? '').trim();
@@ -788,41 +812,56 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
             body,
             button,
           });
+      // A spent provider allowance (Resend's daily quota, a rate limit) says
+      // nothing about the message: the same send succeeds once the allowance
+      // resets, so it is deferred rather than failed. Retiring the row instead is
+      // what costs a security notice its delivery for good.
+      const throttled = /quota|rate limit|too many|throttl/i.test(result.error ?? '');
+      // A permanent refusal: nobody to send to, or the channel was never usable.
+      // Retrying cannot change either.
       const terminal =
-        !to ||
-        /quota|rate limit|not configured|missing|invalid|no recipient/i.test(result.error ?? '');
+        !to || /not configured|missing|invalid|no recipient/i.test(result.error ?? '');
       if (result.ok) {
         await query(
           `UPDATE notification_deliveries
               SET status = 'SENT', provider = $1, provider_message_id = $2, sent_at = now(), error = NULL
             WHERE id = $3`,
-          [result.provider ?? fallbackProvider, result.providerMessageId ?? null, deliveryId]
+          [result.provider ?? fallbackProvider, result.providerMessageId ?? null, deliveryId],
+          rowCtx
         );
         if (channel === 'SMS') {
           await query(
             `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, provider_message_id, sent_at)
              VALUES ($1,$2,$3,$4,$5,'SENT',$6,now())`,
-            [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.providerMessageId ?? null]
+            [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.providerMessageId ?? null],
+            rowCtx
           );
         }
         ok += 1;
       } else {
         const attempts = Number(row.retry_count ?? 0) + 1;
-        if (!terminal && attempts <= MAX_DELIVERY_RETRIES) {
-          const delaySeconds =
-            RETRY_DELAYS_SECONDS[attempts - 1] ?? RETRY_DELAYS_SECONDS[RETRY_DELAYS_SECONDS.length - 1];
+        // A throttled row waits on the allowance clock rather than the transport
+        // backoff, and gets a far longer budget: `attempts` still bounds it, so a
+        // dead provider ends as a visible FAILED row rather than a silent loop.
+        const deferSeconds = throttled
+          ? THROTTLE_DEFER_SECONDS
+          : RETRY_DELAYS_SECONDS[attempts - 1] ?? RETRY_DELAYS_SECONDS[RETRY_DELAYS_SECONDS.length - 1];
+        const retryBudget = throttled ? MAX_THROTTLE_DEFERRALS : MAX_DELIVERY_RETRIES;
+        if (!terminal && attempts <= retryBudget) {
           await query(
             `UPDATE notification_deliveries
                 SET status = 'RETRYING', retry_count = $1, error = $2,
                     next_retry_at = now() + ($3::int || ' seconds')::interval
               WHERE id = $4`,
-            [attempts, result.error ?? 'unknown', delaySeconds, deliveryId]
+            [attempts, result.error ?? 'unknown', deferSeconds, deliveryId],
+            rowCtx
           );
           if (channel === 'SMS') {
             await query(
               `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, error, retry_count)
                VALUES ($1,$2,$3,$4,$5,'RETRYING',$6,$7)`,
-              [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.error ?? 'unknown', attempts]
+              [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.error ?? 'unknown', attempts],
+              rowCtx
             );
           }
         } else {
@@ -830,20 +869,23 @@ export async function processNotificationDeliveries(): Promise<{ processed: numb
             `UPDATE notification_deliveries
                 SET status = 'FAILED', retry_count = $1, error = $2
               WHERE id = $3`,
-            [attempts, result.error ?? 'unknown', deliveryId]
+            [attempts, result.error ?? 'unknown', deliveryId],
+            rowCtx
           );
           if (channel === 'SMS') {
             await query(
               `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, error, retry_count)
                VALUES ($1,$2,$3,$4,$5,'FAILED',$6,$7)`,
-              [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.error ?? 'unknown', attempts]
+              [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.error ?? 'unknown', attempts],
+              rowCtx
             );
           }
         }
-        failed += 1;
+        if (terminal || attempts > retryBudget) failed += 1;
+        else deferred += 1;
       }
     }
-    return { processed: res.rows.length, ok, failed };
+    return { processed: res.rows.length, ok, failed, deferred };
   } finally {
     deliveryLoopRunning = false;
   }
