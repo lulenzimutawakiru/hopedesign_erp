@@ -110,6 +110,31 @@ function MyHr() {
     api<{ data: Rec[] }>('/api/ops/hcm/me/attendance').then((r) => setAttendance(r.data ?? [])).catch(() => undefined);
     api<{ data: Rec[] }>('/api/ops/hcm/me/payslips').then((r) => setPayslips(r.data ?? [])).catch(() => undefined);
   }, []);
+  const clockFromDevice = (path: string) => {
+    if (!navigator.geolocation) {
+      setError('This device cannot share its location. A clock-in is only recorded at the factory.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      try {
+        await api(path, {
+          method: 'POST',
+          body: JSON.stringify({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          }),
+        });
+        const r = await api<{ data: Rec[] }>('/api/ops/hcm/me/attendance');
+        setAttendance(r.data ?? []);
+        setError('');
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Clock-in was not recorded');
+      }
+    }, () => {
+      setError('Allow location so the clock-in can be checked against the factory premises.');
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  };
   const emp = (profile?.employee ?? null) as Rec | null;
   return (
     <Page kicker="Self-service" title="My HR" sub="Your file, leave, attendance and payslips. Link an ERP login to the employee record if this page is empty.">
@@ -170,6 +195,13 @@ function MyHr() {
           )}
           {tab === 'attendance' && (
             <section className="card">
+              <div className="card-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <h3>Clock</h3>
+                <div className="action-group">
+                  <button className="btn btn-primary btn-sm" type="button" onClick={() => clockFromDevice('/api/ops/hcm/me/clock-in')}>Clock in</button>
+                  <button className="btn btn-sm" type="button" onClick={() => clockFromDevice('/api/ops/hcm/me/clock-out')}>Clock out</button>
+                </div>
+              </div>
               <div className="table-wrap">
                 <table className="data">
                   <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Status</th></tr></thead>

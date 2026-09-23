@@ -33,7 +33,7 @@ const PURPOSE_COPY: Record<EmailCodePurpose, string> = {
 };
 
 /**
- * Inner body of the "Confirm it's you" mail.
+ * Inner body of the verification-code mail.
  *
  * Only the body is rendered here: sendEmail() wraps every message in the
  * HOPE DESIGN shell (logo, header band, contact block, copyright) through
@@ -46,18 +46,18 @@ export function renderCodeEmailHtml(opts: {
   purpose: EmailCodePurpose;
   ttlMinutes: number;
 }): string {
-  const purposeLine = `Here is the security code needed to ${PURPOSE_COPY[opts.purpose]}.`;
+  const purposeLine = `Please use the verification code below to ${PURPOSE_COPY[opts.purpose]}.`;
   return [
-    `<h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;font-weight:800;color:${BRAND_COLORS.navy};">Confirm it's you</h1>`,
+    `<h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;font-weight:800;color:${BRAND_COLORS.navy};">Verification code</h1>`,
     `<p style="margin:0 0 14px;">${escapeHtml(opts.greeting)}</p>`,
     `<p style="margin:0 0 6px;">${escapeHtml(purposeLine)}</p>`,
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 18px;"><tr>',
     `<td align="center" style="background:${BRAND_COLORS.canvas};border:1px solid ${BRAND_COLORS.border};border-radius:10px;padding:22px 12px;">`,
     `<div style="font-family:'Courier New',Courier,monospace;font-size:34px;font-weight:700;letter-spacing:10px;text-indent:10px;line-height:1.2;color:${BRAND_COLORS.navy};">${escapeHtml(opts.code)}</div>`,
     '</td></tr></table>',
-    `<p style="margin:0 0 14px;font-weight:700;color:${BRAND_COLORS.red};">Do NOT share this code with anyone.</p>`,
-    `<p style="margin:0 0 14px;">It expires in ${Number(opts.ttlMinutes)} minutes and can only be used once.</p>`,
-    `<p style="margin:0;font-size:13.5px;color:${BRAND_COLORS.muted};">If you didn't request this email, there's nothing to worry about - you can safely ignore it. To keep your account secure, please don't forward this email to anyone.</p>`,
+    `<p style="margin:0 0 14px;font-weight:700;color:${BRAND_COLORS.red};">Do not disclose this code to any person, including members of staff.</p>`,
+    `<p style="margin:0 0 14px;">This code expires in ${Number(opts.ttlMinutes)} minutes and may be used once only.</p>`,
+    `<p style="margin:0;font-size:13.5px;color:${BRAND_COLORS.muted};">If you did not request this code, you may disregard this message. Please do not forward it.</p>`,
   ].join('');
 }
 
@@ -66,24 +66,24 @@ const defaultSender: EmailCodeSender = async ({ to, name, code, purpose, ttlMinu
   // Explicit text alternative: stripTags() cannot separate the heading from the
   // code panel, so text-only clients get a hand-built version.
   const text = [
-    "Confirm it's you",
+    'Verification code',
     '',
     greeting,
     '',
-    `Here is the security code needed to ${PURPOSE_COPY[purpose]}.`,
+    `Please use the verification code below to ${PURPOSE_COPY[purpose]}.`,
     '',
     code,
     '',
-    'Do NOT share this code with anyone.',
+    'Do not disclose this code to any person, including members of staff.',
     '',
-    `It expires in ${ttlMinutes} minutes and can only be used once.`,
-    "If you didn't request this email, there's nothing to worry about - you can safely ignore it. To keep your account secure, please don't forward this email to anyone.",
+    `This code expires in ${ttlMinutes} minutes and may be used once only.`,
+    'If you did not request this code, you may disregard this message. Please do not forward it.',
     '',
     'HOPE DESIGN GROUP LTD',
   ].join('\n');
   const res = await sendEmail({
     to: [to],
-    subject: `${code} is your HOPE DESIGN sign-in code`,
+    subject: 'Your HOPE DESIGN verification code',
     html: renderCodeEmailHtml({ greeting, code, purpose, ttlMinutes }),
     text,
     preheader: `Your one-time code expires in ${ttlMinutes} minutes.`,

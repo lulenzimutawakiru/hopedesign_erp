@@ -122,6 +122,58 @@ function candidateAddresses(email: ReceivedEmail | null, fallback: string[]): st
   return out;
 }
 
+/**
+ * Local parts that only ever appear on machine-sent mail. Our own outbound
+ * uses `noreply@` for security and alert mail and `notifications@` for the
+ * notification fan-out; when one of those addresses sends to a mailbox that we
+ * also receive on, Resend hands the message straight back to us and it is filed
+ * as "received" mail that no human wrote.
+ *
+ * A foreign `no-reply@` is ordinary correspondence, so this only counts when
+ * the sender is also on the receiving mailbox's own domain - see isSelfEcho.
+ */
+const MACHINE_SENDER_LOCAL_PARTS = new Set([
+  'no-reply',
+  'noreply',
+  'no_reply',
+  'do-not-reply',
+  'donotreply',
+  'mailer-daemon',
+  'postmaster',
+  'bounce',
+  'bounces',
+  'notifications',
+  'notification',
+  'automated',
+  'mailer',
+  'alerts',
+]);
+
+/** The domain part of an address, lower-cased, or '' when it has none. */
+function addressDomain(address: string): string {
+  const at = address.lastIndexOf('@');
+  return at < 0 ? '' : address.slice(at + 1).trim().toLowerCase();
+}
+
+/** The local part of an address, lower-cased, or '' when it has none. */
+function addressLocalPart(address: string): string {
+  const at = address.lastIndexOf('@');
+  return (at < 0 ? address : address.slice(0, at)).trim().toLowerCase();
+}
+
+/**
+ * True when a message is our own automation arriving back at a mailbox we also
+ * receive on: a machine local part sending from the receiving mailbox's own
+ * domain. Everything else - a reply from a person, or machine mail from a
+ * foreign domain - is false and is filed normally.
+ */
+function isSelfEcho(sender: string, mailboxAddress: string): boolean {
+  const local = addressLocalPart(sender);
+  const domain = addressDomain(sender);
+  if (!local || !domain) return false;
+  if (!MACHINE_SENDER_LOCAL_PARTS.has(local)) return false;
+  return domain === addressDomain(mailboxAddress);
+}
 /** Fold one address list into the JSONB envelope column and recipient rows. */
 function recipientLists(email: ReceivedEmail): { to: string[]; cc: string[]; bcc: string[] } {
   const clean = (list: string[]) =>
@@ -420,6 +472,32 @@ async function deliver(opts: DeliveryOptions): Promise<IngestResult> {
     return refused('FETCH_FAILED', tenantId, retryable);
   }
 
+  // Our own alert and notification mail is addressed to role mailboxes we also
+  // receive on, so Resend delivers it back to us. Filing it would duplicate the
+  // in-app copy and fill the mailbox with mail no human sent, so it is refused
+  // before the insert; the sender is the only thing that separates it from a
+  // reply.
+  const senderAddress = (() => {
+    const parsed = parseFromHeader(email.from ?? headerValue(email.headers, 'from'));
+    const address = parsed.email ?? '';
+    return isEmailAddress(address) ? address.trim().toLowerCase() : '';
+  })();
+  if (senderAddress && isSelfEcho(senderAddress, String(mailbox.mailbox_address ?? ''))) {
+    console.warn(
+      `[mail][inbound] refused SELF_ECHO from ${senderAddress} to ${mailbox.mailbox_address} id=${emailId}`
+    );
+    await recordEvent({
+      tenantId,
+      eventType: opts.eventType,
+      providerMessageId: opts.providerMessageId,
+      emailId,
+      recipient: mailbox.mailbox_address,
+      payload: opts.payload,
+      signatureValid: !opts.backfilled,
+      error: 'SELF_ECHO',
+    });
+    return refused('SELF_ECHO', tenantId);
+  }
   // The webhook's message_id is the same header the fetched message carries, so
   // preferring either yields the same key; the Resend id is the last resort for
   // a message that arrived without a Message-ID at all.

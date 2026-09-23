@@ -6,6 +6,7 @@ import { loadAuthUser } from '../middleware/auth.js';
 import { sendStoredEmail } from './mail/send.js';
 import { computeNextRun } from './reportScheduler.js';
 import { governanceSweep } from './governance.js';
+import { ApiError } from '../utils.js';
 
 export interface CronJobRow {
   id: number;
@@ -57,6 +58,27 @@ function numParam(job: CronJobRow, key: string, fallback: number): number {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
+
+/**
+ * Channels for the scheduled nags below (stale work orders, expiring
+ * documents, pending QC, aged quarantine, dead stock, unpaid payments).
+ *
+ * Every one of these checks notifies once per matching record and re-runs on
+ * its own schedule, so together they were the dominant source of outbound
+ * mail: on 2026-09-22 the stale-work-order check alone produced ~39 copies of
+ * each "... has no recent activity" subject in a single day.
+ *
+ * That volume matters because Resend's daily quota is shared with the sign-in
+ * codes and password mail. On 2026-09-20/21 the quota ran out and 41 alert
+ * messages died with `429 daily_quota_exceeded` - a sign-in code issued in
+ * that same window would have died identically.
+ *
+ * These items are review work rather than security events, so they reach the
+ * right people through the in-app bell and stay out of the inbox. Security
+ * mail keeps EMAIL: `system.password_expiry` below still emails, because a
+ * user who must change their password has to be told in their inbox.
+ */
+const NAG_CHANNELS: string[] = ['IN_APP'];
 
 function nextRunFor(job: CronJobRow, from: Date): Date {
   if (job.scheduleType === 'INTERVAL' && job.intervalMinutes && job.intervalMinutes > 0) {
@@ -115,6 +137,7 @@ async function stockReorderCheck(client: pg.PoolClient, ctx: Ctx, job: CronJobRo
         severity: critical ? 'ERROR' : 'WARN',
         actionLabel: 'Review Stock',
         actionTarget: `/inventory/items/${id}`,
+        channels: NAG_CHANNELS,
         data: { job: job.code, itemCode: code, available, reorderPoint: reorder, safetyStock: safety, critical },
       },
       userIds
@@ -177,6 +200,7 @@ async function contractExpiryCheck(client: pg.PoolClient, ctx: Ctx, job: CronJob
         severity: daysLeft <= 14 ? 'ERROR' : 'WARN',
         actionLabel: 'View Contract',
         actionTarget: `/hr/employees/${employeeId}?tab=contracts`,
+        channels: NAG_CHANNELS,
         data: { job: job.code, employeeId, employeeNo: String(r.employee_no), endDate: String(r.end_date), daysLeft },
       },
       userIds
@@ -223,6 +247,7 @@ async function assetMaintenanceCheck(client: pg.PoolClient, ctx: Ctx, job: CronJ
         severity: 'WARN',
         actionLabel: 'Schedule Maintenance',
         actionTarget: `/assets/${id}?tab=maintenance`,
+        channels: NAG_CHANNELS,
         data: { job: job.code, assetNo, dueDate: String(r.next_maintenance) },
       },
       userIds
@@ -282,6 +307,7 @@ async function assetInspectionCheck(client: pg.PoolClient, ctx: Ctx, job: CronJo
         severity: 'WARN',
         actionLabel: 'Schedule Inspection',
         actionTarget: `/assets/${id}?tab=maintenance`,
+        channels: NAG_CHANNELS,
         data: { job: job.code, assetNo, dueDate: String(r.next_inspection) },
       },
       userIds
@@ -327,6 +353,7 @@ async function custodyOverdueCheck(client: pg.PoolClient, ctx: Ctx, job: CronJob
         severity: 'ERROR',
         actionLabel: 'Review Custody',
         actionTarget: `/assets/${id}?tab=custody`,
+        channels: NAG_CHANNELS,
         data: { job: job.code, assetNo, expectedReturnDate: String(r.expected_return_date) },
       },
       targets
@@ -373,6 +400,7 @@ async function workOrderOverdueCheck(client: pg.PoolClient, ctx: Ctx, job: CronJ
         severity: 'ERROR',
         actionLabel: 'Review Work Order',
         actionTarget: `/production/work-orders/${id}`,
+        channels: NAG_CHANNELS,
         data: { job: job.code, workOrderNo: woNo, dueDate: String(r.due_date), status: String(r.status) },
       },
       userIds
@@ -452,6 +480,7 @@ async function approvalEscalation(client: pg.PoolClient, ctx: Ctx, job: CronJobR
         severity: 'ERROR',
         actionLabel: 'Open My Work',
         actionTarget: '/my-work',
+        channels: NAG_CHANNELS,
         data: { job: job.code, escalated, graceHours, instances: instanceIds.length },
       },
       userIds
@@ -501,7 +530,7 @@ async function qualityQcPendingCheck(client: pg.PoolClient, ctx: Ctx, job: CronJ
         severity: 'WARN',
         actionLabel: 'Review Inspection',
         actionTarget: `/quality/inspections/${id}`,
-        channels: ['IN_APP', 'EMAIL'],
+        channels: NAG_CHANNELS,
         data: { job: job.code, inspectionNo, batchNo, graceHours },
       },
       userIds
@@ -546,7 +575,7 @@ async function productionOrderStaleCheck(client: pg.PoolClient, ctx: Ctx, job: C
         severity: 'WARN',
         actionLabel: 'Review Work Order',
         actionTarget: `/production/orders/${id}`,
-        channels: ['IN_APP', 'EMAIL'],
+        channels: NAG_CHANNELS,
         data: { job: job.code, woNo, productName, staleHours, status: r.status },
       },
       userIds
@@ -597,7 +626,7 @@ async function inventoryDeadStockCheck(client: pg.PoolClient, ctx: Ctx, job: Cro
         severity: 'INFO',
         actionLabel: 'Review Stock',
         actionTarget: `/inventory/items/${id}`,
-        channels: ['IN_APP', 'EMAIL'],
+        channels: NAG_CHANNELS,
         data: { job: job.code, itemCode: code, onHand, days },
       },
       userIds
@@ -642,7 +671,7 @@ async function documentExpiryCheck(client: pg.PoolClient, ctx: Ctx, job: CronJob
         severity: 'WARN',
         actionLabel: 'View Document',
         actionTarget: `/documents/${id}`,
-        channels: ['IN_APP', 'EMAIL'],
+        channels: NAG_CHANNELS,
         data: { job: job.code, docNo, title, windowDays, expiresAt: r.expires_at },
       },
       userIds
@@ -690,7 +719,7 @@ async function paymentDueReminder(client: pg.PoolClient, ctx: Ctx, job: CronJobR
         severity: 'WARN',
         actionLabel: 'Review Payment',
         actionTarget: `/finance/payments/${id}`,
-        channels: ['IN_APP', 'EMAIL'],
+        channels: NAG_CHANNELS,
         data: { job: job.code, payNo, payee, amount, currency, days },
       },
       userIds
@@ -735,7 +764,7 @@ async function quarantineAgingCheck(client: pg.PoolClient, ctx: Ctx, job: CronJo
         severity: 'WARN',
         actionLabel: 'Review Quarantine',
         actionTarget: `/quality/quarantine/${id}`,
-        channels: ['IN_APP', 'EMAIL'],
+        channels: NAG_CHANNELS,
         data: { job: job.code, productName: name, quantity, days, reason: r.reason },
       },
       userIds
@@ -855,11 +884,25 @@ async function emailQueueFlush(client: pg.PoolClient, ctx: Ctx, job: CronJobRow)
       const reason = error instanceof Error ? error.message : 'Could not be sent';
       failed += 1;
       note(reason);
-      await parkUnsendableEmail(client, ctx, id, reason);
+      await parkUnsendableEmail(client, ctx, id, reason, {
+        permanent: isPermanentSendRefusal(error),
+      });
     }
   }
   return { checked: rows.length, sent, failed, skipped, reasons };
 }
+
+/**
+ * True when a send was refused for a reason no retry can change. Mailbox
+ * authorisation is the case that matters: these retries act as the message's
+ * author, so an author who holds no grant on the mailbox the message carries is
+ * refused identically every time. Retrying that to the cap only delays the row
+ * reaching FAILED and replaces the real cause with "Delivery attempts
+ * exhausted", which says nothing about the missing grant an administrator has
+ * to restore.
+ */
+const isPermanentSendRefusal = (error: unknown): boolean =>
+  error instanceof ApiError && (error.status === 403 || error.status === 404);
 
 /**
  * Park a message this flush could not authorise: no author, an author who is no
@@ -872,7 +915,8 @@ async function parkUnsendableEmail(
   client: pg.PoolClient,
   ctx: Ctx,
   emailId: number,
-  reason: string
+  reason: string,
+  options: { permanent?: boolean } = {}
 ): Promise<void> {
   const tenantId = ctx.tenantId ?? 0;
   await client.query(
@@ -885,6 +929,23 @@ async function parkUnsendableEmail(
       WHERE email_id = $1 AND status = 'QUEUED'`,
     [emailId, reason]
   );
+  if (options.permanent) {
+    // Retrying cannot change the outcome, so the row is put straight at its
+    // exhausted state instead of spending the remaining attempts to get there.
+    await client.query(
+      `INSERT INTO email_outbox
+         (tenant_id, email_id, status, attempts, max_attempts, next_attempt_at, last_error)
+       VALUES ($1,$2,'FAILED',1,1,NULL,$3)
+       ON CONFLICT (email_id) DO UPDATE
+         SET status = 'FAILED',
+             attempts = email_outbox.max_attempts,
+             next_attempt_at = NULL,
+             last_error = EXCLUDED.last_error,
+             updated_at = now()`,
+      [tenantId, emailId, reason]
+    );
+    return;
+  }
   await client.query(
     `INSERT INTO email_outbox (tenant_id, email_id, status, attempts, last_error)
      VALUES ($1,$2,'QUEUED',1,$3)
@@ -1005,7 +1066,9 @@ async function emailOutboxDrain(client: pg.PoolClient, ctx: Ctx, job: CronJobRow
       const reason = error instanceof Error ? error.message : 'Could not be sent';
       failed += 1;
       note(reason);
-      await parkUnsendableEmail(client, ctx, emailId, reason);
+      await parkUnsendableEmail(client, ctx, emailId, reason, {
+        permanent: isPermanentSendRefusal(error),
+      });
     }
   }
   return {

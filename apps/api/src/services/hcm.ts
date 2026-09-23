@@ -11,6 +11,7 @@ import path from 'node:path';
 import { config } from '../config.js';
 import { parsePdf } from './pdf.js';
 import { mintEmployeeIdentity } from './employeeIdentity.js';
+import { clockIn, clockOut } from './hr.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const ACTIVE_EMPLOYEE_STATUS = "('ACTIVE','PROBATION','ON_LEAVE')";
@@ -2548,6 +2549,16 @@ export async function myAttendance(client: pg.PoolClient, ctx: Ctx) {
     [Number(emp.id)]
   );
   return toCamelRows(res.rows);
+}
+
+export async function myClockIn(client: pg.PoolClient, ctx: Ctx, loc?: { latitude?: unknown; longitude?: unknown; accuracy?: unknown } | null) {
+  const emp = await employeeForUser(client, ctx);
+  return clockIn(client, ctx, Number(emp.id), loc);
+}
+
+export async function myClockOut(client: pg.PoolClient, ctx: Ctx, loc?: { latitude?: unknown; longitude?: unknown; accuracy?: unknown } | null) {
+  const emp = await employeeForUser(client, ctx);
+  return clockOut(client, ctx, Number(emp.id), loc);
 }
 
 export async function myPayslips(client: pg.PoolClient, ctx: Ctx) {

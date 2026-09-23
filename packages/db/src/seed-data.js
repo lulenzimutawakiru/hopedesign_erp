@@ -342,10 +342,10 @@ async function ensureStatutoryConfigs(client, tenantId) {
       effective_to: null,
       version: 2,
       rates: [
-        { min: 0, max: 335000, rate: 0 },
+        { min: 0, max: 235000, rate: 0 },
+        { min: 235000, max: 335000, rate: 10 },
         { min: 335000, max: 410000, rate: 20 },
-        { min: 410000, max: 485000, rate: 25 },
-        { min: 485000, max: 10000000, rate: 30 },
+        { min: 410000, max: 10000000, rate: 30 },
         { min: 10000000, max: null, rate: 40 },
       ],
       limits: {},

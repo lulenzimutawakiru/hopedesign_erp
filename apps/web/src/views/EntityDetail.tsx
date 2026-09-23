@@ -149,8 +149,30 @@ export default function EntityDetail({ route }: { route: RouteMatch }) {
   const code = pick<string>(row, meta.codeColumn ?? '', 'id') ?? '';
 
   const actions = allowedActions(status, module, resource, (p) => can(user, p));
+  const tr = meta.transitions ?? {};
+  const extraActions: { id: string; label: string; tone?: 'danger' }[] = [];
+  if (tr.archive && can(user, `${module}.${resource}.archive`)) extraActions.push({ id: 'archive', label: 'Archive' });
+  if (tr.restore && can(user, `${module}.${resource}.restore`)) extraActions.push({ id: 'restore', label: 'Restore' });
+  if (meta.allowDelete === true && can(user, `${module}.${resource}.delete`)) extraActions.push({ id: 'delete', label: 'Delete', tone: 'danger' });
+  const doDelete = async () => {
+    setActBusy(true);
+    setNotice('');
+    setError('');
+    try {
+      await api(`${base}/${id}`, { method: 'DELETE' });
+      navigate(`/records/${module}/${resource}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setActBusy(false);
+    }
+  };
   const run = (id: string) => {
     if (id === 'edit') { setEditOpen(true); return; }
+    if (id === 'delete') {
+      setConfirm({ id, title: `Delete ${meta.label}?`, body: `${code} will be permanently removed. This writes an audit event and cannot be undone.` });
+      return;
+    }
     if (id === 'void' || id === 'cancel') {
       setConfirm({ id, title: `${id === 'void' ? 'Void' : 'Cancel'} ${meta.label}?`, body: `${code} will leave the live pipeline. This writes an audit event and cannot be undone from this screen.` });
       return;
@@ -169,7 +191,7 @@ export default function EntityDetail({ route }: { route: RouteMatch }) {
         </div>
         <div className="head-actions">
           {status && <Badge value={status} />}
-          {actions.filter((a) => a.id !== 'edit').map((a) => (
+          {[...actions.filter((a) => a.id !== 'edit'), ...extraActions].map((a) => (
             <button key={a.id} className={`btn ${a.tone === 'primary' ? 'btn-primary' : a.tone === 'success' ? 'btn-success' : a.tone === 'danger' ? 'btn-danger' : ''}`} disabled={actBusy} onClick={() => run(a.id)}>{a.label}</button>
           ))}
           {actions.some((a) => a.id === 'edit') && <button className="btn" onClick={() => setEditOpen(true)}>Edit</button>}
@@ -288,10 +310,11 @@ export default function EntityDetail({ route }: { route: RouteMatch }) {
         <ConfirmDialog
           title={confirm.title}
           body={confirm.body}
-          confirmLabel={confirm.id === 'void' ? 'Void document' : 'Cancel document'}
+          confirmLabel={confirm.id === 'void' ? 'Void document' : confirm.id === 'delete' ? 'Delete record' : 'Cancel document'}
           danger
+          reasonLabel={confirm.id === 'delete' ? null : undefined}
           onCancel={() => setConfirm(null)}
-          onConfirm={(reason) => { setConfirm(null); void doAction(confirm.id, { comment: reason }); }}
+          onConfirm={(reason) => { const c = confirm; setConfirm(null); if (c.id === 'delete') void doDelete(); else void doAction(c.id, { comment: reason }); }}
         />
       )}
 
@@ -302,7 +325,7 @@ export default function EntityDetail({ route }: { route: RouteMatch }) {
       )}
 
       <StickyActions>
-        {actions.filter((a) => a.id !== 'edit').slice(0, 3).map((a) => (
+        {[...actions.filter((a) => a.id !== 'edit').slice(0, 3), ...extraActions].map((a) => (
           <button key={a.id} className={`btn ${a.tone === 'primary' ? 'btn-primary' : a.tone === 'success' ? 'btn-success' : a.tone === 'danger' ? 'btn-danger' : ''}`} disabled={actBusy} onClick={() => run(a.id)}>{a.label}</button>
         ))}
         <button className="btn" onClick={() => navigate(`/records/${module}/${resource}`)}>Back</button>

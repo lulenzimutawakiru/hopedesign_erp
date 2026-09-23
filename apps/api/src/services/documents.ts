@@ -36,6 +36,7 @@ import {
   excelBrandImages,
   excelNumFmt,
   preloadFooterLogo,
+  brandImageWidth,
   preloadLogo,
   preloadSecondaryLogo,
   readStoredBrandingFile,
@@ -92,6 +93,7 @@ export interface DocData {
   isContract?: boolean;
   isCertificate?: boolean;
   isIdCard?: boolean;
+  isPayslip?: boolean;
   classification?: string;
   photo?: { bytes: Buffer; mime: string; dataUrl: string; caption?: string };
   qrPng?: Buffer;
@@ -1729,8 +1731,7 @@ async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise
   payBreakdown.push(['Net Pay', moneyCcy(pick(r, 'net_pay'), currency)]);
   const paymentDate = dateOnly(pick(r, 'slip_payment_date', 'payment_date'));
   const notes = [
-    'This payslip is issued for the employee\'s personal records. It is confidential and must not be disclosed to third parties without the employee\'s consent.',
-    'PAYE, NSSF and Local Service Tax are calculated from the statutory configuration in force for this payroll period under Ugandan law.',
+    'Confidential. Statutory deductions follow the rates configured for this period.',
   ];
   if (!published && !['RELEASED', 'PAID'].includes(str(pick(r, 'payroll_status')))) {
     notes.push('This is a calculated slip. It has not been published as a final payslip.');
@@ -1739,10 +1740,11 @@ async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise
   return {
     code: str(pick(r, 'payslip_no')),
     title: 'Payslip',
-    kicker: 'Payroll document',
+    kicker: 'Pay statement',
     currency,
     status,
     classification: 'Confidential',
+    isPayslip: true,
     subtitle: lines(employeeName, period).join('  ·  ') || undefined,
     parties: [
       {
@@ -3911,8 +3913,219 @@ function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
 </body></html>`;
 }
 
+
+function payslipLines(data, kind) {
+  return (data.items ?? []).filter((it) => String(it.kind) === kind);
+}
+function payslipFact(data, label) {
+  const hit = (data.facts ?? []).find((row) => row[0] === label);
+  return hit ? String(hit[1]) : '';
+}
+function payslipTotal(data, label) {
+  const hit = (data.totals ?? []).find((row) => row[0] === label);
+  return hit ? String(hit[1]) : '';
+}
+
+function htmlPayslipBody(data) {
+  const employee = (data.parties ?? []).find((p) => p.heading === 'Employee');
+  const name = htmlEsc(employee?.name ?? '');
+  const lines = (employee?.lines ?? []).map((ln) => `<div>${htmlEsc(ln)}</div>`).join('');
+  const net = htmlEsc(payslipTotal(data, 'Net Pay'));
+  const gross = htmlEsc(payslipTotal(data, 'Gross Pay'));
+  const deducted = htmlEsc(payslipTotal(data, 'Total Deductions'));
+  const payDate = htmlEsc(payslipFact(data, 'Pay Date'));
+  const bank = htmlEsc(payslipFact(data, 'Bank'));
+  const tin = htmlEsc(payslipFact(data, 'TIN'));
+  const nssf = htmlEsc(payslipFact(data, 'NSSF No'));
+  const period = htmlEsc(payslipFact(data, 'Period'));
+  const row = (it) => `<tr><td>${htmlEsc(it.component)}</td><td>${htmlEsc(it.detail ?? '')}</td><td class="amt">${htmlEsc(it.amount)}</td></tr>`;
+  const table = (title, kind) => {
+    const items = payslipLines(data, kind);
+    const body = items.length
+      ? items.map(row).join('')
+      : '<tr><td colspan="3">None for this period</td></tr>';
+    return `<section><h3>${title}</h3><table><thead><tr><th>Component</th><th>Basis</th><th>Amount</th></tr></thead><tbody>${body}</tbody></table></section>`;
+  };
+  const notes = (data.notes ?? []).map((n) => `<li>${htmlEsc(n)}</li>`).join('');
+  return `<style>
+    .slip { font-family: inherit; color: inherit; }
+    .slip-top { display: flex; gap: 16px; align-items: stretch; margin-top: 8px; }
+    .who { flex: 1; border: 1px solid #e4e7ec; border-left: 3px solid var(--teal); padding: 14px 16px; }
+    .who .k { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
+    .who .n { font-size: 20px; font-weight: 750; margin: 4px 0 8px; }
+    .who .m { font-size: 12px; line-height: 1.45; color: #526072; }
+    .net { width: 220px; background: var(--navy); color: #fff; padding: 14px 16px; }
+    .net .k { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
+    .net .v { font-size: 20px; font-weight: 750; margin-top: 8px; }
+    .net .s { margin-top: 8px; font-size: 12px; opacity: .9; }
+    .cols { display: flex; gap: 16px; margin-top: 16px; }
+    .cols section { flex: 1; }
+    .cols h3 { margin: 0; background: var(--navy); color: #fff; font-size: 11px; letter-spacing: .08em; padding: 8px 10px; }
+    .cols table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .cols th { text-align: left; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #526072; padding: 6px 8px; border-bottom: 1px solid #e4e7ec; }
+    .cols td { padding: 7px 8px; border-bottom: 1px solid #eef1f4; vertical-align: top; }
+    .cols td.amt, .cols th:last-child { text-align: right; white-space: nowrap; }
+    .sum { display: flex; margin-top: 16px; border: 1px solid #e4e7ec; }
+    .sum div { flex: 1; padding: 10px 12px; }
+    .sum div:last-child { background: var(--navy); color: #fff; }
+    .sum .k { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+    .sum .v { font-size: 14px; font-weight: 750; margin-top: 4px; }
+    .payto { margin-top: 12px; font-size: 12px; color: #526072; }
+    .slip ul { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #526072; }
+  </style>
+  <div class="slip">
+    <div class="slip-top">
+      <div class="who"><div class="k">Employee</div><div class="n">${name}</div><div class="m">${lines}${period ? `<div>${period}</div>` : ''}</div></div>
+      <div class="net"><div class="k">Net pay</div><div class="v">${net}</div>${payDate ? `<div class="s">Pay date ${payDate}</div>` : ''}</div>
+    </div>
+    <div class="cols">${table('Earnings', 'Earning')}${table('Deductions', 'Deduction')}</div>
+    <div class="sum">
+      <div><div class="k">Gross pay</div><div class="v">${gross}</div></div>
+      <div><div class="k">Deductions</div><div class="v">${deducted}</div></div>
+      <div><div class="k">Net pay</div><div class="v">${net}</div></div>
+    </div>
+    <div class="payto">${[bank && `Paid to ${bank}`, tin && `TIN ${tin}`, nssf && `NSSF ${nssf}`].filter(Boolean).join(' · ')}</div>
+    ${notes ? `<ul>${notes}</ul>` : ''}
+  </div>`;
+}
+
+async function renderPayslipPdf(data, opts) {
+  const doc = new PdfDoc();
+  doc.setNewPageHandler(() => undefined);
+  const brand = brandOf(opts.company);
+  const c = opts.company;
+  const logoName = preloadLogo(doc, c.logoUrl);
+  const secondaryLogo = preloadSecondaryLogo(doc, c.secondaryLogoUrl);
+  const footerLogo = preloadFooterLogo(doc, c.footerLogoUrl);
+  const classification = classifOf(data, opts);
+  const head = letterheadMeta(data, opts, "");
+  head.subtitle = undefined;
+  head.status = undefined;
+  drawLetterhead(doc, head, brand, logoName, secondaryLogo);
+
+  const W = TABLE_W;
+  const employee = (data.parties ?? []).find((p) => p.heading === "Employee");
+  const net = payslipTotal(data, "Net Pay");
+  const gross = payslipTotal(data, "Gross Pay");
+  const deducted = payslipTotal(data, "Total Deductions");
+  const period = payslipFact(data, "Period");
+  const payDate = payslipFact(data, "Pay Date");
+  const payrollNo = payslipFact(data, "Payroll No");
+  const bank = payslipFact(data, "Bank");
+  const tin = payslipFact(data, "TIN");
+  const nssfNo = payslipFact(data, "NSSF No");
+
+  const floor = 86;
+  let y = doc.cursorY - 4;
+  doc.rawText(employee?.name || "", MARGIN, y, 14, { bold: true, color: brand.navy, maxWidth: W });
+  y -= 18;
+  const who = (employee?.lines ?? []).filter((ln) => ln && String(ln).trim()).slice(0, 3).join("    ·    ");
+  if (who) {
+    doc.rawText(who, MARGIN, y, 8, { color: BRAND.gray, maxWidth: W });
+    y -= 14;
+  }
+
+  const metaH = 30;
+  y -= 2;
+  doc.rect(MARGIN, y - metaH, W, metaH, BRAND.headerFill);
+  const meta = [
+    ["PERIOD", period],
+    ["PAY DATE", payDate],
+    ["PAYROLL", payrollNo],
+    ["CURRENCY", payslipFact(data, "Currency")],
+  ];
+  const slot = W / meta.length;
+  meta.forEach(([lab, val], i) => {
+    const x = MARGIN + 10 + i * slot;
+    if (i > 0) doc.line(MARGIN + i * slot, y - 5, MARGIN + i * slot, y - metaH + 5, BRAND.line, 0.4);
+    doc.rawText(lab, x, y - 11, 5.8, { bold: true, color: brand.teal, maxWidth: slot - 18 });
+    doc.rawText(val || "—", x, y - 23, 8, { bold: true, color: brand.navy, maxWidth: slot - 18 });
+  });
+  y -= metaH + 12;
+
+  const headH = 16;
+  const netH = 36;
+  const reserved = 16 + 12 + netH + 8;
+  let earnings = payslipLines(data, "Earning");
+  let deds = payslipLines(data, "Deduction");
+  const fold = (lines, max) => (
+    lines.length <= max
+      ? lines
+      : [...lines.slice(0, Math.max(0, max - 1)), { component: String(lines.length - (max - 1)) + " further lines", amount: "" }]
+  );
+  let n = Math.max(earnings.length, deds.length, 1);
+  let rowH = 15;
+  const room = Math.max(12, y - floor - reserved - headH);
+  if (n * rowH > room) rowH = Math.max(12, Math.floor(room / n));
+  if (n * rowH > room) {
+    const maxRows = Math.max(1, Math.floor(room / 12));
+    earnings = fold(earnings, maxRows);
+    deds = fold(deds, maxRows);
+    n = Math.max(earnings.length, deds.length, 1);
+    rowH = 12;
+  }
+
+  const gap = 12;
+  const colW = (W - gap) / 2;
+  const y0 = y;
+  const drawCol = (x, title, lines) => {
+    doc.rect(x, y0 - headH, colW, headH, brand.navy);
+    doc.rawText(title, x + 10, y0 - 11, 7, { bold: true, color: BRAND.white, maxWidth: colW - 20 });
+    for (let i = 0; i < n; i++) {
+      const bottom = y0 - headH - (i + 1) * rowH;
+      doc.rect(x, bottom, colW, rowH, i % 2 === 0 ? BRAND.white : BRAND.zebra);
+      doc.line(x + 10, bottom, x + colW - 10, bottom, BRAND.line, 0.3);
+      const line = lines[i];
+      if (!line) continue;
+      const textY = bottom + Math.max(3, (rowH - 8) / 2);
+      doc.rawText(String(line.component ?? ""), x + 10, textY, 8, { color: BRAND.ink, maxWidth: colW * 0.56 });
+      doc.rawText(String(line.amount ?? ""), x + 8, textY, 8, { bold: true, color: BRAND.ink, align: "right", maxWidth: colW - 18 });
+    }
+  };
+  drawCol(MARGIN, "EARNINGS", earnings);
+  drawCol(MARGIN + colW + gap, "DEDUCTIONS", deds);
+
+  const sumY = y0 - headH - n * rowH - 14;
+  doc.rawText("Gross pay", MARGIN + 10, sumY, 7.5, { color: BRAND.gray, maxWidth: colW * 0.45 });
+  doc.rawText(gross, MARGIN + 8, sumY, 9, { bold: true, color: brand.navy, align: "right", maxWidth: colW - 18 });
+  const dx = MARGIN + colW + gap;
+  doc.rawText("Deductions", dx + 10, sumY, 7.5, { color: BRAND.gray, maxWidth: colW * 0.45 });
+  doc.rawText(deducted, dx + 8, sumY, 9, { bold: true, color: brand.navy, align: "right", maxWidth: colW - 18 });
+
+  const netTop = sumY - 12;
+  doc.rect(MARGIN, netTop - netH, W, netH, brand.navy);
+  doc.rect(MARGIN, netTop - netH, W, 2.2, brand.teal);
+  doc.rawText("NET PAY", MARGIN + 16, netTop - 15, 7.5, { bold: true, color: brand.teal });
+  doc.rawText(net, MARGIN + 14, netTop - 15, 14, { bold: true, color: BRAND.white, align: "right", maxWidth: W - 30 });
+  const note = [bank && "Paid to " + bank, tin && "TIN " + tin, nssfNo && "NSSF " + nssfNo].filter(Boolean).join("    ·    ");
+  if (note) doc.rawText(note, MARGIN + 16, netTop - 28, 7, { color: [0.82, 0.88, 0.9], maxWidth: W - 32 });
+
+  const companyLine = [c.legalName || c.name, c.tin ? "TIN " + c.tin : "", c.vrn ? "VRN " + c.vrn : ""].filter(Boolean).join("  ·  ");
+  doc.footer(
+    [
+      [c.footerText, companyLine].filter(Boolean).join("  ·  "),
+      [
+        "Issued by " + opts.issuedBy + " on " + formatDocDateTime(opts.issuedAt),
+        opts.correlationId ? "Ref " + opts.correlationId : "",
+        classification.toUpperCase(),
+      ].filter(Boolean).join("  ·  "),
+    ].filter(Boolean),
+    { navy: brand.navy, accent: brand.teal, color: GRAY, logoName: footerLogo },
+  );
+  doc.setMetadata({
+    title: "Payslip" + (data.code ? " " + data.code : ""),
+    author: opts.issuedBy,
+    subject: "Payslip",
+    keywords: [data.code, c.legalName || c.name].filter(Boolean).join(", "),
+    creator: c.name,
+    producer: c.legalName || c.name,
+  });
+  return doc.build();
+}
+
 async function renderPdf(data: DocData, opts: DocumentRenderOpts): Promise<Buffer> {
   if (data.isIdCard) return renderIdCardPdf(data, opts);
+  if (data.isPayslip) return renderPayslipPdf(data, opts);
   if (data.isContract) return renderContractPdf(data, opts);
   if (data.isCertificate) return renderCertificatePdf(data, opts);
   const doc = new PdfDoc();
@@ -4418,21 +4631,21 @@ function htmlGenericBody(data: DocData): string {
 
 async function renderHtml(data: DocData, opts: DocumentRenderOpts): Promise<string> {
   const auth = authEnabled(opts);
-  const body = data.isContract ? htmlClauseBody(data) : data.isCertificate ? htmlCertificateBody(data) : htmlGenericBody(data);
+  const body = data.isPayslip ? htmlPayslipBody(data) : data.isContract ? htmlClauseBody(data) : data.isCertificate ? htmlCertificateBody(data) : htmlGenericBody(data);
   return renderBrandedHtml({
     title: data.title,
-    subtitle: data.subtitle,
+    subtitle: data.isPayslip ? undefined : data.subtitle,
     kicker: data.kicker ?? 'Official document',
     company: opts.company,
     issuedBy: opts.issuedBy,
     issuedAt: opts.issuedAt,
     correlationId: opts.correlationId ?? null,
     docNo: data.code,
-    status: statusOf(data, opts),
+    status: data.isPayslip ? undefined : statusOf(data, opts),
     classification: classifOf(data, opts),
-    parties: data.parties,
-    facts: data.facts ?? data.meta,
-    authenticity: auth ? { fingerprint: opts.fingerprint ?? '', token: opts.token ?? '', verifyUrl: opts.verifyUrl ?? '' } : null,
+    parties: data.isPayslip ? [] : data.parties,
+    facts: data.isPayslip ? [] : (data.facts ?? data.meta),
+    authenticity: data.isPayslip || !auth ? null : { fingerprint: opts.fingerprint ?? '', token: opts.token ?? '', verifyUrl: opts.verifyUrl ?? '' },
     photo: data.photo?.dataUrl ? { dataUrl: data.photo.dataUrl, caption: data.photo.caption } : null,
     body,
   });

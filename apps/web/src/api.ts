@@ -128,6 +128,8 @@ export interface EntityMeta {
   statusColumn: string | null;
   searchable: string[];
   qrEntityType: string | null;
+  allowDelete?: boolean;
+  transitions?: Record<string, string> | null;
   columns: MetaColumn[];
   writable: string[];
 }

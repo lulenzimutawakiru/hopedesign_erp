@@ -141,8 +141,8 @@ hrOpsRouter.patch('/employees/:id', ...run('hr.employees.update', (c, ctx, b, p)
   payrollEnabled: b.payrollEnabled != null ? Boolean(b.payrollEnabled) : undefined,
 })));
 hrOpsRouter.post('/employees/:id/terminate', ...run('hr.employees.terminate', (c, ctx, b, p) => hr.terminateEmployee(c, ctx, Number(p.id), b.terminationDate != null ? String(b.terminationDate) : null)));
-hrOpsRouter.post('/employees/:id/clock-in', ...run('hr.attendance.create', (c, ctx, _b, p) => hr.clockIn(c, ctx, Number(p.id))));
-hrOpsRouter.post('/employees/:id/clock-out', ...run('hr.attendance.create', (c, ctx, _b, p) => hr.clockOut(c, ctx, Number(p.id))));
+hrOpsRouter.post('/employees/:id/clock-in', ...run('hr.attendance.create', (c, ctx, _b, p) => hr.clockIn(c, ctx, Number(p.id), b)));
+hrOpsRouter.post('/employees/:id/clock-out', ...run('hr.attendance.create', (c, ctx, _b, p) => hr.clockOut(c, ctx, Number(p.id), b)));
 hrOpsRouter.post('/employees/:id/loans', ...run('hr.loans.create', (c, ctx, b, p) => loansService.createLoan(c, ctx, {
   employeeId: Number(p.id),
   amount: Number(b.amount),

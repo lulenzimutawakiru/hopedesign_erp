@@ -569,6 +569,8 @@ hcmOpsRouter.post('/assets/assignments/:id/return', ...run('hr.asset_assignments
 // ============================================================
 hcmOpsRouter.get('/me', ...runGet(['hr.employees.view', 'hr.leave.view', 'hr.payslips.view'], (c, ctx) => hcm.myProfile(c, ctx)));
 hcmOpsRouter.get('/me/leave', ...runGet('hr.leave.view', (c, ctx) => hcm.myLeave(c, ctx)));
+hcmOpsRouter.post('/me/clock-in', ...run('hr.attendance.view', (c, ctx, b) => hcm.myClockIn(c, ctx, b)));
+hcmOpsRouter.post('/me/clock-out', ...run('hr.attendance.view', (c, ctx, b) => hcm.myClockOut(c, ctx, b)));
 hcmOpsRouter.get('/me/attendance', ...runGet('hr.attendance.view', (c, ctx) => hcm.myAttendance(c, ctx)));
 hcmOpsRouter.get('/me/payslips', ...runGet('hr.payslips.view', (c, ctx) => hcm.myPayslips(c, ctx)));
 hcmOpsRouter.get('/me/documents', ...runGet(['hr.employees.view', 'hr.leave.view'], (c, ctx) => hcm.myDocuments(c, ctx)));

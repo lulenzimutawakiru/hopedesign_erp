@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { pool, query } from '../db.js';
+import { query, tx } from '../db.js';
 import {
   isAfricasTalkingConfigured,
   sendSmsViaAfricastalking,
@@ -10,6 +10,8 @@ import { loadCompanyProfile } from './branding.js';
 import {
   brandEmailContent,
   DEFAULT_COMPANY,
+  EMAIL_SOCIAL_FIELDS,
+  socialLinksFromValues,
   type CompanyBrand,
   type EmailActionButton,
 } from './emailBranding.js';
@@ -78,6 +80,24 @@ export function resetEmailBrandCache(): void {
  * shipped default identity rather than blocking delivery, and is never cached,
  * so a transient database error cannot pin the fallback for later sends.
  */
+async function loadEmailSocials(tenantId: number, companyId: number | null) {
+  const keys = EMAIL_SOCIAL_FIELDS.map((f) => f.key);
+  const res = await query(
+    `SELECT key, value FROM app_settings
+      WHERE tenant_id = $1 AND category = 'general' AND key = ANY($2::text[])
+        AND (company_id = $3 OR company_id IS NULL)
+      ORDER BY (company_id IS NOT DISTINCT FROM $3) DESC`,
+    [tenantId, keys, companyId],
+    { tenantId, companyId }
+  );
+  const values: Record<string, unknown> = {};
+  for (const row of res.rows as Array<{ key: string; value: unknown }>) {
+    if (values[row.key] == null) values[row.key] = row.value;
+  }
+  return socialLinksFromValues(values);
+}
+
+
 export async function resolveEmailBrand(): Promise<CompanyBrand> {
   const now = Date.now();
   if (emailBrandCache && now - emailBrandCache.at < EMAIL_BRAND_TTL_MS) {
@@ -93,10 +113,10 @@ export async function resolveEmailBrand(): Promise<CompanyBrand> {
       { tenantId }
     );
     const companyId = Number(companyRow.rows[0]?.id) || null;
-    const profile = await loadCompanyProfile(pool as unknown as pg.PoolClient, {
-      tenantId,
-      companyId,
-    });
+    const profile = await tx(
+      (client) => loadCompanyProfile(client, { tenantId, companyId }),
+      { tenantId, companyId }
+    );
     const brand: CompanyBrand = {
       name: profile.name || DEFAULT_COMPANY.name,
       tagline: profile.tagline || undefined,
@@ -109,6 +129,7 @@ export async function resolveEmailBrand(): Promise<CompanyBrand> {
       footerLogoUrl: profile.footerLogoUrl || undefined,
       brandColor: profile.brandColor || undefined,
       brandColorSecondary: profile.brandColorSecondary || undefined,
+      socials: await loadEmailSocials(tenantId, companyId),
     };
     emailBrandCache = { at: now, brand };
     return brand;

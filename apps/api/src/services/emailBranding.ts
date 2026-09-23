@@ -25,6 +25,8 @@ export interface CompanyBrand {
   brandColor?: string;
   /** Secondary brand colour for the header accent rule. Falls back to brand red. */
   brandColorSecondary?: string;
+  /** Public social profiles, rendered as links in the email footer. */
+  socials?: Array<{ label: string; url: string }>;
 }
 
 export interface EmailActionButton {
@@ -35,7 +37,7 @@ export interface EmailActionButton {
 export const DEFAULT_COMPANY: CompanyBrand = {
   name: 'HOPE DESIGN GROUP LTD',
   tagline: 'Paper Manufacturing & Printing',
-  address: 'Plot 12, Namanve Industrial Park, Kampala, Uganda',
+  address: '',
   phone: '+256 414 000 000',
   email: 'info@hopedesign.jorlentech.com',
   website: 'https://hopedesign.jorlentech.com',
@@ -187,72 +189,117 @@ export interface BrandedEmailOptions {
   button?: EmailActionButton | null;
 }
 
+export const EMAIL_SOCIAL_FIELDS: Array<{ key: string; label: string }> = [
+  { key: 'social_facebook', label: 'Facebook' },
+  { key: 'social_instagram', label: 'Instagram' },
+  { key: 'social_linkedin', label: 'LinkedIn' },
+  { key: 'social_x', label: 'X' },
+  { key: 'social_youtube', label: 'YouTube' },
+  { key: 'social_tiktok', label: 'TikTok' },
+  { key: 'social_whatsapp', label: 'WhatsApp' },
+];
+
+function socialHref(label: string, raw: unknown): string {
+  let s = raw == null ? '' : String(raw).trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim();
+  if (/^https:\/\/\S+$/i.test(s)) return s;
+  if (label === 'WhatsApp') {
+    const digits = s.replace(/\D/g, '');
+    if (digits.length >= 8 && digits.length <= 15) return 'https://wa.me/' + digits;
+  }
+  return '';
+}
+
+/** Public social links stored under General settings. Only https links are rendered. */
+export function socialLinksFromValues(values: Record<string, unknown> | null | undefined): Array<{ label: string; url: string }> {
+  const src = values && typeof values === 'object' ? values : {};
+  const out: Array<{ label: string; url: string }> = [];
+  for (const field of EMAIL_SOCIAL_FIELDS) {
+    const url = socialHref(field.label, src[field.key]);
+    if (url) out.push({ label: field.label, url });
+  }
+  return out;
+}
+
+
 export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
   const company = opts.company ?? DEFAULT_COMPANY;
   const rawBody = /<\/?[a-z][\s\S]*>/i.test(opts.bodyHtml) ? opts.bodyHtml : textToHtml(opts.bodyHtml);
   const body = styleAnchors(rawBody);
+  const name = escapeHtml(company.name || '');
   const tagline = company.tagline ? escapeHtml(company.tagline) : '';
   const preheaderText = opts.preheader
     ? escapeHtml(opts.preheader)
-    : escapeHtml(`${company.name}${tagline ? ' — ' + tagline : ''}`);
+    : escapeHtml(company.name + (company.tagline ? ' \u2014 ' + company.tagline : ''));
   const button = opts.button && opts.button.label && opts.button.url ? renderButton(opts.button) : '';
   const year = new Date().getFullYear();
   const headerBand = safeHex(company.brandColor, BRAND_COLORS.navy);
   const accent = safeHex(company.brandColorSecondary, BRAND_COLORS.red);
-  const leftMark = emailLogoHtml(company.logoUrl, {
-    height: 34,
-    maxWidth: 220,
-    alt: company.name,
-  });
-  const headerRightMark = emailLogoHtml(company.secondaryLogoUrl, {
-    height: 26,
-    maxWidth: 160,
-    alt: company.name,
-  });
-  const footerMark = emailLogoHtml(company.footerLogoUrl, {
-    height: 26,
-    maxWidth: 150,
-    alt: company.name,
-  });
-  const wordmark = leftMark
-    ? leftMark
-    : `<div style="font-size:23px;font-weight:800;color:${BRAND_COLORS.white};letter-spacing:1.5px;line-height:1.1;">${escapeHtml(company.name)}</div>`;
+  const ink = BRAND_COLORS.navy;
+  const quiet = '#3D4C5C';
+  const headerLogo = emailLogoHtml(company.logoUrl, { height: 42, maxWidth: 168, alt: company.name });
+  const secondaryLogo = emailLogoHtml(company.secondaryLogoUrl, { height: 36, maxWidth: 132, alt: company.name });
+  const footerLogo = emailLogoHtml(company.footerLogoUrl || company.logoUrl, { height: 40, maxWidth: 148, alt: company.name });
 
-  const contactPairs = (
-    [
-      ['Address', company.address],
-      ['Phone', company.phone],
-      ['Email', company.email],
-      ['Website', company.website],
-    ] as [string, string | undefined][]
-  ).filter((p) => p[1] && String(p[1]).trim().length > 0) as [string, string][];
+  const contactPairs = [
+    ['Address', company.address, ''],
+    ['Phone', company.phone, company.phone ? 'tel:' + String(company.phone).replace(/\s/g, '') : ''],
+    ['Email', company.email, company.email ? 'mailto:' + company.email : ''],
+    ['Website', company.website, company.website && /^https:\/\//i.test(company.website) ? company.website : ''],
+  ].filter((row) => row[1] && String(row[1]).trim());
 
-  const contactCells = contactPairs
-    .map(([label, value]) => {
-      const val =
-        label === 'Email' && company.email
-          ? `<a href="mailto:${escapeHtml(company.email)}" style="color:${BRAND_COLORS.navy};text-decoration:underline;">${escapeHtml(company.email)}</a>`
-          : label === 'Website' && company.website
-            ? `<a href="${escapeHtml(company.website)}" style="color:${BRAND_COLORS.navy};text-decoration:underline;">${escapeHtml(company.website)}</a>`
-            : escapeHtml(value);
-      return `
-            <td width="50%" style="padding:10px 16px 10px 0;font-family:${FONT};vertical-align:top;">
-              <div style="font-size:10px;font-weight:700;color:${BRAND_COLORS.red};letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px;">${escapeHtml(label)}</div>
-              <div style="font-size:12.5px;color:${BRAND_COLORS.navy};line-height:1.5;">${val}</div>
-            </td>`;
-    })
-    .join('');
-  const contactBlock =
-    contactPairs.length > 0
-      ? `
-          <tr>
-            <td style="padding:0 36px;background:#F8FAFC;font-family:${FONT};">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                <tr>${contactCells}</tr>
-              </table>
-            </td>
-          </tr>`
-      : '';
+  const contactRows = [];
+  for (let i = 0; i < contactPairs.length; i += 2) {
+    const pair = contactPairs.slice(i, i + 2);
+    const cells = pair.map(([label, value, href]) => {
+      const shown = escapeHtml(String(value));
+      const inner = href
+        ? '<a href="' + escapeHtml(href) + '" style="color:' + ink + ';text-decoration:underline;">' + shown + '</a>'
+        : shown;
+      return '<td width="50%" valign="top" style="padding:0 16px 14px 0;font-family:' + FONT + ';">'
+        + '<div style="margin:0 0 3px;font-size:11px;line-height:1.3;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:' + quiet + ';">' + escapeHtml(label) + '</div>'
+        + '<div style="margin:0;font-size:14px;line-height:1.45;font-weight:600;color:' + ink + ';word-break:break-word;">' + inner + '</div>'
+        + '</td>';
+    }).join('');
+    const pad = pair.length === 1 ? '<td width="50%" style="padding:0;font-size:0;line-height:0;">&nbsp;</td>' : '';
+    contactRows.push('<tr>' + cells + pad + '</tr>');
+  }
+  const contactBlock = contactRows.length
+    ? '<tr><td style="padding:18px 32px 4px;background:#F7F9FB;font-family:' + FONT + ';">'
+      + '<div style="margin:0 0 12px;font-size:12px;line-height:1.3;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:' + quiet + ';">Contact</div>'
+      + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + contactRows.join('') + '</table>'
+      + '</td></tr>'
+    : '';
+
+  const marks = { Facebook: 'f', Instagram: 'Ig', LinkedIn: 'in', X: 'X', YouTube: 'Yt', TikTok: 'Tt', WhatsApp: 'Wa' };
+  const socials = (Array.isArray(company.socials) ? company.socials : []).filter((s) => s && s.label && s.url);
+  const socialRows = [];
+  for (let i = 0; i < socials.length; i += 2) {
+    const pair = socials.slice(i, i + 2);
+    const cells = pair.map((s) => {
+      const mark = marks[s.label] || String(s.label).slice(0, 2);
+      const size = mark.length > 1 ? '11px' : '15px';
+      return '<td width="50%" valign="middle" style="padding:0 12px 12px 0;">'
+        + '<table role="presentation" cellpadding="0" cellspacing="0"><tr>'
+        + '<td bgcolor="' + ink + '" align="center" valign="middle" width="32" height="32" '
+        + 'style="width:32px;height:32px;background:' + ink + ';color:#FFFFFF;font-family:' + FONT + ';font-size:' + size + ';font-weight:700;line-height:32px;text-align:center;">'
+        + escapeHtml(mark) + '</td>'
+        + '<td valign="middle" style="padding-left:10px;font-family:' + FONT + ';font-size:14px;line-height:1.3;font-weight:700;">'
+        + '<a href="' + escapeHtml(s.url) + '" style="color:' + ink + ';text-decoration:none;">' + escapeHtml(s.label) + '</a>'
+        + '</td></tr></table></td>';
+    }).join('');
+    const pad = pair.length === 1 ? '<td width="50%" style="padding:0;font-size:0;line-height:0;">&nbsp;</td>' : '';
+    socialRows.push('<tr>' + cells + pad + '</tr>');
+  }
+  const socialBlock = socialRows.length
+    ? '<tr><td style="padding:4px 32px 6px;background:#F7F9FB;font-family:' + FONT + ';">'
+      + '<div style="margin:0 0 12px;font-size:12px;line-height:1.3;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:' + quiet + ';">Social</div>'
+      + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + socialRows.join('') + '</table>'
+      + '</td></tr>'
+    : '';
+
+  const headerName = '<div style="margin:0;font-family:' + FONT + ';font-size:22px;line-height:1.25;font-weight:700;letter-spacing:0;color:#FFFFFF;">' + name + '</div>'
+    + (tagline ? '<div style="margin:4px 0 0;font-family:' + FONT + ';font-size:13px;line-height:1.4;font-weight:600;letter-spacing:0.02em;color:#F4F7FB;">' + tagline + '</div>' : '');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -264,58 +311,57 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
 </head>
 <body style="margin:0;padding:0;background:${BRAND_COLORS.canvas};-webkit-text-size-adjust:100%;word-spacing:normal;">
 <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:transparent;">${preheaderText}&nbsp;&zwnj;</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BRAND_COLORS.canvas};padding:32px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BRAND_COLORS.canvas};padding:28px 12px;">
   <tr>
     <td align="center">
-      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:${BRAND_COLORS.white};border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.10);">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:${BRAND_COLORS.white};border:1px solid ${BRAND_COLORS.border};border-radius:10px;overflow:hidden;">
         <tr>
-          <td style="background:${headerBand};padding:26px 36px 20px;">
+          <td bgcolor="${headerBand}" style="background:${headerBand};padding:24px 32px 22px;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
               <tr>
-                <td style="font-family:${FONT};vertical-align:middle;">
-                  ${wordmark}
-                  ${tagline ? `<div style="font-size:11px;color:${BRAND_COLORS.softMuted};letter-spacing:.5px;margin-top:6px;line-height:1.5;">${tagline}</div>` : ''}
-                </td>
-                <td align="right" style="vertical-align:middle;padding-left:16px;">${headerRightMark}</td>
+                ${headerLogo ? '<td valign="middle" width="180" style="padding-right:16px;vertical-align:middle;">' + headerLogo + '</td>' : ''}
+                <td valign="middle" style="vertical-align:middle;font-family:${FONT};">${headerName}</td>
+                ${secondaryLogo ? '<td valign="middle" align="right" width="140" style="padding-left:16px;vertical-align:middle;">' + secondaryLogo + '</td>' : ''}
               </tr>
             </table>
           </td>
         </tr>
         <tr>
-          <td style="padding:0 36px 0;">
+          <td style="padding:0;font-size:0;line-height:0;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
               <tr>
-                <td width="50%" style="height:3px;font-size:0;line-height:0;background:${accent};border-radius:2px 0 0 2px;">&nbsp;</td>
-                <td width="50%" style="height:3px;font-size:0;line-height:0;background:${BRAND_COLORS.sky};border-radius:0 2px 2px 0;">&nbsp;</td>
+                <td width="50%" bgcolor="${accent}" style="height:4px;font-size:0;line-height:0;background:${accent};">&nbsp;</td>
+                <td width="50%" bgcolor="${BRAND_COLORS.sky}" style="height:4px;font-size:0;line-height:0;background:${BRAND_COLORS.sky};">&nbsp;</td>
               </tr>
             </table>
           </td>
         </tr>
         <tr>
-          <td style="padding:30px 36px 26px;font-family:${FONT};font-size:15px;line-height:1.7;color:${BRAND_COLORS.body};">
+          <td style="padding:32px 32px 28px;font-family:${FONT};font-size:15px;line-height:1.65;color:${BRAND_COLORS.body};">
             ${body}
             ${button}
           </td>
         </tr>
         <tr>
-          <td style="border-top:1px solid ${BRAND_COLORS.border};background:#F8FAFC;padding:18px 36px 0;font-family:${FONT};">
+          <td bgcolor="#F7F9FB" style="background:#F7F9FB;border-top:1px solid ${BRAND_COLORS.border};padding:22px 32px 16px;font-family:${FONT};">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
               <tr>
-                <td style="vertical-align:middle;">
-                  <div style="font-size:14px;font-weight:800;color:${BRAND_COLORS.navy};letter-spacing:.4px;">${escapeHtml(company.name)}</div>
-                  ${tagline ? `<div style="font-size:12px;color:${BRAND_COLORS.muted};margin-top:2px;">${tagline}</div>` : ''}
+                ${footerLogo ? '<td valign="middle" width="160" style="padding-right:16px;vertical-align:middle;">' + footerLogo + '</td>' : ''}
+                <td valign="middle" style="vertical-align:middle;">
+                  <div style="margin:0;font-size:20px;line-height:1.25;font-weight:700;letter-spacing:0;color:${ink};">${name}</div>
+                  ${tagline ? '<div style="margin:4px 0 0;font-size:13px;line-height:1.4;font-weight:600;color:' + quiet + ';">' + tagline + '</div>' : ''}
                 </td>
-                <td align="right" style="vertical-align:middle;">${footerMark}</td>
               </tr>
             </table>
           </td>
         </tr>
+        ${socialBlock}
         ${contactBlock}
         <tr>
-          <td style="background:#F8FAFC;padding:14px 36px 22px;font-family:${FONT};">
-            <div style="font-size:11px;color:${BRAND_COLORS.softMuted};line-height:1.7;border-top:1px solid ${BRAND_COLORS.border};padding-top:14px;">
-              This is an automated message from HOPE DESIGN. Please do not reply to this email.<br>
-              &copy; ${year} ${escapeHtml(company.name)}. All rights reserved.
+          <td bgcolor="#F7F9FB" style="background:#F7F9FB;padding:8px 32px 22px;font-family:${FONT};">
+            <div style="border-top:1px solid ${BRAND_COLORS.border};padding-top:14px;font-size:12px;line-height:1.6;color:${quiet};">
+              This is an automated message from <strong style="color:${ink};">${name}</strong>. Please do not reply to this email.<br>
+              &copy; ${year} <strong style="color:${ink};">${name}</strong>. All rights reserved.
             </div>
           </td>
         </tr>
@@ -327,12 +373,20 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
 </html>`;
 }
 
-/**
- * Brand the content of an outgoing email before dispatch.
- * - A complete HTML document is passed through untouched.
- * - An HTML fragment or plain text is wrapped in the branded template.
- * - A plain-text version is always produced for text-only clients.
- */
+
+function emailIdentityText(company) {
+  const c = company ?? DEFAULT_COMPANY;
+  const lines = ['', c.name || ''];
+  if (c.tagline) lines.push(String(c.tagline));
+  for (const row of [c.address, c.phone, c.email, c.website]) {
+    if (row && String(row).trim()) lines.push(String(row).trim());
+  }
+  for (const s of Array.isArray(c.socials) ? c.socials : []) {
+    if (s && s.label && s.url) lines.push(String(s.label) + ': ' + String(s.url));
+  }
+  return lines.join('\n');
+}
+
 export function brandEmailContent(opts: {
   subject: string;
   html?: string | null;
@@ -358,6 +412,6 @@ export function brandEmailContent(opts: {
       button: opts.button ?? undefined,
       preheader: opts.preheader ?? undefined,
     }),
-    text: text || stripTags(bodyHtml),
+    text: [text || stripTags(bodyHtml), emailIdentityText(opts.company)].filter(Boolean).join('\n'),
   };
 }

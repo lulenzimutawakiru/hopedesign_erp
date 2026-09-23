@@ -212,6 +212,7 @@ export const ENTITIES: (CrudConfig & Handlers)[] = [
   { table: 'bonus_records', module: 'hr', resource: 'bonus_records', label: 'Bonus Record', statusColumn: 'status', searchable: [], defaultOrder: 't.id DESC' },
   { table: 'commission_records', module: 'hr', resource: 'commission_records', label: 'Commission Record', statusColumn: 'status', searchable: [], defaultOrder: 't.id DESC' },
   { table: 'statutory_configs', module: 'hr', resource: 'statutory_configs', label: 'Statutory Config', codeColumn: 'code', statusColumn: 'status', searchable: ['code', 'name', 'country', 'category'], defaultOrder: 't.effective_from DESC' },
+  { table: 'payroll_settings', module: 'hr', resource: 'payroll_settings', label: 'Payroll Setting', codeColumn: 'config_key', statusColumn: 'status', searchable: ['config_key', 'description'], defaultOrder: 't.config_key ASC', allowDelete: true, transitions: { archive: 'INACTIVE', restore: 'ACTIVE' } },
 
   // Self-service + projects
   { table: 'employee_requests', module: 'hr', resource: 'employee_requests', label: 'Employee Request', statusColumn: 'status', searchable: ['subject'], defaultOrder: 't.id DESC' },

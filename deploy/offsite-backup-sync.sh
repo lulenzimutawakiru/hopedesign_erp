@@ -37,7 +37,26 @@ if [[ ${#SOURCES[@]} -eq 0 ]]; then
   exit 1
 fi
 
-log "Found ${#SOURCES[@]} artifact(s) to consider."
+# Re-check every candidate immediately before sending. The glob above expanded a
+# moment ago, but a concurrent retention sweep - storage-backup.sh prunes
+# storage archives, postgres-backup.sh prunes dumps - can unlink a file between
+# expansion and rsync. rsync then exits 23 ("some files were not transferred"),
+# which here is a *local delete*, not a sync failure; treating it as one raised a
+# CRITICAL alert every time the two cron entries collided at 02:30 (02:00 dump,
+# 02:30 storage prune + this sync). Sending only files that still exist keeps a
+# genuine failure loud while letting a benign race stay quiet.
+SEND=()
+for f in "${SOURCES[@]}"; do
+  [[ -f "$f" ]] || continue
+  SEND+=("$f")
+done
+
+if [[ ${#SEND[@]} -eq 0 ]]; then
+  log "ERROR: all ${#SOURCES[@]} artifact(s) disappeared before send (retention race); nothing to sync."
+  exit 1
+fi
+
+log "Found ${#SEND[@]} artifact(s) to sync (of ${#SOURCES[@]} candidate(s))."
 
 if ! $SSH_CMD "$REMOTE" "mkdir -p '$REMOTE_DIR' && chmod 750 '$REMOTE_DIR'"; then
   log "ERROR: peer $REMOTE is unreachable or refused the key; backups remain single-copy."
@@ -47,7 +66,12 @@ fi
 # --update guards against replacing a newer remote artifact with an older local
 # one. Times are preserved; permissions are forced to 600 because production
 # data should never be world-readable on the peer either.
-if ! rsync -t --update --partial --chmod=F600 -e "$SSH_CMD" "${SOURCES[@]}" "$REMOTE:$REMOTE_DIR/"; then
+#
+# --ignore-missing-args makes a file that vanishes between the check above and
+# the transfer a clean no-op rather than an error. --partial is deliberately NOT
+# used: it would leave a truncated copy on the peer and turn the same benign
+# race into exit 23 instead of a skip.
+if ! rsync -t --update --ignore-missing-args --chmod=F600 -e "$SSH_CMD" "${SEND[@]}" "$REMOTE:$REMOTE_DIR/"; then
   log "ERROR: rsync failed; backups may be incomplete on the peer."
   exit 1
 fi

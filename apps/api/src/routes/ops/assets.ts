@@ -71,6 +71,7 @@ assetsOpsRouter.get('/', ...runGet('assets.register.view', (c, ctx, q) => ast.li
   sortDir: q.sortDir != null ? (String(q.sortDir) as 'asc' | 'desc') : undefined,
 })));
 assetsOpsRouter.post('/', ...run('assets.register.create', (c, ctx, b) => ast.createAsset(c, ctx, b)));
+assetsOpsRouter.post('/bulk', ...run('assets.register.create', (c, ctx, b) => ast.createAssetsBulk(c, ctx, b)));
 assetsOpsRouter.patch('/:id', ...run('assets.register.update', (c, ctx, b, p) => ast.updateAsset(c, ctx, Number(p.id), b)));
 assetsOpsRouter.delete('/:id', ...run('assets.register.delete', (c, ctx, b, p) => ast.deleteAsset(c, ctx, Number(p.id), b)));
 assetsOpsRouter.post('/:id/archive', ...run('assets.register.archive', (c, ctx, b, p) => ast.archiveAsset(c, ctx, Number(p.id), b)));
