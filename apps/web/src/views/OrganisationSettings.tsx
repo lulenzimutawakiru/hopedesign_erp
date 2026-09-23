@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { api, ApiError } from '../api';
 import { ErrorBanner, Modal, PageLoader } from '../components/ui';
@@ -404,6 +406,415 @@ function BeforeAfter({ before, after }: { before: unknown; after: unknown }) {
 // Settings form (kind: 'settings')
 // ---------------------------------------------------------------------------
 
+
+const PREMISES_FIELDS = ['premises_latitude', 'premises_longitude', 'premises_radius_m'];
+
+const LOCATION_ORDER = ['name', 'code', 'type', 'address', 'city', 'country', 'timezone', 'branch_id'];
+
+const LOCATION_LABEL: Record<string, string> = {
+  code: 'Code',
+  name: 'Name',
+  type: 'Kind of place',
+  address: 'Address',
+  city: 'City',
+  country: 'Country',
+  timezone: 'Timezone',
+  branch_id: 'Branch',
+};
+
+const LOCATION_HINT: Record<string, string> = {
+  code: 'A short code. Attendance settings uses this to choose the clock-in place.',
+  name: 'The name people will recognise, such as the factory or the head office.',
+  type: 'Factory, workplace, warehouse, site, or another kind of place.',
+  address: 'Street and plot. Type the real address. Nothing is filled in for you.',
+  city: 'Town or city.',
+  timezone: 'Used for the local clock. Example: Africa/Kampala.',
+};
+
+const RADIUS_CHOICES: Array<{ metres: string; label: string }> = [
+  { metres: '100', label: 'Gate' },
+  { metres: '250', label: 'Yard' },
+  { metres: '400', label: 'Compound' },
+  { metres: '800', label: 'Wide site' },
+];
+
+function PremisesMap({
+  lat,
+  lng,
+  radius,
+  disabled,
+  onPick,
+}: {
+  lat: string;
+  lng: string;
+  radius: string;
+  disabled?: boolean;
+  onPick: (lat: string, lng: string) => void;
+}) {
+  const holder = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
+  const circleRef = useRef<L.Circle | null>(null);
+  const onPickRef = useRef(onPick);
+  const disabledRef = useRef(disabled);
+  onPickRef.current = onPick;
+  disabledRef.current = disabled;
+
+  useEffect(() => {
+    const node = holder.current;
+    if (!node || mapRef.current) return;
+    const map = L.map(node, { zoomControl: true });
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap',
+      maxZoom: 19,
+    }).addTo(map);
+    const la = Number(lat);
+    const ln = Number(lng);
+    const saved = Number.isFinite(la) && Number.isFinite(ln);
+    map.setView(saved ? [la, ln] : [1.0, 32.0], saved ? 16 : 6);
+    map.on('click', (event: L.LeafletMouseEvent) => {
+      if (disabledRef.current) return;
+      onPickRef.current(event.latlng.lat.toFixed(6), event.latlng.lng.toFixed(6));
+    });
+    mapRef.current = map;
+    const fit = window.setTimeout(() => map.invalidateSize(), 50);
+    if (!saved && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition((pos) => {
+        if (!mapRef.current) return;
+        mapRef.current.setView([pos.coords.latitude, pos.coords.longitude], 16);
+      });
+    }
+    return () => {
+      window.clearTimeout(fit);
+      map.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+      circleRef.current = null;
+    };
+    // The map is created once for this open form. Later pin changes update the marker.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const la = Number(lat);
+    const ln = Number(lng);
+    const ok = Number.isFinite(la) && Number.isFinite(ln);
+    if (!ok) {
+      markerRef.current?.remove();
+      markerRef.current = null;
+      circleRef.current?.remove();
+      circleRef.current = null;
+      return;
+    }
+    const icon = L.divIcon({
+      className: '',
+      html: '<div style="width:18px;height:18px;border-radius:50%;background:#0f172a;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)"></div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9],
+    });
+    if (!markerRef.current) {
+      markerRef.current = L.marker([la, ln], { icon, draggable: !disabled, autoPan: true }).addTo(map);
+      markerRef.current.on('dragend', () => {
+        const point = markerRef.current?.getLatLng();
+        if (!point || disabledRef.current) return;
+        onPickRef.current(point.lat.toFixed(6), point.lng.toFixed(6));
+      });
+    } else {
+      markerRef.current.setLatLng([la, ln]);
+      markerRef.current.setIcon(icon);
+      if (disabled) markerRef.current.dragging?.disable();
+      else markerRef.current.dragging?.enable();
+    }
+    const metres = Math.max(Number(radius) || 250, 1);
+    if (!circleRef.current) {
+      circleRef.current = L.circle([la, ln], {
+        radius: metres,
+        color: '#0f172a',
+        weight: 1,
+        fillColor: '#0f172a',
+        fillOpacity: 0.12,
+      }).addTo(map);
+    } else {
+      circleRef.current.setLatLng([la, ln]);
+      circleRef.current.setRadius(metres);
+    }
+    if (!map.getBounds().contains([la, ln])) map.setView([la, ln], Math.max(map.getZoom(), 16));
+  }, [lat, lng, radius, disabled]);
+
+  return <div ref={holder} style={{ height: 300, width: '100%', borderRadius: 8, border: '1px solid #e4e7ec' }} />;
+}
+
+/** Where this place is, and how far from that point a phone clock-in still counts. */
+function PremisesPin({
+  drafts,
+  disabled,
+  onChange,
+}: {
+  drafts: Record<string, Draft>;
+  disabled?: boolean;
+  onChange: (key: string, value: Draft) => void;
+}) {
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const [gpsBusy, setGpsBusy] = useState(false);
+  const [accuracy, setAccuracy] = useState<number | null>(null);
+  const [showCoords, setShowCoords] = useState(false);
+  const lat = str(drafts.premises_latitude);
+  const lng = str(drafts.premises_longitude);
+  const radius = str(drafts.premises_radius_m);
+  const hasPin = lat !== '' && lng !== '' && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+  const place = [str(drafts.address), str(drafts.city)].filter(Boolean).join(', ');
+  const placePin = (nextLat: string, nextLng: string) => {
+    onChange('premises_latitude', nextLat);
+    onChange('premises_longitude', nextLng);
+    if (radius === '') onChange('premises_radius_m', '250');
+  };
+  const pinHere = () => {
+    if (!navigator.geolocation) {
+      setGpsError('This device cannot read a location. Click the map instead.');
+      return;
+    }
+    setGpsBusy(true);
+    setGpsError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        placePin(pos.coords.latitude.toFixed(6), pos.coords.longitude.toFixed(6));
+        setAccuracy(Math.round(pos.coords.accuracy));
+        setGpsBusy(false);
+      },
+      () => {
+        setGpsBusy(false);
+        setGpsError('Location was blocked. Click the map to drop the pin, or allow location and try again.');
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
+    );
+  };
+  const clearPin = () => {
+    onChange('premises_latitude', '');
+    onChange('premises_longitude', '');
+    setAccuracy(null);
+  };
+  return (
+    <div className="card">
+      <div className="card-head">
+        <div>
+          <h3>Clock-in area</h3>
+          <span className="field-hint">{hasPin ? 'Pinned on the map' : 'Click the map to drop a pin'}</span>
+        </div>
+        <div className="head-actions">
+          {hasPin && (
+            <button type="button" className="btn btn-sm btn-ghost" disabled={disabled} onClick={clearPin}>
+              Clear pin
+            </button>
+          )}
+          <button type="button" className="btn btn-sm btn-primary" disabled={disabled || gpsBusy} onClick={pinHere}>
+            {gpsBusy ? 'Reading GPS…' : 'Use my GPS'}
+          </button>
+        </div>
+      </div>
+      <div className="card-pad">
+        <p className="muted" style={{ marginTop: 0 }}>
+          {place ? place + '. ' : ''}
+          Click the map to drop the pin, or drag it. Use my GPS drops it where this device is. The shaded circle is the clock-in area.
+        </p>
+        {gpsError && <p className="field-error">{gpsError}</p>}
+        <PremisesMap lat={lat} lng={lng} radius={radius} disabled={disabled} onPick={placePin} />
+        <p className="field-hint" style={{ marginTop: 12 }}>How far from the pin should a clock-in still count?</p>
+        <div className="head-actions">
+          {RADIUS_CHOICES.map((choice) => (
+            <button
+              key={choice.metres}
+              type="button"
+              className={'btn btn-sm ' + (radius === choice.metres ? 'btn-primary' : 'btn-ghost')}
+              disabled={disabled}
+              onClick={() => onChange('premises_radius_m', choice.metres)}
+            >
+              {choice.label} · {choice.metres} m
+            </button>
+          ))}
+        </div>
+        <p className="field-hint">
+          {hasPin
+            ? (accuracy != null ? 'GPS was accurate to about ' + accuracy + ' m. ' : '') + 'Save the location to keep this pin.'
+            : 'Nothing is pinned until you click the map or use GPS.'}
+        </p>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowCoords((v) => !v)}>
+          {showCoords ? 'Hide coordinates' : 'Edit coordinates'}
+        </button>
+        {showCoords && (
+          <div className="form-grid" style={{ marginTop: 10 }}>
+            <Field label="Latitude">
+              <FieldInput type="number" value={lat} disabled={disabled} onChange={(v) => onChange('premises_latitude', v)} />
+            </Field>
+            <Field label="Longitude">
+              <FieldInput type="number" value={lng} disabled={disabled} onChange={(v) => onChange('premises_longitude', v)} />
+            </Field>
+            <Field label="Radius in metres">
+              <FieldInput type="number" value={radius} disabled={disabled} onChange={(v) => onChange('premises_radius_m', v)} />
+            </Field>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LocationFields({
+  defs,
+  drafts,
+  disabled,
+  required,
+  onChange,
+}: {
+  defs: FieldDef[];
+  drafts: Record<string, Draft>;
+  disabled?: boolean;
+  required: string[];
+  onChange: (key: string, value: Draft) => void;
+}) {
+  const byKey = new Map(defs.map((d) => [d.key, d]));
+  const ordered = [
+    ...LOCATION_ORDER.map((key) => byKey.get(key)).filter((d): d is FieldDef => Boolean(d)),
+    ...defs.filter((d) => !LOCATION_ORDER.includes(d.key) && !PREMISES_FIELDS.includes(d.key)),
+  ];
+  return (
+    <div className="stack">
+      <div className="card">
+        <div className="card-head"><h3>Place</h3></div>
+        <div className="card-pad">
+          <div className="form-grid">
+            {ordered.map((d) => (
+              <div key={d.key} style={d.key === 'address' ? { gridColumn: '1 / -1' } : undefined}>
+                <Field
+                  label={LOCATION_LABEL[d.key] ?? titleCase(d.key)}
+                  required={required.includes(d.key)}
+                  hint={LOCATION_HINT[d.key] ?? (d.options ? 'One of: ' + d.options.join(', ') : undefined)}
+                >
+                  <FieldInput
+                    type={d.key === 'address' ? 'textarea' : fieldInputType(d.kind)}
+                    options={d.options ?? undefined}
+                    value={drafts[d.key] ?? ''}
+                    disabled={disabled}
+                    onChange={(v) => onChange(d.key, v)}
+                  />
+                </Field>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <PremisesPin drafts={drafts} disabled={disabled} onChange={onChange} />
+    </div>
+  );
+}
+
+/** One row of the organisation's own locations, as the structure API returns it. */
+interface LocationRow {
+  id?: unknown;
+  code?: unknown;
+  name?: unknown;
+  premisesLatitude?: unknown;
+  premisesLongitude?: unknown;
+  premisesRadiusM?: unknown;
+}
+
+/** A location can only host device clock-in once its premises are pinned. */
+const hasPremises = (row: LocationRow): boolean =>
+  !isBlank(row.premisesLatitude)
+  && !isBlank(row.premisesLongitude)
+  && !isBlank(row.premisesRadiusM)
+  && Number(row.premisesRadiusM) > 0;
+
+/**
+ * Chooses the location whose code device clock-in is matched against.
+ *
+ * The server records a punch at that one location and nowhere else, so the row
+ * offers the organisation's own active locations rather than a free-text code
+ * that could never match. A saved value that no longer matches an active
+ * location stays selectable, so opening this screen cannot quietly clear a
+ * setting the server is still relying on.
+ */
+function ClockInLocationField({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: Draft;
+  disabled?: boolean;
+  onChange: (v: string) => void;
+}) {
+  const [rows, setRows] = useState<LocationRow[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const selected = str(value);
+
+  useEffect(() => {
+    let alive = true;
+    api<{ data: { rows?: LocationRow[] } }>(BASE + '/structure/locations?status=ACTIVE')
+      .then((r) => {
+        if (alive) setRows(r.data.rows ?? []);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setRows([]);
+        setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Seeing a settings category and listing the organisation structure are
+  // separate permissions, so fall back to the plain text control rather than
+  // leaving the row unusable for someone who may still legitimately edit it.
+  if (failed) {
+    return (
+      <FieldInput
+        type="text"
+        value={value}
+        disabled={disabled}
+        placeholder="Location code"
+        onChange={(v) => onChange(str(v))}
+      />
+    );
+  }
+
+  const options = rows ?? [];
+  const loaded = rows !== null;
+  const match = options.find((r) => str(r.code).trim().toUpperCase() === selected.trim().toUpperCase());
+  const warn = loaded && selected.trim() !== '' && (match === undefined || !hasPremises(match));
+  const hint = !loaded
+    ? 'Loading locations...'
+    : selected.trim() === ''
+      ? 'Device clock-in is refused until a location is chosen.'
+      : match === undefined
+        ? 'That code is not an active location, so device clock-in would be refused.'
+        : !hasPremises(match)
+          ? 'This location has no premises yet. Save its latitude, longitude and radius under Organisation structure first.'
+          : 'Clock-in is accepted within ' + String(match.premisesRadiusM) + ' m of ' + (str(match.name) || str(match.code)) + '.';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 0 }}>
+      <select
+        value={selected}
+        disabled={disabled || !loaded}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">Not set</option>
+        {options.map((r) => (
+          <option key={str(r.id) || str(r.code)} value={str(r.code)}>
+            {str(r.code) + ' - ' + str(r.name) + (hasPremises(r) ? '' : ' (no premises yet)')}
+          </option>
+        ))}
+        {loaded && match === undefined && selected.trim() !== '' && (
+          <option value={selected}>{selected + ' (not an active location)'}</option>
+        )}
+      </select>
+      <span className={warn ? 'field-error' : 'field-hint'}>{hint}</span>
+    </div>
+  );
+}
+
 /**
  * The generic settings editor.
  *
@@ -502,14 +913,22 @@ function SettingsForm({
             </div>
           ) : (
             <div className="setting-input-wrap">
-              <FieldInput
-                type={def.type}
-                options={def.options}
-                value={draft}
-                disabled={disabled || locked}
-                placeholder={def.default === undefined ? undefined : String(def.default)}
-                onChange={(v) => onDraft(key, v)}
-              />
+              {key === 'clock_in_location_code' ? (
+                <ClockInLocationField
+                  value={draft}
+                  disabled={disabled || locked}
+                  onChange={(v) => onDraft(key, v)}
+                />
+              ) : (
+                <FieldInput
+                  type={def.type}
+                  options={def.options}
+                  value={draft}
+                  disabled={disabled || locked}
+                  placeholder={def.default === undefined ? undefined : String(def.default)}
+                  onChange={(v) => onDraft(key, v)}
+                />
+              )}
             </div>
           )}
 
@@ -671,7 +1090,7 @@ const STRUCTURE_EXTRA: Record<string, string[]> = {
   branches: ['address', 'phone'],
   departments: ['branchId'],
   divisions: ['branchId', 'description'],
-  locations: ['type', 'city'],
+  locations: ['type', 'address'],
   warehouses: ['type', 'isSecure'],
   cost_centres: ['description', 'branchId'],
 };
@@ -783,6 +1202,16 @@ function StructurePanel({
     { key: 'code', label: 'Code' },
     { key: 'name', label: 'Name' },
     ...extra.map((k) => ({ key: k, label: titleCase(k) })),
+    ...(category.id === 'locations'
+      ? [{
+          key: 'premises',
+          label: 'Premises',
+          render: (row: Row) => {
+            const pinned = !isBlank(row.premisesLatitude) && !isBlank(row.premisesLongitude) && Number(row.premisesRadiusM) > 0;
+            return pinned ? 'Pinned · ' + String(row.premisesRadiusM) + ' m' : 'Not pinned';
+          },
+        }]
+      : []),
     { key: 'status', label: 'Status', render: (row: Row) => <Chip value={row.status} /> },
     {
       key: 'actions',
@@ -859,6 +1288,15 @@ function StructurePanel({
           }
         >
           {problem && <ErrorBanner error={new Error(problem)} />}
+          {category.id === 'locations' ? (
+            <LocationFields
+              defs={defs}
+              drafts={drafts}
+              disabled={act.busy}
+              required={required}
+              onChange={(key, v) => setDrafts((prev) => ({ ...prev, [key]: v }))}
+            />
+          ) : (
           <div className="form-grid">
             {defs.map((d: FieldDef) => (
               <Field
@@ -877,6 +1315,7 @@ function StructurePanel({
               </Field>
             ))}
           </div>
+          )}
         </Modal>
       )}
 

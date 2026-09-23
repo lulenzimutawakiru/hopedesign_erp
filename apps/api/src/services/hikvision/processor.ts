@@ -217,12 +217,32 @@ async function findEmployee(
        FROM employees
       WHERE company_id = $1
         AND status = 'ACTIVE'
-        AND (employee_no = $2 OR employee_number = $2 OR short_employee_number = $2)
+        AND (
+          employee_no = $2 OR employee_number = $2 OR short_employee_number = $2
+          OR regexp_replace(upper(employee_no), '[^A-Z0-9]', '', 'g') = regexp_replace(upper($2), '[^A-Z0-9]', '', 'g')
+          OR regexp_replace(upper(COALESCE(employee_number, '')), '[^A-Z0-9]', '', 'g') = regexp_replace(upper($2), '[^A-Z0-9]', '', 'g')
+          OR regexp_replace(upper(COALESCE(short_employee_number, '')), '[^A-Z0-9]', '', 'g') = regexp_replace(upper($2), '[^A-Z0-9]', '', 'g')
+        )
       ORDER BY (employee_no = $2) DESC
       LIMIT 1`,
     [companyId, identifier]
   );
-  if (empRes.rows.length > 0) return empRes.rows[0] as unknown as EmployeeRow;
+  if (empRes.rows.length > 0) {
+    const matched = empRes.rows[0] as unknown as EmployeeRow;
+    await client.query(
+      `INSERT INTO hikvision_employee_links
+         (tenant_id, company_id, employee_id, device_id, employee_identifier, verification_method, status)
+       SELECT $1, $2, $3, $4, $5, 'UNKNOWN', 'ACTIVE'
+       WHERE NOT EXISTS (
+         SELECT 1 FROM hikvision_employee_links
+          WHERE company_id = $2
+            AND employee_identifier = $5
+            AND COALESCE(device_id, 0) = COALESCE($4::bigint, 0)
+       )`,
+      [matched.tenant_id, matched.company_id, matched.id, deviceId, identifier],
+    );
+    return matched;
+  }
 
   // 3) Issued identities (RFID card, biometric reference, short badge).
   const idRes = await client.query(
@@ -316,6 +336,70 @@ async function createException(
   });
 }
 
+
+type AttendancePosture = 'CLOCK' | 'PRODUCTION' | 'DRIVER' | 'OPTIONAL';
+
+/**
+ * GENERAL is the office day: late after 09:00, and any clock-out after 17:30
+ * is overtime. PRODUCTION is expected only while the factory is producing.
+ * DRIVER may attend any day and is not marked late. OPTIONAL is the managing
+ * director: a punch may be recorded, but clocking in is not required.
+ */
+function attendancePosture(code: string | null | undefined): AttendancePosture {
+  const c = String(code ?? '').toUpperCase();
+  if (c === 'PRODUCTION') return 'PRODUCTION';
+  if (c === 'DRIVER') return 'DRIVER';
+  if (c === 'OPTIONAL') return 'OPTIONAL';
+  return 'CLOCK';
+}
+
+/** Same-day production bounds. Null when the factory is not producing. */
+async function productionWindowFor(
+  client: pg.PoolClient,
+  companyId: number,
+  workDate: string,
+  tz: string,
+): Promise<{ startIso: string | null; endIso: string | null } | null> {
+  const res = await client.query<{ start_at: Date | string | null; end_at: Date | string | null }>(
+    `WITH scheduled AS (
+       SELECT min(e.planned_start) AS start_at, max(e.planned_end) AS end_at
+         FROM production_schedule_entries e
+         JOIN production_schedules s ON s.id = e.schedule_id
+        WHERE e.company_id = $1
+          AND e.status IN ('PLANNED','CONFIRMED','IN_PROGRESS','RELEASED')
+          AND s.status IN ('PUBLISHED','CONFIRMED','ACTIVE')
+          AND (e.planned_start AT TIME ZONE $3)::date <= $2::date
+          AND (e.planned_end AT TIME ZONE $3)::date >= $2::date
+     ),
+     orders AS (
+       SELECT min(COALESCE(w.started_at, (w.start_date::timestamp AT TIME ZONE $3))) AS start_at,
+              max(COALESCE(w.completed_at, ((w.due_date + time '23:59') AT TIME ZONE $3))) AS end_at
+         FROM work_orders w
+        WHERE w.company_id = $1
+          AND w.status IN ('RELEASED','IN_PROGRESS','QUALITY_INSPECTION')
+          AND COALESCE(w.start_date, (w.started_at AT TIME ZONE $3)::date) <= $2::date
+          AND COALESCE(w.due_date, (COALESCE(w.completed_at, now()) AT TIME ZONE $3)::date) >= $2::date
+     )
+     SELECT start_at, end_at FROM scheduled WHERE start_at IS NOT NULL
+     UNION ALL
+     SELECT start_at, end_at FROM orders
+      WHERE start_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM scheduled WHERE start_at IS NOT NULL)`,
+    [companyId, workDate, tz],
+  );
+  const row = res.rows[0];
+  if (!row?.start_at || !row?.end_at) return null;
+  const start = new Date(row.start_at);
+  const end = new Date(row.end_at);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return null;
+  return {
+    // A run that began on an earlier day is already under way. Arriving today
+    // is attendance, not lateness against yesterday's start.
+    startIso: tzDateKey(start.getTime(), tz) === workDate ? start.toISOString() : null,
+    endIso: tzDateKey(end.getTime(), tz) === workDate ? end.toISOString() : null,
+  };
+}
+
 async function resolveShift(
   client: pg.PoolClient,
   companyId: number,
@@ -364,7 +448,13 @@ async function processRowInTx(
 ): Promise<boolean> {
   const eventTimeIso = toIso(row.device_event_time);
   const employeeIdentifier = payload.employee_identifier?.trim() || null;
-  const verificationMethod = classifyVerification(payload.verification) as VerificationMethod;
+  const subEventType = Number(payload.fields?.subEventType);
+  // Hikvision minor 38 is a fingerprint match. Minor 104 is employee number plus fingerprint.
+  // Minor 75 is a face match and must not clock anyone in or out.
+  const fingerprintPass = subEventType === 38 || subEventType === 104;
+  const verificationMethod = (
+    fingerprintPass ? 'FINGERPRINT' : subEventType === 75 ? 'FACE' : classifyVerification(payload.verification)
+  ) as VerificationMethod;
   const ctx = { tenantId: device.tenant_id, companyId: device.company_id, ip: row.source_ip ?? null };
 
   // --- Missing / unparseable event time -------------------------------------
@@ -485,6 +575,28 @@ async function processRowInTx(
 
   const classification = classify(0, false, false, null);
   const isAttendance = isAttendancePunch(classification.eventType);
+
+  if (isAttendance && !fingerprintPass) {
+    await insertNormalizedEvent(client, device, row, {
+      employeeIdentifier,
+      employeeId: employee.id,
+      eventTimeIso,
+      verificationMethod,
+      eventType: classification.eventType,
+      classificationReason: `${classification.reason}; ignored because it was not a fingerprint`,
+      location,
+      attendancePunchId: null,
+      extraMetadata: { employeeNumber: employee.employee_no, rawEventType, subEventType, ignored: 'not_fingerprint' },
+    });
+    await markProcessed(client, row, device, ctx, {
+      employeeIdentifier,
+      employeeId: employee.id,
+      eventType: classification.eventType,
+      verificationMethod,
+      metadata: { ignored: 'not_fingerprint', subEventType: Number.isFinite(subEventType) ? subEventType : null },
+    });
+    return true;
+  }
 
   if (!isAttendance) {
     // Access / informational events: canonical record only (no punch, no shift math).
@@ -660,9 +772,22 @@ async function processRowInTx(
     shiftSource = resolved.source;
   }
 
-  const win = shift
+  let posture: AttendancePosture = attendancePosture(shift?.code);
+  let productionOpen = true;
+  let win = shift
     ? shiftWindow(workDate, shift.start_time, shift.end_time, device.timezone)
     : { startIso: null as string | null, endIso: null as string | null, overnight: false };
+  if (posture === 'DRIVER' || posture === 'OPTIONAL') {
+    win = { startIso: null, endIso: null, overnight: false };
+  } else if (posture === 'PRODUCTION') {
+    const found = await productionWindowFor(client, device.company_id, workDate, device.timezone);
+    if (!found) {
+      productionOpen = false;
+      win = { startIso: null, endIso: null, overnight: false };
+    } else {
+      win = { startIso: found.startIso, endIso: found.endIso, overnight: false };
+    }
+  }
 
   if (!shift) {
     // No schedule to evaluate against: keep the punch, flag for the reviewer.
@@ -710,6 +835,8 @@ async function processRowInTx(
       deviceCode: device.code,
       devicePurpose: device.device_purpose,
       shiftSource,
+      posture,
+      productionOpen,
       timezone: device.timezone,
     }),
   ];
@@ -870,6 +997,20 @@ async function processRowInTx(
     graceMinutes,
     breakMinutes,
   });
+  if (posture === 'DRIVER' || posture === 'OPTIONAL' || (posture === 'PRODUCTION' && !productionOpen)) {
+    metrics.lateMinutes = 0;
+    metrics.earlyDepartureMinutes = 0;
+    metrics.overtimeMinutes = 0;
+    if (metrics.attendanceStatus === 'LATE' || metrics.attendanceStatus === 'EARLY_DEPARTURE') {
+      metrics.attendanceStatus = 'PRESENT';
+    }
+  }
+  // General staff: time worked after 17:30 is overtime. The shift end is 17:30,
+  // so the minutes after the scheduled end are the overtime.
+  if (String(shift?.code ?? '').toUpperCase() === 'GENERAL' && mergedCheckOut && win.endIso) {
+    const afterClose = Date.parse(mergedCheckOut) - Date.parse(win.endIso);
+    metrics.overtimeMinutes = afterClose > 0 ? Math.max(0, Math.round(afterClose / 60000)) : 0;
+  }
 
   const rawPunchCount = (fresh.raw_punch_count ?? 0) + (punchId > 0 ? 1 : 0);
   await client.query(
@@ -920,6 +1061,17 @@ async function processRowInTx(
       exceptionType: 'MISSING_CHECK_IN',
       severity: 'WARN',
       summary: `Check-out received without a check-in for ${workDate}.`,
+      eventTimeIso,
+      rawEventId: row.raw_event_id,
+    });
+  } else if (posture === 'PRODUCTION' && !productionOpen && punchType === 'CHECK_IN' &&
+             !(await exceptionExists(client, device.company_id, employee.id, 'OTHER', device.timezone, evMs))) {
+    await createException(client, device, {
+      employeeId: employee.id,
+      employeeIdentifier,
+      exceptionType: 'OTHER',
+      severity: 'WARN',
+      summary: `Production staff attended on ${workDate}, but the factory had no production in progress.`,
       eventTimeIso,
       rawEventId: row.raw_event_id,
     });

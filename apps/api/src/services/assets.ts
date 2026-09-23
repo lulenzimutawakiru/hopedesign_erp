@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { Ctx } from '../db.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { badRequest, forbidden, notFound } from '../utils.js';
@@ -430,6 +430,236 @@ export async function createAsset(client: pg.PoolClient, ctx: Ctx, b: Record<str
   });
   return { assetId, assetNo, qrId: Number(qr.id), qrCode: qr.code, tagId, status: 'DRAFT' };
 }
+
+
+const BULK_ASSET_MAX = 1000;
+
+/** Number a shared serial or barcode. A value that ends in digits counts upward; anything else is kept on the first unit only. */
+function steppedCode(raw: string | null, offset: number): string | null {
+  if (!raw) return null;
+  const m = /^(.*?)(\d+)$/.exec(raw);
+  if (!m) return offset === 0 ? raw : null;
+  const next = (BigInt(m[2]) + BigInt(offset)).toString().padStart(m[2].length, '0');
+  return m[1] + next;
+}
+
+function bulkUnitName(base: string, index: number, quantity: number): string {
+  if (quantity <= 1) return base;
+  const width = Math.max(3, String(quantity).length);
+  return base + ' ' + String(index).padStart(width, '0');
+}
+
+/**
+ * Register many identical assets in one step. Each unit is its own register
+ * row, with its own asset number, QR code and tag. Purchase cost is the price
+ * of one unit. Notifications are written once for the batch, not once per unit.
+ */
+export async function createAssetsBulk(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+  const companyId = ctx.companyId;
+  if (!companyId) throw badRequest('Company context required');
+  const baseName = s(b.name);
+  if (!baseName) throw badRequest('Asset name is required');
+  const quantity = typeof b.quantity === 'string' ? Number(b.quantity.trim()) : Number(b.quantity);
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > BULK_ASSET_MAX) {
+    throw badRequest('Quantity must be a whole number from 1 to 1,000');
+  }
+  const branchId = n(b.branchId) ?? ctx.branchId ?? null;
+  const categoryId = n(b.categoryId);
+  const numbered = await client.query(
+    `SELECT i::int AS i, next_asset_no($1,$2,$3,$4) AS asset_no
+       FROM generate_series(1, $5) AS i
+      ORDER BY i`,
+    [ctx.tenantId, companyId, branchId, categoryId, quantity]
+  );
+  if (numbered.rows.length !== quantity) throw badRequest('Could not allocate asset numbers');
+
+  const purchaseCost = num0(b.purchaseCost);
+  const usefulLife = n(b.usefulLifeMonths);
+  const shared = {
+    typeId: n(b.typeId),
+    classId: n(b.classId),
+    description: s(b.description),
+    manufacturer: s(b.manufacturer),
+    model: s(b.model),
+    partNo: s(b.partNo),
+    sku: s(b.sku),
+    isMachine: b.isMachine === true || b.isMachine === 'true',
+    machineRef: s(b.machineRef),
+    isHighValue: b.isHighValue === true || b.isHighValue === 'true',
+    isSerialized: !(b.isSerialized === false || b.isSerialized === 'false'),
+    departmentId: n(b.departmentId),
+    costCentreId: n(b.costCentreId),
+    projectId: n(b.projectId),
+    locationId: n(b.locationId),
+    warehouseId: n(b.warehouseId),
+    floor: s(b.floor),
+    room: s(b.room),
+    building: s(b.building),
+    currency: s(b.currency) ?? 'UGX',
+    purchaseDate: s(b.purchaseDate),
+    supplierId: n(b.supplierId),
+    poId: n(b.poId),
+    poNumber: s(b.poNumber),
+    invoiceId: n(b.invoiceId),
+    invoiceNumber: s(b.invoiceNumber),
+    grnId: n(b.grnId),
+    grnNumber: s(b.grnNumber),
+    capitalizationDate: s(b.capitalizationDate),
+    residual: num0(b.residualValue),
+    method: s(b.depreciationMethod) ?? 'STRAIGHT_LINE',
+    condition: s(b.condition) ?? 'NEW',
+    operational: operationalStateOf(b.operationalState),
+    attributes: JSON.stringify(b.attributes ?? {}),
+    tagType: s(b.tagType) ?? 'QR',
+    serialStart: s(b.serialNo),
+    barcodeStart: s(b.barcode),
+  };
+
+  const params: unknown[] = [];
+  const tuples: string[] = [];
+  const pushTuple = (vals: unknown[]) => {
+    const start = params.length;
+    params.push(...vals);
+    tuples.push('(' + vals.map((_, j) => '$' + (start + j + 1)).join(',') + ')');
+  };
+  for (const row of numbered.rows) {
+    const index = Number(row.i);
+    pushTuple([
+      companyId, ctx.tenantId, branchId, String(row.asset_no), bulkUnitName(baseName, index, quantity),
+      categoryId, shared.typeId, shared.classId, shared.description,
+      shared.manufacturer, shared.model, steppedCode(shared.serialStart, index - 1), shared.partNo, shared.sku,
+      steppedCode(shared.barcodeStart, index - 1),
+      shared.isMachine, shared.machineRef, shared.isHighValue, shared.isSerialized,
+      shared.departmentId, shared.costCentreId, shared.projectId, shared.locationId, shared.warehouseId,
+      shared.floor, shared.room, shared.building,
+      purchaseCost, shared.currency, shared.purchaseDate, shared.supplierId, shared.poId, shared.poNumber,
+      shared.invoiceId, shared.invoiceNumber, shared.grnId, shared.grnNumber,
+      shared.capitalizationDate, usefulLife, shared.residual, shared.method,
+      0, purchaseCost, 'DRAFT', shared.condition, shared.operational, shared.attributes, ctx.userId ?? null,
+    ]);
+  }
+  const inserted = await client.query(
+    `INSERT INTO asset_register
+       (company_id, tenant_id, branch_id, asset_no, name, category_id, type_id, class_id, description,
+        manufacturer, model, serial_no, part_no, sku, barcode, is_machine, machine_ref, is_high_value, is_serialized,
+        department_id, cost_centre_id, project_id, location_id, warehouse_id, floor, room, building,
+        purchase_cost, currency, purchase_date, supplier_id, po_id, po_number, invoice_id, invoice_number, grn_id, grn_number,
+        capitalization_date, useful_life_months, residual_value, depreciation_method,
+        accumulated_depreciation, current_book_value, status, condition, operational_state, attributes, created_by)
+     VALUES ${tuples.join(',')}
+     RETURNING id, asset_no`,
+    params
+  );
+  const idByNo = new Map<string, number>();
+  for (const row of inserted.rows) idByNo.set(String(row.asset_no), Number(row.id));
+  const units = numbered.rows.map((row) => {
+    const assetNo = String(row.asset_no);
+    const assetId = idByNo.get(assetNo);
+    if (!assetId) throw badRequest('Bulk registration did not return every asset');
+    return { index: Number(row.i), assetId, assetNo, qrCode: '', qrId: 0 };
+  });
+
+  const qrCodes = await client.query(
+    `SELECT i::int AS i, next_doc_no($1, 'HDG-AS', 8) AS code
+       FROM generate_series(1, $2) AS i
+      ORDER BY i`,
+    [ctx.tenantId, quantity]
+  );
+  const qrParams: unknown[] = [];
+  const qrTuples: string[] = [];
+  units.forEach((unit, i) => {
+    const code = String(qrCodes.rows[i].code);
+    const secret = randomBytes(24).toString('base64url');
+    const secretHash = createHash('sha256').update(secret).digest('hex');
+    const start = qrParams.length;
+    qrParams.push(companyId, ctx.tenantId, code, secretHash, 'ASSET', unit.assetId, null, null, ctx.userId ?? null);
+    qrTuples.push('(' + [1, 2, 3, 4, 5, 6, 7, 8, 9].map((j) => '$' + (start + j)).join(',') + ')');
+    unit.qrCode = code;
+  });
+  const qrInserted = await client.query(
+    `INSERT INTO qr_codes (company_id, tenant_id, code, secret_hash, entity_type, entity_id, product_id, batch_id, generated_by)
+     VALUES ${qrTuples.join(',')}
+     RETURNING id, code`,
+    qrParams
+  );
+  const qrByCode = new Map<string, number>();
+  for (const row of qrInserted.rows) qrByCode.set(String(row.code), Number(row.id));
+  for (const unit of units) {
+    const qrId = qrByCode.get(unit.qrCode);
+    if (!qrId) throw badRequest('Bulk registration did not return every QR code');
+    unit.qrId = qrId;
+  }
+  await client.query(
+    `UPDATE asset_register AS a
+        SET qr_id = u.qr_id
+       FROM unnest($1::bigint[], $2::bigint[]) AS u(asset_id, qr_id)
+      WHERE a.id = u.asset_id`,
+    [units.map((u) => u.assetId), units.map((u) => u.qrId)]
+  );
+
+  const tagCodes = await client.query(
+    `SELECT i::int AS i, next_doc_no($1, 'TAG', 8) AS code
+       FROM generate_series(1, $2) AS i
+      ORDER BY i`,
+    [ctx.tenantId, quantity]
+  );
+  const tagParams: unknown[] = [];
+  const tagTuples: string[] = [];
+  units.forEach((unit, i) => {
+    const start = tagParams.length;
+    tagParams.push(companyId, ctx.tenantId, unit.assetId, unit.qrId, String(tagCodes.rows[i].code), shared.tagType, ctx.userId ?? null);
+    const ph = [1, 2, 3, 4, 5, 6].map((j) => '$' + (start + j)).join(',');
+    tagTuples.push('(' + ph + ",'PENDING',$" + (start + 7) + ')');
+  });
+  const tagInserted = await client.query(
+    `INSERT INTO asset_tags (company_id, tenant_id, asset_id, qr_id, tag_no, tag_type, status, generated_by)
+     VALUES ${tagTuples.join(',')}
+     RETURNING id, asset_id`,
+    tagParams
+  );
+
+  const tagByAsset = new Map<number, number>();
+  for (const row of tagInserted.rows) tagByAsset.set(Number(row.asset_id), Number(row.id));
+
+  const timeParams: unknown[] = [];
+  const timeTuples: string[] = [];
+  for (const unit of units) {
+    const start = timeParams.length;
+    timeParams.push(
+      companyId, ctx.tenantId, unit.assetId, 'REGISTERED', 'Asset registered', null, ctx.userId ?? null,
+      null, JSON.stringify(unit.assetNo), shared.locationId, null, null,
+      JSON.stringify({ qrId: unit.qrId, tagId: tagByAsset.get(unit.assetId) ?? null, bulkQuantity: quantity, bulkIndex: unit.index })
+    );
+    timeTuples.push('(' + Array.from({ length: 13 }, (_, j) => '$' + (start + j + 1)).join(',') + ')');
+  }
+  await client.query(
+    `INSERT INTO asset_timeline
+       (company_id, tenant_id, asset_id, event_type, title, description, user_id,
+        old_value, new_value, location_id, reason, reference_doc_id, metadata)
+     VALUES ${timeTuples.join(',')}`,
+    timeParams
+  );
+
+  const first = units[0];
+  const last = units[units.length - 1];
+  await logAudit(client, ctx, {
+    action: 'create', resource: 'assets', recordId: first.assetId, recordCode: first.assetNo,
+    newValues: { name: baseName, quantity, firstAssetNo: first.assetNo, lastAssetNo: last.assetNo },
+  });
+  await emitEvent(client, ctx, {
+    eventType: 'asset.bulk_registered', entityType: 'assets.register', entityId: first.assetId, entityCode: first.assetNo,
+    payload: { quantity, firstAssetNo: first.assetNo, lastAssetNo: last.assetNo, name: baseName },
+  });
+  return {
+    quantity,
+    firstAssetId: first.assetId,
+    lastAssetId: last.assetId,
+    firstAssetNo: first.assetNo,
+    lastAssetNo: last.assetNo,
+    status: 'DRAFT',
+  };
+}
+
 
 const IDENT_FIELDS = new Set(['name','category_id','type_id','class_id','description','manufacturer','model','serial_no','part_no','sku','barcode','is_machine','machine_ref','is_high_value','is_serialized','attributes']);
 const ORG_FIELDS = new Set(['department_id','cost_centre_id','project_id','location_id','warehouse_id','floor','room','building','branch_id']);

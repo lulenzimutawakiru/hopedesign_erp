@@ -1078,6 +1078,26 @@ function EmployeeDesk({ id }: { id: number }) {
   if (error && !doc) return <ErrorBanner error={error} />;
   if (!doc) return <PageLoader variant="page" label="Opening employee…" />;
   const e = doc.employee as Rec;
+
+  const clockHere = (path: string, ok: string) => {
+    if (!navigator.geolocation) {
+      setError('This device cannot share its location. A clock-in is only recorded at the factory.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setNotice('');
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      await act(path, {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+      }, ok);
+    }, () => {
+      setBusy(false);
+      setError('Allow location so the clock-in can be checked against the factory premises.');
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  };
   const act = async (path: string, body: Rec = {}, ok = 'Done') => {
     setBusy(true); setError(''); setNotice('');
     try {
@@ -1172,14 +1192,15 @@ function EmployeeDesk({ id }: { id: number }) {
                 {e.payrollGroupName ? ` (${String(e.payrollGroupName)})` : ''}
               </span>
             </div>
+            <div><span className="emp-hero-k">Biometric user</span><span className="emp-hero-v cell-mono">{Array.isArray(doc.biometricUsers) && doc.biometricUsers.length ? doc.biometricUsers.map((b: Rec) => String(b.employeeIdentifier)).join(', ') : 'Not linked'}</span></div>
           </div>
         </div>
         <div className="emp-hero-actions">
           <button className="btn btn-sm" onClick={() => navigate('/people/employees')}>All employees</button>
           {can(user, 'hr.attendance.create') && !terminated && (
             <>
-              <button className="btn" disabled={busy} onClick={() => act(`/api/ops/hr/employees/${id}/clock-in`, {}, 'Clocked in')}>Clock in</button>
-              <button className="btn" disabled={busy} onClick={() => act(`/api/ops/hr/employees/${id}/clock-out`, {}, 'Clocked out')}>Clock out</button>
+              <button className="btn" disabled={busy} onClick={() => clockHere(`/api/ops/hr/employees/${id}/clock-in`, 'Clocked in at the factory')}>Clock in</button>
+              <button className="btn" disabled={busy} onClick={() => clockHere(`/api/ops/hr/employees/${id}/clock-out`, 'Clocked out at the factory')}>Clock out</button>
             </>
           )}
           {can(user, 'hr.contracts.create') && !terminated && (

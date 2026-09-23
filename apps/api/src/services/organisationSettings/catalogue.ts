@@ -323,6 +323,10 @@ export const ORG_CATEGORIES: OrgCategory[] = [
         default: true,
         help: 'Read-only by design: corrections create a linked adjustment and never rewrite the device event.',
       }),
+      clock_in_location_code: f('Clock-in Location', 'text', {
+        group: 'Premises',
+        help: 'Location code from Organisation structure. Device clock-in is recorded only at that location, using the premises latitude, longitude and radius saved on it.',
+      }),
       gps_required: bool('Require GPS On Mobile Clock-in', { group: 'Corrections', default: false }),
     },
   },
@@ -336,7 +340,7 @@ export const ORG_CATEGORIES: OrgCategory[] = [
     group: 'Operations',
     kind: 'settings',
     manage: 'organisation.manufacturing.manage',
-    blurb: 'Plants, machines, shifts, quality gates and waste vocabulary for the factory floor at Namanve.',
+    blurb: 'Plants, machines, shifts, quality gates and waste vocabulary for the factory floor.',
     settings: {
       default_plant: f('Default Plant', 'text', { group: 'Plant', default: 'FACTORY' }),
       machines: f('Machines', 'text', { group: 'Plant', default: 'FSS104,FSS300' }),

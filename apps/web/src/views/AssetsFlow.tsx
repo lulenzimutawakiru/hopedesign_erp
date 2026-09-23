@@ -41,6 +41,9 @@ export default function AssetsFlow({ path }: { path: string }) {
   if (parts[1] === 'register' && parts[2] === 'new') {
     return <PostAsset onClose={() => navigate('/assets/register')} asPage />;
   }
+  if (parts[1] === 'register' && parts[2] === 'bulk') {
+    return <PostAsset onClose={() => navigate('/assets/register')} asPage bulk />;
+  }
   if (parts.length <= 1) return <AssetBoard />;
   switch (parts[1]) {
     case 'scan': return <AssetScan />;
@@ -116,6 +119,7 @@ function AssetBoard() {
         actions={
           <>
             {can(user, 'assets.register.create') && <button className="btn btn-primary" onClick={() => navigate('/assets/register/new')}>Register asset</button>}
+            {can(user, 'assets.register.create') && <button className="btn" onClick={() => navigate('/assets/register/bulk')}>Register in bulk</button>}
             {can(user, 'assets.scans.perform') && <button className="btn" onClick={() => navigate('/assets/scan')}>Scan asset</button>}
           </>
         }
@@ -444,11 +448,23 @@ function Register() {
         actions={
           <>
             {can(user, 'assets.register.create') && <button className="btn btn-primary" onClick={() => navigate('/assets/register/new')}>Register asset</button>}
+            {can(user, 'assets.register.create') && <button className="btn" onClick={() => navigate('/assets/register/bulk')}>Register in bulk</button>}
             {can(user, 'assets.scans.perform') && <button className="btn" onClick={() => navigate('/assets/scan')}>Scan asset</button>}
           </>
         }
       />
       <AssetModuleTabs active="register" />
+      {q.get('bulk') && (
+        <div className="callout" style={{ marginBottom: 14 }}>
+          <div className="callout-body">
+            <p style={{ margin: 0 }}>
+              Registered <strong>{Number(q.get('bulk')).toLocaleString()}</strong> assets
+              {q.get('from') && q.get('to') ? <> from <span className="cell-mono">{q.get('from')}</span> to <span className="cell-mono">{q.get('to')}</span></> : null}.
+              Each one has its own asset number and QR tag. The purchase cost was recorded per unit.
+            </p>
+          </div>
+        </div>
+      )}
       <div className="card card-pad" style={{ marginBottom: 14 }}>
         <div className="toolbar" style={{ marginBottom: 10 }}>
           <input id="ast-search" ref={searchRef} className="search-input" type="search" aria-label="Search assets"
@@ -655,7 +671,7 @@ function Register() {
   );
 }
 
-function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean }) {
+function PostAsset({ onClose, asPage, bulk }: { onClose: () => void; asPage?: boolean; bulk?: boolean }) {
   const [f, setF] = useState<Rec>({ currency: 'UGX', depreciationMethod: 'STRAIGHT_LINE', condition: 'NEW', operationalState: 'NOT_IN_USE', tagType: 'QR', isSerialized: true });
   const [categories, setCategories] = useState<Rec[]>([]);
   const [types, setTypes] = useState<Rec[]>([]);
@@ -697,19 +713,42 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
     setF((p) => ({ ...p, [k]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }));
   const name = s(f.name).trim();
   const nameMissing = attempted && !name;
+  const quantity = bulk ? Math.trunc(Number(s(f.quantity))) : 1;
+  const quantityOk = Number.isInteger(quantity) && quantity >= 1 && quantity <= 1000;
+  const quantityMissing = Boolean(bulk) && attempted && !quantityOk;
+  const nameWidth = Math.max(3, String(quantityOk ? quantity : 1).length);
+  const padNo = (n: number) => String(n).padStart(nameWidth, '0');
+  const previewFirst = name && bulk && quantityOk ? `${name} ${padNo(1)}` : name;
+  const previewLast = name && bulk && quantityOk && quantity > 1 ? `${name} ${padNo(quantity)}` : '';
+  const unitCost = Number(s(f.purchaseCost));
+  const batchTotal = bulk && quantityOk && Number.isFinite(unitCost) && unitCost > 0 ? unitCost * quantity : null;
+  const saveLabel = busy
+    ? (bulk ? 'Registering…' : 'Saving…')
+    : bulk
+      ? `Register ${quantityOk ? quantity.toLocaleString() : ''} assets`.replace(/\s{2,}/, ' ')
+      : 'Save draft';
   const save = async () => {
-    if (!name) {
+    if (!name || (bulk && !quantityOk)) {
       setAttempted(true);
-      setError('Asset name is required before saving the draft.');
+      setError(!name ? 'Asset name is required before saving the draft.' : 'Enter a quantity from 1 to 1,000.');
       return;
     }
     setBusy(true);
     setError('');
     try {
-      const r = await api<{ data: { assetId: number; assetNo: string; qrId: number; qrCode: string; tagId: number } }>('/api/ops/assets', {
-        method: 'POST', body: JSON.stringify(f),
-      });
-      navigate(`/assets/${r.data.assetId}?new=1`);
+      if (bulk) {
+        const r = await api<{ data: { quantity: number; firstAssetNo: string; lastAssetNo: string } }>('/api/ops/assets/bulk', {
+          method: 'POST', body: JSON.stringify({ ...f, quantity }),
+        });
+        navigate('/assets/register', {
+          query: { search: name, bulk: String(r.data.quantity), from: r.data.firstAssetNo, to: r.data.lastAssetNo },
+        });
+      } else {
+        const r = await api<{ data: { assetId: number; assetNo: string; qrId: number; qrCode: string; tagId: number } }>('/api/ops/assets', {
+          method: 'POST', body: JSON.stringify(f),
+        });
+        navigate(`/assets/${r.data.assetId}?new=1`);
+      }
       onClose();
     } catch (e) { setError(e instanceof Error ? e.message : 'Registration failed'); }
     finally { setBusy(false); }
@@ -733,10 +772,19 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
         { id: 'pa-dep', label: 'Depreciation' },
       ]} />
 
-      <FormSection id="pa-ident" title="Identity" hint="Name is enough to save a draft. Serial and model help later scans.">
+      <FormSection id="pa-ident" title="Identity" hint={bulk ? 'Each unit is registered on its own, with its own asset number and QR tag. A starting serial that ends in digits is counted upward.' : 'Name is enough to save a draft. Serial and model help later scans.'}>
+        {bulk && (
+          <div className={`field field-required${quantityMissing ? ' field-invalid' : ''}`} style={{ gridColumn: '1 / -1' }}>
+            <label htmlFor="pa-qty">Quantity</label>
+            <input id="pa-qty" type="number" min={1} max={1000} step={1} value={s(f.quantity)} onChange={set('quantity')} placeholder="1000" autoFocus />
+            <span className="field-hint">Up to 1,000. For example, 1,000 laptops become 1,000 separate assets.</span>
+            {quantityMissing && <span className="field-error">Enter a whole number from 1 to 1,000.</span>}
+            {previewLast && <span className="field-hint">Names run from {previewFirst} to {previewLast}.</span>}
+          </div>
+        )}
         <div className={`field field-required${nameMissing ? ' field-invalid' : ''}`} style={{ gridColumn: '1 / -1' }}>
           <label htmlFor="pa-name">Asset name</label>
-          <input id="pa-name" value={s(f.name)} onChange={(e) => { set('name')(e); if (attempted) setAttempted(false); }} placeholder="e.g. Dell Latitude 7450" autoFocus />
+          <input id="pa-name" value={s(f.name)} onChange={(e) => { set('name')(e); if (attempted) setAttempted(false); }} placeholder="e.g. Dell Latitude 7450" autoFocus={!bulk} />
           {nameMissing && <span className="field-error">Enter a name to continue.</span>}
         </div>
         <div className="field" style={{ gridColumn: '1 / -1' }}>
@@ -745,10 +793,10 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
         </div>
         <div className="field"><label htmlFor="pa-man">Manufacturer</label><input id="pa-man" value={s(f.manufacturer)} onChange={set('manufacturer')} placeholder="Dell" /></div>
         <div className="field"><label htmlFor="pa-model">Model</label><input id="pa-model" value={s(f.model)} onChange={set('model')} placeholder="Latitude 7450" /></div>
-        <div className="field"><label htmlFor="pa-sn">Serial number</label><input id="pa-sn" value={s(f.serialNo)} onChange={set('serialNo')} placeholder="Chassis / device serial" /></div>
+        <div className="field"><label htmlFor="pa-sn">{bulk ? 'Starting serial' : 'Serial number'}</label><input id="pa-sn" value={s(f.serialNo)} onChange={set('serialNo')} placeholder="Chassis / device serial" /></div>
         <div className="field"><label htmlFor="pa-part">Part number</label><input id="pa-part" value={s(f.partNo)} onChange={set('partNo')} /></div>
         <div className="field"><label htmlFor="pa-sku">SKU</label><input id="pa-sku" value={s(f.sku)} onChange={set('sku')} /></div>
-        <div className="field"><label htmlFor="pa-bc">Existing barcode</label><input id="pa-bc" value={s(f.barcode)} onChange={set('barcode')} placeholder="If it already has one" /></div>
+        <div className="field"><label htmlFor="pa-bc">{bulk ? 'Starting barcode' : 'Existing barcode'}</label><input id="pa-bc" value={s(f.barcode)} onChange={set('barcode')} placeholder="If it already has one" /></div>
         <div className="asset-flags">
           <FlagToggle on={f.isMachine === true} onChange={(v) => setF((p) => ({ ...p, isMachine: v }))} label="Production machine" hint="Link to the plant register (FSS104, FSS300…)" />
           <FlagToggle on={f.isHighValue === true} onChange={(v) => setF((p) => ({ ...p, isHighValue: v }))} label="High-value" hint="Extra approval on transfer and disposal" />
@@ -779,7 +827,7 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
       </FormSection>
 
       <FormSection id="pa-cost" title="Procurement & cost">
-        <div className="field"><label htmlFor="pa-cost-in">Purchase cost</label><input id="pa-cost-in" type="number" min="0" step="0.01" value={s(f.purchaseCost)} onChange={set('purchaseCost')} placeholder="0.00" /></div>
+        <div className="field"><label htmlFor="pa-cost-in">{bulk ? 'Purchase cost per unit' : 'Purchase cost'}</label><input id="pa-cost-in" type="number" min="0" step="0.01" value={s(f.purchaseCost)} onChange={set('purchaseCost')} placeholder="0.00" /></div>
         <div className="field"><label htmlFor="pa-cur">Currency</label><select id="pa-cur" value={s(f.currency)} onChange={set('currency')}>{CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
         <div className="field"><label htmlFor="pa-pdate">Purchase date</label><input id="pa-pdate" type="date" value={s(f.purchaseDate)} onChange={set('purchaseDate')} /></div>
         <div className="field"><label htmlFor="pa-supplier">Supplier</label><select id="pa-supplier" value={s(f.supplierId)} onChange={set('supplierId')}><option value="">Not set</option>{suppliers.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}</select></div>
@@ -810,20 +858,20 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
       <div className="page asset-page">
         <ModuleHeader
           kicker="Asset management"
-          title="Register a new asset"
-          sub="Name is enough to save a draft. A permanent number and QR tag are issued on save."
+          title={bulk ? 'Register assets in bulk' : 'Register a new asset'}
+          sub={bulk ? 'Register up to 1,000 identical assets in one step. Each unit gets its own number and QR tag. The purchase cost is the price of one unit.' : 'Name is enough to save a draft. A permanent number and QR tag are issued on save.'}
         />
         <AssetModuleTabs active="register" />
         {form}
         <div className="spend-dock">
           <div className="spend-dock-meta">
-            {name ? <strong>{name}</strong> : 'Name the asset to save a draft'}
-            {estMonthly != null ? <> · {fmtMoney(estMonthly)} / month</> : null}
+            {previewFirst ? <strong>{previewLast ? `${previewFirst} to ${previewLast}` : previewFirst}</strong> : 'Name the asset to save a draft'}
+            {batchTotal != null ? <> · {fmtMoney(batchTotal)} for {quantity.toLocaleString()} units</> : estMonthly != null ? <> · {fmtMoney(estMonthly)} / month</> : null}
             <span> · Ctrl+S saves</span>
           </div>
           <div className="head-actions">
             <button type="button" className="btn" onClick={onClose}>Cancel</button>
-            <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save draft'}</button>
+            <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={busy}>{saveLabel}</button>
           </div>
         </div>
       </div>
@@ -831,12 +879,12 @@ function PostAsset({ onClose, asPage }: { onClose: () => void; asPage?: boolean 
   }
 
   return (
-    <Modal title="Register a new asset" onClose={onClose} wide
+    <Modal title={bulk ? 'Register assets in bulk' : 'Register a new asset'} onClose={onClose} wide
       footer={
         <>
-          <span className="muted" style={{ marginRight: 'auto', fontSize: 12 }}>Name is enough to save a draft.</span>
+          <span className="muted" style={{ marginRight: 'auto', fontSize: 12 }}>{bulk ? (batchTotal != null ? `${quantity.toLocaleString()} units · ${fmtMoney(batchTotal)} in total` : 'Purchase cost is per unit.') : 'Name is enough to save a draft.'}</span>
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>{busy ? 'Saving…' : 'Save draft'}</button>
+          <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>{saveLabel}</button>
         </>
       }>
       {form}

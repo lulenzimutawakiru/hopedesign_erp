@@ -437,10 +437,24 @@ export async function getEmployee(client: pg.PoolClient, ctx: Ctx, employeeId: n
   ]);
   const account = await identityLink.getLinkedUser(client, ctx, employeeId);
   const accountMatches = account ? [] : await identityLink.suggestUsersForEmployee(client, ctx, employeeId);
+  const biometric = await client.query(
+    `SELECT l.employee_identifier, l.status, l.verification_method, d.name AS device_name
+       FROM hikvision_employee_links l
+       LEFT JOIN hikvision_devices d ON d.id = l.device_id
+      WHERE l.employee_id = $1 AND l.tenant_id = $2 AND l.status = 'ACTIVE'
+      ORDER BY l.employee_identifier`,
+    [employeeId, ctx.tenantId],
+  );
   return {
     employee: toCamelRow(res.rows[0]),
     account,
     accountMatches,
+    biometricUsers: biometric.rows.map((row) => ({
+      employeeIdentifier: row.employee_identifier,
+      status: row.status,
+      verificationMethod: row.verification_method,
+      deviceName: row.device_name,
+    })),
     contracts: toCamelRows(contracts.rows),
     leave: toCamelRows(leave.rows),
     loans: toCamelRows(loans.rows),
@@ -577,28 +591,243 @@ export async function getEmployeePhoto(
   return { ...file, employeeNo: String(emp.rows[0].employee_no) };
 }
 
-export async function clockIn(client: pg.PoolClient, ctx: Ctx, employeeId: number) {
+
+const FACTORY_TZ = 'Africa/Kampala';
+
+/** Device-supplied fix; every field is unknown because it arrives from the client. */
+type DeviceFixInput = { latitude?: unknown; longitude?: unknown; accuracy?: unknown } | null | undefined;
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const dLat = rad(lat2 - lat1);
+  const dLon = rad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function readDeviceFix(loc: DeviceFixInput): { latitude: number; longitude: number; accuracy: number | null } | null {
+  const latitude = Number(loc?.latitude);
+  const longitude = Number(loc?.longitude);
+  const accuracy = Number(loc?.accuracy);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  return { latitude, longitude, accuracy: Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null };
+}
+
+/** Device clock-ins are kept only inside the pinned factory premises. */
+async function assertAtFactory(client: pg.PoolClient, ctx: Ctx, loc: DeviceFixInput) {
+  const setting = await client.query(
+    `SELECT value #>> '{}' AS code
+       FROM app_settings
+      WHERE tenant_id = $1
+        AND category = 'organisation.attendance'
+        AND key = 'clock_in_location_code'
+        AND (company_id = $2 OR company_id IS NULL)
+        AND value IS NOT NULL
+        AND value <> 'null'::jsonb
+        AND btrim(value #>> '{}') <> ''
+      ORDER BY (company_id IS NOT NULL) DESC
+      LIMIT 1`,
+    [ctx.tenantId, ctx.companyId],
+  );
+  const code = setting.rows[0] ? String(setting.rows[0].code).trim() : '';
+  if (!code) {
+    throw badRequest('Choose the clock-in location under Organisation settings, Attendance settings. Device clock-in uses that location only.');
+  }
+  const res = await client.query(
+    `SELECT id, name, code, premises_latitude AS lat, premises_longitude AS lng, premises_radius_m AS radius
+       FROM locations
+      WHERE tenant_id = $1 AND company_id = $2 AND status = 'ACTIVE'
+        AND upper(code) = upper($3)
+      LIMIT 1`,
+    [ctx.tenantId, ctx.companyId, code],
+  );
+  const row = res.rows[0];
+  if (!row) {
+    throw badRequest('The clock-in location saved in Attendance settings does not match an active location.');
+  }
+  if (row.lat == null || row.lng == null || row.radius == null || Number(row.radius) <= 0) {
+    throw badRequest('Record premises latitude, longitude and radius on location ' + row.code + ' in Organisation settings.');
+  }
+  const lat = Number(row.lat);
+  const lng = Number(row.lng);
+  const radius = Number(row.radius);
+  const fix = readDeviceFix(loc);
+  if (!fix) {
+    throw badRequest('Clock-in is only recorded at the location set in Organisation settings. Allow location on your device and try again.');
+  }
+  if (fix.accuracy != null && fix.accuracy > 150) {
+    throw badRequest('The location from this device is not precise enough. Step into the open at that location and try again.');
+  }
+  const distance = haversineMeters(fix.latitude, fix.longitude, lat, lng);
+  const slack = Math.min(50, Math.max(0, fix.accuracy ?? 0));
+  if (distance - slack > radius) {
+    throw badRequest(`This clock was not recorded. The device is ${Math.round(distance)} metres from ${row.name}.`);
+  }
+  return {
+    premisesId: Number(row.id),
+    premisesName: String(row.name),
+    latitude: fix.latitude,
+    longitude: fix.longitude,
+    accuracy: fix.accuracy,
+    distanceMeters: Math.round(distance),
+  };
+}
+
+async function kampalaToday(client: pg.PoolClient): Promise<string> {
+  const res = await client.query(`SELECT (now() AT TIME ZONE 'Africa/Kampala')::date AS work_date`);
+  return String(res.rows[0].work_date).slice(0, 10);
+}
+
+function atKampala(workDate: string, timeOfDay: string): Date {
+  const hhmmss = String(timeOfDay).slice(0, 8);
+  return new Date(`${workDate}T${hhmmss}+03:00`);
+}
+
+/** Copy a device punch onto the shift record so late and overtime still apply. */
+async function mirrorDevicePunch(client: pg.PoolClient, ctx: Ctx, employeeId: number, workDate: string) {
+  const emp = await client.query(
+    `SELECT e.tenant_id, e.company_id, e.branch_id, e.department_id,
+            s.id AS shift_id, s.code AS shift_code,
+            s.start_time::text AS start_time, s.end_time::text AS end_time,
+            COALESCE(s.grace_minutes, 0) AS grace_minutes,
+            COALESCE(s.break_minutes, 0) AS break_minutes,
+            a.clock_in, a.clock_out
+       FROM employees e
+       JOIN attendance a ON a.employee_id = e.id AND a.work_date = $3::date
+       LEFT JOIN shift_assignments sa ON sa.employee_id = e.id AND sa.company_id = e.company_id
+         AND sa.status = 'ACTIVE' AND sa.effective_from <= $3::date
+         AND (sa.effective_to IS NULL OR sa.effective_to >= $3::date)
+       LEFT JOIN shifts s ON s.id = sa.shift_id AND s.status = 'ACTIVE'
+      WHERE e.id = $1 AND e.tenant_id = $2
+      ORDER BY sa.effective_from DESC NULLS LAST
+      LIMIT 1`,
+    [employeeId, ctx.tenantId, workDate],
+  );
+  const row = emp.rows[0];
+  if (!row) return;
+  const code = String(row.shift_code ?? '').toUpperCase();
+  const exempt = code === 'DRIVER' || code === 'OPTIONAL';
+  const checkIn = row.clock_in ? new Date(row.clock_in) : null;
+  const checkOut = row.clock_out ? new Date(row.clock_out) : null;
+  let scheduledStart = null;
+  let scheduledEnd = null;
+  let late = 0;
+  let early = 0;
+  let overtime = 0;
+  if (!exempt && row.start_time && row.end_time && code === 'GENERAL') {
+    scheduledStart = atKampala(workDate, row.start_time);
+    scheduledEnd = atKampala(workDate, row.end_time);
+    const graceMs = Math.max(0, Number(row.grace_minutes) || 0) * 60000;
+    if (checkIn && checkIn.getTime() > scheduledStart.getTime() + graceMs) {
+      late = Math.round((checkIn.getTime() - scheduledStart.getTime() - graceMs) / 60000);
+    }
+    if (checkOut && checkOut.getTime() < scheduledEnd.getTime()) {
+      early = Math.round((scheduledEnd.getTime() - checkOut.getTime()) / 60000);
+    }
+    if (checkOut && checkOut.getTime() > scheduledEnd.getTime()) {
+      overtime = Math.round((checkOut.getTime() - scheduledEnd.getTime()) / 60000);
+    }
+  }
+  const status = late > 0 ? 'LATE' : early > 0 ? 'EARLY_DEPARTURE' : 'PRESENT';
+  const scheduledMinutes = scheduledStart && scheduledEnd
+    ? Math.max(0, Math.round((scheduledEnd.getTime() - scheduledStart.getTime()) / 60000) - Number(row.break_minutes || 0))
+    : 0;
+  const actual = checkIn && checkOut ? Math.max(0, Math.round((checkOut.getTime() - checkIn.getTime()) / 60000)) : 0;
+  const existing = await client.query(
+    `SELECT id FROM attendance_records
+      WHERE company_id = $1 AND employee_id = $2 AND work_date = $3::date
+        AND COALESCE(shift_id, 0) = COALESCE($4::bigint, 0)
+      LIMIT 1`,
+    [row.company_id, employeeId, workDate, row.shift_id],
+  );
+  if (existing.rows.length) {
+    await client.query(
+      `UPDATE attendance_records
+          SET check_in = $2, check_out = $3, shift_id = $4, shift_code = $5,
+              scheduled_start = $6, scheduled_end = $7, grace_minutes = $8, break_minutes = $9,
+              scheduled_minutes = $10, actual_minutes = $11, worked_minutes = $12,
+              late_minutes = $13, early_departure_minutes = $14, overtime_minutes = $15,
+              attendance_status = $16, updated_at = now()
+        WHERE id = $1`,
+      [
+        existing.rows[0].id, checkIn, checkOut, row.shift_id, row.shift_code,
+        scheduledStart, scheduledEnd, row.grace_minutes, row.break_minutes,
+        scheduledMinutes, actual, Math.max(0, actual - Number(row.break_minutes || 0)),
+        late, early, overtime, status,
+      ],
+    );
+  } else {
+    await client.query(
+      `INSERT INTO attendance_records (
+         tenant_id, company_id, branch_id, department_id, employee_id, work_date,
+         shift_id, shift_code, scheduled_start, scheduled_end, grace_minutes, break_minutes,
+         check_in, check_out, scheduled_minutes, worked_minutes, actual_minutes,
+         late_minutes, early_departure_minutes, overtime_minutes, attendance_status, source
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6::date,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'DEVICE'
+       )`,
+      [
+        row.tenant_id, row.company_id, row.branch_id, row.department_id, employeeId, workDate,
+        row.shift_id, row.shift_code, scheduledStart, scheduledEnd, row.grace_minutes, row.break_minutes,
+        checkIn, checkOut, scheduledMinutes, Math.max(0, actual - Number(row.break_minutes || 0)), actual,
+        late, early, overtime, status,
+      ],
+    );
+  }
+  if (code === 'GENERAL') {
+    await client.query(
+      `UPDATE attendance SET overtime_minutes = $2, late_minutes = $3, early_leave_minutes = $4
+        WHERE employee_id = $1 AND work_date = $5::date`,
+      [employeeId, overtime, late, early, workDate],
+    );
+  }
+}
+
+export async function clockIn(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  employeeId: number,
+  loc?: { latitude?: unknown; longitude?: unknown; accuracy?: unknown } | null,
+) {
   const emp = await client.query(`SELECT id FROM employees WHERE id = $1 AND tenant_id = $2`, [employeeId, ctx.tenantId]);
   if (emp.rows.length === 0) throw notFound('Employee not found');
-  const day = new Date().toISOString().slice(0, 10);
+  const where = await assertAtFactory(client, ctx, loc);
+  const day = await kampalaToday(client);
   const existing = await client.query(
     `SELECT id, clock_in FROM attendance WHERE employee_id = $1 AND work_date = $2`,
     [employeeId, day]
   );
   if (existing.rows.length && existing.rows[0].clock_in) throw badRequest('Already clocked in today');
+  const attrs = JSON.stringify(where);
   if (existing.rows.length) {
-    await client.query(`UPDATE attendance SET clock_in = now(), status = 'PRESENT' WHERE id = $1`, [existing.rows[0].id]);
-    return { attendanceId: Number(existing.rows[0].id), workDate: day };
+    await client.query(
+      `UPDATE attendance
+          SET clock_in = now(), status = 'PRESENT', source = 'DEVICE', attributes = $2::jsonb
+        WHERE id = $1`,
+      [existing.rows[0].id, attrs],
+    );
+  } else {
+    await client.query(
+      `INSERT INTO attendance (employee_id, work_date, clock_in, status, source, attributes)
+       VALUES ($1,$2,now(),'PRESENT','DEVICE',$3::jsonb)`,
+      [employeeId, day, attrs],
+    );
   }
-  const ins = await client.query(
-    `INSERT INTO attendance (employee_id, work_date, clock_in, status) VALUES ($1,$2,now(),'PRESENT') RETURNING id`,
-    [employeeId, day]
-  );
-  return { attendanceId: Number(ins.rows[0].id), workDate: day };
+  await mirrorDevicePunch(client, ctx, employeeId, day);
+  return { attendanceId: employeeId, workDate: day, premises: where.premisesName, distanceMeters: where.distanceMeters };
 }
 
-export async function clockOut(client: pg.PoolClient, ctx: Ctx, employeeId: number) {
-  const day = new Date().toISOString().slice(0, 10);
+export async function clockOut(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  employeeId: number,
+  loc?: { latitude?: unknown; longitude?: unknown; accuracy?: unknown } | null,
+) {
+  const where = await assertAtFactory(client, ctx, loc);
+  const day = await kampalaToday(client);
   const existing = await client.query(
     `SELECT a.* FROM attendance a JOIN employees e ON e.id = a.employee_id
      WHERE a.employee_id = $1 AND a.work_date = $2 AND e.tenant_id = $3`,
@@ -607,11 +836,15 @@ export async function clockOut(client: pg.PoolClient, ctx: Ctx, employeeId: numb
   if (existing.rows.length === 0 || !existing.rows[0].clock_in) throw badRequest('Clock in first');
   if (existing.rows[0].clock_out) throw badRequest('Already clocked out');
   const hours = (Date.now() - new Date(existing.rows[0].clock_in).getTime()) / 3600000;
+  const attrs = { ...(existing.rows[0].attributes ?? {}), clockOut: where };
   await client.query(
-    `UPDATE attendance SET clock_out = now(), hours = $2 WHERE id = $1`,
-    [existing.rows[0].id, round2(hours)]
+    `UPDATE attendance
+        SET clock_out = now(), hours = $2, source = 'DEVICE', attributes = $3::jsonb
+      WHERE id = $1`,
+    [existing.rows[0].id, round2(hours), JSON.stringify(attrs)],
   );
-  return { attendanceId: Number(existing.rows[0].id), hours: round2(hours) };
+  await mirrorDevicePunch(client, ctx, employeeId, day);
+  return { attendanceId: Number(existing.rows[0].id), hours: round2(hours), premises: where.premisesName, distanceMeters: where.distanceMeters };
 }
 
 export async function listAttendance(client: pg.PoolClient, ctx: Ctx, day?: string) {
