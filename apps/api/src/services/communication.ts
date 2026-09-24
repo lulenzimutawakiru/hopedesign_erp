@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { Ctx, query } from '../db.js';
-import { dispatchBird } from './bird.js';
+import { dispatchBird, type EmailAttachmentInput } from './bird.js';
 import { config } from '../config.js';
 import { normalizeE164 } from './africastalking.js';
 import { renderButton } from './emailBranding.js';
@@ -235,6 +235,12 @@ export interface InsertOutboundEmailOptions {
   classification?: string;
   /** The pipeline sends immediately unless the stored row is scheduled. */
   forceNow?: boolean;
+  /**
+   * Attachments supplied inline by the caller, as base64 bytes. The scheduled
+   * reports render their own PDF and have no `entity` for the document-
+   * attachment path to pick up, so they hand the file over directly.
+   */
+  attachments?: EmailAttachmentInput[];
 }
 
 export interface InsertOutboundEmailResult {
@@ -393,6 +399,7 @@ export async function insertOutboundEmail(
       forceNow: opts.forceNow !== false,
       mailboxId,
       html: opts.html ?? null,
+      attachments: opts.attachments,
     });
     return {
       emailId,

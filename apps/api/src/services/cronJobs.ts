@@ -1,10 +1,12 @@
 import pg from 'pg';
 import { Ctx, query, tx } from '../db.js';
 import { logAudit } from './audit.js';
-import { notifyUsers, resolveRecipients } from './communication.js';
+import { insertOutboundEmail, notifyUsers, resolveRecipients } from './communication.js';
 import { loadAuthUser } from '../middleware/auth.js';
 import { sendStoredEmail } from './mail/send.js';
 import { computeNextRun } from './reportScheduler.js';
+import { loadCompanyProfile, reportFingerprint } from './branding.js';
+import { renderTablePdf, type BrandedTableColumn } from './brandedExport.js';
 import { governanceSweep } from './governance.js';
 import { ApiError } from '../utils.js';
 
@@ -729,6 +731,255 @@ async function paymentDueReminder(client: pg.PoolClient, ctx: Ctx, job: CronJobR
   return { checked: rows.length, due: rows.length, notified };
 }
 
+// ---------------------------------------------------------------------------
+// Attendance summary mail
+// ---------------------------------------------------------------------------
+
+/**
+ * Audience the daily attendance summary is addressed to when the job row
+ * carries no `notify_roles` of its own. Held here as well as in the seed so a
+ * job created by hand, or an edited job whose params were cleared, still
+ * reaches the right people.
+ */
+const ATTENDANCE_SUMMARY_ROLES: readonly string[] = [
+  'hr_manager',
+  'operations_manager',
+  'managing_director',
+];
+
+/**
+ * Collapse role-resolved rows into the list of addresses an email is actually
+ * sent to. One person can hold more than one of the roles above, and the same
+ * mailbox can sit on more than one user row, so the list is keyed on the
+ * lowercased address: the first spelling seen wins and any later duplicate -
+ * including one that differs only in case - is dropped. Blank rows are skipped
+ * rather than turned into an empty recipient.
+ */
+export function dedupeEmails(rows: ReadonlyArray<{ email: string | null }>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const row of rows) {
+    const email = String(row.email ?? '').trim();
+    if (!email) continue;
+    const key = email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(email);
+  }
+  return out;
+}
+
+/**
+ * Daily attendance summary, mailed as a branded PDF at 19:30 Kampala.
+ *
+ * Two things about this handler are deliberate and easy to get wrong later:
+ *
+ *  1. The work day it reports is the KAMPALA day that is closing, not the
+ *     server's. Every container in this deployment runs UTC with TZ unset, so
+ *     a 19:30 EAT run happens at 16:30 UTC and the server's own date would
+ *     already agree - but that agreement is a coincidence of the offset, and
+ *     deriving the date in the company's zone keeps it correct if the run time
+ *     is ever moved. (The seed therefore carries run_time '16:30'; see the 0186
+ *     migration for why.)
+ *
+ *  2. A day with no captured records still sends, and says so in the subject
+ *     line. An unattended attendance terminal is exactly the failure this
+ *     report exists to surface, and a silently missing email cannot surface
+ *     anything.
+ *
+ * Recipients are resolved from role codes rather than fixed addresses, so the
+ * summary follows whoever holds the role. The same person can hold two of the
+ * roles - the managing director here also holds operations_manager - so the
+ * address list is de-duplicated by mailbox before the message is created.
+ */
+async function attendanceSummaryEmail(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  job: CronJobRow
+): Promise<Record<string, unknown>> {
+  const configured = rolesOf(job);
+  const roleCodes = configured.length > 0 ? configured : [...ATTENDANCE_SUMMARY_ROLES];
+  const companyScope = ctx.companyId ?? null;
+
+  const dayRes = await client.query(
+    `SELECT (now() AT TIME ZONE 'Africa/Kampala')::date::text AS day,
+            to_char(now() AT TIME ZONE 'Africa/Kampala', 'FMDay, FMDD FMMonth YYYY') AS label`
+  );
+  const day = String(dayRes.rows[0]?.day ?? '');
+  const label = String(dayRes.rows[0]?.label ?? day);
+
+  const totalsRes = await client.query(
+    `SELECT count(*)::int AS records,
+            count(*) FILTER (WHERE attendance_status = 'PRESENT')::int AS present,
+            count(*) FILTER (WHERE attendance_status = 'LATE')::int AS late,
+            count(*) FILTER (WHERE attendance_status = 'ABSENT')::int AS absent,
+            count(*) FILTER (WHERE attendance_status = 'ON_LEAVE')::int AS on_leave,
+            count(*) FILTER (WHERE attendance_status = 'EARLY_DEPARTURE')::int AS early_departure,
+            count(*) FILTER (WHERE attendance_status = 'HALF_DAY')::int AS half_day,
+            count(*) FILTER (WHERE attendance_status IN ('PENDING','EXCUSED'))::int AS awaiting,
+            COALESCE(sum(late_minutes), 0)::int AS late_minutes,
+            COALESCE(sum(overtime_minutes), 0)::int AS overtime_minutes,
+            count(*) FILTER (WHERE check_in IS NOT NULL AND check_out IS NULL)::int AS still_on_duty
+       FROM attendance_records
+      WHERE tenant_id = $1
+        AND work_date = $2::date
+        AND ($3::bigint IS NULL OR company_id = $3)`,
+    [ctx.tenantId, day, companyScope]
+  );
+  const totals = (totalsRes.rows[0] ?? {}) as Record<string, unknown>;
+  const tally = (key: string): number => Number(totals[key] ?? 0);
+  const records = tally('records');
+
+  const activeRes = await client.query(
+    `SELECT count(*)::int AS n
+       FROM employees
+      WHERE tenant_id = $1 AND status = 'ACTIVE'
+        AND ($2::bigint IS NULL OR company_id = $2)`,
+    [ctx.tenantId, companyScope]
+  );
+  const activeEmployees = Number((activeRes.rows[0] as Record<string, unknown>)?.n ?? 0);
+
+  // Only the rows somebody has to look at: an absence, a late arrival, an early
+  // departure, or a shift that never closed. The full roster would bury them.
+  const excRes = await client.query(
+    `SELECT COALESCE(NULLIF(e.employee_no, ''), NULLIF(e.employee_number, ''), e.id::text) AS emp_no,
+            trim(concat_ws(' ', e.first_name, e.last_name)) AS name,
+            COALESCE(dp.name, '') AS department,
+            a.attendance_status AS status,
+            CASE WHEN a.check_in IS NULL THEN ''
+                 ELSE to_char(a.check_in AT TIME ZONE 'Africa/Kampala', 'HH24:MI') END AS check_in,
+            CASE WHEN a.check_out IS NULL THEN ''
+                 ELSE to_char(a.check_out AT TIME ZONE 'Africa/Kampala', 'HH24:MI') END AS check_out,
+            COALESCE(a.late_minutes, 0)::int AS late_minutes
+       FROM attendance_records a
+       JOIN employees e ON e.id = a.employee_id AND e.tenant_id = a.tenant_id
+       LEFT JOIN departments dp ON dp.id = e.department_id
+      WHERE a.tenant_id = $1
+        AND a.work_date = $2::date
+        AND ($3::bigint IS NULL OR a.company_id = $3)
+        AND (a.attendance_status IN ('ABSENT','LATE','EARLY_DEPARTURE','HALF_DAY','EXCUSED')
+             OR COALESCE(a.late_minutes, 0) > 0
+             OR (a.check_in IS NOT NULL AND a.check_out IS NULL))
+      ORDER BY (a.attendance_status = 'ABSENT') DESC, COALESCE(a.late_minutes, 0) DESC, name ASC
+      LIMIT 200`,
+    [ctx.tenantId, day, companyScope]
+  );
+  const exceptions = excRes.rows as Array<Record<string, unknown>>;
+
+  const facts: Array<[string, string]> = [
+    ['Work date', label],
+    ['Records captured', String(records)],
+    ['Present', String(tally('present'))],
+    ['Late', String(tally('late'))],
+    ['Absent', String(tally('absent'))],
+    ['On leave', String(tally('on_leave'))],
+    ['Early departure', String(tally('early_departure'))],
+    ['Half day', String(tally('half_day'))],
+    ['Awaiting review', String(tally('awaiting'))],
+    ['Total late minutes', String(tally('late_minutes'))],
+    ['Overtime minutes', String(tally('overtime_minutes'))],
+    ['Still on duty', String(tally('still_on_duty'))],
+    ['Active employees', String(activeEmployees)],
+  ];
+
+  const columns: BrandedTableColumn[] = [
+    { key: 'emp_no', label: 'Employee No' },
+    { key: 'name', label: 'Employee' },
+    { key: 'department', label: 'Department' },
+    { key: 'status', label: 'Status' },
+    { key: 'check_in', label: 'In' },
+    { key: 'check_out', label: 'Out' },
+    { key: 'late_minutes', label: 'Late (min)', align: 'right' },
+  ];
+
+  const company = await loadCompanyProfile(client, ctx);
+  const issuedAt = new Date().toISOString();
+  const fingerprint = reportFingerprint('attendance.summary', columns.map((c) => c.key), exceptions);
+  const pdf = await renderTablePdf({
+    title: 'Daily Attendance Summary',
+    subtitle: label,
+    kicker: 'Workforce attendance',
+    docNo: `ATT-${day}`,
+    company,
+    issuedBy: 'HOPE DESIGN ERP - scheduled report',
+    issuedAt,
+    facts,
+    columns,
+    rows: exceptions,
+    fingerprint,
+    classification: 'Internal',
+  });
+
+  const bodyLines = [
+    `Attendance summary for ${label}.`,
+    '',
+    `Records captured: ${records}`,
+    `Present: ${tally('present')}`,
+    `Late: ${tally('late')}`,
+    `Absent: ${tally('absent')}`,
+    `On leave: ${tally('on_leave')}`,
+    `Early departure: ${tally('early_departure')}`,
+    `Half day: ${tally('half_day')}`,
+    `Awaiting review: ${tally('awaiting')}`,
+    `Total late minutes: ${tally('late_minutes')}`,
+    `Overtime minutes: ${tally('overtime_minutes')}`,
+    `Still on duty (checked in, not yet out): ${tally('still_on_duty')}`,
+    '',
+    `${exceptions.length} record${exceptions.length === 1 ? '' : 's'} need attention; they are listed in the attached PDF.`,
+  ];
+  if (records === 0) {
+    bodyLines.push(
+      '',
+      'No attendance was captured for this date. Please confirm the attendance terminal was reachable.'
+    );
+  }
+  bodyLines.push('', 'The full summary is attached as a PDF.');
+
+  const userIds = await resolveRecipients(client, ctx, { roleCodes });
+  const recipientRows =
+    userIds.length > 0
+      ? ((
+          await client.query(
+            `SELECT email
+               FROM users
+              WHERE tenant_id = $1 AND id = ANY($2::bigint[])
+                AND status = 'ACTIVE' AND email IS NOT NULL AND email <> ''`,
+            [ctx.tenantId, userIds]
+          )
+        ).rows as Array<{ email: string | null }>)
+      : [];
+
+  const to = dedupeEmails(recipientRows);
+
+  if (to.length === 0) {
+    // Loud on purpose: the addresses come from role assignments, so an empty
+    // list means nobody holds the roles and the report reached no one.
+    console.warn('[cronJobs] attendance summary has no recipients', { job: job.code, roleCodes });
+    return { day, records, exceptions: exceptions.length, recipients: 0, sent: false };
+  }
+
+  const sent = await insertOutboundEmail(client, ctx, {
+    to,
+    subject: `Attendance Summary - ${label}`,
+    body: bodyLines.join('\n'),
+    classification: 'INTERNAL',
+    attachments: [
+      { filename: `attendance-summary-${day}.pdf`, content: pdf.toString('base64') },
+    ],
+  });
+
+  return {
+    day,
+    records,
+    exceptions: exceptions.length,
+    recipients: to.length,
+    emailId: sent.emailId,
+    outcome: sent.outcome,
+    error: sent.error ?? null,
+    pdfBytes: pdf.length,
+  };
+}
+
 async function quarantineAgingCheck(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
   const days = numParam(job, 'days', 7);
   const { rows } = await client.query(
@@ -1124,6 +1375,8 @@ async function runHandler(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Pro
       return emailOutboxDrain(client, ctx, job);
     case 'GOVERNANCE_AUTHORITY_SWEEP':
       return governanceAuthoritySweep(client, ctx);
+    case 'ATTENDANCE_SUMMARY_EMAIL':
+      return attendanceSummaryEmail(client, ctx, job);
     default:
       return { skipped: true, reason: `Unknown job type ${job.jobType}` };
   }

@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { api, auth, db, loginAs } from './helpers.js';
-import { runCronJobById } from '../src/services/cronJobs.js';
+import { dedupeEmails, runCronJobById } from '../src/services/cronJobs.js';
 import { config } from '../src/config.js';
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -1204,5 +1204,156 @@ describe('mail: outbox drain and system-generated mail', () => {
     // The bytes have to be a real PDF, not an empty placeholder: the whole point
     // of attaching the record is that the recipient can open it.
     expect(readFileSync(abs).subarray(0, 5).toString('latin1')).toBe('%PDF-');
+  });
+});
+
+/**
+ * The daily attendance summary runs unattended: it renders the Kampala workday
+ * as a branded PDF and mails it to HR, the Operations Manager and the Managing
+ * Director. There is no request to derive the tenant from and no signed-in user
+ * behind it, so the two things worth pinning down are that the recipients come
+ * out of role assignments without duplicates, and that a real PDF reaches the
+ * send pipeline instead of being quietly dropped.
+ */
+describe('cron: daily attendance summary email', () => {
+  const summaryStart = new Date();
+  const createdEmails: number[] = [];
+  let jobId = 0;
+  let savedApiKey = '';
+  let savedFromEmail = '';
+
+  /** How the seeded roles resolve: raw assignments versus distinct inboxes. */
+  const roleInboxes = async (): Promise<{ assignments: number; distinct: number }> => {
+    const res = await db(
+      `SELECT count(*)::int AS assignments, count(DISTINCT lower(u.email))::int AS distinct_emails
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+         JOIN users u ON u.id = ur.user_id
+        WHERE r.tenant_id = (SELECT tenant_id FROM users WHERE id = $1)
+          AND r.code IN ('hr_manager','operations_manager','managing_director')
+          AND (ur.company_id IS NULL OR ur.company_id = (SELECT company_id FROM users WHERE id = $1))
+          AND u.status = 'ACTIVE' AND u.email IS NOT NULL AND u.email <> ''`,
+      [adminUserId]
+    );
+    const row = res.rows[0] as Record<string, unknown>;
+    return { assignments: Number(row.assignments), distinct: Number(row.distinct_emails) };
+  };
+
+  beforeAll(async () => {
+    const created = await db(
+      `INSERT INTO cron_jobs
+         (tenant_id, company_id, branch_id, code, name, description, job_type, schedule_type,
+          run_time, day_of_week, day_of_month, interval_minutes, params, enabled, timezone, next_run_at)
+       SELECT tenant_id, company_id, NULL::bigint, $2, 'Attendance summary (test)',
+              'Temporary row created by the test suite.', 'ATTENDANCE_SUMMARY_EMAIL', 'DAILY',
+              '16:30', NULL, NULL, NULL, $3::jsonb, false, 'Africa/Kampala', now()
+         FROM users WHERE id = $1
+       RETURNING id`,
+      [
+        adminUserId,
+        `CRON-ATTENDANCE-TEST-${stamp}`,
+        JSON.stringify({ notify_roles: ['hr_manager', 'operations_manager', 'managing_director'] }),
+      ]
+    );
+    jobId = Number((created.rows[0] as Record<string, unknown>).id);
+    savedApiKey = config.resend.apiKey;
+    savedFromEmail = config.resend.fromEmail;
+  });
+
+  afterAll(async () => {
+    config.resend.apiKey = savedApiKey;
+    config.resend.fromEmail = savedFromEmail;
+    if (createdEmails.length) {
+      await db('DELETE FROM email_outbox WHERE email_id = ANY($1::int[])', [createdEmails]);
+      await db('DELETE FROM email_recipients WHERE email_id = ANY($1::int[])', [createdEmails]);
+      await db('DELETE FROM emails WHERE id = ANY($1::int[])', [createdEmails]);
+    }
+    if (jobId) {
+      await db('DELETE FROM cron_job_runs WHERE job_id = $1 AND started_at >= $2', [jobId, summaryStart]);
+      await db('DELETE FROM cron_jobs WHERE id = $1', [jobId]);
+    }
+  });
+
+  it('sends the day as a PDF to each role inbox once, through the send pipeline', async (testCtx) => {
+    const roleInfo = await roleInboxes();
+    // A database with none of the three roles seeded cannot exercise this job.
+    // Both this local install and production have at least hr_manager, and the
+    // collapse of two roles onto one inbox is covered by the unit test after
+    // this block, which does not depend on who happens to be seeded.
+    if (roleInfo.distinct === 0) {
+      testCtx.skip();
+      return;
+    }
+
+    // The provider is blanked for the run, exactly as the other cron cases here
+    // do: a test must not put mail on the wire.
+    config.resend.apiKey = '';
+    config.resend.fromEmail = '';
+    let result: { ok: boolean; error?: string };
+    try {
+      result = await runCronJobById(jobId);
+    } finally {
+      config.resend.apiKey = savedApiKey;
+      config.resend.fromEmail = savedFromEmail;
+    }
+    // An attachment the mail layer rejects throws out of the handler and fails
+    // the run, so a clean run is itself proof that the report rendered.
+    expect(result.ok).toBe(true);
+
+    const run = await db('SELECT details FROM cron_job_runs WHERE job_id = $1 ORDER BY id DESC LIMIT 1', [jobId]);
+    const details = run.rows[0].details as Record<string, unknown>;
+    expect(String(details.day)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(Number(details.pdfBytes)).toBeGreaterThan(1000);
+    expect(Number(details.recipients)).toBe(roleInfo.distinct);
+
+    const emailId = Number(details.emailId);
+    expect(emailId).toBeGreaterThan(0);
+    createdEmails.push(emailId);
+
+    const email = await db('SELECT subject, classification FROM emails WHERE id = $1', [emailId]);
+    expect(email.rows).toHaveLength(1);
+    const mail = email.rows[0] as Record<string, unknown>;
+    // The date rides in the subject so a day with no captures is visible in the
+    // inbox rather than hidden behind an identical line every evening.
+    expect(String(mail.subject)).toMatch(/^Attendance Summary - .+\d{4}$/);
+    expect(String(mail.classification)).toBe('INTERNAL');
+
+    const recipients = await db(
+      'SELECT DISTINCT lower(email) AS email FROM email_recipients WHERE email_id = $1',
+      [emailId]
+    );
+    expect(recipients.rows).toHaveLength(roleInfo.distinct);
+    for (const row of recipients.rows as Array<Record<string, unknown>>) {
+      expect(String(row.email)).toContain('@');
+    }
+
+    // The provider was blanked, so the message has to be parked for the outbox
+    // drain rather than lost - the same path a provider outage takes.
+    const outbox = await db('SELECT status FROM email_outbox WHERE email_id = $1', [emailId]);
+    expect(outbox.rows).toHaveLength(1);
+  });
+});
+
+/**
+ * The collapse that stops one person being mailed twice when they hold two of
+ * the roles. Kept separate from the run above because it is the part of the job
+ * that depends on the shape of the audience rather than on database contents.
+ */
+describe('cron: attendance summary recipient collapse', () => {
+  it('keeps one address when one person holds two of the roles', () => {
+    const collapsed = dedupeEmails([
+      { email: 'hr@example.com' },
+      { email: 'md@example.com' },
+      { email: 'md@example.com' },
+    ]);
+    expect(collapsed).toEqual(['hr@example.com', 'md@example.com']);
+  });
+
+  it('treats addresses that differ only in case as the same mailbox', () => {
+    expect(dedupeEmails([{ email: 'MD@Example.com' }, { email: 'md@example.com' }])).toEqual(['MD@Example.com']);
+  });
+
+  it('trims, keeps the first spelling, and skips rows with no address', () => {
+    expect(dedupeEmails([{ email: '  a@b.com  ' }, { email: null }, { email: '   ' }])).toEqual(['a@b.com']);
   });
 });
