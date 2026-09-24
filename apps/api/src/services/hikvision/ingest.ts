@@ -308,7 +308,10 @@ export async function ingestDeviceEvent(opts: {
     }
 
     // Device telemetry: mark online and refresh last-seen (never override
-    // MAINTENANCE / DISABLED that an administrator set explicitly).
+    // MAINTENANCE / DISABLED that an administrator set explicitly). Clearing
+    // status_reason matters as much as setting ONLINE: sweepStaleDevices()
+    // writes an explanation when it flips a device to OFFLINE, and without this
+    // the admin UI keeps showing that outage text long after the device is back.
     await client.query(
       `UPDATE hikvision_devices
           SET last_event_at = now(),
@@ -316,6 +319,9 @@ export async function ingestDeviceEvent(opts: {
               connection_status = CASE
                 WHEN connection_status IN ('MAINTENANCE','DISABLED') THEN connection_status
                 ELSE 'ONLINE' END,
+              status_reason = CASE
+                WHEN connection_status IN ('MAINTENANCE','DISABLED') THEN status_reason
+                ELSE NULL END,
               updated_at = now()
         WHERE id = $1`,
       [device.id]

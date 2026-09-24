@@ -705,14 +705,34 @@ export async function recordDeviceTimeSync(
   const device = await fetchScopedDevice(c, scope, deviceId);
   const config = await ensureConfig(c, scope, deviceId, ctx.userId ?? null);
   const warningSeconds = Number(config.clock_drift_warning_seconds ?? 120) || 120;
+  // Drift is only observable at the moment the terminal checks in, so it is read
+  // from the offset recorded on the last heartbeat: server receive time minus the
+  // device clock. Comparing the device clock against *now* instead measures how
+  // long the device has been silent, not how wrong its clock is - during the
+  // 2026-09-23 outage that reported ~57,600 s of "drift" as CRITICAL for a device
+  // whose clock was correct all along.
   const hb = await c.query(
-    `SELECT device_time FROM hikvision_device_heartbeats
+    `SELECT device_time, heartbeat_at,
+            EXTRACT(EPOCH FROM (heartbeat_at - device_time)) AS drift_seconds
+       FROM hikvision_device_heartbeats
       WHERE device_id = $1 AND device_time IS NOT NULL
       ORDER BY heartbeat_at DESC LIMIT 1`,
     [deviceId]
   );
   const serverIso = new Date().toISOString();
-  const driftSeconds = hb.rows.length > 0 ? Math.round((Date.now() - new Date(String(hb.rows[0].device_time)).getTime()) / 1000) : null;
+  const lastHeartbeatAt = hb.rows.length > 0 ? hb.rows[0].heartbeat_at : null;
+  const heartbeatAgeSeconds = lastHeartbeatAt === null
+    ? null
+    : Math.round((Date.now() - new Date(String(lastHeartbeatAt)).getTime()) / 1000);
+  // Once the last contact is older than the CRITICAL band the interval between
+  // then and now would dominate the reading, so the drift is reported as unknown
+  // instead of as a confident number.
+  const driftSeconds = hb.rows.length > 0
+    && hb.rows[0].drift_seconds !== null
+    && heartbeatAgeSeconds !== null
+    && heartbeatAgeSeconds <= warningSeconds * 2
+    ? Math.round(Number(hb.rows[0].drift_seconds))
+    : null;
   const absDrift = driftSeconds === null ? null : Math.abs(driftSeconds);
   let driftStatus = 'OK';
   if (absDrift !== null) {
@@ -732,6 +752,15 @@ export async function recordDeviceTimeSync(
         driftSeconds, absDrift, driftStatus,
         JSON.stringify({ checkedBy: ctx.userId ?? null }),
       ]
+    );
+    // last_clock_drift_seconds is what the device list shows; storing the value
+    // that was just measured keeps it honest between checks. A successful remote
+    // sync below overwrites this with 0, which is the truth at that point.
+    await c.query(
+      `UPDATE hikvision_devices
+          SET last_clock_drift_seconds = $2, updated_at = now()
+        WHERE id = $1`,
+      [deviceId, driftSeconds]
     );
   }
 
@@ -795,6 +824,8 @@ export async function recordDeviceTimeSync(
     deviceId,
     serverTime: serverIso,
     deviceTime: hb.rows.length > 0 ? hb.rows[0].device_time : null,
+    lastHeartbeatAt,
+    heartbeatAgeSeconds,
     driftSeconds,
     driftStatus,
     thresholdSeconds: warningSeconds,

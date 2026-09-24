@@ -5,6 +5,25 @@
 {$DOMAIN} {
 	encode gzip zstd
 
+	# Access logging. This site previously had no request log at all, which is why
+	# a 16 h gap in Hikvision deliveries was invisible from the server side.
+	# Hikvision terminals cap the webhook URL at 128 characters and cannot send
+	# custom headers, so the device credential travels in the query string
+	# (?serial=<serial>&key=<40 hex>); redact it here so an access log can never
+	# become a key leak. Output is stdout, which the compose json-file driver
+	# already rotates (x-logging: 10 MB x 3) - no new volume, no host path.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					replace key REDACTED
+				}
+			}
+		}
+	}
+
 	header {
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
