@@ -1338,7 +1338,7 @@ const GROUP_LABELS: Record<string, string> = {
   Payroll: 'Payroll run',
 };
 
-function SettingsTab() {
+function SettingsTab({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const { user } = useAuth();
   const canUpdate = can(user, 'hr.payroll_settings.update');
 
@@ -1397,6 +1397,10 @@ function SettingsTab() {
   const entries = dirtyKeys.filter((key) => (draft[key] ?? '').trim() !== '').map((key) => ({ key, value: (draft[key] ?? '').trim() }));
   const remove = dirtyKeys.filter((key) => (draft[key] ?? '').trim() === '');
   const dirty = dirtyKeys.length > 0;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   const setValue = (key: string, value: string) => setDraft((current) => ({ ...current, [key]: value }));
 
@@ -1718,10 +1722,30 @@ const PAYROLL_TABS: Array<[string, string, string]> = [
 export default function PayrollSettings({ path }: { path: string }) {
   const tabFromPath = path === '/people/statutory-configs' ? 'statutory' : 'settings';
   const [tab, setTab] = useState<string>(tabFromPath);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [leaveTo, setLeaveTo] = useState<{ tab: string | null; href: string } | null>(null);
 
   useEffect(() => {
     setTab(tabFromPath);
   }, [tabFromPath]);
+
+  const openTab = (key: string, href: string) => {
+    if (key === tab) return;
+    if (tab === 'settings' && settingsDirty) {
+      setLeaveTo({ tab: key, href });
+      return;
+    }
+    setTab(key);
+    navigate(href);
+  };
+
+  const leave = (href: string) => {
+    if (tab === 'settings' && settingsDirty) {
+      setLeaveTo({ tab: null, href });
+      return;
+    }
+    navigate(href);
+  };
 
   return (
     <div className="page">
@@ -1729,18 +1753,35 @@ export default function PayrollSettings({ path }: { path: string }) {
         kicker="Payroll"
         title="Configuration"
         subtitle="The statutory tables payroll withholds from, and the settings that shape a run - both read back from the engine that calculates a payslip."
-        actions={<button className="btn" onClick={() => navigate('/people/payrolls')}>Payroll runs</button>}
+        actions={<button className="btn" onClick={() => leave('/people/payrolls')}>Payroll runs</button>}
       />
       <div className="tabs" style={{ marginBottom: 12 }}>
         {PAYROLL_TABS.map(([k, label, href]) => (
           <button
             key={k}
             className={tab === k ? 'tab active' : 'tab'}
-            onClick={() => { setTab(k); navigate(href); }}
+            onClick={() => openTab(k, href)}
           >{label}</button>
         ))}
       </div>
-      {tab === 'statutory' ? <StatutoryTab /> : <SettingsTab />}
+      {tab === 'statutory' ? <StatutoryTab /> : <SettingsTab onDirtyChange={setSettingsDirty} />}
+      {leaveTo && (
+        <ConfirmDialog
+          title="Discard unsaved run settings?"
+          body="This tab has edits that have not been saved. Leaving now discards them and reloads the stored values."
+          confirmLabel="Discard and leave"
+          danger
+          reasonLabel={null}
+          onCancel={() => setLeaveTo(null)}
+          onConfirm={() => {
+            const next = leaveTo;
+            setLeaveTo(null);
+            setSettingsDirty(false);
+            if (next.tab) setTab(next.tab);
+            navigate(next.href);
+          }}
+        />
+      )}
     </div>
   );
 }

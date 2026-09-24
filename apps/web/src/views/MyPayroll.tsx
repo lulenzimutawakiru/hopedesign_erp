@@ -223,6 +223,21 @@ function periodLabel(slip: PeriodLike): string {
   return from + ' to ' + to;
 }
 
+/**
+ * Delivery evidence: what the server recorded about this employee opening and
+ * downloading the slip, so an employee can see their own read receipt.
+ */
+function deliveryEvidence(slip: MySlip): string {
+  const views = num(slip.viewedCount);
+  const downloads = num(slip.downloadCount);
+  const parts: string[] = [];
+  if (views > 0) parts.push('read ' + fmtNum(views) + ' time' + (views === 1 ? '' : 's'));
+  if (downloads > 0) parts.push('downloaded ' + fmtNum(downloads) + ' time' + (downloads === 1 ? '' : 's'));
+  if (slip.viewedAt) parts.push('first opened ' + fmtDate(slip.viewedAt));
+  if (parts.length === 0) return 'Not opened yet';
+  return parts.join(' \u00B7 ');
+}
+
 export default function MyPayroll() {
   const [home, setHome] = useState<Home | null>(null);
   const [loading, setLoading] = useState(true);
@@ -323,6 +338,12 @@ export default function MyPayroll() {
   const current = home?.current ?? null;
   const ccy = str(current?.currency) || 'UGX';
   const maxTrend = Math.max(1, ...(home?.trend ?? []).map((t) => num(t.netTotal)));
+  const pageTotals = {
+    label: (home?.totalCount ?? 0) > slips.length ? 'Total on this page' : 'Total across every payslip',
+    gross: slips.reduce((sum, s) => sum + num(s.grossTotal), 0),
+    deductions: slips.reduce((sum, s) => sum + num(s.deductionTotal), 0),
+    net: slips.reduce((sum, s) => sum + num(s.netTotal), 0),
+  };
 
   return (
     <>
@@ -342,7 +363,7 @@ export default function MyPayroll() {
       />
 
       {error && !forbidden && <ErrorBanner error={error} />}
-      {notice && <div className="alert alert-error">{notice}</div>}
+      {notice && <div className="alert alert-error" role="alert">{notice}</div>}
 
       {emp && (
         <HrToolbar>
@@ -366,29 +387,30 @@ export default function MyPayroll() {
             <section className="card card-accent" style={{ marginBottom: 16 }}>
               <div className="card-head">
                 <h3>Latest payslip</h3>
-                <span className="muted">{periodLabel(current)}</span>
-                <div className="action-group">
-                  <Badge value={current.status} />
-                </div>
               </div>
               <div className="card-pad">
-                <div className="grid-2">
-                  <div className="detail-list">
-                    <Row label="Payslip number"><span className="cell-mono">{str(current.payslipNo) || '-'}</span></Row>
-                    <Row label="Payroll run"><span className="cell-mono">{str(current.payrollNo) || '-'}</span></Row>
-                    <Row label="Run type">{str(current.runType) || 'Normal'}{str(current.offCycleType) ? ' - ' + str(current.offCycleType) : ''}</Row>
-                    <Row label="Pay date">{day(current.paymentDate)}</Row>
-                    <Row label="Published">{current.publishedAt ? fmtDate(current.publishedAt) : 'Not yet published'}</Row>
-                    <Row label="Payable">{day(current.periodEnd) === '-' ? '-' : 'On ' + day(current.paymentDate)}</Row>
+                <div className="hero-card" style={{ padding: 0 }}>
+                  <div className="hero-main">
+                    <div className="hero-id">
+                      <span className="hero-kicker">Net pay - {periodLabel(current)}</span>
+                      <h2 className="kpi-value kpi-ok">{money(current.netTotal)} {ccy}</h2>
+                    </div>
+                    <span className="hero-status"><Badge value={current.status} /></span>
                   </div>
-                  <div className="detail-list">
-                    <Row label="Gross pay">{money(current.grossTotal)} {ccy}</Row>
-                    <Row label="Taxable pay">{money(current.taxableTotal)} {ccy}</Row>
-                    <Row label="Deductions">{money(current.deductionTotal)} {ccy}</Row>
-                    <Row label="Employer contributions">{money(current.employerContributions)} {ccy}</Row>
-                    <Row label="Net pay"><strong>{money(current.netTotal)} {ccy}</strong></Row>
+                  <div className="hero-meta">
+                    <span>Gross <b>{money(current.grossTotal)} {ccy}</b></span>
+                    <span>Taxable <b>{money(current.taxableTotal)} {ccy}</b></span>
+                    <span>Deductions <b>{money(current.deductionTotal)} {ccy}</b></span>
+                    <span>Employer contributions <b>{money(current.employerContributions)} {ccy}</b></span>
+                    <span>Paid <b>{day(current.paymentDate)}</b></span>
+                    <span>Payslip <b className="cell-mono">{str(current.payslipNo) || '-'}</b></span>
+                    <span>Run <b className="cell-mono">{str(current.payrollNo) || '-'}</b></span>
+                    <span>Type <b>{str(current.runType) || 'Normal'}{str(current.offCycleType) ? ' - ' + str(current.offCycleType) : ''}</b></span>
+                    <span>Published <b>{current.publishedAt ? fmtDate(current.publishedAt) : 'Not yet published'}</b></span>
+                    <span>Delivery <b>{deliveryEvidence(current)}</b></span>
                   </div>
                 </div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>Your own read receipt: opens and downloads recorded on this payslip.</div>
                 <div className="chip-row">
                   <button className="btn btn-primary" onClick={() => void openSlip(current)}>How this was calculated</button>
                   <button className="btn" disabled={busy !== ''} onClick={() => void fetchSlip(current, 'pdf')}>
@@ -402,12 +424,12 @@ export default function MyPayroll() {
 
           {ytd && (
             <HrKpiGrid>
-              <HrKpi label={'Gross ' + ytd.year + ' to date'} value={money(ytd.gross)} sub={fmtNum(ytd.periods) + ' payslip(s) this year'} />
+              <HrKpi label={'Gross ' + ytd.year + ' to date'} value={money(ytd.gross)} sub={fmtNum(ytd.periods) + ' payslip(s) this year'} accent="#1261A0" tint="rgba(18, 97, 160, 0.12)" />
               <HrKpi label="PAYE paid to date" value={money(ytd.paye)} sub="Income tax withheld and remitted" accent="var(--clay)" tint="rgba(201, 54, 54, 0.12)" />
               <HrKpi label="NSSF (your share)" value={money(ytd.nssfEmployee)} sub="5% employee contribution" />
               <HrKpi label="NSSF (employer share)" value={money(ytd.nssfEmployer)} sub="Paid by the employer, not deducted from you" />
               <HrKpi label="Local service tax" value={money(ytd.lst)} sub="Remitted to the local government" />
-              <HrKpi label={'Net received ' + ytd.year} value={money(ytd.net)} sub={'Total deductions ' + money(ytd.deductions)} />
+              <HrKpi label={'Net received ' + ytd.year} value={money(ytd.net)} sub={'Total deductions ' + money(ytd.deductions)} accent="#168A5B" tint="rgba(22, 138, 91, 0.12)" />
             </HrKpiGrid>
           )}
 
@@ -470,6 +492,16 @@ export default function MyPayroll() {
                       </td>
                     </tr>
                   ))}
+                  {slips.length > 0 && (
+                    <tr>
+                      <td><strong>{pageTotals.label}</strong></td>
+                      <td /><td /><td />
+                      <td className="cell-num">{money(pageTotals.gross)}</td>
+                      <td className="cell-num">{money(pageTotals.deductions)}</td>
+                      <td className="cell-num"><strong>{money(pageTotals.net)}</strong></td>
+                      <td /><td />
+                    </tr>
+                  )}
                   {slips.length === 0 && (
                     <HrTableEmpty colSpan={9} title="No payslips on this page" hint="Try another page." />
                   )}

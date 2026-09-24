@@ -1214,8 +1214,13 @@ export function PayrollDesk({ id }: { id: number }) {
       {openErrors > 0 && (
         <div className="alert alert-error" role="alert">
           <strong>{openErrors} blocking exception{openErrors === 1 ? '' : 's'}</strong> must be resolved before this run can move
-          through review. Open the Exceptions tab for the detail.
+          through review. Open the Overview tab for the detail.
           {highRisk > 0 && (<span> {highRisk} high-risk item{highRisk === 1 ? '' : 's'} also need a decision.</span>)}
+        </div>
+      )}
+      {openErrors > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <button className="btn btn-sm" onClick={() => setTab('Overview')}>Show the exceptions</button>
         </div>
       )}
       <HrKpiGrid>
@@ -1286,7 +1291,7 @@ export function PayrollDesk({ id }: { id: number }) {
           <button className="btn" disabled={busy} onClick={runSimulate}>Simulate</button>
         )}
         {status === 'DRAFT' && can(user, 'hr.payrolls.submit') && (
-          <button className="btn btn-primary" disabled={busy || openErrors > 0} onClick={() => act(`/api/ops/hr/payrolls/${id}/submit`, 'Submitted for approval')}>Submit for approval</button>
+          <button className="btn btn-primary" disabled={busy || openErrors > 0} title={openErrors > 0 ? openErrors + ' blocking exception' + (openErrors === 1 ? '' : 's') + ' must be resolved first - see Overview.' : undefined} onClick={() => act(`/api/ops/hr/payrolls/${id}/submit`, 'Submitted for approval')}>Submit for approval</button>
         )}
         {status === 'APPROVED' && can(user, 'hr.payrolls.release') && (
           <button className="btn btn-primary" disabled={busy} onClick={() => setConfirm('release')}>Release payment</button>
