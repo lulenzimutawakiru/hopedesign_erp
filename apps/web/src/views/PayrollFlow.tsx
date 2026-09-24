@@ -282,6 +282,7 @@ function EmployeesTab({
   items,
   onOpen,
   canPrintSlips,
+  canCreate,
   docBusy,
   onPayslip,
   onRegister,
@@ -289,6 +290,7 @@ function EmployeesTab({
   items: Rec[];
   onOpen: (item: Rec) => void;
   canPrintSlips: boolean;
+  canCreate: boolean;
   docBusy: string;
   onPayslip: (slip: Rec, format: 'pdf' | 'print') => void;
   onRegister: (format: DocFormat) => void;
@@ -299,6 +301,9 @@ function EmployeesTab({
       title="Payroll register"
       actions={
         <div className="action-group">
+          {canCreate && (
+            <button className="btn btn-sm" onClick={() => navigate('/people/employees/new')}>New employee</button>
+          )}
           <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => onRegister('pdf')}>
             {docBusy === 'registerpdf' ? 'Saving...' : 'Register PDF'}
           </button>
@@ -377,7 +382,15 @@ function EmployeesTab({
               </tr>
             )}
             {items.length === 0 && (
-              <HrTableEmpty colSpan={11} title="No employees in this run" hint="Recalculate the payroll to pull in active contracts for the period." />
+              <HrTableEmpty
+                colSpan={11}
+                title="No employees in this run"
+                hint="Recalculate the payroll to pull in active contracts for the period, or hire someone new onto the file."
+              >
+                {canCreate && (
+                  <button className="btn btn-primary btn-sm" onClick={() => navigate('/people/employees/new')}>New employee</button>
+                )}
+              </HrTableEmpty>
             )}
           </tbody>
         </table>
@@ -1187,6 +1200,7 @@ export function PayrollDesk({ id }: { id: number }) {
   const openErrors = exceptions.filter((x) => x.severity === 'ERROR' && x.status === 'OPEN').length;
   const highRisk = exceptions.filter((x) => x.severity === 'HIGH_RISK' && x.status === 'OPEN').length;
   const canPrintSlips = can(user, 'hr.payslips.view');
+  const canCreate = can(user, 'hr.employees.create');
   const employerCost = num(p.grossTotal) + stat.employerNssf + stat.lst;
   const chargeable = stat.taxableIncome || num(p.grossTotal);
   const earnings = aggregateComponents(items, 'earnings');
@@ -1205,6 +1219,9 @@ export function PayrollDesk({ id }: { id: number }) {
         actions={
           <>
             <Badge value={p.status} />
+            {canCreate && (
+              <button className="btn btn-sm" onClick={() => navigate('/people/employees/new')}>New employee</button>
+            )}
             <button className="btn btn-sm" onClick={() => navigate('/people/payrolls')}>All runs</button>
           </>
         }
@@ -1323,6 +1340,7 @@ export function PayrollDesk({ id }: { id: number }) {
         <EmployeesTab
           items={items}
           onOpen={setDrawer}
+          canCreate={canCreate}
           canPrintSlips={canPrintSlips}
           docBusy={docBusy}
           onPayslip={openPayslipDoc}

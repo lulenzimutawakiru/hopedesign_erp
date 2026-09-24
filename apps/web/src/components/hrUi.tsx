@@ -45,7 +45,7 @@ export function HrEmptyState({ icon = '•', title, hint, children }: { icon?: s
 }
 
 /** Centered empty row inside a <table>. */
-export function HrTableEmpty({ colSpan, icon = '•', title, hint }: { colSpan: number; icon?: string; title: string; hint?: string }) {
+export function HrTableEmpty({ colSpan, icon = '•', title, hint, children }: { colSpan: number; icon?: string; title: string; hint?: string; children?: ReactNode }) {
   return (
     <tr>
       <td colSpan={colSpan}>
@@ -53,6 +53,7 @@ export function HrTableEmpty({ colSpan, icon = '•', title, hint }: { colSpan: 
           <div className="empty-icon" aria-hidden>{icon}</div>
           <h3>{title}</h3>
           {hint && <p>{hint}</p>}
+          {children && <div className="empty-actions">{children}</div>}
         </div>
       </td>
     </tr>
