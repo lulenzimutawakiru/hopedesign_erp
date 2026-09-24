@@ -729,7 +729,30 @@ export async function postSupplierPayment(client: pg.PoolClient, ctx: Ctx, payme
   return entryId;
 }
 
-/** Payroll release: Dr expense (gross), Cr PAYE, Cr NSSF accrual, Cr loan recoveries, Cr bank (net). */
+/**
+ * Payroll GL posting.
+ *
+ *   Dr  Salaries expense          employee gross earnings
+ *   Dr  Employer NSSF expense     employer NSSF contribution
+ *   Cr  PAYE payable              PAYE withheld from employees
+ *   Cr  NSSF payable              employee + employer NSSF
+ *   Cr  LST payable               local service tax withheld
+ *   Cr  Staff recoveries          loans, advances and other authorised deductions
+ *   Cr  Net pay payable           the amount the employees are actually paid
+ *
+ * Accounts are resolved from `payroll_gl_mappings` by mapping role (a group
+ * specific mapping wins over the company-wide default), and the chart of
+ * accounts is only consulted for roles finance has not mapped yet, so payroll
+ * can be re-pointed at different accounts without a code change.
+ *
+ * The earnings debit is split across the cost centres the employees belong to,
+ * which is what makes the payroll journal usable for departmental costing.
+ *
+ * The entry is balanced by construction and the balance is asserted before the
+ * journal is written: if a payroll's earnings no longer reconcile with its
+ * deductions and net pay, posting fails loudly with the figures instead of
+ * quietly pushing an out-of-balance entry into the ledger.
+ */
 export async function postPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: number) {
   const res = await client.query(
     `SELECT * FROM payrolls WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
@@ -738,62 +761,210 @@ export async function postPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: nu
   if (res.rows.length === 0) throw notFound('Payroll not found');
   const run = res.rows[0];
   if (run.gl_posted) return Number(run.gl_journal_id);
-  if (!['APPROVED', 'RELEASED'].includes(String(run.status))) {
-    throw badRequest(`Payroll must be APPROVED before posting (current: ${run.status})`);
+  if (!['APPROVED', 'RELEASED', 'PAID', 'POSTED'].includes(String(run.status))) {
+    throw badRequest(`Payroll must be approved or released before it can be posted (current: ${run.status})`);
   }
-  const items = await client.query(`SELECT * FROM payroll_items WHERE payroll_id = $1`, [payrollId]);
+  const items = await client.query(
+    `SELECT pi.*, e.cost_centre_id
+       FROM payroll_items pi
+       LEFT JOIN employees e ON e.id = pi.employee_id
+      WHERE pi.payroll_id = $1`,
+    [payrollId]
+  );
   if (items.rows.length === 0) throw badRequest('Payroll has no lines');
-  let gross = 0;
-  let paye = 0;
-  let nssf = 0;
-  let loans = 0;
-  let advances = 0;
-  let other = 0;
-  let lst = 0;
-  let net = 0;
+
+  const totals = {
+    gross: 0, paye: 0, nssf: 0, employerNssf: 0,
+    loans: 0, advances: 0, other: 0, lst: 0, net: 0,
+  };
+  const earningsByCentre = new Map<string, { costCentreId: number | null; amount: number }>();
+  const employerNssfByCentre = new Map<string, { costCentreId: number | null; amount: number }>();
+  const accumulate = (
+    bucket: Map<string, { costCentreId: number | null; amount: number }>,
+    costCentreId: number | null,
+    amount: number
+  ) => {
+    const key = costCentreId == null ? 'none' : String(costCentreId);
+    const entry = bucket.get(key) ?? { costCentreId, amount: 0 };
+    entry.amount += amount;
+    bucket.set(key, entry);
+  };
   for (const it of items.rows) {
-    gross += Number(it.gross_pay);
-    paye += Number(it.paye);
-    nssf += Number(it.nssf);
-    loans += Number(it.loans);
-    advances += Number(it.advances);
-    other += Number(it.other_deductions);
-    lst += Number(it.lst);
-    net += Number(it.net_pay);
+    const gross = Number(it.gross_pay ?? 0);
+    const employerNssf = Number(it.employer_nssf ?? 0);
+    const costCentreId = it.cost_centre_id != null ? Number(it.cost_centre_id) : null;
+    totals.gross += gross;
+    totals.paye += Number(it.paye ?? 0);
+    totals.nssf += Number(it.nssf ?? 0);
+    totals.employerNssf += employerNssf;
+    totals.loans += Number(it.loans ?? 0);
+    totals.advances += Number(it.advances ?? 0);
+    totals.other += Number(it.other_deductions ?? 0);
+    totals.lst += Number(it.lst ?? 0);
+    totals.net += Number(it.net_pay ?? 0);
+    accumulate(earningsByCentre, costCentreId, gross);
+    accumulate(employerNssfByCentre, costCentreId, employerNssf);
   }
-  const expId = await getAccountId(client, ctx, COA.ADMIN_EXP);
-  const payeId = await getAccountId(client, ctx, COA.PAYE);
-  const nssfId = await getAccountId(client, ctx, COA.ACCRUAL);
-  const loanId = await getAccountId(client, ctx, COA.OTHER_RECV);
-  const bankId = await getAccountId(client, ctx, COA.DEFAULT_BANK);
-  const lines: JournalLine[] = [
-    { account_id: expId, debit: round2(gross), description: `Payroll ${run.payroll_no} gross` },
-  ];
-  if (paye > 0) lines.push({ account_id: payeId, credit: round2(paye), description: `PAYE ${run.payroll_no}` });
-  if (nssf > 0) lines.push({ account_id: nssfId, credit: round2(nssf), description: `NSSF ${run.payroll_no}` });
-  if (lst > 0) lines.push({ account_id: nssfId, credit: round2(lst), description: `LST ${run.payroll_no}` });
-  if (loans + advances + other > 0) {
-    lines.push({ account_id: loanId, credit: round2(loans + advances + other), description: `Staff recoveries ${run.payroll_no}` });
+
+  const groupId = run.payroll_group_id != null ? Number(run.payroll_group_id) : null;
+  const mappings = await payrollGlAccounts(client, ctx, groupId);
+  const accountFor = async (role: string): Promise<number> => {
+    const mapping = mappings.get(role);
+    if (mapping) {
+      const id = PAYROLL_GL_CREDIT_ROLES.includes(role) ? mapping.credit_account_id : mapping.debit_account_id;
+      if (id != null) return Number(id);
+    }
+    return getAccountId(client, ctx, PAYROLL_GL_FALLBACK[role]);
+  };
+
+  const staffRecoveries = totals.loans + totals.advances + totals.other;
+  const debits = round2(totals.gross) + round2(totals.employerNssf);
+  const creditsBeforeNet =
+    round2(totals.paye) + round2(totals.nssf + totals.employerNssf) + round2(totals.lst) + round2(staffRecoveries);
+  const netPay = round2(debits - creditsBeforeNet);
+  const variance = round2(netPay - round2(totals.net));
+  if (Math.abs(variance) > 0.01) {
+    throw badRequest(
+      `Payroll ${run.payroll_no} cannot be posted because it does not balance. ` +
+        `Gross ${round2(totals.gross)} + employer NSSF ${round2(totals.employerNssf)} = ${round2(debits)}, ` +
+        `but statutory and recovery deductions plus net pay come to ${round2(creditsBeforeNet + round2(totals.net))} ` +
+        `(difference ${variance}). Recalculate the payroll before posting it.`
+    );
   }
-  if (net > 0) lines.push({ account_id: bankId, credit: round2(net), description: `Net pay ${run.payroll_no}` });
+
+  const label = String(run.payroll_no);
+  const lines: JournalLine[] = [];
+  const earningAccountId = await accountFor('EARNING_EXPENSE');
+  for (const part of earningsByCentre.values()) {
+    const amount = round2(part.amount);
+    if (amount === 0) continue;
+    lines.push({
+      account_id: earningAccountId,
+      debit: amount,
+      cost_centre_id: part.costCentreId,
+      description: `Salaries ${label}`,
+    });
+  }
+  if (round2(totals.employerNssf) !== 0) {
+    const employerAccountId = await accountFor('EMPLOYER_NSSF_EXPENSE');
+    for (const part of employerNssfByCentre.values()) {
+      const amount = round2(part.amount);
+      if (amount === 0) continue;
+      lines.push({
+        account_id: employerAccountId,
+        debit: amount,
+        cost_centre_id: part.costCentreId,
+        description: `Employer NSSF ${label}`,
+      });
+    }
+  }
+  const pushCredit = async (role: string, amount: number, description: string) => {
+    const value = round2(amount);
+    if (value === 0) return;
+    lines.push({ account_id: await accountFor(role), credit: value, description: `${description} ${label}` });
+  };
+  await pushCredit('PAYE_PAYABLE', totals.paye, 'PAYE payable');
+  await pushCredit('NSSF_PAYABLE', totals.nssf + totals.employerNssf, 'NSSF payable');
+  await pushCredit('LST_PAYABLE', totals.lst, 'LST payable');
+  await pushCredit('STAFF_RECOVERIES', staffRecoveries, 'Staff recoveries');
+  await pushCredit('NET_PAY', netPay, 'Net pay payable');
+
+  const debitTotal = round2(lines.reduce((sum, l) => sum + Number(l.debit ?? 0), 0));
+  const creditTotal = round2(lines.reduce((sum, l) => sum + Number(l.credit ?? 0), 0));
+  if (Math.abs(debitTotal - creditTotal) > 0.01) {
+    throw badRequest(
+      `Refusing to post an unbalanced payroll journal for ${label}: debits ${debitTotal}, credits ${creditTotal}.`
+    );
+  }
+
   const entryId = await postJournalLines(client, ctx, {
     entryDate: isoDate(run.period_end),
     journalType: 'PAYROLL',
-    description: `Payroll ${run.payroll_no}`,
+    description: `Payroll ${label}`,
     lines,
     refType: 'payrolls',
     refId: payrollId,
-    refCode: String(run.payroll_no),
+    refCode: label,
   });
-  await markPosted(client, 'payrolls', payrollId, entryId, { status: 'RELEASED', released_by: ctx.userId ?? null, released_at: new Date().toISOString() });
+  await markPosted(client, 'payrolls', payrollId, entryId, { status: 'POSTED' });
+  await client.query(
+    `INSERT INTO payroll_status_history (company_id, tenant_id, payroll_id, from_status, to_status, changed_by, changed_at, comment, ip)
+     VALUES ($1,$2,$3,$4,$5,$6, now(), $7, $8)`,
+    [ctx.companyId, ctx.tenantId, payrollId, run.status, 'POSTED', ctx.userId ?? null, 'Payroll posted to the general ledger', ctx.ip ?? null]
+  );
   await emitEvent(client, ctx, {
     eventType: 'finance.payroll_posted',
     entityType: 'payrolls',
     entityId: payrollId,
-    entityCode: String(run.payroll_no),
-    payload: { journalId: entryId, net: round2(net) },
+    entityCode: label,
+    payload: {
+      journalId: entryId,
+      gross: round2(totals.gross),
+      employerNssf: round2(totals.employerNssf),
+      paye: round2(totals.paye),
+      net: netPay,
+    },
   });
   return entryId;
+}
+
+/** Liability roles credit their account; expense roles debit theirs. */
+const PAYROLL_GL_CREDIT_ROLES: string[] = [
+  'PAYE_PAYABLE',
+  'NSSF_PAYABLE',
+  'LST_PAYABLE',
+  'STAFF_RECOVERIES',
+  'NET_PAY',
+];
+
+/** Used only for roles finance has not mapped yet, so the ledger still balances. */
+const PAYROLL_GL_FALLBACK: Record<string, string> = {
+  EARNING_EXPENSE: COA.ADMIN_EXP,
+  EMPLOYER_NSSF_EXPENSE: COA.ADMIN_EXP,
+  EMPLOYER_PENSION_EXPENSE: COA.ADMIN_EXP,
+  PAYE_PAYABLE: COA.PAYE,
+  NSSF_PAYABLE: COA.ACCRUAL,
+  LST_PAYABLE: COA.ACCRUAL,
+  STAFF_RECOVERIES: COA.OTHER_RECV,
+  NET_PAY: COA.DEFAULT_BANK,
+};
+
+interface PayrollGlMapping {
+  debit_account_id: number;
+  credit_account_id: number;
+  cost_centre_id: number | null;
+}
+
+/**
+ * Role -> account mapping for payroll posting. A mapping scoped to the payroll
+ * group wins over the company-wide default; unmapped roles fall back to the
+ * chart of accounts.
+ */
+async function payrollGlAccounts(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  payrollGroupId: number | null
+): Promise<Map<string, PayrollGlMapping>> {
+  const res = await client.query(
+    `SELECT mapping_role, debit_account_id, credit_account_id, cost_centre_id
+       FROM payroll_gl_mappings
+      WHERE tenant_id = $1 AND company_id = $2 AND is_default = true
+        AND mapping_role IS NOT NULL
+        AND (payroll_group_id IS NULL OR payroll_group_id = $3)
+      ORDER BY (payroll_group_id IS NULL) ASC, id ASC`,
+    [ctx.tenantId, ctx.companyId, payrollGroupId]
+  );
+  const map = new Map<string, PayrollGlMapping>();
+  for (const row of res.rows) {
+    const role = String(row.mapping_role);
+    if (map.has(role)) continue;
+    map.set(role, {
+      debit_account_id: Number(row.debit_account_id),
+      credit_account_id: Number(row.credit_account_id),
+      cost_centre_id: row.cost_centre_id != null ? Number(row.cost_centre_id) : null,
+    });
+  }
+  return map;
 }
 
 function round2(n: number) {

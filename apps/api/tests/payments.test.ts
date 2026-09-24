@@ -80,7 +80,7 @@ describe('Payroll payments', () => {
     const journalId = Number(posted.body.data.journalId);
     expect(journalId).toBeGreaterThan(0);
     const after = await api.get(`/api/ops/hr/payrolls/${payrollId}`).set(auth(admin));
-    expect(after.body.data.payroll.status).toBe('RELEASED');
+    expect(after.body.data.payroll.status).toBe('POSTED');
     expect(after.body.data.payroll.glPosted).toBe(true);
 
     // 6. Payment batch: hannah prepared the payroll, so she is the batch creator.

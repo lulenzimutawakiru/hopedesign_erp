@@ -79,7 +79,7 @@ async function loadBatch(client: pg.PoolClient, ctx: Ctx, batchId: number) {
   return res.rows[0];
 }
 
-/** Create a payment batch for an approved/released payroll run. */
+/** Create a payment batch for an approved, released, paid or posted payroll run. */
 export async function createPaymentBatch(
   client: pg.PoolClient,
   ctx: Ctx,
@@ -87,8 +87,8 @@ export async function createPaymentBatch(
 ) {
   if (!ctx.companyId) throw badRequest('Company context required');
   const payroll = await loadPayroll(client, ctx, input.payrollId);
-  if (!['APPROVED', 'RELEASED'].includes(String(payroll.status))) {
-    throw badRequest(`Payroll must be APPROVED or RELEASED before creating a payment batch (current: ${payroll.status})`);
+  if (!['APPROVED', 'RELEASED', 'PAID', 'POSTED'].includes(String(payroll.status))) {
+    throw badRequest(`Payroll must be APPROVED, RELEASED, PAID or POSTED before creating a payment batch (current: ${payroll.status})`);
   }
   const existing = await client.query(
     `SELECT batch_no, status FROM payment_batches
@@ -432,11 +432,11 @@ export async function getPaymentBatch(client: pg.PoolClient, ctx: Ctx, batchId: 
   return detail;
 }
 
-/** Publish payslips for a released payroll (idempotent per employee). */
+/** Publish payslips for a released/paid/posted payroll (idempotent per employee). */
 export async function publishPayslips(client: pg.PoolClient, ctx: Ctx, payrollId: number) {
   if (!ctx.companyId) throw badRequest('Company context required');
   const payroll = await loadPayroll(client, ctx, payrollId);
-  if (!['RELEASED', 'PAID'].includes(String(payroll.status))) {
+  if (!['RELEASED', 'PAID', 'POSTED', 'CLOSED'].includes(String(payroll.status))) {
     throw badRequest(`Payslips can only be published after the payroll is released (current: ${payroll.status})`);
   }
   const periodEnd = toISODate(payroll.period_end) ?? '';
@@ -673,7 +673,7 @@ export async function paymentDashboard(client: pg.PoolClient, ctx: Ctx) {
        (SELECT count(DISTINCT employee_id) FROM payment_transactions WHERE tenant_id = $1 AND company_id = $2 AND status = 'SUCCESS')::int AS employees_paid,
        (SELECT COALESCE(SUM(amount),0) FROM payment_transactions WHERE tenant_id = $1 AND company_id = $2 AND status = 'SUCCESS')::numeric AS total_paid,
        (SELECT COALESCE(SUM(total_amount),0) FROM payment_batches WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','EXPORTED','CONFIRMED'))::numeric AS outstanding_amount,
-       (SELECT COALESCE(SUM(net_total),0) FROM payrolls WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','RELEASED','PAID'))::numeric AS payroll_net_total`,
+       (SELECT COALESCE(SUM(net_total),0) FROM payrolls WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','RELEASED','PAID','POSTED','CLOSED'))::numeric AS payroll_net_total`,
     [ctx.tenantId, ctx.companyId]
   );
   const byStatus = await client.query(

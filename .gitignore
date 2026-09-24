@@ -20,6 +20,8 @@ tmp-hr/
 .login-resp.json
 *.token.txt
 *.probe.cjs
+tmp-*.cjs
+~$*
 
 # Blue/green runtime state (rewritten by deploy scripts)
 deploy/caddy-live/active.caddy
@@ -40,7 +42,6 @@ deploy/alert.env
 hv-*.json
 hv-*.jsonl
 hv-*.txt
-/tmp-*.cjs
 /vercel-sync-env.cjs
 /dba-probe.cjs
 /prod-env-gen.cjs

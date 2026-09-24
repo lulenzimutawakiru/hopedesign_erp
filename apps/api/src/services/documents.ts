@@ -1733,7 +1733,7 @@ async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise
   const notes = [
     'Confidential. Statutory deductions follow the rates configured for this period.',
   ];
-  if (!published && !['RELEASED', 'PAID'].includes(str(pick(r, 'payroll_status')))) {
+  if (!published && !['RELEASED', 'PAID', 'POSTED', 'CLOSED'].includes(str(pick(r, 'payroll_status')))) {
     notes.push('This is a calculated slip. It has not been published as a final payslip.');
   }
   if (str(pick(r, 'payroll_reason'))) notes.push(`Payroll note: ${str(pick(r, 'payroll_reason'))}`);
@@ -1909,7 +1909,7 @@ async function loadPayrollRegister(client: pg.PoolClient, ctx: Ctx, id: number):
     'This register lists every employee line on the payroll run for the period shown. Amounts are in the payroll currency.',
     'PAYE, NSSF and Local Service Tax are calculated from the statutory configuration in force for this payroll period under Ugandan law.',
   ];
-  if (!['RELEASED', 'PAID'].includes(str(pick(h, 'status')))) {
+  if (!['RELEASED', 'PAID', 'POSTED', 'CLOSED'].includes(str(pick(h, 'status')))) {
     notes.push('This is a draft register. It has not been released as a final payroll.');
   }
   if (str(pick(h, 'reason'))) notes.push(`Payroll note: ${str(pick(h, 'reason'))}`);
@@ -2213,6 +2213,34 @@ export async function loadEmployeeIdRegister(
   };
 }
 
+/**
+ * The caller's own payslip.
+ *
+ * The same document the HR workspace renders, reached through the employee
+ * portal instead. Ownership is proved by joining the payslip back to the
+ * employee behind the authenticated user, so an employee who guesses a
+ * colleague's payslip id gets a not-found answer rather than their pay.
+ */
+async function loadMyPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise<DocData> {
+  if (!ctx.userId) throw notFound('Payslip not found');
+  // The portal identifies a published payslip by `payslips.id` - that is the id the
+  // employee sees in the payslip list and the net-pay trend - so ownership is proven
+  // against the payslip row itself. The rendered document is produced from the payroll
+  // item the slip was published for, which is what holds the frozen calculation.
+  const owned = await client.query(
+    `SELECT i.id AS item_id
+       FROM payslips s
+       JOIN users u ON u.employee_id = s.employee_id AND u.tenant_id = s.tenant_id
+       LEFT JOIN payroll_items i ON i.payroll_id = s.payroll_id AND i.employee_id = s.employee_id
+      WHERE s.id = $1 AND u.id = $2 AND s.tenant_id = $3 AND s.company_id = $4
+        AND s.status = 'PUBLISHED'`,
+    [id, ctx.userId, ctx.tenantId, ctx.companyId]
+  );
+  const itemId = owned.rows[0] ? owned.rows[0].item_id : null;
+  if (itemId == null) throw notFound('Payslip not found');
+  return loadPayslip(client, ctx, Number(itemId));
+}
+
 export const DOCUMENT_TYPES: Record<string, DocumentTypeDef> = {
   expense: { type: 'expense', label: 'Expense Voucher', permission: 'finance.expenses.view', load: loadExpense },
   budget: { type: 'budget', label: 'Budget', permission: 'finance.budgets.view', load: loadBudget },
@@ -2240,6 +2268,7 @@ export const DOCUMENT_TYPES: Record<string, DocumentTypeDef> = {
   'employment-contract': { type: 'employment-contract', label: 'Employment Contract', permission: 'hr.contracts.view', load: loadEmploymentContract },
   'certificate-of-service': { type: 'certificate-of-service', label: 'Certificate of Service', permission: 'hr.certificates.view', load: loadCertificateOfService },
   payslip: { type: 'payslip', label: 'Payslip', permission: 'hr.payslips.view', load: loadPayslip },
+  'my-payslip': { type: 'my-payslip', label: 'Payslip', permission: 'hr.employee_payroll.self_view', load: loadMyPayslip },
   'payroll-register': { type: 'payroll-register', label: 'Payroll Register', permission: 'hr.payrolls.view', load: loadPayrollRegister },
   'employee-id': { type: 'employee-id', label: 'Employee Identity Card', permission: 'hr.employee_identity.view', load: loadEmployeeId },
   'employee-id-card': { type: 'employee-id-card', label: 'Employee ID Card', permission: 'hr.employee_card.view', load: loadEmployeeIdCard },

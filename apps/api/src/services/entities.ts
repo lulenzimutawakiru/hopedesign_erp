@@ -30,7 +30,10 @@ export const ENTITIES: Record<
   'production.plans': { table: 'production_plans', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
   'production.work_orders': { table: 'work_orders', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
   'production.boms': { table: 'boms', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
-  'hr.payrolls': { table: 'payrolls', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
+  // Payroll is returned to DRAFT (not a terminal REJECTED) so a returned run can be
+  // corrected and resubmitted; created_by drives the segregation-of-duties check
+  // that stops a preparer approving their own run.
+  'hr.payrolls': { table: 'payrolls', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'DRAFT', ownerColumn: 'created_by' },
   'hr.final_settlements': { table: 'final_settlements', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'DRAFT', ownerColumn: 'prepared_by' },
   'hr.requisitions': { table: 'job_requisitions', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'submitted_by' },
   'hr.workforce_plans': { table: 'workforce_plans', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'submitted_by' },

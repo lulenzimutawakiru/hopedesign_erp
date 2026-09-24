@@ -63,6 +63,7 @@ import { serviceDeskOpsRouter } from './routes/ops/serviceDesk.js';
 import { complianceOpsRouter } from './routes/ops/compliance.js';
 import { organisationSettingsOpsRouter } from './routes/ops/organisationSettings.js';
 import { myServiceDeskRouter } from './routes/ops/myServiceDesk.js';
+import { myPayrollRouter } from './routes/ops/myPayroll.js';
 import { runServiceDeskSlaTick } from './services/serviceDeskSla.js';
 
 export const app = express();
@@ -234,6 +235,7 @@ app.use('/api/healthcare', requireModule('healthcare'));
 // the tenant module registry must not be able to lock staff out of support.
 app.use('/api/service-desk', serviceDeskOpsRouter);
 app.use('/api/my/service-desk', myServiceDeskRouter);
+app.use('/api/my/payroll', myPayrollRouter);
 
 // Generic CRUD+ for all registered entities.
 mountCrud(app);

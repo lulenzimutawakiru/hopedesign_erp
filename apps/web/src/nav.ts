@@ -391,7 +391,10 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'attendance', label: 'Attendance', href: '/people/attendance', perm: 'hr.attendance.view' },
           { id: 'time', label: 'Time & Shifts', href: '/people/time', perm: 'hr.shifts.view' },
           { id: 'payroll', label: 'Payroll', href: '/people/payrolls', perm: 'hr.payrolls.view' },
+          { id: 'payroll-runs', label: 'Payroll Runs', href: '/people/payrolls/runs', perm: 'hr.payrolls.view' },
+          { id: 'payroll-calendar', label: 'Payroll Calendar', href: '/people/payroll-calendar', perm: 'hr.payroll_periods.view' },
           { id: 'payroll-exceptions', label: 'Exceptions', href: '/people/exceptions', perm: 'hr.payrolls.view' },
+          { id: 'payroll-statutory', label: 'Statutory', href: '/people/statutory-compliance', perm: 'hr.statutory.view' },
           { id: 'payroll-settings', label: 'Payroll Settings', href: '/people/payroll-settings', perm: 'hr.payroll_settings.view' },
           { id: 'statutory-configs', label: 'Statutory Configs', href: '/people/statutory-configs', perm: 'hr.statutory_configs.view' },
           { id: 'loans', label: 'Loans', href: '/people/loans', perm: 'hr.loans.view' },
@@ -406,6 +409,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'benefits', label: 'Benefits', href: '/people/benefits', perm: 'hr.benefit_plans.view' },
           { id: 'relations', label: 'Relations', href: '/people/relations', perm: 'hr.grievances.view' },
           { id: 'me', label: 'My HR', href: '/people/me', perm: 'hr.leave.view' },
+          { id: 'my-payroll', label: 'My Payroll', href: '/people/my-payroll', perm: 'hr.employee_payroll.self_view' },
         ],
       },
       {
@@ -751,6 +755,9 @@ export function requiredPermForPath(path: string): string | undefined {
       advances: 'hr.advances.view',
       payments: 'hr.payrolls.view',
       'payroll-settings': 'hr.payroll_settings.view',
+      'payroll-calendar': 'hr.payroll_periods.view',
+      'statutory-compliance': 'hr.statutory.view',
+      'my-payroll': 'hr.employee_payroll.self_view',
       'statutory-configs': 'hr.statutory_configs.view',
       'off-cycle': 'hr.payrolls.view',
       'final-settlements': 'hr.final_settlements.view',
@@ -980,6 +987,7 @@ export function hrefForSearchHit(table: string, match: Record<string, unknown>):
     case 'complaints': return `/crm/complaints/${id}`;
     case 'employees': return `/people/employees/${id}`;
     case 'payrolls': return `/people/payrolls/${id}`;
+    case 'payroll_periods': return '/people/payroll-calendar';
     case 'suppliers': return `/records/procurement/suppliers/${id}`;
     case 'purchase_orders': return `/buy/orders/${id}`;
     case 'purchase_requisitions': return `/buy/requisitions/${id}`;

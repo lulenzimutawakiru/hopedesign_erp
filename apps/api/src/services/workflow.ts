@@ -6,6 +6,7 @@ import { ENTITIES } from './entities.js';
 import { emitEvent } from './events.js';
 import { notifyUserAdvanced, notifyRoleAdvanced } from './communication.js';
 import { logAudit } from './audit.js';
+import * as payrollLifecycle from './payrollLifecycle.js';
 
 interface StartWorkflowInput {
   entityType: string;
@@ -181,11 +182,21 @@ export async function completeWorkflow(client: pg.PoolClient, ctx: Ctx, instance
   // securityPrinting service (approval vs materials authorization), so the
   // generic status update + side effect must be skipped for them.
   if (entity && String(inst.entity_type) !== 'security_printing.jobs') {
-    await client.query(
-      `UPDATE ${entity.table} SET ${entity.statusColumn} = $1 WHERE id = $2`,
-      [entity.approvedStatus, Number(inst.entity_id)]
-    );
-    await runApprovalSideEffect(client, ctx, String(inst.entity_type), Number(inst.entity_id));
+    if (String(inst.entity_type) === 'hr.payrolls') {
+      // Payroll approvals carry the full lifecycle evidence (status history,
+      // decision, lock, audit) through the payroll lifecycle service instead of
+      // the bare status update used by document-style entities.
+      await payrollLifecycle.recordWorkflowDecision(client, ctx, {
+        payrollId: Number(inst.entity_id),
+        approved: true,
+      });
+    } else {
+      await client.query(
+        `UPDATE ${entity.table} SET ${entity.statusColumn} = $1 WHERE id = $2`,
+        [entity.approvedStatus, Number(inst.entity_id)]
+      );
+      await runApprovalSideEffect(client, ctx, String(inst.entity_type), Number(inst.entity_id));
+    }
   }
   await emitEvent(client, ctx, {
     eventType: `${String(inst.entity_type).replace('.', '_')}.approved`,
@@ -235,10 +246,24 @@ export async function rejectWorkflow(client: pg.PoolClient, ctx: Ctx, instanceId
   );
   const entity = ENTITIES[String(inst.entity_type)];
   if (entity) {
-    await client.query(
-      `UPDATE ${entity.table} SET ${entity.statusColumn} = $1 WHERE id = $2`,
-      [entity.rejectedStatus, Number(inst.entity_id)]
-    );
+    if (String(inst.entity_type) === 'hr.payrolls') {
+      const recorded = await payrollLifecycle.recordWorkflowDecision(client, ctx, {
+        payrollId: Number(inst.entity_id),
+        approved: false,
+        comment: comment ?? null,
+      });
+      if (!recorded) {
+        await client.query(
+          `UPDATE ${entity.table} SET ${entity.statusColumn} = $1 WHERE id = $2`,
+          [entity.rejectedStatus, Number(inst.entity_id)]
+        );
+      }
+    } else {
+      await client.query(
+        `UPDATE ${entity.table} SET ${entity.statusColumn} = $1 WHERE id = $2`,
+        [entity.rejectedStatus, Number(inst.entity_id)]
+      );
+    }
   }
   await emitEvent(client, ctx, {
     eventType: `${String(inst.entity_type).replace('.', '_')}.rejected`,

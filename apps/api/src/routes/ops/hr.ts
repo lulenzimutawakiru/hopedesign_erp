@@ -13,6 +13,9 @@ import * as payments from '../../services/payments.js';
 import * as loansService from '../../services/loans.js';
 import * as identityLink from '../../services/identityLink.js';
 import * as payrollSettings from '../../services/payrollSettings.js';
+import * as payrollLifecycle from '../../services/payrollLifecycle.js';
+import * as payrollPeriods from '../../services/payrollPeriods.js';
+import * as statutoryFilings from '../../services/statutoryFilings.js';
 
 export const hrOpsRouter = Router();
 const photoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -35,9 +38,20 @@ const runGet = (permission: string, fn: QueryFn) => [
       (client) => fn(client, req.ctx, req.query as Record<string, unknown>, req.params as Record<string, string>),
       req.ctx
     );
+
     res.json({ data: out });
   }),
 ];
+
+/** undefined keeps the caller's company, 'null' asks for the tenant-wide scope. */
+const scopeParam = (raw: unknown): number | null | undefined => {
+  if (raw === undefined || raw === '') return undefined;
+  if (raw === null || raw === 'null') return null;
+  return Number(raw);
+};
+
+const optionalText = (raw: unknown): string | undefined =>
+  raw != null && raw !== '' ? String(raw) : undefined;
 
 hrOpsRouter.get('/board', ...runGet('hr.employees.view', (c, ctx) => hr.hrBoard(c, ctx)));
 hrOpsRouter.get('/departments', ...runGet('hr.employees.view', (c, ctx) => hr.listDepartments(c, ctx)));
@@ -208,17 +222,92 @@ hrOpsRouter.post('/leave/:id/approve', ...run('hr.leave.approve', (c, ctx, _b, p
 hrOpsRouter.post('/leave/:id/reject', ...run('hr.leave.approve', (c, ctx, _b, p) => hr.decideLeave(c, ctx, Number(p.id), 'REJECTED')));
 
 hrOpsRouter.get('/payrolls', ...runGet('hr.payrolls.view', (c, ctx) => hr.listPayrolls(c, ctx)));
-hrOpsRouter.get('/payrolls/:id', ...runGet('hr.payrolls.view', (c, ctx, _q, p) => hr.getPayroll(c, ctx, Number(p.id))));
+
+hrOpsRouter.get('/payrolls/command-centre', ...runGet('hr.payrolls.view', (c, ctx) =>
+  payrollLifecycle.payrollCommandCentre(c, ctx)));
+// The run document carries its own pipeline so the timeline a client draws
+// is generated from the same status list the lifecycle enforces.
+hrOpsRouter.get('/payrolls/:id', ...runGet('hr.payrolls.view', async (c, ctx, _q, p) => {
+  const doc = await hr.getPayroll(c, ctx, Number(p.id));
+  return { ...doc, workflow: payrollLifecycle.pipelineFor(String(doc.payroll.status)) };
+}));
 hrOpsRouter.get('/payrolls/:id/exceptions', ...runGet('hr.payrolls.view', (c, ctx, _q, p) => payrollValidation.listExceptions(c, ctx, Number(p.id))));
 hrOpsRouter.post('/payrolls/:id/validate', ...run('hr.payrolls.update', (c, ctx, _b, p) => payrollValidation.validatePayroll(c, ctx, Number(p.id))));
 hrOpsRouter.post('/payrolls', ...run('hr.payrolls.create', (c, ctx, b) => hr.createPayroll(c, ctx, {
   periodStart: String(b.periodStart),
   periodEnd: String(b.periodEnd),
+  runType: optionalText(b.runType),
   payrollGroupId: b.payrollGroupId != null && b.payrollGroupId !== '' ? Number(b.payrollGroupId) : undefined,
+  payrollPeriodId: b.payrollPeriodId != null && b.payrollPeriodId !== '' ? Number(b.payrollPeriodId) : undefined,
+  paymentDate: optionalText(b.paymentDate),
 })));
 hrOpsRouter.post('/payrolls/:id/calculate', ...run('hr.payrolls.update', (c, ctx, _b, p) => hr.calculatePayroll(c, ctx, Number(p.id))));
 hrOpsRouter.post('/payrolls/:id/submit', ...run('hr.payrolls.submit', (c, ctx, _b, p) => hr.submitPayroll(c, ctx, Number(p.id))));
 hrOpsRouter.post('/payrolls/:id/post', ...run('hr.payrolls.post', (c, ctx, _b, p) => hr.postPayrollRun(c, ctx, Number(p.id))));
+
+// --- Payroll lifecycle and calendar ------------------------------------------
+// A payroll run is a controlled financial transaction. It is calculated,
+// validated, reviewed, approved, released, paid, posted and only then closed.
+// The status machine, segregation of duties and blocking-exception checks live
+// in payrollLifecycle; these routes only map HTTP input onto that contract, so
+// a client can never skip a step by calling an endpoint out of order.
+hrOpsRouter.post('/payrolls/:id/release', ...run('hr.payrolls.release', (c, ctx, b, p) =>
+  payrollLifecycle.releasePayroll(c, ctx, Number(p.id), { comment: optionalText(b.comment) })));
+hrOpsRouter.post('/payrolls/:id/paid', ...run('hr.payrolls.pay', (c, ctx, b, p) =>
+  payrollLifecycle.markPayrollPaid(c, ctx, Number(p.id), { comment: optionalText(b.comment) })));
+hrOpsRouter.post('/payrolls/:id/close', ...run('hr.payrolls.close', (c, ctx, b, p) =>
+  payrollLifecycle.closePayroll(c, ctx, Number(p.id), {
+    comment: optionalText(b.comment),
+    varianceExplanation: optionalText(b.varianceExplanation),
+  })));
+hrOpsRouter.post('/payrolls/:id/reopen', ...run('hr.payrolls.reopen', (c, ctx, b, p) =>
+  payrollLifecycle.reopenPayroll(c, ctx, Number(p.id), {
+    reason: String(b.reason ?? ''),
+    recalculate: b.recalculate !== false,
+  })));
+hrOpsRouter.post('/payrolls/:id/simulate', ...run('hr.payrolls.calculate', (c, ctx, _b, p) =>
+  payrollLifecycle.simulatePayroll(c, ctx, Number(p.id))));
+// Void cancels a run created in error. It is refused once payments are
+// confirmed or the cost is in the ledger, so a void can never erase money
+// that has actually moved.
+hrOpsRouter.post('/payrolls/:id/void', ...run('hr.payrolls.void', (c, ctx, b, p) =>
+  payrollLifecycle.voidPayroll(c, ctx, Number(p.id), { reason: String(b.reason ?? '') })));
+hrOpsRouter.get('/payrolls/:id/variance', ...runGet('hr.payrolls.view', (c, ctx, _q, p) =>
+  payrollLifecycle.payrollVariance(c, ctx, Number(p.id))));
+hrOpsRouter.get('/payrolls/:id/approvals', ...runGet('hr.payrolls.view', (c, ctx, _q, p) =>
+  payrollLifecycle.listPayrollApprovals(c, ctx, Number(p.id))));
+hrOpsRouter.get('/payrolls/:id/audit', ...runGet('hr.payrolls.view', (c, ctx, _q, p) =>
+  payrollLifecycle.payrollAuditTimeline(c, ctx, Number(p.id))));
+
+// --- Payroll calendar --------------------------------------------------------
+// Periods are the calendar that runs are attached to. They carry the statutory
+// rule version a run is calculated against, so payroll remains reproducible
+// even after the rates change.
+hrOpsRouter.get('/payroll-periods', ...runGet('hr.payroll_periods.view', (c, ctx, q) =>
+  payrollPeriods.listPayrollPeriods(c, ctx, {
+    status: optionalText(q.status),
+    frequency: optionalText(q.frequency),
+    periodType: optionalText(q.periodType),
+    fiscalYear: q.fiscalYear != null && q.fiscalYear !== '' ? Number(q.fiscalYear) : undefined,
+    q: optionalText(q.q),
+    page: q.page != null ? Number(q.page) : undefined,
+    pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  })));
+hrOpsRouter.post('/payroll-periods', ...run('hr.payroll_periods.create', (c, ctx, b) =>
+  payrollPeriods.createPayrollPeriod(c, ctx, b)));
+hrOpsRouter.get('/payroll-periods/:id', ...runGet('hr.payroll_periods.view', (c, ctx, _q, p) =>
+  payrollPeriods.getPayrollPeriod(c, ctx, Number(p.id))));
+hrOpsRouter.patch('/payroll-periods/:id', ...run('hr.payroll_periods.update', (c, ctx, b, p) =>
+  payrollPeriods.updatePayrollPeriod(c, ctx, Number(p.id), b)));
+hrOpsRouter.post('/payroll-periods/:id/close', ...run('hr.payroll_periods.close', (c, ctx, b, p) =>
+  payrollPeriods.closePayrollPeriod(c, ctx, Number(p.id), { reason: optionalText(b.reason) })));
+hrOpsRouter.post('/payroll-periods/:id/cancel', ...run('hr.payroll_periods.close', (c, ctx, b, p) =>
+  payrollPeriods.cancelPayrollPeriod(c, ctx, Number(p.id), { reason: String(b.reason ?? '') })));
+hrOpsRouter.post('/payroll-periods/:id/lock', ...run('hr.payroll_periods.update', (c, ctx, b, p) =>
+  payrollPeriods.setPayrollPeriodLock(c, ctx, Number(p.id), true, { reason: optionalText(b.reason) })));
+hrOpsRouter.post('/payroll-periods/:id/unlock', ...run('hr.payroll_periods.update', (c, ctx, b, p) =>
+  payrollPeriods.setPayrollPeriodLock(c, ctx, Number(p.id), false, { reason: optionalText(b.reason) })));
+
 
 hrOpsRouter.post('/payrolls/:id/payment-batch', ...run('hr.payrolls.update', (c, ctx, b, p) => payments.createPaymentBatch(c, ctx, { payrollId: Number(p.id), fileFormat: b.fileFormat != null && b.fileFormat !== '' ? String(b.fileFormat) : undefined })));
 hrOpsRouter.get('/payment-batches', ...runGet('hr.payrolls.view', (c, ctx, q) => payments.listPaymentBatches(c, ctx, { status: q.status != null && q.status !== '' ? String(q.status) : undefined, payrollId: q.payrollId != null ? Number(q.payrollId) : undefined, q: q.q != null && q.q !== '' ? String(q.q) : undefined, page: q.page != null ? Number(q.page) : undefined, pageSize: q.pageSize != null ? Number(q.pageSize) : undefined })));
@@ -292,16 +381,6 @@ hrOpsRouter.post('/final-settlements/:id/pay', ...run('hr.final_settlements.pay'
 // describe precedence, bands or rates differently from the way a payslip is
 // actually calculated.
 
-/** undefined keeps the caller's company, 'null' asks for the tenant-wide scope. */
-const scopeParam = (raw: unknown): number | null | undefined => {
-  if (raw === undefined || raw === '') return undefined;
-  if (raw === null || raw === 'null') return null;
-  return Number(raw);
-};
-
-const optionalText = (raw: unknown): string | undefined =>
-  raw != null && raw !== '' ? String(raw) : undefined;
-
 hrOpsRouter.get('/payroll-settings', ...runGet('hr.payroll_settings.view', (c, ctx) =>
   payrollSettings.getPayrollSettings(c, ctx)));
 
@@ -338,3 +417,76 @@ hrOpsRouter.post('/statutory-configs/:id/supersede', ...run('hr.statutory_config
 
 hrOpsRouter.post('/statutory-configs/:id/restore', ...run('hr.statutory_configs.activate', (c, ctx, b, p) =>
   payrollSettings.restoreStatutoryConfig(c, ctx, p.id, b)));
+
+// --- Statutory filings -------------------------------------------------------
+// A payroll run calculates a liability; a filing is the separate, deliberate
+// act of declaring that liability to the authority and settling it. Each
+// transition is audited, and the reconciled amount is stored rather than only
+// displayed, so a statutory variance survives into reporting instead of
+// disappearing when the screen is closed.
+
+hrOpsRouter.get('/statutory-filings', ...runGet('hr.statutory.view', (c, ctx, q) =>
+  statutoryFilings.listStatutoryFilings(c, ctx, {
+    status: optionalText(q.status),
+    category: optionalText(q.category),
+    payrollId: q.payrollId != null && q.payrollId !== '' ? Number(q.payrollId) : undefined,
+    overdueOnly: String(q.overdueOnly ?? '') === 'true' || String(q.overdueOnly ?? '') === '1',
+    q: optionalText(q.q),
+    page: q.page != null ? Number(q.page) : undefined,
+    pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  })));
+
+hrOpsRouter.get('/statutory-compliance', ...runGet('hr.statutory.view', (c, ctx) =>
+  statutoryFilings.statutoryComplianceBoard(c, ctx)));
+
+hrOpsRouter.get('/statutory-filings/:id', ...runGet('hr.statutory.view', (c, ctx, _q, p) =>
+  statutoryFilings.getStatutoryFiling(c, ctx, Number(p.id))));
+
+hrOpsRouter.post('/statutory-filings', ...run('hr.statutory.create', (c, ctx, b) =>
+  statutoryFilings.createStatutoryFiling(c, ctx, {
+    category: String(b.category ?? ''),
+    payrollId: b.payrollId != null && b.payrollId !== '' ? Number(b.payrollId) : undefined,
+    periodStart: String(b.periodStart ?? ''),
+    periodEnd: String(b.periodEnd ?? ''),
+    dueDate: optionalText(b.dueDate),
+    taxPeriod: optionalText(b.taxPeriod),
+    currency: optionalText(b.currency),
+    notes: optionalText(b.notes),
+  })));
+
+hrOpsRouter.post('/statutory-filings/:id/prepare', ...run('hr.statutory.update', (c, ctx, b, p) =>
+  statutoryFilings.prepareStatutoryFiling(c, ctx, Number(p.id), {
+    dueDate: optionalText(b.dueDate),
+    filingNo: optionalText(b.filingNo),
+    notes: optionalText(b.notes),
+  })));
+
+hrOpsRouter.post('/statutory-filings/:id/submit', ...run('hr.statutory.update', (c, ctx, b, p) =>
+  statutoryFilings.submitStatutoryFiling(c, ctx, Number(p.id), {
+    filingNo: optionalText(b.filingNo),
+    notes: optionalText(b.notes),
+  })));
+
+hrOpsRouter.post('/statutory-filings/:id/accept', ...run('hr.statutory.approve', (c, ctx, b, p) =>
+  statutoryFilings.acceptStatutoryFiling(c, ctx, Number(p.id), {
+    filingNo: optionalText(b.filingNo),
+    notes: optionalText(b.notes),
+  })));
+
+hrOpsRouter.post('/statutory-filings/:id/pay', ...run('hr.statutory.update', (c, ctx, b, p) =>
+  statutoryFilings.recordStatutoryPayment(c, ctx, Number(p.id), {
+    paymentDate: optionalText(b.paymentDate),
+    paymentReference: optionalText(b.paymentReference),
+    amount: b.amount != null && b.amount !== '' ? Number(b.amount) : null,
+    notes: optionalText(b.notes),
+  })));
+
+hrOpsRouter.post('/statutory-filings/:id/reconcile', ...run('hr.statutory.update', (c, ctx, b, p) =>
+  statutoryFilings.reconcileStatutoryFiling(c, ctx, Number(p.id), {
+    reconciledAmount: Number(b.reconciledAmount),
+    notes: optionalText(b.notes),
+    evidenceDocumentId: b.evidenceDocumentId != null && b.evidenceDocumentId !== '' ? Number(b.evidenceDocumentId) : null,
+  })));
+
+hrOpsRouter.post('/statutory-filings/:id/cancel', ...run('hr.statutory.approve', (c, ctx, b, p) =>
+  statutoryFilings.cancelStatutoryFiling(c, ctx, Number(p.id), { reason: String(b.reason ?? '') })));

@@ -98,18 +98,26 @@ interface PayeBand {
 function payeBands(cfg: StatutoryConfig): PayeBand[] {
   const rates = Array.isArray(cfg.rates) ? cfg.rates : [];
   const thresholds = Array.isArray(cfg.thresholds) ? cfg.thresholds : [];
+  // Parallel form wins when the two halves are declared separately: thresholds
+  // carry min/max and rates carry the percentage. This is checked first because
+  // a threshold-aligned rates array also carries a `rate` key, so the
+  // band-object test below would otherwise claim it and silently charge every
+  // shilling at the last band's rate.
+  if (thresholds.length) {
+    const out: PayeBand[] = [];
+    for (let i = 0; i < thresholds.length; i++) {
+      const e = thresholds[i] as Record<string, unknown>;
+      const r = (rates[i] ?? {}) as Record<string, unknown>;
+      out.push({ min: Number(e.min ?? 0), max: e.max != null ? Number(e.max) : null, rate: Number(r.rate ?? 0) });
+    }
+    return out.sort((a, b) => a.min - b.min);
+  }
   if (rates.length && rates[0] && typeof rates[0] === 'object' && 'rate' in (rates[0] as object)) {
     return (rates as Array<Record<string, unknown>>)
       .map((b) => ({ min: Number(b.min ?? 0), max: b.max != null ? Number(b.max) : null, rate: Number(b.rate ?? 0) }))
       .sort((a, b) => a.min - b.min);
   }
-  const out: PayeBand[] = [];
-  for (let i = 0; i < thresholds.length; i++) {
-    const e = thresholds[i] as Record<string, unknown>;
-    const r = (rates[i] ?? {}) as Record<string, unknown>;
-    out.push({ min: Number(e.min ?? 0), max: e.max != null ? Number(e.max) : null, rate: Number(r.rate ?? 0) });
-  }
-  return out.sort((a, b) => a.min - b.min);
+  return [];
 }
 
 /** Progressive monthly income tax from versioned bands (e.g. Uganda PAYE). */
@@ -164,6 +172,25 @@ export function computeNssf(gross: number, cfg: StatutoryConfig): NssfResult {
 }
 
 /**
+ * Year and month of an effective or period date, read without a timezone
+ * round-trip. Payroll dates arrive from PostgreSQL as `YYYY-MM-DD` strings;
+ * running those through `new Date(...)` would reinterpret them in local time
+ * and, anywhere east of UTC, roll the month backwards (1 November reads as
+ * October in Kampala), which shifts a seasonal deduction into the wrong month.
+ */
+function monthOf(value: unknown): { year: number; month: number } | null {
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return { year: value.getUTCFullYear(), month: value.getUTCMonth() + 1 };
+  }
+  const match = /^(\d{4})-(\d{2})/.exec(String(value ?? ''));
+  if (!match) return null;
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return null;
+  return { year: Number(match[1]), month };
+}
+
+/**
  * Local service tax / flat statutory deduction.
  * Flat or percentage forms:
  *   limits: { monthly_amount: 5000, min_gross: 100000, apply_to_payroll: true }
@@ -190,13 +217,18 @@ export function computeLst(
   // supplies the payroll period, skip LST when the period does not overlap.
   const months = Array.isArray(limits.months) ? (limits.months as unknown[]).map(Number) : [];
   if (months.length && opts.periodStart && opts.periodEnd) {
-    const start = new Date(String(opts.periodStart) + 'T00:00:00');
-    const end = new Date(String(opts.periodEnd) + 'T00:00:00');
-    const first = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
-    const last = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
-    let overlap = false;
-    for (let d = new Date(first); d <= last && !overlap; d.setUTCMonth(d.getUTCMonth() + 1)) {
-      if (months.includes(d.getUTCMonth() + 1)) overlap = true;
+    const start = monthOf(opts.periodStart);
+    const end = monthOf(opts.periodEnd);
+    // An unreadable period is treated as "not supplied" rather than "outside
+    // the season": gating needs a known period, and silently zeroing a
+    // withholding because of a formatting surprise would understate what the
+    // employer owes the authority.
+    let overlap = !(start && end);
+    if (start && end) {
+      const lastIndex = end.year * 12 + (end.month - 1);
+      for (let index = start.year * 12 + (start.month - 1); index <= lastIndex && !overlap; index++) {
+        if (months.includes((index % 12) + 1)) overlap = true;
+      }
     }
     if (!overlap) return 0;
   }

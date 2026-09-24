@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, DocFormat, fmtDate, fmtMoney, fmtNum, openDocument } from '../api';
+import { api, fmtDate, fmtMoney, fmtNum, openDocument } from '../api';
 import { useAuth, can } from '../auth';
-import { useCompanyProfile } from '../company';
 import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, PageLoader, StaffPhoto } from '../components/ui';
 import { ConfirmDialog } from '../components/os';
-import { HrKpi, HrKpiGrid, HrPageHeader, HrTableEmpty, HrToolbar } from '../components/hrUi';
+import { HrEmptyState, HrKpi, HrKpiGrid, HrPageHeader, HrTableEmpty, HrToolbar } from '../components/hrUi';
 import RecruitmentFlow from './RecruitmentFlow';
 import OnboardingFlow from './OnboardingFlow';
 import WorkforcePlanning from './WorkforcePlanning';
@@ -13,6 +12,8 @@ import LeaveFlow from './LeaveFlow';
 import ContractFlow from './ContractFlow';
 import EmployeeIdentity from './EmployeeIdentity';
 import HcmOps from './HcmOps';
+import { PayrollCalendar, PayrollDesk, StatutoryCompliance } from './PayrollFlow';
+import MyPayroll from './MyPayroll';
 
 type Rec = Record<string, unknown>;
 
@@ -77,9 +78,13 @@ export default function HrFlow({ path }: { path: string }) {
   if (view === 'leave') return <LeaveDesk path={path} />;
   if (view === 'attendance') return <AttendanceDesk />;
   if (view === 'contracts') return <ContractFlow path={path} />;
+  if (view === 'payroll-calendar') return <PayrollCalendar />;
+  if (view === 'statutory-compliance') return <StatutoryCompliance />;
+  if (view === 'my-payroll') return <MyPayroll />;
   if (view === 'payrolls' && id === 'new') return <PayrollComposer />;
+  if (view === 'payrolls' && id === 'runs') return <PayrollList />;
   if (view === 'payrolls' && id) return <PayrollDesk id={Number(id)} />;
-  if (view === 'payrolls') return <PayrollList />;
+  if (view === 'payrolls') return <PayrollCommandCentre />;
   if (view === 'final-settlements' && id) return <FinalSettlementDesk id={Number(id)} />;
   if (view === 'final-settlements') return <FinalSettlementList />;
   if (view === 'off-cycle' && id === 'new') return <OffCycleComposer />;
@@ -814,7 +819,7 @@ function OffCycleDesk({ id }: { id: number }) {
         {String(p.status) === 'DRAFT' && can(user, 'hr.payrolls.submit') && (
           <button className="btn btn-primary" disabled={busy} onClick={() => act(`/api/ops/hr/off-cycle/${id}/submit`, 'Submitted for approval')}>Submit</button>
         )}
-        {['APPROVED', 'RELEASED'].includes(String(p.status)) && !p.glPosted && can(user, 'hr.payrolls.post') && (
+        {['APPROVED', 'RELEASED', 'PAID'].includes(String(p.status)) && !p.glPosted && can(user, 'hr.payrolls.post') && (
           <button className="btn btn-success" disabled={busy} onClick={() => act(`/api/ops/hr/off-cycle/${id}/post`, 'Posted to the ledger')}>Post to ledger</button>
         )}
       </div>
@@ -1825,6 +1830,229 @@ function AttendanceDesk() {
   );
 }
 
+type PayrollCentrePayload = {
+  companyId?: number;
+  asOf?: string;
+  current: Rec | null;
+  totals: Rec;
+  exceptions: Rec;
+  pendingApprovals: number;
+  payment: Rec | null;
+  statutory: { expected: Rec; filings: Rec[] };
+  workflow: Rec[];
+  periods: Rec[];
+  recentRuns: Rec[];
+};
+
+function wfTone(state: unknown): { fg: string; bg: string; bd: string } {
+  const s = String(state ?? 'PENDING');
+  if (s === 'DONE') return { fg: '#0F4A32', bg: '#E3F3EB', bd: '#B8DCCB' };
+  if (s === 'CURRENT') return { fg: '#1261A0', bg: '#E4F0FA', bd: '#B8D5EA' };
+  return { fg: 'var(--muted)', bg: 'var(--paper-2)', bd: 'var(--line)' };
+}
+
+function periodStatusTone(status: unknown): string {
+  const s = String(status ?? '');
+  if (s === 'OPEN') return 'badge-green';
+  if (s === 'LOCKED') return 'badge-amber';
+  if (s === 'CLOSED') return 'badge-neutral';
+  if (s === 'CANCELLED') return 'badge-red';
+  return 'badge-neutral';
+}
+
+function PayrollCommandCentre() {
+  const [centre, setCentre] = useState<PayrollCentrePayload | null>(null);
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    api<{ data: PayrollCentrePayload }>('/api/ops/hr/payrolls/command-centre')
+      .then((r) => setCentre(r.data))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Payroll command centre failed'));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  if (error && !centre) return <ErrorBanner error={error} />;
+  if (!centre) return <PageLoader variant="page" label="Opening payroll command centre..." />;
+  const current = centre.current;
+  const totals = centre.totals ?? {};
+  const exceptions = centre.exceptions ?? {};
+  const statutory = centre.statutory ?? { expected: {}, filings: [] };
+  const expected = statutory.expected ?? {};
+  const filings = statutory.filings ?? [];
+  const workflow = centre.workflow ?? [];
+  const periods = centre.periods ?? [];
+  const recentRuns = centre.recentRuns ?? [];
+  const currentStep = workflow.find((s) => s.state === 'CURRENT');
+  const payment = centre.payment;
+  const openExceptions = Number(exceptions.open ?? 0);
+  const blocking = Number(exceptions.blocking ?? 0);
+  const highRisk = Number(exceptions.highRisk ?? 0);
+  const warnings = Number(exceptions.warnings ?? 0);
+  const nssfTotal = Number(totals.employeeNssf ?? 0) + Number(totals.employerNssf ?? 0);
+  const pendingApprovals = Number(centre.pendingApprovals ?? 0);  return (
+    <div className="page">
+      <HrPageHeader
+        kicker="Payroll"
+        title="Command centre"
+        subtitle={current
+          ? `Run ${String(current.payrollNo ?? '')} - ${String(current.periodStart ?? '').slice(0, 10)} to ${String(current.periodEnd ?? '').slice(0, 10)}`
+          : 'No payroll run is open. Create a payroll to begin the period.'}
+        actions={
+          <>
+            <button className="btn" onClick={() => navigate('/people/payrolls/runs')}>All runs</button>
+            <button className="btn" onClick={() => navigate('/people/payroll-calendar')}>Payroll calendar</button>
+            <button className="btn btn-primary" onClick={() => navigate('/people/payrolls/new')}>New payroll</button>
+          </>
+        }
+      />
+      {error && <ErrorBanner error={error} />}
+      <HrKpiGrid>
+        <HrKpi label="Headcount" value={fmtNum(totals.headcount)} sub={current ? String(current.status ?? '') : 'No open run'} />
+        <HrKpi label="Gross payroll" value={fmtMoney(totals.gross)} sub={'Taxable ' + fmtMoney(totals.taxable)} accent="#1261A0" tint="rgba(18, 97, 160, 0.12)" />
+        <HrKpi label="Net payroll" value={fmtMoney(totals.net)} sub={'Deductions ' + fmtMoney(totals.deductions)} accent="#168A5B" tint="rgba(22, 138, 91, 0.12)" />
+        <HrKpi label="PAYE" value={fmtMoney(totals.paye)} sub={'LST ' + fmtMoney(totals.lst)} />
+        <HrKpi label="NSSF" value={fmtMoney(nssfTotal)} sub={'Employee ' + fmtMoney(totals.employeeNssf) + ' - Employer ' + fmtMoney(totals.employerNssf)} />
+        <HrKpi label="Employer cost" value={fmtMoney(totals.employerCost)} sub="Gross + employer NSSF + LST" accent="#B45309" tint="rgba(180, 83, 9, 0.12)" />
+      </HrKpiGrid>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 14, alignItems: 'start' }}>
+        <section className="card">
+          <div className="card-head">
+            <h3>Workflow</h3>
+            {current && <span className="muted">{String(currentStep?.label ?? current.status ?? '')}</span>}
+          </div>
+          {workflow.length === 0 ? (
+            <HrEmptyState icon="◇" title="No workflow yet" hint="Create a payroll run to start the validation, approval and payment workflow.">
+              <button className="btn btn-primary" onClick={() => navigate('/people/payrolls/new')}>New payroll</button>
+            </HrEmptyState>
+          ) : (
+            <div className="timeline">
+              {workflow.map((s) => {
+                const tone = wfTone(s.state);
+                return (
+                  <div className="timeline-item" key={String(s.status)}>
+                    <span className="timeline-dot" style={{ background: tone.fg }} />
+                    <div className="timeline-title">
+                      <span>{String(s.label ?? s.status)}</span>
+                      <span className="chip" style={{ gap: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700, color: tone.fg, background: tone.bg, borderColor: tone.bd }}>{String(s.state ?? 'PENDING')}</span>
+                    </div>
+                    <div className="timeline-meta">{String(s.status ?? '')}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+        <section className="card">
+          <div className="card-head">
+            <h3>Control panel</h3>
+            {current && <Badge value={String(current.status ?? '')} />}
+          </div>
+          <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+            <div className="kpi-card"><span className="kpi-label">Exceptions open</span><span className="kpi-value">{fmtNum(openExceptions)}</span></div>
+            <div className="kpi-card"><span className="kpi-label">Blocking</span><span className="kpi-value">{fmtNum(blocking)}</span></div>
+            <div className="kpi-card"><span className="kpi-label">High risk</span><span className="kpi-value">{fmtNum(highRisk)}</span></div>
+            <div className="kpi-card"><span className="kpi-label">Warnings</span><span className="kpi-value">{fmtNum(warnings)}</span></div>
+            <div className="kpi-card"><span className="kpi-label">Pending approvals</span><span className="kpi-value">{fmtNum(pendingApprovals)}</span></div>
+            <div className="kpi-card"><span className="kpi-label">Pay date</span><span className="kpi-value" style={{ fontSize: 16 }}>{current ? String(current.payDate ?? '').slice(0, 10) || '-' : '-'}</span></div>
+          </div>
+          <div className="flow-actions" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+            <button className="btn btn-sm" onClick={() => navigate('/people/exceptions')}>Exceptions centre</button>
+            <button className="btn btn-sm" onClick={() => navigate('/inbox')}>Approvals inbox</button>
+            {current && <button className="btn btn-sm" onClick={() => navigate('/people/payrolls/' + String(current.payrollId))}>Open run</button>}
+            {payment && <button className="btn btn-sm" onClick={() => navigate('/people/payments')}>Payment {String(payment.status ?? '')}</button>}
+          </div>
+        </section>
+      </div>      <section className="card">
+        <div className="card-head">
+          <h3>Statutory</h3>
+          <span className="muted">Expected liability and filing status</span>
+        </div>
+        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+          <div className="kpi-card"><span className="kpi-label">PAYE liability</span><span className="kpi-value">{fmtMoney(expected.paye)}</span></div>
+          <div className="kpi-card"><span className="kpi-label">Employee NSSF</span><span className="kpi-value">{fmtMoney(expected.employeeNssf)}</span></div>
+          <div className="kpi-card"><span className="kpi-label">Employer NSSF</span><span className="kpi-value">{fmtMoney(expected.employerNssf)}</span></div>
+        </div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Filing</th><th>Period</th><th className="cell-num">Gross</th><th className="cell-num">Employee</th><th className="cell-num">Employer</th><th>Due</th><th>Status</th></tr></thead>
+            <tbody>
+              {filings.map((f, i) => (
+                <tr key={String(f.filingNo ?? i)}>
+                  <td className="cell-mono">{String(f.filingNo ?? '-')}</td>
+                  <td>{String(f.periodStart ?? '').slice(0, 10)} - {String(f.periodEnd ?? '').slice(0, 10)}</td>
+                  <td className="cell-num">{fmtMoney(f.grossAmount)}</td>
+                  <td className="cell-num">{fmtMoney(f.employeeContribution)}</td>
+                  <td className="cell-num">{fmtMoney(f.employerContribution)}</td>
+                  <td>{String(f.dueDate ?? '').slice(0, 10) || '-'}</td>
+                  <td><Badge value={String(f.status ?? '')} /></td>
+                </tr>
+              ))}
+              {filings.length === 0 && (
+                <HrTableEmpty colSpan={7} title="No statutory filings" hint="Filings appear once a payroll run reaches the statutory stage." />
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="flow-actions" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+          <button className="btn btn-sm" onClick={() => navigate('/people/statutory-configs')}>Statutory configuration</button>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head">
+          <h3>Payroll calendar</h3>
+          <button className="btn btn-sm" onClick={() => navigate('/people/payroll-calendar')}>Open calendar</button>
+        </div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Period</th><th>Type</th><th>Pay date</th><th className="cell-num">Runs</th><th>Status</th></tr></thead>
+            <tbody>
+              {periods.map((per) => (
+                <tr key={String(per.id)} className="row-click" onClick={() => navigate('/people/payroll-calendar?period=' + String(per.id))}>
+                  <td>
+                    <span className="td-strong">{String(per.code ?? '-')}</span>
+                    <span className="cell-sub">{String(per.periodStart ?? '').slice(0, 10)} - {String(per.periodEnd ?? '').slice(0, 10)}</span>
+                  </td>
+                  <td>{String(per.periodType ?? 'NORMAL')} / {String(per.frequency ?? '')}</td>
+                  <td>{String(per.paymentDate ?? '').slice(0, 10) || '-'}</td>
+                  <td className="cell-num">{fmtNum(per.runCount)}</td>
+                  <td><span className={'badge ' + periodStatusTone(per.status)}>{String(per.status ?? '')}</span></td>
+                </tr>
+              ))}
+              {periods.length === 0 && (
+                <HrTableEmpty colSpan={5} title="No payroll periods" hint="Create a period on the payroll calendar to schedule a run." />
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head">
+          <h3>Recent runs</h3>
+          <button className="btn btn-sm" onClick={() => navigate('/people/payrolls/runs')}>All runs</button>
+        </div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Run</th><th>Period</th><th>Type</th><th className="cell-num">Gross</th><th className="cell-num">Net</th><th>GL</th><th>Status</th></tr></thead>
+            <tbody>
+              {recentRuns.map((r) => (
+                <tr key={String(r.id)} className="row-click" onClick={() => navigate('/people/payrolls/' + String(r.id))}>
+                  <td className="cell-mono">{String(r.payrollNo ?? '-')}</td>
+                  <td>{String(r.periodStart ?? '').slice(0, 10)} - {String(r.periodEnd ?? '').slice(0, 10)}</td>
+                  <td>{String(r.runType ?? 'NORMAL')}</td>
+                  <td className="cell-num">{fmtMoney(r.grossTotal)}</td>
+                  <td className="cell-num">{fmtMoney(r.netTotal)}</td>
+                  <td>{r.glPosted ? 'Posted' : 'Open'}</td>
+                  <td><Badge value={String(r.status ?? '')} /></td>
+                </tr>
+              ))}
+              {recentRuns.length === 0 && (
+                <HrTableEmpty colSpan={7} title="No payroll runs yet" hint="Create a payroll to calculate statutory deductions and release net pay." />
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
 function PayrollList() {
   const [rows, setRows] = useState<Rec[]>([]);
   const [error, setError] = useState('');
@@ -1884,7 +2112,7 @@ function PayrollList() {
   const paidCount = rows.filter((r) => String(r.status ?? '') === 'PAID').length;
   const queueCount = rows.filter((r) => ['SUBMITTED', 'APPROVED'].includes(String(r.status ?? ''))).length;
   const netThisMonth = rows
-    .filter((r) => String(r.periodStart ?? '').startsWith(monthPrefix) && ['APPROVED', 'RELEASED', 'PAID'].includes(String(r.status ?? '')))
+    .filter((r) => String(r.periodStart ?? '').startsWith(monthPrefix) && ['APPROVED', 'RELEASED', 'PAID', 'POSTED', 'CLOSED'].includes(String(r.status ?? '')))
     .reduce((sum, r) => sum + money(r.netTotal), 0);
   const latestScored = rows.find((r) => r.validationScore !== null && r.validationScore !== undefined);
 
@@ -1976,355 +2204,9 @@ function PayrollList() {
   );
 }
 
-function PayrollDesk({ id }: { id: number }) {
-  const { user } = useAuth();
-  const [doc, setDoc] = useState<{ payroll: Rec; items: Rec[]; exceptions: Rec[] } | null>(null);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [docBusy, setDocBusy] = useState('');
-  const load = useCallback(() => {
-    api<{ data: { payroll: Rec; items: Rec[]; exceptions: Rec[] } }>(`/api/ops/hr/payrolls/${id}`)
-      .then((r) => setDoc(r.data))
-      .catch((e) => setError(e instanceof Error ? e.message : 'Payroll failed'));
-  }, [id]);
-  useEffect(() => { load(); }, [load]);
-  if (error && !doc) return <ErrorBanner error={error} />;
-  if (!doc) return <PageLoader variant="page" label="Opening payroll…" />;
-  const p = doc.payroll;
-  const exceptions = (doc.exceptions as Rec[]) ?? [];
-  const openErrors = exceptions.filter((x) => x.severity === 'ERROR' && x.status === 'OPEN').length;
-  const act = async (path: string, ok: string) => {
-    setBusy(true); setError(''); setNotice('');
-    try {
-      const r = await api<{ data: Rec }>(path, { method: 'POST', body: '{}' });
-      setNotice(r.data.journalId ? `Posted journal #${r.data.journalId}` : ok);
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally { setBusy(false); }
-  };
-  const runValidate = async () => {
-    setBusy(true); setError(''); setNotice('');
-    try {
-      const r = await api<{ data: { validationScore: number; errors: number; warnings: number; ready: boolean } }>(`/api/ops/hr/payrolls/${id}/validate`, { method: 'POST', body: '{}' });
-      setNotice(`Validation ${r.data.ready ? 'passed' : 'blocked'}: ${r.data.validationScore}/100 (${r.data.errors} errors, ${r.data.warnings} warnings)`);
-      load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally { setBusy(false); }
-  };
-  const openPayslipDoc = async (slip: Rec, format: 'pdf' | 'print') => {
-    setDocBusy(String(slip.id) + format); setError('');
-    try {
-      await openDocument('payslip', slip.id, format, String(slip.payslipNo ?? 'payslip') + '.pdf');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally { setDocBusy(''); }
-  };
-  const openRegisterDoc = async (format: DocFormat) => {
-    setDocBusy('register' + format); setError('');
-    try {
-      await openDocument('payroll-register', id, format, `payroll_${String(p.payrollNo ?? id)}`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally { setDocBusy(''); }
-  };
-  const canPrintSlips = can(user, 'hr.payslips.view');
-  return (
-    <div className="page">
-      <header className="page-head">
-        <div>
-          <button className="btn btn-sm" onClick={() => navigate('/people/payrolls')}>Back</button>
-          <h1>Payroll <span className="cell-mono">{String(p.payrollNo)}</span></h1>
-          <p className="muted">{String(p.periodStart).slice(0, 10)} – {String(p.periodEnd).slice(0, 10)}</p>
-        </div>
-        <Badge value={p.status} />
-      </header>
-      {notice && <div className="alert alert-success">{notice}</div>}
-      {error && <ErrorBanner error={error} />}
-      <div className="kpi-grid">
-        <div className="kpi-card"><span className="kpi-label">Gross</span><span className="kpi-value">{fmtMoney(p.grossTotal)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Deductions</span><span className="kpi-value">{fmtMoney(p.deductionTotal)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Net</span><span className="kpi-value">{fmtMoney(p.netTotal)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">GL</span><span className="kpi-value">{p.glPosted ? 'Posted' : 'Open'}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Readiness</span><span className="kpi-value">{p.validationScore == null ? '-' : `${String(p.validationScore)}%`}</span></div>
-      </div>
-      <div className="flow-actions" style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-        {['DRAFT', 'SUBMITTED'].includes(String(p.status)) && can(user, 'hr.payrolls.update') && (
-          <button className="btn" disabled={busy} onClick={() => act(`/api/ops/hr/payrolls/${id}/calculate`, 'Recalculated')}>Recalculate</button>
-        )}
-        {['DRAFT', 'SUBMITTED'].includes(String(p.status)) && can(user, 'hr.payrolls.update') && (
-          <button className="btn" disabled={busy} onClick={runValidate}>Validate</button>
-        )}
-        {String(p.status) === 'DRAFT' && can(user, 'hr.payrolls.submit') && (
-          <button className="btn btn-primary" disabled={busy} onClick={() => act(`/api/ops/hr/payrolls/${id}/submit`, 'Submitted for approval')}>Submit</button>
-        )}
-        {['APPROVED', 'RELEASED'].includes(String(p.status)) && !p.glPosted && can(user, 'hr.payrolls.post') && (
-          <button className="btn btn-success" disabled={busy} onClick={() => act(`/api/ops/hr/payrolls/${id}/post`, 'Posted to the ledger')}>Post to ledger</button>
-        )}
-        {['APPROVED', 'RELEASED'].includes(String(p.status)) && can(user, 'hr.payrolls.update') && (
-          <button className="btn" disabled={busy} onClick={() => act(`/api/ops/hr/payrolls/${id}/payment-batch`, 'Payment batch created')}>Create pay batch</button>
-        )}
-        {['APPROVED', 'RELEASED', 'PAID'].includes(String(p.status)) && can(user, 'hr.payrolls.post') && (
-          <button className="btn" disabled={busy} onClick={() => act(`/api/ops/hr/payrolls/${id}/publish-payslips`, 'Payslips published')}>Publish slips</button>
-        )}
-        <button className="btn" onClick={() => navigate('/people/payments')}>Pay batches</button>
-        <button className="btn" onClick={() => navigate('/inbox')}>Approvals inbox</button>
-        <button className="btn" onClick={() => navigate('/finance/journals')}>Journals</button>
-      </div>
-      <section className="card">
-        <div className="card-head">
-  <h3>Slips</h3>
-  <div className="action-group">
-    <span className="muted">Export register:</span>
-    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('pdf')}>{docBusy === 'registerpdf' ? 'Saving…' : 'PDF'}</button>
-    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('xlsx')}>{docBusy === 'registerxlsx' ? 'Saving…' : 'Excel'}</button>
-    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('csv')}>{docBusy === 'registercsv' ? 'Saving…' : 'CSV'}</button>
-    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('json')}>{docBusy === 'registerjson' ? 'Saving…' : 'JSON'}</button>
-    <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openRegisterDoc('print')}>{docBusy === 'registerprint' ? 'Opening…' : 'Print'}</button>
-  </div>
-</div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Employee</th><th className="cell-num">Basic</th><th className="cell-num">Allow.</th><th className="cell-num">Gross</th><th className="cell-num">PAYE</th><th className="cell-num">NSSF</th><th className="cell-num">Net</th><th className="cell-num">OT</th><th className="cell-num">Prev.</th><th className="cell-num">Reimb.</th><th className="cell-num">Advance</th><th className="cell-num">Other</th><th className="cell-num">Paid</th><th className="cell-num">Balance</th>{canPrintSlips ? <th></th> : null}</tr></thead>
-            <tbody>
-              {doc.items.map((i) => (
-                <tr key={String(i.id)}>
-                  <td>{String(i.firstName)} {String(i.lastName)} <span className="cell-mono">{String(i.employeeNo)}</span></td>
-                  <td className="cell-num">{fmtMoney(i.basicPay)}</td>
-                  <td className="cell-num">{fmtMoney(i.allowances)}</td>
-                  <td className="cell-num">{fmtMoney(i.grossPay)}</td>
-                  <td className="cell-num">{fmtMoney(i.paye)}</td>
-                  <td className="cell-num">{fmtMoney(i.nssf)}</td>
-                  <td className="cell-num">{fmtMoney(i.netPay)}</td>
-                  <td className="cell-num">{fmtMoney(i.overtime)}</td>
-                  <td className="cell-num">{fmtMoney(i.previousBalance)}</td>
-                  <td className="cell-num">{fmtMoney(i.reimbursement)}</td>
-                  <td className="cell-num">{fmtMoney(i.advances)}</td>
-                  <td className="cell-num">{fmtMoney(i.otherDeductions)}</td>
-                  <td className="cell-num">{fmtMoney(i.amountPaid)}</td>
-                  <td className="cell-num">{fmtMoney(i.balance)}</td>
-                  {canPrintSlips && (
-                    <td>
-                      <div className="action-group">
-                        <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openPayslipDoc(i, 'print')}>{docBusy === String(i.id) + 'print' ? 'Printing…' : 'Print'}</button>
-                        <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => openPayslipDoc(i, 'pdf')}>{docBusy === String(i.id) + 'pdf' ? 'Saving…' : 'PDF'}</button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-              {doc.items.length > 0 && (
-                <tr>
-                  <td><strong>Total</strong></td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.basicPay) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.allowances) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.grossPay) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.paye) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.nssf) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.netPay) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.overtime) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.previousBalance) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.reimbursement) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.advances) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.otherDeductions) || 0), 0))}</td>
-                  <td className="cell-num">{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.amountPaid) || 0), 0))}</td>
-                  <td className="cell-num"><strong>{fmtMoney(doc.items.reduce((s, i) => s + (Number(i.balance) || 0), 0))}</strong></td>
-                  {canPrintSlips ? <td /> : null}
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section className="card">
-        <div className="card-head">
-          <h3>Exceptions</h3>
-          <span className="muted">{openErrors > 0 ? `${openErrors} open error${openErrors === 1 ? '' : 's'}` : 'No open errors'}</span>
-        </div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Employee</th><th>Type</th><th>Severity</th><th>Message</th></tr></thead>
-            <tbody>
-              {exceptions.map((x) => (
-                <tr key={String(x.id)}>
-                  <td>{x.firstName ? `${String(x.firstName)} ${String(x.lastName)}` : 'Run-level'} <span className="cell-mono">{String(x.employeeNo ?? '')}</span></td>
-                  <td className="cell-mono">{String(x.exceptionType)}</td>
-                  <td><span className={`badge ${x.severity === 'ERROR' ? 'badge-red' : x.severity === 'HIGH_RISK' ? 'badge-critical' : 'badge-amber'}`}>{String(x.severity).replace(/_/g, ' ')}</span></td>
-                  <td>{String(x.message)}</td>
-                </tr>
-              ))}
-              {exceptions.length === 0 && <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>No exceptions yet. Recalculate or validate this run to refresh.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      {Number(p.id) === AUG2026_REFERENCE_RUN_ID && <PayrollAugustReference />}
-    </div>
-  );
-}
-
-const AUG2026_REFERENCE_RUN_ID = 632;
-
-const AUG2026_NSSF = [
-  { label: 'Employee NSSF', rate: '5%' },
-  { label: 'Employer NSSF', rate: '10%' },
-];
-
-const AUG2026_PAYE = [
-  { band: 'UGX 0 to 335,000', tax: '0' },
-  { band: 'UGX 335,001 to 410,000', tax: '10% of the amount exceeding UGX 335,000' },
-  { band: 'UGX 410,001 to 485,000', tax: 'UGX 7,500 + 25% of the amount exceeding UGX 410,000' },
-  { band: 'UGX 485,001 to 10,000,000', tax: 'UGX 26,250 + 30% of the amount exceeding UGX 485,000' },
-  { band: 'Above UGX 10,000,000', tax: 'UGX 2,880,750 + 10% of the amount exceeding UGX 10,000,000' },
-];
-
-const AUG2026_LST = [
-  { band: '100,001 - 200,000', annual: 5000 },
-  { band: '200,001 - 300,000', annual: 10000 },
-  { band: '300,001 - 400,000', annual: 20000 },
-  { band: '400,001 - 500,000', annual: 30000 },
-  { band: '500,001 - 600,000', annual: 40000 },
-  { band: '600,001 - 700,000', annual: 60000 },
-  { band: '700,001 - 800,000', annual: 70000 },
-  { band: '800,001 - 900,000', annual: 80000 },
-  { band: '900,001 - 1,000,000', annual: 90000 },
-  { band: 'Above 1,000,000', annual: 100000 },
-];
-
-const AUG2026_SUSPENSIONS = [
-  { employee: 'Guillaume Niyonzima', reason: '10-day suspension (Sundays excluded)', salary: 1081923, workingDays: 26, dailyRate: 41612.42, daysAbsent: 10, deduction: 416124, adjusted: 665799 },
-  { employee: 'Tabu Derrick', reason: '12 days absent (prorated on calendar-day basis, consistent with new starters)', salary: 369616, workingDays: 31, dailyRate: 11923.1, daysAbsent: 12, deduction: 143077, adjusted: 226539 },
-];
-
-const AUG2026_STARTERS = ['Emile Niyungeko', 'Gloria Nakakawa', 'Racheal Tagulwa', 'Lorraine Ninihazwe', 'Shamirah Nantume', 'Viola Akatikwasa'].map((name) => ({
-  employee: name,
-  reason: 'Started 12 Aug 2026 (pro-rated first month)',
-  salary: 368846,
-  calendarDays: 31,
-  dailyRate: 11898.25806,
-  daysWorked: 20,
-  prorated: 237965,
-}));
-
-const refRate = (v: number) => v.toLocaleString('en-UG', { minimumFractionDigits: 2, maximumFractionDigits: 5 });
-
-function PayrollAugustReference() {
-  const company = useCompanyProfile();
-  return (
-    <>
-      <section className="card">
-        <div className="card-head"><h3>Statutory rates &amp; deductions - August 2026 reference</h3></div>
-        <div className="card-pad">
-          <p className="muted" style={{ marginTop: 0 }}>Rates and schedules applied to the August 2026 payroll for {company.name}.</p>
-          <p className="kpi-label">NSSF</p>
-          <div className="table-wrap">
-            <table className="data">
-              <thead><tr><th>Contribution</th><th>Rate</th></tr></thead>
-              <tbody>
-                {AUG2026_NSSF.map((r) => (
-                  <tr key={r.label}><td>{r.label}</td><td>{r.rate}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="kpi-label">Income tax (PAYE) - UGX</p>
-          <div className="table-wrap">
-            <table className="data">
-              <thead><tr><th>Monthly taxable income (UGX)</th><th>Tax</th></tr></thead>
-              <tbody>
-                {AUG2026_PAYE.map((r) => (
-                  <tr key={r.band}><td>{r.band}</td><td>{r.tax}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="kpi-label">Local service tax (LST)</p>
-          <div className="table-wrap">
-            <table className="data">
-              <thead><tr><th>Monthly gross income (UGX)</th><th className="cell-num">Annual LST (UGX)</th></tr></thead>
-              <tbody>
-                {AUG2026_LST.map((r) => (
-                  <tr key={r.band}><td>{r.band}</td><td className="cell-num">{fmtMoney(r.annual)}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="muted" style={{ marginBottom: 0 }}>Source: KCCA Local Service Tax (Assessment &amp; Payment) schedule, Local Governments Act Cap 243.</p>
-        </div>
-      </section>
-      <section className="card">
-        <div className="card-head"><h3>Unpaid leave / suspension deductions - August</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr>
-              <th>Employee</th>
-              <th>Reason</th>
-              <th className="cell-num">Full monthly basic</th>
-              <th className="cell-num">Working days (Aug 2026, excl. Sundays)</th>
-              <th className="cell-num">Daily rate</th>
-              <th className="cell-num">Days absent</th>
-              <th className="cell-num">Deduction</th>
-              <th className="cell-num">Adjusted basic</th>
-            </tr></thead>
-            <tbody>
-              {AUG2026_SUSPENSIONS.map((r) => (
-                <tr key={r.employee}>
-                  <td>{r.employee}</td>
-                  <td className="muted">{r.reason}</td>
-                  <td className="cell-num">{fmtMoney(r.salary)}</td>
-                  <td className="cell-num">{fmtNum(r.workingDays)}</td>
-                  <td className="cell-num">{refRate(r.dailyRate)}</td>
-                  <td className="cell-num">{fmtNum(r.daysAbsent)}</td>
-                  <td className="cell-num">{fmtMoney(r.deduction)}</td>
-                  <td className="cell-num"><strong>{fmtMoney(r.adjusted)}</strong></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="card-pad" style={{ paddingTop: 12 }}>
-          <p className="muted" style={{ margin: 0 }}>Daily rate = full monthly Basic Salary &divide; 26 working days in August 2026 (31 calendar days less 5 Sundays: Aug 2, 9, 16, 23, 30). Transport allowance is not prorated. The deduction reduces Basic Salary only, so Gross Pay, NSSF, PAYEE and LST recalculate automatically from the lower base.</p>
-        </div>
-      </section>
-      <section className="card">
-        <div className="card-head"><h3>New starters - pro-rated pay - August</h3></div>
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr>
-              <th>Employee</th>
-              <th>Reason</th>
-              <th className="cell-num">Full monthly basic</th>
-              <th className="cell-num">Calendar days (Aug 2026)</th>
-              <th className="cell-num">Daily rate</th>
-              <th className="cell-num">Days worked (from 12 Aug)</th>
-              <th className="cell-num">Prorated basic</th>
-            </tr></thead>
-            <tbody>
-              {AUG2026_STARTERS.map((r) => (
-                <tr key={r.employee}>
-                  <td>{r.employee}</td>
-                  <td className="muted">{r.reason}</td>
-                  <td className="cell-num">{fmtMoney(r.salary)}</td>
-                  <td className="cell-num">{fmtNum(r.calendarDays)}</td>
-                  <td className="cell-num">{refRate(r.dailyRate)}</td>
-                  <td className="cell-num">{fmtNum(r.daysWorked)}</td>
-                  <td className="cell-num"><strong>{fmtMoney(r.prorated)}</strong></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="card-pad" style={{ paddingTop: 12 }}>
-          <p className="muted" style={{ margin: 0 }}>Daily rate = full monthly Basic Salary &divide; 31 calendar days in August 2026 (pro-rated on a calendar-day basis, not working days, since these employees started mid-month). Days worked = 12 Aug to 31 Aug inclusive = 20 days. Transport allowance is not prorated, consistent with the unpaid-leave deductions above.</p>
-        </div>
-      </section>
-    </>
-  );
-}
-
 function PayrollComposer() {
+  const query = useHashQuery();
+  const periodId = Number(query.get('periodId') ?? 0) || 0;
   const today = new Date();
   const startDefault = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
   const end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
@@ -2338,7 +2220,7 @@ function PayrollComposer() {
     try {
       const r = await api<{ data: { payrollId: number } }>('/api/ops/hr/payrolls', {
         method: 'POST',
-        body: JSON.stringify({ periodStart, periodEnd }),
+        body: JSON.stringify(periodId ? { periodStart, periodEnd, payrollPeriodId: periodId } : { periodStart, periodEnd }),
       });
       navigate(`/people/payrolls/${r.data.payrollId}`);
     } catch (e) {
@@ -2351,7 +2233,7 @@ function PayrollComposer() {
         <div>
           <button className="btn btn-sm" onClick={() => navigate('/people/payrolls')}>Back</button>
           <h1>New payroll</h1>
-          <p className="muted">Calculates PAYE (Uganda bands) and 5% NSSF for every active employee.</p>
+          <p className="muted">Using statutory rules in force for the period.</p>
         </div>
       </header>
       {error && <ErrorBanner error={error} />}

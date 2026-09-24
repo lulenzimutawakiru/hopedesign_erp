@@ -14,6 +14,7 @@ import { loadModernPayrollInputs, prorateEmployment, prorateBasic, resolveCompon
 import * as identityLink from './identityLink.js';
 import { mintEmployeeIdentity } from './employeeIdentity.js';
 import * as payrollSettings from './payrollSettings.js';
+import { resolvePeriodForRun } from './payrollPeriods.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -27,20 +28,6 @@ function inclusiveDays(start: string, end: string): number {
   const e = Date.parse(`${end.slice(0, 10)}T00:00:00Z`);
   if (!Number.isFinite(s) || !Number.isFinite(e) || e < s) throw badRequest('Leave dates are invalid');
   return Math.floor((e - s) / 86400000) + 1;
-}
-
-/** Uganda monthly PAYE (threshold 235,000; bands 10 / 20 / 30 / 40). */
-export function ugandaPayeMonthly(taxable: number): number {
-  const t = Number(taxable) || 0;
-  if (t <= 235000) return 0;
-  if (t <= 335000) return round2(0.10 * (t - 235000));
-  if (t <= 410000) return round2(10000 + 0.20 * (t - 335000));
-  if (t <= 10000000) return round2(25000 + 0.30 * (t - 410000));
-  return round2(2902000 + 0.40 * (t - 10000000));
-}
-
-export function employeeNssf(gross: number): number {
-  return round2(Math.max(0, Number(gross) || 0) * 0.05);
 }
 
 function sumAllowances(raw: unknown): number {
@@ -1004,6 +991,7 @@ export async function createPayroll(
     deductAdvances?: boolean;
     paymentDate?: string;
     payrollGroupId?: number | null;
+    payrollPeriodId?: number | null;
   }
 ) {
   if (!ctx.companyId) throw badRequest('Company context required');
@@ -1051,11 +1039,18 @@ export async function createPayroll(
     );
     if (clash.rows.length) throw badRequest(`Overlaps payroll ${clash.rows[0].payroll_no}`);
   }
+  const periodLink = await resolvePeriodForRun(client, ctx, {
+    payrollPeriodId: input.payrollPeriodId,
+    periodStart: String(input.periodStart),
+    periodEnd: String(input.periodEnd),
+    payrollGroupId,
+    runType,
+  });
   const payrollNo = await nextDoc(client, ctx, await payrollSettings.getPayrollRunPrefix(client, ctx));
   const ins = await client.query(
     `INSERT INTO payrolls (company_id, tenant_id, payroll_no, period_start, period_end, status, created_by,
-        run_type, off_cycle_type, reason, employee_ids, extra_earnings, extra_deductions, deduct_loans, deduct_advances, payment_date, payroll_group_id)
-     VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+        run_type, off_cycle_type, reason, employee_ids, extra_earnings, extra_deductions, deduct_loans, deduct_advances, payment_date, payroll_group_id, payroll_period_id)
+     VALUES ($1,$2,$3,$4,$5,'DRAFT',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, payrollNo, input.periodStart, input.periodEnd, ctx.userId ?? null,
       runType, isOffCycle ? offCycleType : null, isOffCycle ? String(input.reason ?? '').trim() : null,
@@ -1065,6 +1060,7 @@ export async function createPayroll(
       isOffCycle ? input.deductAdvances !== false : true,
       isOffCycle && input.paymentDate ? String(input.paymentDate) : null,
       payrollGroupId,
+      periodLink ? periodLink.id : null,
     ]
   );
   const payrollId = Number(ins.rows[0].id);
@@ -1322,6 +1318,7 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
       nssf: { configId: nssfCfg.id, code: nssfCfg.code, version: nssfCfg.version, employee: nssf.employee, employer: nssf.employer, base: nssf.base, ceiling: nssf.ceiling },
       lst: lstCfg ? { configId: lstCfg.id, code: lstCfg.code, version: lstCfg.version, amount: lst } : null,
       taxableIncome,
+      chargeableIncome,
       earnings,
       deductions,
       benefits: { employee: benefitsEmployee, employer: benefitsEmployer },
@@ -1546,7 +1543,7 @@ export async function hrBoard(client: pg.PoolClient, ctx: Ctx) {
        (SELECT count(*) FROM leave_requests l JOIN employees e ON e.id = l.employee_id
          WHERE e.tenant_id = $1 AND e.company_id = $2 AND l.status = 'SUBMITTED')::int AS pending_leave,
        (SELECT COALESCE(sum(net_total),0) FROM payrolls
-         WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','RELEASED','PAID')
+          WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','RELEASED','PAID','POSTED','CLOSED')
            AND period_end >= (CURRENT_DATE - interval '45 days'))::numeric AS last_net,
        (SELECT COALESCE(sum(balance),0) FROM employee_loans ln
          JOIN employees e ON e.id = ln.employee_id

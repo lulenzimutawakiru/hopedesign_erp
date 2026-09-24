@@ -2566,8 +2566,8 @@ export async function myPayslips(client: pg.PoolClient, ctx: Ctx) {
   const res = await client.query(
     `SELECT i.*, p.payroll_no, p.period_start, p.period_end, p.status AS payroll_status
      FROM payroll_items i JOIN payrolls p ON p.id = i.payroll_id
-     WHERE i.employee_id = $1 AND p.status IN ('APPROVED','RELEASED','PAID')
-     ORDER BY p.period_end DESC LIMIT 24`,
+     WHERE i.employee_id = $1 AND p.status IN ('APPROVED','RELEASED','PAID','POSTED','CLOSED')
+      ORDER BY p.period_end DESC LIMIT 24`,
     [Number(emp.id)]
   );
   return toCamelRows(res.rows);
@@ -2678,10 +2678,10 @@ export async function hcmDashboard(client: pg.PoolClient, ctx: Ctx) {
          WHERE tenant_id = $1 AND company_id = $2 AND status = 'TERMINATED'
            AND alumni_date IS NOT NULL AND alumni_date >= (CURRENT_DATE - interval '90 days'))::int AS recent_exits,
        (SELECT COALESCE(sum(gross_total),0) FROM payrolls
-         WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','RELEASED','PAID')
+         WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','RELEASED','PAID','POSTED','CLOSED')
            AND period_end >= (CURRENT_DATE - interval '45 days'))::numeric AS recent_payroll_gross,
        (SELECT COALESCE(sum(net_total),0) FROM payrolls
-         WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','RELEASED','PAID')
+         WHERE tenant_id = $1 AND company_id = $2 AND status IN ('APPROVED','RELEASED','PAID','POSTED','CLOSED')
            AND period_end >= (CURRENT_DATE - interval '45 days'))::numeric AS recent_payroll_net`,
     [ctx.tenantId, ctx.companyId]
   );

@@ -61,7 +61,7 @@ describe('HR and payroll', () => {
 
     const after = await api.get(`/api/ops/hr/payrolls/${payrollId}`).set(auth(admin));
     expect(after.body.data.payroll.glPosted).toBe(true);
-    expect(after.body.data.payroll.status).toBe('RELEASED');
+    expect(after.body.data.payroll.status).toBe('POSTED');
 
     const loanRow = await db(`SELECT balance, status FROM employee_loans WHERE id = $1`, [loan.body.data.loanId]);
     expect(Number(loanRow.rows[0].balance)).toBe(300000);
@@ -160,7 +160,7 @@ describe('HR and payroll', () => {
 
     const after = await api.get(`/api/ops/hr/off-cycle/${payrollId}`).set(auth(admin));
     expect(after.body.data.payroll.glPosted).toBe(true);
-    expect(after.body.data.payroll.status).toBe('RELEASED');
+    expect(after.body.data.payroll.status).toBe('POSTED');
 
     // Loan balance reduces only after the run posts.
     const loanRow = await db(`SELECT balance, status FROM employee_loans WHERE id = $1`, [loan.body.data.loanId]);
