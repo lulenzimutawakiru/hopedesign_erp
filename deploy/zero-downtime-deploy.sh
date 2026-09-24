@@ -89,6 +89,36 @@ trap cleanup EXIT
 
 compose=(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
 
+# The Caddyfile reaches the container through a bind-mounted *file*
+# (docker-compose.prod.yml: ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro). Docker
+# resolves that mount to an inode when the container is created, and `git merge`
+# writes a new file and renames it over the old one. The container therefore
+# keeps reading the PRE-merge Caddyfile, and `caddy reload` cheerfully reloads
+# that stale config - so a Caddyfile change can look deployed while never
+# reaching production. Compare the two hashes and recreate the container when
+# they diverge, which re-resolves the mount to the file actually on disk.
+caddyfile_stale() {
+  local host_hash container_hash
+  host_hash="$(sha256sum "$APP_DIR/deploy/Caddyfile" 2>/dev/null | cut -d' ' -f1)"
+  container_hash="$(docker exec "$CADDY_CONTAINER" sha256sum /etc/caddy/Caddyfile 2>/dev/null | cut -d' ' -f1)"
+  [[ -n "$host_hash" && -n "$container_hash" && "$host_hash" != "$container_hash" ]]
+}
+sync_caddy_config() {
+  docker inspect -f '{{.Id}}' "$CADDY_CONTAINER" >/dev/null 2>&1 || return 0
+  caddyfile_stale || return 0
+  log "      Caddy is reading a stale Caddyfile (bind-mounted file kept its old inode through git merge); recreating so the new config loads"
+  "${compose[@]}" up -d --no-deps --force-recreate caddy >>"$LOG_DIR/deploy.log" 2>&1 || {
+    log "ERROR: force-recreate of caddy failed"
+    return 1
+  }
+  for _ in $(seq 1 30); do
+    container_healthy "$CADDY_CONTAINER" && return 0
+    sleep 2
+  done
+  log "ERROR: caddy did not become healthy after recreation"
+  return 1
+}
+
 [[ -f "$ENV_FILE" ]] || { echo "ERROR: $ENV_FILE is missing" >&2; exit 1; }
 
 OLD_COMMIT="$(git rev-parse HEAD)"
@@ -234,6 +264,10 @@ fi
 
 # 8) Atomic flip + public health gate.
 log "[8/8] flipping Caddy to api-$IDLE"
+if ! sync_caddy_config; then
+  log "ABORT: Caddy is still reading a stale Caddyfile; the config on disk is not in front of live traffic. Active color left at $ACTIVE."
+  exit 1
+fi
 if ! flip_to "$IDLE"; then
   log "ABORT: flip failed; active color restored to $ACTIVE"
   exit 1

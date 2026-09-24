@@ -131,6 +131,21 @@ if [[ -n "$(docker inspect -f '{{.Id}}' "$CADDY_CONTAINER" 2>/dev/null)" ]]; the
     sleep 10
   fi
 fi
+# 1c) Stale-config guard. Same hazard as the deploy script: ./deploy/Caddyfile is
+#     bind-mounted as a *file*, so docker pins it to the inode that existed when the
+#     container was created. `git merge` renames a fresh file over that path, which
+#     leaves the container serving - and reloading - the pre-merge config. Recreate
+#     the container when the hashes diverge, or a Caddyfile fix is deployed but
+#     never applied.
+if [[ -n "$(docker inspect -f '{{.Id}}' "$CADDY_CONTAINER" 2>/dev/null)" ]]; then
+  host_caddy_hash="$(sha256sum "$APP_DIR/deploy/Caddyfile" 2>/dev/null | cut -d' ' -f1)"
+  live_caddy_hash="$(docker exec "$CADDY_CONTAINER" sha256sum /etc/caddy/Caddyfile 2>/dev/null | cut -d' ' -f1)"
+  if [[ -n "$host_caddy_hash" && -n "$live_caddy_hash" && "$host_caddy_hash" != "$live_caddy_hash" ]]; then
+    log "WARN: $CADDY_CONTAINER is reading a stale Caddyfile (host=$host_caddy_hash live=$live_caddy_hash) - force-recreating to load the config on disk"
+    "${compose[@]}" up -d --no-deps --force-recreate caddy >> "$LOG_FILE" 2>&1 || true
+    sleep 10
+  fi
+fi
 
 # 2) Evaluate the two API colors.
 a_status="$(status_of hopedesign-erp-api-a)"
