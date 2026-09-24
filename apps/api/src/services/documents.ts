@@ -2459,6 +2459,46 @@ function wrapHard(text: string, size: number, bold: boolean, maxWidth: number): 
   return out.length ? out : [''];
 }
 
+/** Collapse a date range to a compact form, e.g. "01 Sep 2026 to 30 Sep 2026" -> "01 Sep - 30 Sep 2026". */
+function compactRange(text: string): string {
+  const t = String(text ?? '').trim();
+  const m = t.match(/^(.+?)\s+(?:to|through|until|\u2013|\u2014|-)\s+(.+)$/i);
+  if (!m) return t;
+  const from = m[1].trim();
+  const to = m[2].trim();
+  const fd = from.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+  const td = to.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+  if (fd && td) {
+    if (fd[2].toLowerCase() === td[2].toLowerCase() && fd[3] === td[3]) return fd[1] + ' \u2013 ' + td[1] + ' ' + td[2] + ' ' + td[3];
+    if (fd[3] === td[3]) return fd[1] + ' ' + fd[2] + ' \u2013 ' + td[1] + ' ' + td[2] + ' ' + td[3];
+  }
+  return from + ' \u2013 ' + to;
+}
+
+/** Draw one line, shrinking to `floor` then ellipsizing, so a value can never leave its column. */
+function fitLine(
+  doc: PdfDoc,
+  text: string,
+  x: number,
+  y: number,
+  size: number,
+  style: PdfTextStyle,
+  maxWidth: number,
+  floor = 6
+): void {
+  const bold = style.bold ?? false;
+  let s = size;
+  while (s > floor && textWidth(text, s, bold) > maxWidth) s -= 0.25;
+  let value = text;
+  if (textWidth(value, s, bold) > maxWidth) {
+    const room = maxWidth - textWidth('\u2026', s, bold);
+    let cut = value.length;
+    while (cut > 1 && textWidth(value.slice(0, cut), s, bold) > room) cut -= 1;
+    value = value.slice(0, cut).replace(/[\s,;:.\u00b7-]+$/, '') + '\u2026';
+  }
+  doc.rawText(value, x, y, s, { ...style, maxWidth });
+}
+
 function drawParties(doc: PdfDoc, parties: DocParty[], brand: DocBrand, photoName?: string | null, photoCaption?: string): void {
   const list = parties.filter((p) => p.name);
   if (!list.length && !photoName) return;
@@ -3966,7 +4006,7 @@ function htmlPayslipBody(data: DocData): string {
   const bank = htmlEsc(payslipFact(data, 'Bank'));
   const tin = htmlEsc(payslipFact(data, 'TIN'));
   const nssf = htmlEsc(payslipFact(data, 'NSSF No'));
-  const period = htmlEsc(payslipFact(data, 'Period'));
+  const period = htmlEsc(compactRange(payslipFact(data, 'Period')));
   const row = (it: Record<string, unknown>) => `<tr><td>${htmlEsc(it.component)}</td><td>${htmlEsc(it.detail ?? '')}</td><td class="amt">${htmlEsc(it.amount)}</td></tr>`;
   const table = (title: string, kind: string) => {
     const items = payslipLines(data, kind);
@@ -3982,10 +4022,12 @@ function htmlPayslipBody(data: DocData): string {
     .who .k { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
     .who .n { font-size: 20px; font-weight: 750; margin: 4px 0 8px; }
     .who .m { font-size: 12px; line-height: 1.45; color: #526072; }
+    .who .p { margin-top: 9px; padding-top: 8px; border-top: 1px solid #eef1f4; font-size: 12px; color: #526072; }
+    .who .p .k2 { display: inline-block; min-width: 64px; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
     .net { width: 220px; background: var(--navy); color: #fff; padding: 14px 16px; }
     .net .k { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
     .net .v { font-size: 20px; font-weight: 750; margin-top: 8px; }
-    .net .s { margin-top: 8px; font-size: 12px; opacity: .9; }
+    .net .s { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.25); font-size: 12px; opacity: .92; }
     .cols { display: flex; gap: 16px; margin-top: 16px; }
     .cols section { flex: 1; }
     .cols h3 { margin: 0; background: var(--navy); color: #fff; font-size: 11px; letter-spacing: .08em; padding: 8px 10px; }
@@ -4003,7 +4045,7 @@ function htmlPayslipBody(data: DocData): string {
   </style>
   <div class="slip">
     <div class="slip-top">
-      <div class="who"><div class="k">Employee</div><div class="n">${name}</div><div class="m">${lines}${period ? `<div>${period}</div>` : ''}</div></div>
+      <div class="who"><div class="k">Employee</div><div class="n">${name}</div><div class="m">${lines}</div>${period ? `<div class="p"><span class="k2">Period</span>${period}</div>` : ''}</div>
       <div class="net"><div class="k">Net pay</div><div class="v">${net}</div>${payDate ? `<div class="s">Pay date ${payDate}</div>` : ''}</div>
     </div>
     <div class="band">Earnings and deductions</div>
@@ -4061,17 +4103,20 @@ async function renderPayslipPdf(data: DocData, opts: DocumentRenderOpts): Promis
   y -= 2;
   doc.rect(MARGIN, y - metaH, W, metaH, BRAND.headerFill);
   const meta = [
-    ["PERIOD", period],
+    ["PERIOD", compactRange(period)],
     ["PAY DATE", payDate],
     ["PAYROLL", payrollNo],
     ["CURRENCY", payslipFact(data, "Currency")],
   ];
-  const slot = W / meta.length;
+  const weights = [1.5, 1.0, 0.9, 0.6];
+  const weightSum = weights.reduce((a, b) => a + b, 0);
   meta.forEach(([lab, val], i) => {
-    const x = MARGIN + 10 + i * slot;
-    if (i > 0) doc.line(MARGIN + i * slot, y - 5, MARGIN + i * slot, y - metaH + 5, BRAND.line, 0.4);
-    doc.rawText(lab, x, y - 11, 5.8, { bold: true, color: brand.teal, maxWidth: slot - 18 });
-    doc.rawText(val || "—", x, y - 23, 8, { bold: true, color: brand.navy, maxWidth: slot - 18 });
+    const col = (weights[i] / weightSum) * W;
+    const mx = MARGIN + (weights.slice(0, i).reduce((a, b) => a + b, 0) / weightSum) * W;
+    const x = mx + 12;
+    if (i > 0) doc.line(mx, y - 5, mx, y - metaH + 5, BRAND.line, 0.4);
+    doc.rawText(lab, x, y - 12, 5.8, { bold: true, color: brand.teal, maxWidth: col - 24 });
+    fitLine(doc, val || "—", x, y - 24, 8, { bold: true, color: brand.navy }, col - 24, 6.4);
   });
   y -= metaH + 12;
 
