@@ -466,6 +466,7 @@ export class PdfDoc {
   private pageIndex = 0;
   private meta: PdfDocMetadata = {};
   private newPageHandler: (() => void) | null = null;
+  private noBreak = false;
   private images: PdfImage[] = [];
   private imageSeq = 0;
 
@@ -496,6 +497,15 @@ export class PdfDoc {
     this.newPageHandler = fn;
   }
 
+  /**
+   * Suppress automatic and explicit page breaks while this is on. The payslip renderer
+   * measures its whole tail up front and pins it into the space it reserved, so a break
+   * inside that tail could only ever produce a near-empty second page.
+   */
+  setNoBreak(v: boolean): void {
+    this.noBreak = v;
+  }
+
   get cursorY(): number {
     return this.y;
   }
@@ -509,6 +519,7 @@ export class PdfDoc {
   }
 
   newPage(): void {
+    if (this.noBreak) return;
     this.pages.push([]);
     this.pageIndex += 1;
     this.y = this.pageH - MARGIN;

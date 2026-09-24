@@ -2584,6 +2584,155 @@ function drawTotals(doc: PdfDoc, totals: Array<[string, string]>, brand: DocBran
   doc.cursorY = top - h - 8;
 }
 
+interface PaySlipGridLayout {
+  colGap: number;
+  colW: number;
+  bandH: number;
+  headH: number;
+  pad: number;
+  footSize: number;
+  lineStep: number;
+  footW: number;
+  footLines: string[];
+  rowH: number;
+  left: Array<[string, string]>;
+  right: Array<[string, string]>;
+  colBody: number;
+  height: number;
+}
+
+/**
+ * Lay out the compact two-column payslip footer: the net-pay calculation on the left
+ * and the PAYE brackets applied on the right. Side-by-side columns are what keep a
+ * full statement on one page without shrinking any type.
+ *
+ * `maxH` is the exact height the caller has reserved, so the grid can never push the
+ * terms, signature and authenticity blocks below it onto a second page. Rows only fold
+ * when a statement is long enough that it cannot fit even at the tightest row height.
+ * Returns null when there is nothing worth drawing.
+ */
+function paySlipGridLayout(data: DocData, maxH: number): PaySlipGridLayout | null {
+  const left0 = (data.payBreakdown ?? []).filter((r) => r && String(r[0] ?? '').trim());
+  const right0 = (data.payeBrackets?.bands ?? []).filter((b) => b && String(b[0] ?? '').trim());
+  const note = String(data.payeBrackets?.note ?? '').trim();
+  if (!left0.length && !right0.length && !note) return null;
+
+  const colGap = 12;
+  const colW = (TABLE_W - colGap) / 2;
+  const bandH = 16;
+  const headH = 11;
+  const pad = 7;
+  const footSize = 6.2;
+  const lineStep = footSize * 1.42;
+  const footW = colW - 16;
+  const footLines = note ? wrapHard(note, footSize, false, footW) : [];
+  const footBlock = footLines.length ? footLines.length * lineStep + 5 : 0;
+
+  const MIN_ROW = 8.5;
+  // The columns may use whatever the caller reserved, less the 6 pt the drawer leaves
+  // under them, so the height returned by this function is honoured to the point.
+  const body = maxH - (bandH + 5 + headH + pad + 6);
+  if (body < MIN_ROW) return null;
+
+  // Both columns share one row height so the two tables line up across the page.
+  const fold = (list: Array<[string, string]>, max: number): Array<[string, string]> =>
+    list.length <= max
+      ? list
+      : [...list.slice(0, Math.max(0, max - 1)), [String(list.length - (max - 1)) + ' further lines', ''] as [string, string]];
+
+  // The rate table carries the statutory note under it, so it has less room per row. When
+  // the note cannot fit at all it is dropped rather than pushing the grid off the page.
+  const noteRoom = body - Math.max(MIN_ROW, right0.length * MIN_ROW);
+  const keepNote = !left0.length && !right0.length ? footBlock > 0 : footBlock <= noteRoom;
+  const foot = keepNote ? footLines : [];
+  const footUse = keepNote ? footBlock : 0;
+
+  const fits = (lh: Array<[string, string]>, rh: Array<[string, string]>, h: number): boolean =>
+    lh.length * h <= body && rh.length * h + footUse <= body;
+
+  let left = left0;
+  let right = right0;
+  let rowH = 15;
+  while (rowH > 12 && !fits(left, right, rowH)) rowH -= 1;
+  if (!fits(left, right, rowH)) {
+    left = fold(left, Math.max(1, Math.floor(body / MIN_ROW)));
+    right = fold(right, Math.max(1, Math.floor((body - footUse) / MIN_ROW)));
+    rowH = 12;
+    while (rowH > MIN_ROW && !fits(left, right, rowH)) rowH -= 0.5;
+  }
+  if (!fits(left, right, rowH)) return null;
+
+  const colBody = Math.max(left.length * rowH, right.length * rowH + footUse);
+  const height = bandH + 5 + headH + colBody + pad + 6;
+  return { colGap, colW, bandH, headH, pad, footSize, lineStep, footW, footLines: foot, rowH, left, right, colBody, height };
+}
+
+/**
+ * Draw the summary grid and return the height it consumed, or 0 when there is nothing
+ * to draw. `maxH` is the height the caller reserved, so this never overflows the page.
+ */
+function drawPaySlipSummaryGrid(doc: PdfDoc, data: DocData, brand: DocBrand, maxH: number): number {
+  const grid = paySlipGridLayout(data, maxH);
+  if (!grid) return 0;
+  const { colGap, colW, bandH, headH, footSize, lineStep, footW, footLines, rowH, left, right } = grid;
+  const showLeft = left.length > 0;
+  const showRight = right.length > 0 || footLines.length > 0;
+  if (!showLeft && !showRight) return 0;
+
+  const top = doc.cursorY;
+  const rowsTop = top - bandH - 5;
+
+  const drawColumn = (
+    x: number,
+    label: string,
+    head: [string, string],
+    list: Array<[string, string]>,
+    foot: string[]
+  ): void => {
+    doc.rect(x, top - bandH, colW, bandH, brand.navy);
+    doc.rect(x, top - bandH, 2.6, bandH, brand.teal);
+    doc.rawText(label.toUpperCase(), x + 9, top - bandH / 2 + 2.4, 6.6, {
+      bold: true,
+      color: BRAND.white,
+      maxWidth: colW - 18,
+    });
+    doc.rect(x, rowsTop - headH, colW, headH, BRAND.headerFill);
+    doc.rawText(head[0], x + 8, rowsTop - 7.6, 5.3, { bold: true, color: brand.teal, maxWidth: colW * 0.62 });
+    doc.rawText(head[1], x + 6, rowsTop - 7.6, 5.3, {
+      bold: true,
+      color: brand.teal,
+      align: 'right',
+      maxWidth: colW - 12,
+    });
+
+    list.forEach(([name, value], i) => {
+      const bottom = rowsTop - headH - (i + 1) * rowH;
+      const textY = bottom + Math.max(2.4, (rowH - 7.2) / 2);
+      doc.line(x + 8, bottom, x + colW - 8, bottom, LINE, 0.3);
+      if (i === list.length - 1 && list.length > 1) {
+        doc.rect(x, bottom, colW, rowH, brand.navy);
+        doc.rawText(name, x + 8, textY, 7.2, { bold: true, color: BRAND.white, maxWidth: colW * 0.62 });
+        doc.rawText(value, x + 6, textY, 7.8, { bold: true, color: BRAND.white, align: 'right', maxWidth: colW - 12 });
+      } else {
+        if (i % 2 === 1) doc.rect(x, bottom, colW, rowH, BRAND.zebra);
+        doc.rawText(name, x + 8, textY, 7.2, { color: BRAND.ink, maxWidth: colW * 0.62 });
+        doc.rawText(value, x + 6, textY, 7.2, { bold: true, color: BRAND.ink, align: 'right', maxWidth: colW - 12 });
+      }
+    });
+
+    let fy = rowsTop - headH - list.length * rowH - 5;
+    for (const ln of foot) {
+      doc.rawText(ln, x + 8, fy, footSize, { color: GRAY, maxWidth: footW });
+      fy -= lineStep;
+    }
+  };
+
+  if (showLeft) drawColumn(MARGIN, 'Net pay calculation', ['DESCRIPTION', 'AMOUNT'], left, []);
+  if (showRight) drawColumn(MARGIN + colW + colGap, 'PAYE brackets applied', ['MONTHLY TAXABLE INCOME', 'RATE'], right, footLines);
+
+  doc.cursorY = top - grid.height;
+  return grid.height;
+}
 function drawPaySlipExtras(doc: PdfDoc, data: DocData, brand: DocBrand): void {
   const breakdown = data.payBreakdown ?? [];
   const brackets = data.payeBrackets;
@@ -2653,7 +2802,76 @@ function drawPaySlipExtras(doc: PdfDoc, data: DocData, brand: DocBrand): void {
   }
 }
 
-async function drawAuthenticityBlock(doc: PdfDoc, opts: DocumentRenderOpts, brand: DocBrand): Promise<void> {
+/**
+ * Height the "Terms and notes" block will consume, measured without drawing it. Mirrors
+ * drawContractNotices line for line so the payslip tail can reserve exactly this much.
+ */
+function contractNoticesHeight(notes: string[]): number {
+  let h = 0;
+  for (const note of notes) {
+    h += 23 + wrapHard(note, 7.6, false, TABLE_W - 20).length * 7.6 * 1.42 + 14 + 5;
+  }
+  return h;
+}
+
+/**
+ * Lay out the whole payslip tail - summary grid, terms, signatures and the authenticity
+ * panel - as one pinned block.
+ *
+ * A payslip is a one-page document, so the tail is measured before anything is drawn and
+ * the summary grid is given exactly the room left over by the blocks with fixed heights.
+ * Breaks are suppressed for the duration so the tail can never spill onto a second page.
+ */
+async function drawPayslipTail(
+  doc: PdfDoc,
+  data: DocData,
+  brand: DocBrand,
+  opts: DocumentRenderOpts,
+  auth: boolean,
+  floor: number,
+): Promise<void> {
+  const notes = (data.notes ?? []).filter((n) => n && String(n).trim());
+  const noticesH = contractNoticesHeight(notes);
+  const sigH = 23 + 54;
+  const authH = auth ? 4 + authBlockHeight(opts) + 6 : 0;
+
+  const top = doc.cursorY;
+  const gridMax = Math.max(0, top - floor - noticesH - sigH - authH);
+
+  doc.setNoBreak(true);
+  try {
+    drawPaySlipSummaryGrid(doc, data, brand, gridMax);
+    drawContractNotices(doc, notes, brand, 'Terms and notes');
+    await drawContractSignatures(doc, data.signatures ?? [], brand);
+    if (auth) {
+      doc.cursorY -= 4;
+      await drawAuthenticityBlock(doc, opts, brand);
+    }
+  } finally {
+    doc.setNoBreak(false);
+  }
+}
+
+interface AuthBlockLayout {
+  pad: number;
+  qrBox: number;
+  headerH: number;
+  tx: number;
+  tw: number;
+  labelSize: number;
+  noteSize: number;
+  lineH: (size: number) => number;
+  rows: Array<{ label: string; lines: string[]; size: number; color: Rgb }>;
+  noteLines: string[];
+  boxH: number;
+}
+
+/**
+ * Measure the authenticity panel without drawing it. The payslip renderer reserves
+ * exactly this much vertical space up front, so the panel can never end up alone on
+ * page 2 while the statement it belongs to sits on page 1.
+ */
+function authBlockLayout(opts: DocumentRenderOpts): AuthBlockLayout {
   const pad = 10;
   const qrBox = 60;
   const gap = 14;
@@ -2675,19 +2893,47 @@ async function drawAuthenticityBlock(doc: PdfDoc, opts: DocumentRenderOpts, bran
   const noteSize = 6.3;
   const lineH = (size: number): number => size * 1.36;
 
+  // Only rows that actually have a value are laid out. A payslip issued without a
+  // verification token used to print an empty 'Document token' row, spending a whole
+  // label/value pair of vertical space on a page that has none to spare.
   const rows: Array<{ label: string; lines: string[]; size: number; color: Rgb }> = [
     { label: 'Issued by', lines: wrapHard(issued, valueSize, false, tw), size: valueSize, color: GRAY },
-    { label: 'SHA-256 fingerprint', lines: wrapHard(opts.fingerprint ?? '', monoSize, false, tw), size: monoSize, color: INK },
-    { label: 'Document token', lines: wrapHard(tokenShort, monoSize, false, tw), size: monoSize, color: INK },
-    { label: 'Verify at', lines: wrapHard(opts.verifyUrl ?? '', valueSize, false, tw), size: valueSize, color: BRAND.blue },
   ];
+  if (opts.fingerprint) {
+    rows.push({ label: 'SHA-256 fingerprint', lines: wrapHard(opts.fingerprint, monoSize, false, tw), size: monoSize, color: INK });
+  }
+  if (tokenShort) {
+    rows.push({ label: 'Document token', lines: wrapHard(tokenShort, monoSize, false, tw), size: monoSize, color: INK });
+  }
+  if (opts.verifyUrl) {
+    rows.push({ label: 'Verify at', lines: wrapHard(opts.verifyUrl, valueSize, false, tw), size: valueSize, color: BRAND.blue });
+  }
   const noteLines = wrapHard(note, noteSize, false, tw);
 
   let contentH = 9;
   for (const r of rows) contentH += labelSize * 1.5 + r.lines.length * lineH(r.size) + 4;
   contentH += noteLines.length * lineH(noteSize) + 8;
-  const boxH = Math.max(qrBox + pad * 2, headerH + Math.ceil(contentH));
+  return {
+    pad,
+    qrBox,
+    headerH,
+    tx,
+    tw,
+    labelSize,
+    noteSize,
+    lineH,
+    rows,
+    noteLines,
+    boxH: Math.max(qrBox + pad * 2, headerH + Math.ceil(contentH)),
+  };
+}
 
+function authBlockHeight(opts: DocumentRenderOpts): number {
+  return authBlockLayout(opts).boxH;
+}
+
+async function drawAuthenticityBlock(doc: PdfDoc, opts: DocumentRenderOpts, brand: DocBrand): Promise<void> {
+  const { pad, qrBox, headerH, tx, tw, labelSize, noteSize, lineH, rows, noteLines, boxH } = authBlockLayout(opts);
   if (doc.cursorY - boxH < BOTTOM) doc.newPage();
   const top = doc.cursorY;
   const bottom = top - boxH;
@@ -3077,7 +3323,7 @@ function readStoredContractSignature(signatureUrl: string): { bytes: Buffer; ext
 async function drawContractSignatures(doc: PdfDoc, signs: DocSignature[], brand: DocBrand): Promise<void> {
   if (!signs.length) return;
   drawContractBand(doc, 'Signatures', brand);
-  const h = 62;
+  const h = 54;
   if (doc.cursorY - h < BOTTOM) doc.newPage();
   const n = Math.min(3, signs.length);
   const gap = 24;
@@ -4177,15 +4423,10 @@ async function renderPayslipPdf(data: DocData, opts: DocumentRenderOpts): Promis
   const note = [bank && "Paid to " + bank, tin && "TIN " + tin, nssfNo && "NSSF " + nssfNo].filter(Boolean).join("    ·    ");
   if (note) doc.rawText(note, MARGIN + 16, netTop - 28, 7, { color: [0.82, 0.88, 0.9], maxWidth: W - 32 });
 
-  doc.cursorY = netTop - netH - 12;
-  const notes = (data.notes ?? []).filter((n) => n && String(n).trim());
-  drawPaySlipExtras(doc, data, brand);
-  drawContractNotices(doc, notes, brand, "Terms and notes");
-  await drawContractSignatures(doc, data.signatures ?? [], brand);
-  if (auth) {
-    doc.cursorY -= 4;
-    await drawAuthenticityBlock(doc, opts, brand);
-  }
+  // A payslip is issued as a single sheet, so the whole tail is measured and pinned by
+  // drawPayslipTail instead of being laid out with the usual flowing page-break rules.
+  doc.cursorY = netTop - netH - 14;
+  await drawPayslipTail(doc, data, brand, opts, auth, BOTTOM + 6);
 
   const companyLine = [c.legalName || c.name, c.tin ? "TIN " + c.tin : "", c.vrn ? "VRN " + c.vrn : ""].filter(Boolean).join("  ·  ");
   const authLine = auth ? `SHA-256 ${opts.fingerprint?.slice(0, 16)}...` : '';
