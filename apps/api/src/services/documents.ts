@@ -3975,7 +3975,6 @@ function htmlPayslipBody(data: DocData): string {
       : '<tr><td colspan="3">None for this period</td></tr>';
     return `<section><h3>${title}</h3><table><thead><tr><th>Component</th><th>Basis</th><th>Amount</th></tr></thead><tbody>${body}</tbody></table></section>`;
   };
-  const notes = (data.notes ?? []).map((n) => `<li>${htmlEsc(n)}</li>`).join('');
   return `<style>
     .slip { font-family: inherit; color: inherit; }
     .slip-top { display: flex; gap: 16px; align-items: stretch; margin-top: 8px; }
@@ -4007,6 +4006,7 @@ function htmlPayslipBody(data: DocData): string {
       <div class="who"><div class="k">Employee</div><div class="n">${name}</div><div class="m">${lines}${period ? `<div>${period}</div>` : ''}</div></div>
       <div class="net"><div class="k">Net pay</div><div class="v">${net}</div>${payDate ? `<div class="s">Pay date ${payDate}</div>` : ''}</div>
     </div>
+    <div class="band">Earnings and deductions</div>
     <div class="cols">${table('Earnings', 'Earning')}${table('Deductions', 'Deduction')}</div>
     <div class="sum">
       <div><div class="k">Gross pay</div><div class="v">${gross}</div></div>
@@ -4014,7 +4014,9 @@ function htmlPayslipBody(data: DocData): string {
       <div><div class="k">Net pay</div><div class="v">${net}</div></div>
     </div>
     <div class="payto">${[bank && `Paid to ${bank}`, tin && `TIN ${tin}`, nssf && `NSSF ${nssf}`].filter(Boolean).join(' · ')}</div>
-    ${notes ? `<ul>${notes}</ul>` : ''}
+    ${htmlPayBreakdown(data)}
+    ${htmlNotes((data.notes ?? []).filter((n) => n && String(n).trim()), 'Terms and notes')}
+    ${htmlSignatures(data.signatures ?? [])}
   </div>`;
 }
 
@@ -4027,6 +4029,7 @@ async function renderPayslipPdf(data: DocData, opts: DocumentRenderOpts): Promis
   const secondaryLogo = preloadSecondaryLogo(doc, c.secondaryLogoUrl);
   const footerLogo = preloadFooterLogo(doc, c.footerLogoUrl);
   const classification = classifOf(data, opts);
+  const auth = authEnabled(opts);
   const head = letterheadMeta(data, opts, "");
   head.subtitle = undefined;
   head.status = undefined;
@@ -4129,13 +4132,25 @@ async function renderPayslipPdf(data: DocData, opts: DocumentRenderOpts): Promis
   const note = [bank && "Paid to " + bank, tin && "TIN " + tin, nssfNo && "NSSF " + nssfNo].filter(Boolean).join("    ·    ");
   if (note) doc.rawText(note, MARGIN + 16, netTop - 28, 7, { color: [0.82, 0.88, 0.9], maxWidth: W - 32 });
 
+  doc.cursorY = netTop - netH - 12;
+  const notes = (data.notes ?? []).filter((n) => n && String(n).trim());
+  drawPaySlipExtras(doc, data, brand);
+  drawContractNotices(doc, notes, brand, "Terms and notes");
+  await drawContractSignatures(doc, data.signatures ?? [], brand);
+  if (auth) {
+    doc.cursorY -= 4;
+    await drawAuthenticityBlock(doc, opts, brand);
+  }
+
   const companyLine = [c.legalName || c.name, c.tin ? "TIN " + c.tin : "", c.vrn ? "VRN " + c.vrn : ""].filter(Boolean).join("  ·  ");
+  const authLine = auth ? `SHA-256 ${opts.fingerprint?.slice(0, 16)}...` : '';
   doc.footer(
     [
       [c.footerText, companyLine].filter(Boolean).join("  ·  "),
       [
         "Issued by " + opts.issuedBy + " on " + formatDocDateTime(opts.issuedAt),
         opts.correlationId ? "Ref " + opts.correlationId : "",
+        authLine,
         classification.toUpperCase(),
       ].filter(Boolean).join("  ·  "),
     ].filter(Boolean),
@@ -4149,6 +4164,8 @@ async function renderPayslipPdf(data: DocData, opts: DocumentRenderOpts): Promis
     creator: c.name,
     producer: c.legalName || c.name,
   });
+  if (/confidential|restricted/i.test(classification)) doc.watermark("CONFIDENTIAL");
+  else if (auth) doc.watermark("VERIFIED COPY", { color: [0.965, 0.97, 0.975], size: 46 });
   return doc.build();
 }
 
