@@ -309,9 +309,20 @@ export async function ingestDeviceEvent(opts: {
 
     // Device telemetry: mark online and refresh last-seen (never override
     // MAINTENANCE / DISABLED that an administrator set explicitly). Clearing
-    // status_reason matters as much as setting ONLINE: sweepStaleDevices()
-    // writes an explanation when it flips a device to OFFLINE, and without this
-    // the admin UI keeps showing that outage text long after the device is back.
+    // status_reason matters as much as setting ONLINE: the health sweep writes
+    // an explanation when it flips a device to OFFLINE, and without this the
+    // admin UI keeps showing that outage text long after the device is back.
+    //
+    // The previous status is read first so a recovery can be recorded as a
+    // STATUS_CHANGE row. The sweep only logs the OFFLINE transition, so without
+    // this a device that comes back never produces an ONLINE entry and the
+    // admin panel's recent-health list stays full of stale OFFLINE rows.
+    const previous = await client.query(
+      `SELECT connection_status FROM hikvision_devices WHERE id = $1 FOR UPDATE`,
+      [device.id]
+    );
+    const previousStatus: string | null = previous.rows[0]?.connection_status ?? null;
+
     await client.query(
       `UPDATE hikvision_devices
           SET last_event_at = now(),
@@ -326,6 +337,30 @@ export async function ingestDeviceEvent(opts: {
         WHERE id = $1`,
       [device.id]
     );
+
+    // Record the recovery once, on the transition only, so a steady stream of
+    // events from an already-healthy device does not flood the health log.
+    if (
+      previousStatus !== null &&
+      previousStatus !== 'ONLINE' &&
+      previousStatus !== 'MAINTENANCE' &&
+      previousStatus !== 'DISABLED'
+    ) {
+      await client.query(
+        `INSERT INTO hikvision_device_health_logs
+           (tenant_id, company_id, device_id, health_type, previous_status, new_status,
+            message, severity, metadata)
+         VALUES ($1,$2,$3,'STATUS_CHANGE',$4,'ONLINE',$5,'INFO',$6)`,
+        [
+          device.tenant_id,
+          device.company_id,
+          device.id,
+          previousStatus,
+          'Device telemetry received; connection restored',
+          JSON.stringify({ source: 'ingest' }),
+        ]
+      );
+    }
     await client.query(
       `INSERT INTO hikvision_device_heartbeats
          (tenant_id, company_id, device_id, heartbeat_at, device_time, clock_drift_seconds, ip_address)
