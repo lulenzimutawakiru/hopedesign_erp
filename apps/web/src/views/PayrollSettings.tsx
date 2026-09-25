@@ -220,10 +220,17 @@ interface GenericDraft {
   formula: string;
 }
 
+interface SecondaryDraft {
+  rate: string;
+  minGross: string;
+  applyToPayroll: boolean;
+}
+
 interface ShapeDraft {
   paye: PayeBand[];
   nssf: NssfDraft;
   lst: LstDraft;
+  secondary: SecondaryDraft;
   generic: GenericDraft;
 }
 
@@ -277,6 +284,16 @@ function lstFrom(config: StatutoryConfig | null): LstDraft {
   };
 }
 
+function secondaryFrom(config: StatutoryConfig | null): SecondaryDraft {
+  const limits = objOf(config?.limits);
+  const rates = objOf(config?.rates);
+  return {
+    rate: rates.rate == null ? '' : String(rates.rate),
+    minGross: limits.min_gross == null ? '' : String(limits.min_gross),
+    applyToPayroll: limits.apply_to_payroll !== false,
+  };
+}
+
 function genericFrom(config: StatutoryConfig | null): GenericDraft {
   return {
     rates: config ? json(config.rates, '[]') : '[]',
@@ -291,6 +308,7 @@ function draftFrom(config: StatutoryConfig | null): ShapeDraft {
     paye: payeBandsFrom(config?.rates),
     nssf: nssfFrom(config),
     lst: lstFrom(config),
+    secondary: secondaryFrom(config),
     generic: genericFrom(config),
   };
 }
@@ -391,6 +409,19 @@ function buildShape(category: string, draft: ShapeDraft, config: StatutoryConfig
       if (rate < 0 || rate > 100) errors.push('Rate must be between 0 and 100.');
       rates.rate = rate;
     }
+    return { shape: { rates, thresholds: [], limits, formula }, errors };
+  }
+
+  if (category === 'PAYE_SECONDARY') {
+    const limits: Rec = { ...baseLimits };
+    const rates: Rec = { ...baseRates };
+    const rate = num(draft.secondary.rate);
+    const minGross = num(draft.secondary.minGross);
+    if (rate < 0 || rate > 100) errors.push('Rate must be between 0 and 100.');
+    if (minGross < 0) errors.push('Minimum gross cannot be negative.');
+    rates.rate = rate;
+    limits.min_gross = minGross;
+    limits.apply_to_payroll = draft.secondary.applyToPayroll;
     return { shape: { rates, thresholds: [], limits, formula }, errors };
   }
 
@@ -539,6 +570,37 @@ function LstShapeEditor({ draft, setDraft }: { draft: ShapeDraft; setDraft: (nex
   );
 }
 
+function SecondaryPayeShapeEditor({ draft, setDraft }: { draft: ShapeDraft; setDraft: (next: ShapeDraft) => void }) {
+  const secondary = draft.secondary;
+  const set = (patch: Partial<SecondaryDraft>) => setDraft({ ...draft, secondary: { ...secondary, ...patch } });
+  return (
+    <div className="stack">
+      <p className="hint">
+        Income from a second employment is taxed at one fixed rate instead of the resident bands. NSSF is not withheld
+        again on this payroll, because the member is already enrolled through the first employment.
+      </p>
+      <div className="grid-3">
+        <div className="field">
+          <label>Rate (%)</label>
+          <input type="number" min="0" max="100" step="0.01" value={secondary.rate} placeholder="40" onChange={(e) => set({ rate: e.target.value })} />
+          <p className="field-hint">Charged on the whole chargeable income, e.g. 40 for forty percent.</p>
+        </div>
+        <div className="field">
+          <label>Minimum gross (UGX)</label>
+          <input type="number" min="0" value={secondary.minGross} placeholder="0" onChange={(e) => set({ minGross: e.target.value })} />
+          <p className="field-hint">Nobody earning below this is charged.</p>
+        </div>
+        <div className="field">
+          <label>
+            <input type="checkbox" checked={secondary.applyToPayroll} onChange={(e) => set({ applyToPayroll: e.target.checked })} /> Deduct this on payslips
+          </label>
+          <p className="field-hint">Unticked keeps the table on file without taking it off anyone.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GenericShapeEditor({ draft, setDraft }: { draft: ShapeDraft; setDraft: (next: ShapeDraft) => void }) {
   const set = (patch: Partial<GenericDraft>) => setDraft({ ...draft, generic: { ...draft.generic, ...patch } });
   return (
@@ -575,6 +637,7 @@ function ShapeEditor({ category, draft, setDraft }: { category: string; draft: S
   if (category === 'PAYE') return <PayeShapeEditor draft={draft} setDraft={setDraft} />;
   if (category === 'NSSF') return <NssfShapeEditor draft={draft} setDraft={setDraft} />;
   if (category === 'LST') return <LstShapeEditor draft={draft} setDraft={setDraft} />;
+  if (category === 'PAYE_SECONDARY') return <SecondaryPayeShapeEditor draft={draft} setDraft={setDraft} />;
   return <GenericShapeEditor draft={draft} setDraft={setDraft} />;
 }
 

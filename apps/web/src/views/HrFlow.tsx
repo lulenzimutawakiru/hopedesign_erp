@@ -1498,6 +1498,7 @@ function EmployeeEditor({ id }: { id: number }) {
   const [paymentMethod, setPaymentMethod] = useState('');
   const [payrollCurrency, setPayrollCurrency] = useState('');
   const [payrollEnabled, setPayrollEnabled] = useState(false);
+  const [isSecondary, setIsSecondary] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -1529,6 +1530,7 @@ function EmployeeEditor({ id }: { id: number }) {
         setPaymentMethod(String(e.paymentMethod ?? ''));
         setPayrollCurrency(String(e.payrollCurrency ?? ''));
         setPayrollEnabled(Boolean(e.payrollEnabled));
+        setIsSecondary(Boolean(e.isSecondaryEmployment));
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Employee failed'));
   }, [id]);
@@ -1554,6 +1556,7 @@ function EmployeeEditor({ id }: { id: number }) {
           bankAccountNo: bankAccountNo.trim() || null,
           status,
           payrollEnabled,
+          isSecondaryEmployment: isSecondary,
           payrollGroupId: payrollGroupId ? Number(payrollGroupId) : null,
           paymentMethod: paymentMethod || null,
           payrollCurrency: payrollCurrency.trim() || null,
@@ -1641,6 +1644,14 @@ function EmployeeEditor({ id }: { id: number }) {
             </select>
             <p className="muted">Staff who are not enrolled are left out of every payroll run.</p>
           </div>
+          <div className="field">
+            <label>Secondary employment</label>
+            <select value={isSecondary ? 'yes' : 'no'} onChange={(ev) => setIsSecondary(ev.target.value === 'yes')}>
+              <option value="no">Only employment</option>
+              <option value="yes">Second employment</option>
+            </select>
+            <p className="muted">Taxed at a fixed rate instead of the resident PAYE bands, and no NSSF is withheld here.</p>
+          </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={busy || !canEdit} onClick={save}>Save changes</button>
       </section>
@@ -1662,6 +1673,7 @@ function EmployeeComposer() {
   const [paymentMethod, setPaymentMethod] = useState('');
   const [payrollCurrency, setPayrollCurrency] = useState('');
   const [payrollEnabled, setPayrollEnabled] = useState(true);
+  const [isSecondary, setIsSecondary] = useState(false);
   const [userId, setUserId] = useState('');
   const [userQ, setUserQ] = useState('');
   const [userHits, setUserHits] = useState<Rec[]>([]);
@@ -1691,6 +1703,7 @@ function EmployeeComposer() {
           baseSalary: Number(baseSalary) || 0,
           email: email.trim() || null,
           payrollEnabled,
+          isSecondaryEmployment: isSecondary,
           payrollGroupId: payrollGroupId ? Number(payrollGroupId) : null,
           paymentMethod: paymentMethod || null,
           payrollCurrency: payrollCurrency.trim() || null,
@@ -1751,6 +1764,14 @@ function EmployeeComposer() {
               <option value="yes">Included in payroll runs</option>
               <option value="no">Excluded from payroll runs</option>
             </select>
+          </div>
+          <div className="field">
+            <label>Secondary employment</label>
+            <select value={isSecondary ? 'yes' : 'no'} onChange={(e) => setIsSecondary(e.target.value === 'yes')}>
+              <option value="no">Only employment</option>
+              <option value="yes">Second employment</option>
+            </select>
+            <p className="muted">Taxed at a fixed rate instead of the resident PAYE bands, and no NSSF is withheld here.</p>
           </div>
         </div>
         <div className="field" style={{ marginTop: 12 }}>

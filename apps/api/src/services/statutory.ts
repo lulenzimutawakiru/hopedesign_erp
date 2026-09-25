@@ -253,3 +253,30 @@ export function computeLst(
   if (pct > 0) return round2((Number(gross) || 0) * (pct / 100));
   return 0;
 }
+
+/**
+ * Secondary-employment PAYE.
+ *
+ * The Income Tax (Amendment) Act, 2026 keeps a distinct treatment for income
+ * earned from more than one employment relationship: the secondary employer
+ * withholds at a fixed rate instead of on the resident progressive bands, which
+ * is why this cannot reuse computePaye. The Act does not publish a numbered
+ * schedule for that case, so the rate is configuration, not code:
+ *   rates:  { rate: 40 }                       (percentage, 40 = 40%)
+ *   limits: { apply_to_payroll: true, min_gross: 0 }
+ * The seed ships 40% pending confirmation against URA guidance.
+ *
+ * Returns 0 when no config is supplied: a tenant that has not adopted the
+ * secondary schedule keeps taxing those employees on the resident bands.
+ */
+export function computeSecondaryPaye(base: number, cfg: StatutoryConfig | null): number {
+  if (!cfg) return 0;
+  const rates = configRates(cfg);
+  const limits = (cfg.limits ?? {}) as Record<string, unknown>;
+  if (limits.apply_to_payroll === false) return 0;
+  const minGross = Number(limits.min_gross ?? 0);
+  if (minGross > 0 && (Number(base) || 0) < minGross) return 0;
+  const rate = Number(rates.rate ?? limits.rate ?? 0);
+  if (rate <= 0) return 0;
+  return round2(Math.max(0, Number(base) || 0) * (rate / 100));
+}

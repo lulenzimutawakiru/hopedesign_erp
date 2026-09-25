@@ -373,7 +373,7 @@ export async function savePayrollSettings(
 // ===========================================================================
 
 export const STATUTORY_CATEGORIES = [
-  'PAYE', 'NSSF', 'LST', 'SDI', 'WHT', 'SEVERANCE', 'MINIMUM_WAGE', 'OTHER',
+  'PAYE', 'PAYE_SECONDARY', 'NSSF', 'LST', 'SDI', 'WHT', 'SEVERANCE', 'MINIMUM_WAGE', 'OTHER',
 ] as const;
 export type StatutoryCategory = (typeof STATUTORY_CATEGORIES)[number];
 
@@ -918,8 +918,9 @@ export async function previewStatutory(client: pg.PoolClient, ctx: Ctx, input: S
   const periodStart = date(input.periodStart, 'periodStart');
   const periodEnd = date(input.periodEnd, 'periodEnd');
 
-  const [payeCfg, nssfCfg, lstCfg] = await Promise.all([
+  const [payeCfg, secondaryPayeCfg, nssfCfg, lstCfg] = await Promise.all([
     statutory.getStatutoryConfig(client, ctx, 'PAYE', { effectiveDate: asOf, companyId, country }),
+    statutory.getStatutoryConfig(client, ctx, 'PAYE_SECONDARY', { effectiveDate: asOf, companyId, country }),
     statutory.getStatutoryConfig(client, ctx, 'NSSF', { effectiveDate: asOf, companyId, country }),
     statutory.getStatutoryConfig(client, ctx, 'LST', { effectiveDate: asOf, companyId, country }),
   ]);
@@ -944,6 +945,12 @@ export async function previewStatutory(client: pg.PoolClient, ctx: Ctx, input: S
       payeError = err instanceof Error ? err.message : String(err);
     }
   }
+
+  // Secondary-employment PAYE: a second employer withholds a flat rate on the
+  // chargeable income instead of the resident bands. Computed alongside the
+  // primary figure so switching an employee between the two is visible before
+  // it is saved. Zero when the tenant has not adopted the schedule.
+  const secondaryPaye = statutory.computeSecondaryPaye(chargeableIncome, secondaryPayeCfg);
 
   const totalDeductions = round2(paye + nssf.employee + lst);
   const net = round2(gross - totalDeductions);
@@ -970,16 +977,25 @@ export async function previewStatutory(client: pg.PoolClient, ctx: Ctx, input: S
     nssf,
     paye,
     payeError,
+    secondaryPaye,
     lst,
     totalDeductions,
     net,
     employerCost: round2(gross + nssf.employer),
-    configs: { paye: describe(payeCfg), nssf: describe(nssfCfg), lst: describe(lstCfg) },
+    configs: {
+      paye: describe(payeCfg),
+      secondaryPaye: describe(secondaryPayeCfg),
+      nssf: describe(nssfCfg),
+      lst: describe(lstCfg),
+    },
     steps: [
       { label: 'Gross pay', amount: gross, kind: 'gross' },
       { label: 'Employee NSSF', amount: -nssf.employee, kind: 'deduction' },
       { label: 'Taxable income', amount: taxableIncome, kind: 'subtotal' },
       { label: 'PAYE', amount: -paye, kind: 'deduction' },
+      ...(secondaryPayeCfg
+        ? [{ label: 'PAYE (secondary employment)', amount: -secondaryPaye, kind: 'deduction' }]
+        : []),
       { label: 'Local service tax', amount: -lst, kind: 'deduction' },
       { label: 'Net pay', amount: net, kind: 'net' },
     ],

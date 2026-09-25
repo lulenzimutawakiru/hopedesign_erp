@@ -169,6 +169,7 @@ export async function createEmployee(
     bankAccountNo?: string | null;
     status?: string;
     payrollEnabled?: boolean;
+    isSecondaryEmployment?: boolean;
     paymentMethod?: string | null;
     payrollCurrency?: string | null;
     payrollGroupId?: number | string | null;
@@ -195,8 +196,8 @@ export async function createEmployee(
        (company_id, tenant_id, branch_id, department_id, employee_no, first_name, last_name,
         phone, email, tin, nssf_no, position, hire_date, salary_type, base_salary,
         bank_name, bank_account_no, status, payroll_enabled, payment_method, payroll_currency,
-        employee_number, short_employee_number)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING id`,
+        employee_number, short_employee_number, is_secondary_employment)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, ctx.branchId ?? null, input.departmentId ?? null, no,
       input.firstName.trim(), input.lastName.trim(), input.phone ?? null, input.email ?? null,
@@ -204,7 +205,7 @@ export async function createEmployee(
       input.hireDate ?? new Date().toISOString().slice(0, 10),
       input.salaryType ?? 'MONTHLY', Number(input.baseSalary ?? 0),
       input.bankName ?? null, input.bankAccountNo ?? null, status, input.payrollEnabled ?? true,
-      paymentMethod, payrollCurrency, official, short,
+      paymentMethod, payrollCurrency, official, short, input.isSecondaryEmployment ?? false,
     ]
   );
   const employeeId = Number(ins.rows[0].id);
@@ -269,6 +270,7 @@ export async function updateEmployee(
     bankAccountNo?: string | null;
     status?: string;
     payrollEnabled?: boolean;
+    isSecondaryEmployment?: boolean;
     paymentMethod?: string | null;
     payrollCurrency?: string | null;
     payrollGroupId?: number | string | null;
@@ -320,6 +322,7 @@ export async function updateEmployee(
     push('status', status);
   }
   if (input.payrollEnabled !== undefined) push('payroll_enabled', Boolean(input.payrollEnabled));
+  if (input.isSecondaryEmployment !== undefined) push('is_secondary_employment', Boolean(input.isSecondaryEmployment));
   const paymentMethod =
     input.paymentMethod !== undefined && input.paymentMethod !== null && String(input.paymentMethod).trim() !== ''
       ? normalizeEmployeePaymentMethod(input.paymentMethod)
@@ -383,6 +386,7 @@ export async function listEmployees(
   const res = await client.query(
     `SELECT e.id, e.employee_no, e.first_name, e.last_name, e.position, e.status, e.base_salary, e.salary_type,
             e.hire_date, e.phone, e.email, e.photo_path, e.user_id, e.payroll_enabled,
+            e.is_secondary_employment,
             d.code AS department_code, d.name AS department_name,
             u.username AS user_username, u.email AS user_email, u.status AS user_status,
             (e.photo_path IS NOT NULL) AS has_photo
@@ -1144,6 +1148,10 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
   const payeCfg = await statutory.requireStatutoryConfig(client, ctx, 'PAYE', { effectiveDate: periodEnd });
   const nssfCfg = await statutory.requireStatutoryConfig(client, ctx, 'NSSF', { effectiveDate: periodEnd });
   const lstCfg = await statutory.getStatutoryConfig(client, ctx, 'LST', { effectiveDate: periodEnd });
+  // Secondary-employment PAYE is optional, unlike PAYE itself: a tenant that has
+  // not adopted the schedule keeps taxing a second-employment employee on the
+  // resident bands.
+  const secondaryPayeCfg = await statutory.getStatutoryConfig(client, ctx, 'PAYE_SECONDARY', { effectiveDate: periodEnd });
 
   await client.query(`DELETE FROM payroll_items WHERE payroll_id = $1`, [payrollId]);
   await client.query(`DELETE FROM payroll_component_entries WHERE payroll_id = $1`, [payrollId]);
@@ -1275,10 +1283,27 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     // chargeable income before PAYE; LST is withheld separately and never
     // reduces taxable pay.
     const chargeableIncome = round2(basic + contractAllowances + extraForEmployee + taxableComponentEarnings + variableEarnings + taxableEmployeeEarnings + benefitsTaxable);
-    const nssf = statutory.computeNssf(gross, nssfCfg);
+    // Secondary employment: a second employer withholds PAYE at a fixed rate on
+    // the chargeable income instead of on the resident progressive bands, and
+    // does not withhold NSSF again — NSSF is an obligation of the employment
+    // relationship the member is enrolled under, and a second deduction here
+    // would double-charge one contributor. Such an employee is PAYE-only on
+    // this payroll. The tax schedule still needs the tenant to have adopted a
+    // PAYE_SECONDARY rule; without one the resident bands apply, so a missing
+    // rule degrades to normal taxation rather than to zero tax.
+    const isSecondaryEmployment = emp.is_secondary_employment === true;
+    const secondEmploymentTax = isSecondaryEmployment && secondaryPayeCfg !== null;
+    const nssf = isSecondaryEmployment
+      ? { employee: 0, employer: 0, base: 0, ceiling: null as number | null }
+      : statutory.computeNssf(gross, nssfCfg);
     const lst = statutory.computeLst(gross, lstCfg, { periodStart, periodEnd });
     const taxableIncome = round2(Math.max(0, chargeableIncome - nssf.employee));
-    const paye = statutory.computePaye(taxableIncome, payeCfg);
+    const paye = secondEmploymentTax
+      ? statutory.computeSecondaryPaye(chargeableIncome, secondaryPayeCfg)
+      : statutory.computePaye(taxableIncome, payeCfg);
+    // The config the PAYE figure came from, recorded on the payslip so a reprint
+    // resolves the same schedule it was computed on.
+    const payeSource = secondEmploymentTax ? (secondaryPayeCfg ?? payeCfg) : payeCfg;
     const loanRows = await client.query(
       `SELECT id, balance, monthly_deduction FROM employee_loans
        WHERE employee_id = $1 AND status = 'ACTIVE' AND balance > 0`,
@@ -1314,7 +1339,14 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     const net = round2(gross - totalDeductions);
     const slip = await nextDoc(client, ctx, await payrollSettings.getPayslipPrefix(client, ctx));
     const breakdown = {
-      paye: { configId: payeCfg.id, code: payeCfg.code, version: payeCfg.version, taxableIncome, tax: paye },
+      paye: {
+        configId: payeSource.id,
+        code: payeSource.code,
+        version: payeSource.version,
+        taxableIncome,
+        tax: paye,
+        ...(secondEmploymentTax ? { secondaryEmployment: true } : {}),
+      },
       nssf: { configId: nssfCfg.id, code: nssfCfg.code, version: nssfCfg.version, employee: nssf.employee, employer: nssf.employer, base: nssf.base, ceiling: nssf.ceiling },
       lst: lstCfg ? { configId: lstCfg.id, code: lstCfg.code, version: lstCfg.version, amount: lst } : null,
       taxableIncome,
@@ -1357,6 +1389,7 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     paye: statutory.statutorySnapshot(payeCfg),
     nssf: statutory.statutorySnapshot(nssfCfg),
     lst: lstCfg ? statutory.statutorySnapshot(lstCfg) : null,
+    secondaryPaye: secondaryPayeCfg ? statutory.statutorySnapshot(secondaryPayeCfg) : null,
   };
   await client.query(
     `UPDATE payrolls SET gross_total = $2, deduction_total = $3, net_total = $4, currency = $5,
@@ -1364,7 +1397,7 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     [payrollId, round2(grossTotal), round2(deductionTotal), round2(netTotal), currency, payeCfg.id, JSON.stringify(statutorySnapshot)]
   );
   const validation = await payrollValidation.validatePayroll(client, ctx, payrollId);
-  return { payrollId, employees: staff.rows.length, grossTotal: round2(grossTotal), deductionTotal: round2(deductionTotal), netTotal: round2(netTotal), statutory: { paye: payeCfg.code, nssf: nssfCfg.code }, validation };
+  return { payrollId, employees: staff.rows.length, grossTotal: round2(grossTotal), deductionTotal: round2(deductionTotal), netTotal: round2(netTotal), statutory: { paye: payeCfg.code, nssf: nssfCfg.code, secondaryPaye: secondaryPayeCfg?.code ?? null }, validation };
 }
 
 export async function submitPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: number) {

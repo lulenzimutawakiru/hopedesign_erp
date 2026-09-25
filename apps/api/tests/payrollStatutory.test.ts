@@ -6,6 +6,7 @@ import {
   computeLst,
   computeNssf,
   computePaye,
+  computeSecondaryPaye,
   getStatutoryConfig,
   requireStatutoryConfig,
   statutorySnapshot,
@@ -380,6 +381,64 @@ describe('statutory rule engine', () => {
       expect(computeLst(1500000, cfg, { periodStart: '2027-07-01', periodEnd: '2027-07-31' })).toBe(25000);
       // The KCCA schedule only collects in Jul-Oct.
       expect(computeLst(1500000, cfg, { periodStart: '2027-11-01', periodEnd: '2027-11-30' })).toBe(0);
+    });
+  });
+
+  describe('secondary-employment PAYE', () => {
+    // Income from a second employment is withheld at a fixed rate instead of
+    // the resident progressive bands. The Act publishes no numbered schedule
+    // for that case, so the rate is configuration; these tests pin how that
+    // configuration is read rather than any particular rate.
+    const flat = (rate: number, limits: Record<string, unknown> = { apply_to_payroll: true, min_gross: 0 }) =>
+      config({ category: 'PAYE_SECONDARY', code: 'TEST-PAYE-SECONDARY', rates: { rate }, limits });
+
+    it('charges nothing without a configuration', () => {
+      expect(computeSecondaryPaye(1000000, null)).toBe(0);
+    });
+
+    it('withholds the configured share of chargeable income', () => {
+      expect(computeSecondaryPaye(1000000, flat(40))).toBe(400000);
+      expect(computeSecondaryPaye(250000, flat(40))).toBe(100000);
+    });
+
+    it('reads a one-element array of rate objects, like the seeded row', () => {
+      const cfg = config({
+        category: 'PAYE_SECONDARY',
+        rates: [{ rate: 40 }],
+        limits: { apply_to_payroll: true, min_gross: 0 },
+      });
+      expect(computeSecondaryPaye(1000000, cfg)).toBe(400000);
+    });
+
+    it('honours the apply_to_payroll opt-out', () => {
+      expect(computeSecondaryPaye(1000000, flat(40, { apply_to_payroll: false }))).toBe(0);
+    });
+
+    it('skips employees below the minimum chargeable income', () => {
+      const cfg = flat(40, { apply_to_payroll: true, min_gross: 500000 });
+      expect(computeSecondaryPaye(400000, cfg)).toBe(0);
+      expect(computeSecondaryPaye(500000, cfg)).toBe(200000);
+    });
+
+    it('charges nothing at a zero or missing rate', () => {
+      expect(computeSecondaryPaye(1000000, flat(0))).toBe(0);
+      expect(computeSecondaryPaye(1000000, config({ category: 'PAYE_SECONDARY', limits: { apply_to_payroll: true } }))).toBe(0);
+    });
+
+    it('never goes negative', () => {
+      expect(computeSecondaryPaye(0, flat(40))).toBe(0);
+      expect(computeSecondaryPaye(-5000, flat(40))).toBe(0);
+    });
+
+    it('rounds to two decimals', () => {
+      expect(computeSecondaryPaye(333333, flat(40))).toBe(133333.2);
+    });
+
+    it('uses the seeded rule for this tenant', async () => {
+      const cfg = await requireStatutoryConfig(client, CTX, 'PAYE_SECONDARY', { effectiveDate: '2027-07-15' });
+      expect(cfg.code).toBe('UG-PAYE-SECONDARY-2026');
+      // Seeded at the 40% top-rate treatment pending URA confirmation.
+      expect(computeSecondaryPaye(1000000, cfg)).toBe(400000);
     });
   });
 
