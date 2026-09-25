@@ -4253,6 +4253,8 @@ function htmlPayslipBody(data: DocData): string {
   const tin = htmlEsc(payslipFact(data, 'TIN'));
   const nssf = htmlEsc(payslipFact(data, 'NSSF No'));
   const period = htmlEsc(compactRange(payslipFact(data, 'Period')));
+  const payrollNo = htmlEsc(payslipFact(data, 'Payroll No'));
+  const currency = htmlEsc(payslipFact(data, 'Currency'));
   const row = (it: Record<string, unknown>) => `<tr><td>${htmlEsc(it.component)}</td><td>${htmlEsc(it.detail ?? '')}</td><td class="amt">${htmlEsc(it.amount)}</td></tr>`;
   const table = (title: string, kind: string) => {
     const items = payslipLines(data, kind);
@@ -4261,52 +4263,139 @@ function htmlPayslipBody(data: DocData): string {
       : '<tr><td colspan="3">None for this period</td></tr>';
     return `<section><h3>${title}</h3><table><thead><tr><th>Component</th><th>Basis</th><th>Amount</th></tr></thead><tbody>${body}</tbody></table></section>`;
   };
+  // Reference strip: the period covered and the pay date get their own aligned
+  // column each, so the two dates can never be read as one another.
+  const metaCells = ([
+    ['Period covered', period],
+    ['Pay date', payDate],
+    ['Payroll no', payrollNo],
+    ['Currency', currency],
+  ] as Array<[string, string]>)
+    .filter((pair) => pair[1])
+    .map(([k, v]) => `<div class="m-cell"><div class="m-k">${k}</div><div class="m-v">${v}</div></div>`)
+    .join('');
+
+  // Net pay calculation and the PAYE brackets ride in the right-hand rail beside
+  // the earnings/deductions tables, which is what keeps the statement on one
+  // sheet instead of spilling the totals onto a second page.
+  const breakdown = data.payBreakdown ?? [];
+  const brackets = data.payeBrackets;
+  const calcHtml = breakdown.length
+    ? `<div class="band">Net pay calculation</div><div class="totals">${breakdown
+        .map(([label, value], i) => {
+          const isNet = i === breakdown.length - 1 && /net pay/i.test(label);
+          return `<div class="row${isNet ? ' total' : ''}"><span>${htmlEsc(label)}</span><span>${htmlEsc(value)}</span></div>`;
+        })
+        .join('')}</div>`
+    : '';
+  const payeHtml = brackets?.bands.length
+    ? `<div class="band">PAYE brackets applied</div><table class="data"><thead><tr><th>Monthly taxable income (UGX)</th><th>PAYE rate</th></tr></thead><tbody>${brackets.bands
+        .map(([band, rate]) => `<tr><td>${htmlEsc(band)}</td><td>${htmlEsc(rate)}</td></tr>`)
+        .join('')}</tbody></table>${brackets.note ? `<div class="notes"><p>${htmlEsc(brackets.note)}</p></div>` : ''}`
+    : '';
+  const terms = (data.notes ?? []).filter((n) => n && String(n).trim());
   return `<style>
     .slip { font-family: inherit; color: inherit; }
-    .slip-top { display: flex; gap: 16px; align-items: stretch; margin-top: 8px; }
-    .who { flex: 1; border: 1px solid #e4e7ec; border-left: 3px solid var(--teal); padding: 14px 16px; }
-    .who .k { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
-    .who .n { font-size: 20px; font-weight: 750; margin: 4px 0 8px; }
-    .who .m { font-size: 12px; line-height: 1.45; color: #526072; }
-    .who .p { margin-top: 9px; padding-top: 8px; border-top: 1px solid #eef1f4; font-size: 12px; color: #526072; }
-    .who .p .k2 { display: inline-block; min-width: 64px; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
-    .net { width: 220px; background: var(--navy); color: #fff; padding: 14px 16px; }
-    .net .k { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
-    .net .v { font-size: 20px; font-weight: 750; margin-top: 8px; }
-    .net .s { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.25); font-size: 12px; opacity: .92; }
-    .cols { display: flex; gap: 16px; margin-top: 16px; }
-    .cols section { flex: 1; }
-    .cols h3 { margin: 0; background: var(--navy); color: #fff; font-size: 11px; letter-spacing: .08em; padding: 8px 10px; }
-    .cols table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .cols th { text-align: left; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #526072; padding: 6px 8px; border-bottom: 1px solid #e4e7ec; }
-    .cols td { padding: 7px 8px; border-bottom: 1px solid #eef1f4; vertical-align: top; }
+    .slip-meta { display: flex; border: 1px solid #e4e7ec; border-top: 2.2px solid var(--navy); }
+    .slip-meta .m-cell { flex: 1 1 0; min-width: 0; padding: 4px 8px 5px; border-right: 1px solid #eef1f4; }
+    .slip-meta .m-cell:first-child { flex: 1.4 1 0; }
+    .slip-meta .m-cell:last-child { border-right: 0; }
+    .slip-meta .m-k { font-size: 7px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
+    .slip-meta .m-v { font-size: 9.5px; font-weight: 700; color: var(--navy); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .slip-top { display: flex; gap: 10px; align-items: stretch; margin-top: 8px; }
+    .who { flex: 1 1 auto; min-width: 0; border: 1px solid #e4e7ec; border-left: 3px solid var(--teal); padding: 6px 10px; }
+    .who .k { font-size: 7.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
+    .who .n { font-size: 14px; font-weight: 750; margin: 2px 0 3px; }
+    .who .m { font-size: 8.5px; line-height: 1.4; color: #526072; }
+    .net { width: 208px; flex: 0 0 auto; background: var(--navy); color: #fff; padding: 6px 10px; }
+    .net .k { font-size: 7.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--teal); font-weight: 700; }
+    .net .v { font-size: 16px; font-weight: 750; margin-top: 3px; }
+    .net .s { margin-top: 4px; padding-top: 3px; border-top: 1px solid rgba(255,255,255,.25); font-size: 8px; opacity: .92; }
+    .slip-cols { display: flex; gap: 12px; margin-top: 9px; align-items: flex-start; }
+    .slip-main { flex: 1.18 1 0; min-width: 0; }
+    .slip-side { flex: 1 1 0; min-width: 0; }
+    .cols { display: flex; gap: 10px; }
+    .cols section { flex: 1 1 0; min-width: 0; }
+    .cols h3 { margin: 0; background: var(--navy); color: #fff; font-size: 8px; letter-spacing: .08em; text-transform: uppercase; padding: 3.5px 6px; }
+    .cols table { width: 100%; border-collapse: collapse; font-size: 8.5px; margin-top: 0; }
+    .cols th { text-align: left; font-size: 7px; letter-spacing: .05em; text-transform: uppercase; color: #526072; padding: 2.5px 5px; border-bottom: 1px solid #e4e7ec; }
+    .cols td { padding: 2.5px 5px; border-bottom: 1px solid #eef1f4; vertical-align: top; }
     .cols td.amt, .cols th:last-child { text-align: right; white-space: nowrap; }
-    .sum { display: flex; margin-top: 16px; border: 1px solid #e4e7ec; }
-    .sum div { flex: 1; padding: 10px 12px; }
+    .sum { display: flex; margin-top: 8px; border: 1px solid #e4e7ec; }
+    .sum div { flex: 1 1 0; min-width: 0; padding: 5px 7px; }
     .sum div:last-child { background: var(--navy); color: #fff; }
-    .sum .k { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
-    .sum .v { font-size: 14px; font-weight: 750; margin-top: 4px; }
-    .payto { margin-top: 12px; font-size: 12px; color: #526072; }
-    .slip ul { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #526072; }
+    .sum .k { font-size: 7px; letter-spacing: .1em; text-transform: uppercase; }
+    .sum .v { font-size: 10.5px; font-weight: 750; margin-top: 2px; }
+    .payto { margin-top: 5px; font-size: 8.5px; color: #526072; }
+    /* Payslip variant: the shared letterhead, footer and table chrome are
+       tightened for this document only, so a pay statement lands on one sheet
+       while every other branded document keeps its existing proportions. */
+    .payslip-doc .meta-stamp, .payslip-doc .facts { display: none; }
+    .payslip-doc .sheet { padding-bottom: 10px; }
+    .payslip-doc .topbar { height: 6px; }
+    .payslip-doc .letterhead { padding: 4px 20px 0; }
+    .payslip-doc .lh-brand { gap: 5px; }
+    .payslip-doc .brand-logo, .payslip-doc .brand-mark { height: 28px; }
+    .payslip-doc .lh-id { padding-left: 10px; }
+    .payslip-doc .co-name { font-size: 14px; }
+    .payslip-doc .co-tag { margin: 1px 0 2px; }
+    .payslip-doc .c-line { font-size: 8.5px; line-height: 1.35; }
+    .payslip-doc .lh-doc { padding-left: 12px; }
+    .payslip-doc .lh-sec { min-height: 0; margin-bottom: 2px; }
+    .payslip-doc .secondary-logo { height: 20px; }
+    .payslip-doc .doc-kicker { margin-bottom: 2px; }
+    .payslip-doc .doc-title { font-size: 16px; }
+    .payslip-doc .doc-no { font-size: 10px; margin-top: 2px; }
+    .payslip-doc .lh-rule { margin: 4px 0 0; }
+    .payslip-doc .body { padding: 4px 20px 0; }
+    .payslip-doc .band { font-size: 7.5px; padding: 3px 7px; margin: 7px 0 4px; }
+    .payslip-doc .totals { margin: 0; width: auto; font-size: 8.5px; }
+    .payslip-doc .totals .row { padding: 2px 6px; }
+    .payslip-doc .totals .row.total { padding: 4px 6px; margin-top: 2px; }
+    .payslip-doc table.data, .payslip-doc table { font-size: 8.5px; margin-top: 3px; }
+    .payslip-doc table.data th, .payslip-doc table th { font-size: 7px; padding: 2.5px 5px; }
+    .payslip-doc table.data td, .payslip-doc table td { padding: 2.5px 5px; }
+    .payslip-doc .notes { margin-top: 6px; font-size: 8px; }
+    .payslip-doc .notes h4 { margin: 0 0 2px; font-size: 7px; }
+    .payslip-doc .notes p { margin: 0 0 3px; }
+    .payslip-doc .signs { grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 10px; }
+    .payslip-doc .sign .line { height: 18px; }
+    .payslip-doc .sign .lbl { margin-top: 3px; }
+    .payslip-doc .sign .sig-img { height: 26px; }
+    .payslip-doc .foot { margin: 8px 20px 0; font-size: 8px; }
+    .payslip-doc .foot-inner { padding: 6px 10px 5px; gap: 10px; }
+    .payslip-doc .foot-mark { padding-right: 10px; max-width: 130px; }
+    .payslip-doc .foot-logo { height: 20px; max-width: 120px; }
+    .payslip-doc .foot-id .nm { font-size: 9.5px; }
+    .payslip-doc .foot-line { font-size: 7.5px; line-height: 1.4; margin-top: 1px; }
+    .payslip-doc .foot-strip { padding: 3px 10px 4px; gap: 10px; }
   </style>
   <div class="slip">
+    ${metaCells ? `<div class="slip-meta">${metaCells}</div>` : ''}
     <div class="slip-top">
-      <div class="who"><div class="k">Employee</div><div class="n">${name}</div><div class="m">${lines}</div>${period ? `<div class="p"><span class="k2">Period</span>${period}</div>` : ''}</div>
+      <div class="who"><div class="k">Employee</div><div class="n">${name}</div><div class="m">${lines}</div></div>
       <div class="net"><div class="k">Net pay</div><div class="v">${net}</div>${payDate ? `<div class="s">Pay date ${payDate}</div>` : ''}</div>
     </div>
-    <div class="band">Earnings and deductions</div>
-    <div class="cols">${table('Earnings', 'Earning')}${table('Deductions', 'Deduction')}</div>
-    <div class="sum">
-      <div><div class="k">Gross pay</div><div class="v">${gross}</div></div>
-      <div><div class="k">Deductions</div><div class="v">${deducted}</div></div>
-      <div><div class="k">Net pay</div><div class="v">${net}</div></div>
+    <div class="slip-cols">
+      <div class="slip-main">
+        <div class="cols">${table('Earnings', 'Earning')}${table('Deductions', 'Deduction')}</div>
+        <div class="sum">
+          <div><div class="k">Gross pay</div><div class="v">${gross}</div></div>
+          <div><div class="k">Deductions</div><div class="v">${deducted}</div></div>
+          <div><div class="k">Net pay</div><div class="v">${net}</div></div>
+        </div>
+        <div class="payto">${[bank && `Paid to ${bank}`, tin && `TIN ${tin}`, nssf && `NSSF ${nssf}`].filter(Boolean).join(' · ')}</div>
+      </div>
+      <div class="slip-side">
+        ${calcHtml}
+        ${payeHtml}
+      </div>
     </div>
-    <div class="payto">${[bank && `Paid to ${bank}`, tin && `TIN ${tin}`, nssf && `NSSF ${nssf}`].filter(Boolean).join(' · ')}</div>
-    ${htmlPayBreakdown(data)}
-    ${htmlNotes((data.notes ?? []).filter((n) => n && String(n).trim()), 'Terms and notes')}
+    ${htmlNotes(terms, 'Terms and notes')}
     ${htmlSignatures(data.signatures ?? [])}
   </div>`;
 }
+
 
 async function renderPayslipPdf(data: DocData, opts: DocumentRenderOpts): Promise<Buffer> {
   const doc = new PdfDoc();
@@ -4979,6 +5068,7 @@ async function renderHtml(data: DocData, opts: DocumentRenderOpts): Promise<stri
     facts: data.isPayslip ? [] : (data.facts ?? data.meta),
     authenticity: data.isPayslip || !auth ? null : { fingerprint: opts.fingerprint ?? '', token: opts.token ?? '', verifyUrl: opts.verifyUrl ?? '' },
     photo: data.photo?.dataUrl ? { dataUrl: data.photo.dataUrl, caption: data.photo.caption } : null,
+    docClass: data.isPayslip ? 'payslip-doc' : undefined,
     body,
   });
 }

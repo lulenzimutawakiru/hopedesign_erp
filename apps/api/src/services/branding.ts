@@ -648,6 +648,13 @@ export interface BrandedHtmlOptions {
   authenticity?: { fingerprint: string; token: string; verifyUrl: string } | null;
   body: string;
   photo?: { dataUrl: string; caption?: string } | null;
+  /**
+   * Optional variant class applied to the sheet wrapper, e.g. `payslip-doc`.
+   * A variant may tighten the shared chrome (letterhead, footer) and layer
+   * variant-specific rules on top of the base stylesheet without changing how
+   * any other branded document renders.
+   */
+  docClass?: string;
 }
 
 function esc(v: unknown): string {
@@ -888,7 +895,7 @@ export async function renderBrandedHtml(opts: BrandedHtmlOptions): Promise<strin
 </style>
 </head>
 <body>
-<div class="sheet">
+<div class="sheet${opts.docClass ? ' ' + opts.docClass : ''}">
   <div class="topbar"></div>
   <header class="letterhead">
     <div class="lh-row">
