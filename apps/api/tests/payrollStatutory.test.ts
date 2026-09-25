@@ -160,6 +160,35 @@ describe('statutory rule engine', () => {
       // payroll engine feeds in; PAYE on 2,850,000 is the seeded reference value.
       expect(computePaye(2850000, cfg)).toBe(743250);
     });
+
+    it('seeds the legislated FY2026/27 bands, not the superseded schedule', async () => {
+      const cfg = await requireStatutoryConfig(client, CTX, 'PAYE', { effectiveDate: '2027-01-15' });
+      // The seeded row is what a rebuilt or newly onboarded database charges
+      // from. Pin it to the same literals the engine tests use: this code once
+      // shipped carrying the FY2023/24 bands, which would have mis-taxed every
+      // period from 1 July 2026 without the arithmetic tests noticing.
+      const stored = (cfg.rates as Array<{ min: number; max: number | null; rate: number }>).map(
+        (b) => [b.min, b.max, b.rate] as [number, number | null, number]
+      );
+      expect(stored).toEqual(UG_2026_BANDS);
+      expect(cfg.version).toBe(2);
+    });
+
+    it('closes the superseded FY2023/24 schedule at 30 June 2026', async () => {
+      // Effective dating already prefers the 2026 row; closing the old version
+      // is what stops it reading as the current rule in settings and returns.
+      const { rows } = await client.query(
+        `SELECT effective_to::text AS effective_to
+           FROM statutory_configs
+          WHERE tenant_id = $1
+            AND company_id IS NULL
+            AND category = 'PAYE'
+            AND code = 'UG-PAYE-2023'`,
+        [CTX.tenantId]
+      );
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(row.effective_to).toBe('2026-06-30');
+    });
   });
 
   describe('effective dating', () => {
