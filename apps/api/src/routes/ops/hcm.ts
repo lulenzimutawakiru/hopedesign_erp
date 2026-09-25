@@ -6,6 +6,8 @@ import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest } from '../../utils.js';
 import * as hcm from '../../services/hcm.js';
 import * as hcmLists from '../../services/hcmLists.js';
+import { ORG_CATEGORY_BY_ID, defaultFor } from '../../services/organisationSettings/catalogue.js';
+import { loadCategoryValues } from '../../services/organisationSettings/settings.js';
 
 export const hcmOpsRouter = Router();
 const hcmUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -529,6 +531,26 @@ hcmOpsRouter.post('/training/enrollments/:id/complete', ...run('hr.training_sess
 // ============================================================
 // BENEFITS
 // ============================================================
+/**
+ * Benefit vocabulary for the HR desk.
+ *
+ * The category list and the expiry warning window are Organisation Settings
+ * (the HR category), so HR can change them without a deploy. Readable by
+ * anyone who can view benefit plans - it is vocabulary, not secrets.
+ */
+hcmOpsRouter.get('/benefits/meta', ...runGet('hr.benefit_plans.view', async (c, ctx) => {
+  const cat = ORG_CATEGORY_BY_ID.get('hr');
+  const values: Record<string, unknown> = cat ? (await loadCategoryValues(c, ctx, cat)).values : {};
+  const listOf = (key: string) => String((values[key] ?? defaultFor('hr', key)) ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const days = Number(values.benefit_expiry_warning_days ?? defaultFor('hr', 'benefit_expiry_warning_days'));
+  return {
+    benefitCategories: listOf('benefit_categories'),
+    expiryWarningDays: Number.isFinite(days) && days > 0 ? days : 30,
+  };
+}));
 hcmOpsRouter.get('/benefits/plans', ...runGet('hr.benefit_plans.view', (c, ctx) => hcmLists.listBenefitPlans(c, ctx)));
 hcmOpsRouter.post('/benefits/plans', ...run('hr.benefit_plans.create', (c, ctx, b) => hcmLists.createBenefitPlan(c, ctx, {
   code: b.code != null ? String(b.code) : undefined,

@@ -4,6 +4,7 @@ import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { ConfirmDialog } from '../components/os';
+import { Avatar, CodeChip, HrKpi, HrKpiGrid, HrTableEmpty, HrToolbar } from '../components/hrUi';
 
 type Rec = Record<string, unknown>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -686,61 +687,268 @@ function TrainingDesk() {
 
 function BenefitsDesk() {
   const { user } = useAuth();
+  const [tab, setTab] = useState('enrollments');
   const plans = useList('/api/ops/hcm/benefits/plans');
   const enrollments = useList('/api/ops/hcm/benefits/enrollments');
+  const [meta, setMeta] = useState<{ categories: string[]; expiryDays: number }>({ categories: [], expiryDays: 30 });
+  const [q, setQ] = useState('');
+  const [category, setCategory] = useState('');
+  const [status, setStatus] = useState('ACTIVE');
   const [open, setOpen] = useState('');
-  const [name, setName] = useState('');
-  const [employeeId, setEmployeeId] = useState('');
-  const [planId, setPlanId] = useState('');
-  const post = async (path: string, body: Rec, reload: () => void) => {
-    try { await api(path, { method: 'POST', body: JSON.stringify(body) }); setOpen(''); reload(); plans.load(); enrollments.load(); }
-    catch (e) { plans.setError(e instanceof Error ? e.message : 'Action failed'); }
+  const [detail, setDetail] = useState<Rec | null>(null);
+  const [form, setForm] = useState<Rec>({});
+  const [busy, setBusy] = useState(false);
+  const err = plans.error || enrollments.error;
+  const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Category vocabulary and the expiry window are configuration, not code.
+  useEffect(() => {
+    api<{ data: { benefitCategories?: string[]; expiryWarningDays?: number } }>('/api/ops/hcm/benefits/meta')
+      .then((r) => setMeta({
+        categories: r.data.benefitCategories ?? [],
+        expiryDays: r.data.expiryWarningDays ?? 30,
+      }))
+      .catch(() => undefined);
+  }, []);
+
+  const post = async (path: string, body: Rec) => {
+    setBusy(true);
+    plans.setError('');
+    try {
+      await api(path, { method: 'POST', body: JSON.stringify(body) });
+      setOpen('');
+      plans.load();
+      enrollments.load();
+    } catch (e) {
+      plans.setError(e instanceof Error ? e.message : 'Action failed');
+    } finally {
+      setBusy(false);
+    }
   };
+  const openPlan = () => { setForm({ category: meta.categories[0] ?? '' }); setOpen('plan'); };
+  const openEnroll = () => { setForm({ effectiveFrom: today() }); setOpen('enroll'); };
+  const openResign = (r: Rec) => { setDetail(r); setForm({ effectiveTo: today() }); setOpen('resign'); };
+
+  const activePlans = plans.rows.filter((p) => String(p.status ?? 'ACTIVE') === 'ACTIVE');
+  const activeEnroll = enrollments.rows.filter((r) => String(r.status) === 'ACTIVE');
+  const monthly = activeEnroll.reduce((s, r) => s + Number(r.monthlyCost ?? 0), 0);
+  const now = Date.now();
+  const expiring = activeEnroll.filter((r) => {
+    const t = r.effectiveTo ? new Date(String(r.effectiveTo)).getTime() : NaN;
+    return Number.isFinite(t) && t >= now && t <= now + meta.expiryDays * 86400000;
+  });
+  const enrolledCount = (planId: unknown) => enrollments.rows.filter((r) => String(r.planId) === String(planId)).length;
+
+  const needle = q.trim().toLowerCase();
+  const planRows = plans.rows.filter((p) => {
+    const byCat = !category || String(p.category) === category;
+    const byText = !needle || `${String(p.code ?? '')} ${String(p.name ?? '')} ${String(p.provider ?? '')} ${String(p.category ?? '')}`.toLowerCase().includes(needle);
+    return byCat && byText;
+  });
+  const enrollRows = enrollments.rows.filter((r) => {
+    const byStatus = !status || String(r.status) === status;
+    const byText = !needle || `${nameOf(r)} ${String(r.employeeNo ?? '')} ${String(r.planName ?? '')} ${String(r.planCode ?? '')}`.toLowerCase().includes(needle);
+    return byStatus && byText;
+  });
+  const pretty = (v: unknown) => String(v ?? '').replace(/_/g, ' ').toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  const selectedPlan = plans.rows.find((p) => String(p.id) === String(form.planId));
+
   return (
-    <Page kicker="Benefits" title="Plans and enrollments" back="/people"
+    <Page kicker="Benefits" title="Benefit plans and enrolments" back="/people"
       actions={<>
-        {can(user, 'hr.benefit_plans.create') && <button className="btn" onClick={() => setOpen('plan')}>New plan</button>}
-        {can(user, 'hr.benefit_enrollments.enroll') && <button className="btn btn-primary" onClick={() => setOpen('enroll')}>Enroll</button>}
+        {can(user, 'hr.benefit_plans.create') && <button className="btn" onClick={openPlan}>New plan</button>}
+        {can(user, 'hr.benefit_enrollments.enroll') && <button className="btn btn-primary" onClick={openEnroll}>Enrol employee</button>}
       </>}>
-      {plans.error && <ErrorBanner error={plans.error} />}
-      <div className="people-split">
-        <section className="card">
-          <div className="card-head"><h3>Plans</h3></div>
-          <div className="table-wrap"><table className="data">
-            <thead><tr><th>Code</th><th>Name</th><th>Category</th><th className="cell-num">Cost</th></tr></thead>
-            <tbody>{plans.rows.map((p) => (
-              <tr key={String(p.id)}><td className="cell-mono">{String(p.code)}</td><td>{String(p.name)}</td><td><Badge value={p.category} /></td><td className="cell-num">{fmtMoney(p.cost)}</td></tr>
-            ))}</tbody>
-          </table></div>
-        </section>
-        <section className="card">
-          <div className="card-head"><h3>Enrollments</h3></div>
-          <div className="table-wrap"><table className="data">
-            <thead><tr><th>Employee</th><th>Plan</th><th>Status</th><th></th></tr></thead>
-            <tbody>{enrollments.rows.map((r) => (
-              <tr key={String(r.id)}>
-                <td>{nameOf(r)}</td><td>{String(r.planName)}</td><td><Badge value={r.status} /></td>
-                <td>{String(r.status) === 'ACTIVE' && can(user, 'hr.benefit_enrollments.update') && (
-                  <button className="btn btn-sm" onClick={() => post(`/api/ops/hcm/benefits/enrollments/${r.id}/resign`, {}, enrollments.load)}>Resign</button>
-                )}</td>
-              </tr>
-            ))}</tbody>
-          </table></div>
-        </section>
+      {err && <ErrorBanner error={err} />}
+
+      <HrKpiGrid>
+        <HrKpi label="Active plans" value={fmtNum(activePlans.length)} sub={`${fmtNum(plans.rows.length)} in catalogue`} />
+        <HrKpi label="Enrolled" value={fmtNum(activeEnroll.length)} sub="active enrolments" accent="#1261A0" tint="rgba(18, 97, 160, 0.12)" />
+        <HrKpi label="Monthly cost" value={fmtMoney(monthly)} sub="active enrolments" accent="#168A5B" tint="rgba(22, 138, 91, 0.12)" />
+        <HrKpi label="Expiring" value={fmtNum(expiring.length)} sub={`next ${meta.expiryDays} days`} accent="#D97706" tint="rgba(217, 119, 6, 0.12)" />
+      </HrKpiGrid>
+
+      <div className="tabs" style={{ margin: '16px 0 12px' }}>
+        {[['enrollments', 'Enrolments'], ['plans', 'Plans']].map(([k, l]) => (
+          <button key={k} className={tab === k ? 'tab active' : 'tab'} onClick={() => setTab(k)}>{l}</button>
+        ))}
       </div>
-      {open && (
-        <Modal title={open === 'plan' ? 'New benefit plan' : 'Enroll employee'} onClose={() => setOpen('')}
+
+      {tab === 'enrollments' && (
+        <section className="card">
+          <div className="card-head"><h3>Enrolments</h3><span className="muted">{fmtNum(enrollRows.length)} shown</span></div>
+          <HrToolbar>
+            <input className="search-input" placeholder="Search employee, plan or code..." value={q} onChange={(e) => setQ(e.target.value)} />
+            <div className="chips">
+              {[['', 'All'], ['ACTIVE', 'Active'], ['CANCELLED', 'Cancelled']].map(([k, l]) => (
+                <button key={k || 'all'} className={status === k ? 'chip chip-on' : 'chip'} onClick={() => setStatus(k)}>{l}</button>
+              ))}
+            </div>
+          </HrToolbar>
+          <div className="table-wrap"><table className="data">
+            <thead><tr><th>Employee</th><th>Plan</th><th>Category</th><th>Effective</th><th className="cell-num">Monthly cost</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {enrollRows.map((r) => (
+                <tr key={String(r.id)}>
+                  <td><Avatar name={nameOf(r)} sub={String(r.employeeNo ?? '')} size="sm" /></td>
+                  <td>{String(r.planName ?? '')} <CodeChip>{String(r.planCode ?? '')}</CodeChip></td>
+                  <td><Badge value={r.category} /></td>
+                  <td>{fmtDate(r.effectiveFrom)}{r.effectiveTo ? ` to ${fmtDate(r.effectiveTo)}` : ''}</td>
+                  <td className="cell-num">{fmtMoney(r.monthlyCost)}</td>
+                  <td><Badge value={r.status} /></td>
+                  <td>{String(r.status) === 'ACTIVE' && can(user, 'hr.benefit_enrollments.update') && (
+                    <button className="btn btn-sm" onClick={() => openResign(r)}>Resign</button>
+                  )}</td>
+                </tr>
+              ))}
+              {enrollRows.length === 0 && (
+                <HrTableEmpty colSpan={7}
+                  title={enrollments.rows.length === 0 ? 'No enrolments yet' : 'No matches'}
+                  hint={enrollments.rows.length === 0
+                    ? 'Enrol an employee onto a benefit plan to see them here.'
+                    : 'Try a different search or status filter.'}>
+                  {enrollments.rows.length === 0 && can(user, 'hr.benefit_enrollments.enroll') && (
+                    <button className="btn btn-primary" onClick={openEnroll}>Enrol employee</button>
+                  )}
+                </HrTableEmpty>
+              )}
+            </tbody>
+          </table></div>
+        </section>
+      )}
+
+      {tab === 'plans' && (
+        <section className="card">
+          <div className="card-head"><h3>Plans</h3><span className="muted">{fmtNum(planRows.length)} shown</span></div>
+          <HrToolbar>
+            <input className="search-input" placeholder="Search plan, provider or code..." value={q} onChange={(e) => setQ(e.target.value)} />
+            <div className="chips">
+              {[['', 'All'], ...meta.categories.map((c) => [c, pretty(c)])].map(([k, l]) => (
+                <button key={k || 'all'} className={category === k ? 'chip chip-on' : 'chip'} onClick={() => setCategory(k)}>{l}</button>
+              ))}
+            </div>
+          </HrToolbar>
+          <div className="table-wrap"><table className="data">
+            <thead><tr><th>Plan</th><th>Category</th><th>Provider</th><th className="cell-num">Cost</th><th className="cell-num">Employee</th><th className="cell-num">Employer</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {planRows.map((p) => (
+                <tr key={String(p.id)}>
+                  <td><CodeChip>{String(p.code ?? '')}</CodeChip> {String(p.name ?? '')}</td>
+                  <td><Badge value={p.category} /></td>
+                  <td>{String(p.provider ?? '-')}</td>
+                  <td className="cell-num">{fmtMoney(p.cost)}</td>
+                  <td className="cell-num">{fmtMoney(p.employeeContribution)}</td>
+                  <td className="cell-num">{fmtMoney(p.employerContribution)}</td>
+                  <td><Badge value={p.status} /></td>
+                  <td><button className="btn btn-sm" onClick={() => { setDetail(p); setOpen('detail'); }}>Details</button></td>
+                </tr>
+              ))}
+              {planRows.length === 0 && (
+                <HrTableEmpty colSpan={8}
+                  title={plans.rows.length === 0 ? 'No plans yet' : 'No matches'}
+                  hint={plans.rows.length === 0
+                    ? 'Create a benefit plan to start enrolling employees.'
+                    : 'Try a different search or category.'}>
+                  {plans.rows.length === 0 && can(user, 'hr.benefit_plans.create') && (
+                    <button className="btn btn-primary" onClick={openPlan}>New plan</button>
+                  )}
+                </HrTableEmpty>
+              )}
+            </tbody>
+          </table></div>
+        </section>
+      )}
+
+      {open === 'detail' && detail && (
+        <Modal title="Benefit plan" onClose={() => setOpen('')}
+          footer={<button className="btn" onClick={() => setOpen('')}>Close</button>}>
+          <dl className="def-list">
+            <div><dt>Code</dt><dd><CodeChip>{String(detail.code ?? '')}</CodeChip></dd></div>
+            <div><dt>Name</dt><dd>{String(detail.name ?? '')}</dd></div>
+            <div><dt>Category</dt><dd><Badge value={detail.category} /></dd></div>
+            <div><dt>Provider</dt><dd>{String(detail.provider ?? '-')}</dd></div>
+            <div><dt>Monthly cost</dt><dd>{fmtMoney(detail.cost)}</dd></div>
+            <div><dt>Employee share</dt><dd>{fmtMoney(detail.employeeContribution)}</dd></div>
+            <div><dt>Employer share</dt><dd>{fmtMoney(detail.employerContribution)}</dd></div>
+            <div><dt>Status</dt><dd><Badge value={detail.status} /></dd></div>
+            <div><dt>Enrolments</dt><dd>{fmtNum(enrolledCount(detail.id))}</dd></div>
+          </dl>
+        </Modal>
+      )}
+
+      {open === 'plan' && (
+        <Modal title="New benefit plan" wide onClose={() => setOpen('')}
           footer={<><button className="btn" onClick={() => setOpen('')}>Cancel</button>
-            <button className="btn btn-primary" onClick={() => {
-              if (open === 'plan') post('/api/ops/hcm/benefits/plans', { name, category: 'MEDICAL' }, plans.load);
-              else post('/api/ops/hcm/benefits/enrollments', { employeeId: Number(employeeId), planId: Number(planId), effectiveFrom: today() }, enrollments.load);
-            }}>Save</button></>}>
+            <button className="btn btn-primary" disabled={busy || !String(form.name ?? '').trim()}
+              onClick={() => post('/api/ops/hcm/benefits/plans', {
+                name: String(form.name),
+                code: form.code ? String(form.code) : undefined,
+                category: form.category ? String(form.category) : undefined,
+                provider: form.provider ? String(form.provider) : undefined,
+                cost: form.cost !== undefined && form.cost !== '' ? Number(form.cost) : undefined,
+                employeeContribution: form.employeeContribution !== undefined && form.employeeContribution !== '' ? Number(form.employeeContribution) : undefined,
+                employerContribution: form.employerContribution !== undefined && form.employerContribution !== '' ? Number(form.employerContribution) : undefined,
+              })}>Save plan</button></>}>
           <div className="form-grid">
-            {open === 'plan' && <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} /></Field>}
-            {open === 'enroll' && <>
-              <Field label="Employee"><EmpSelect value={employeeId} onChange={setEmployeeId} /></Field>
-              <Field label="Plan"><select value={planId} onChange={(e) => setPlanId(e.target.value)}><option value="">Select…</option>{plans.rows.map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}</select></Field>
-            </>}
+            <Field label="Name"><input value={String(form.name ?? '')} onChange={(e) => set('name', e.target.value)} /></Field>
+            <Field label="Code"><input value={String(form.code ?? '')} placeholder="Auto" onChange={(e) => set('code', e.target.value)} /></Field>
+            <Field label="Category">
+              <select value={String(form.category ?? '')} onChange={(e) => set('category', e.target.value)}>
+                <option value="">Default</option>
+                {meta.categories.map((c) => <option key={c} value={c}>{pretty(c)}</option>)}
+              </select>
+            </Field>
+            <Field label="Provider"><input value={String(form.provider ?? '')} onChange={(e) => set('provider', e.target.value)} /></Field>
+            <Field label="Monthly cost"><input type="number" value={String(form.cost ?? '')} onChange={(e) => set('cost', e.target.value)} /></Field>
+            <Field label="Employee contribution"><input type="number" value={String(form.employeeContribution ?? '')} onChange={(e) => set('employeeContribution', e.target.value)} /></Field>
+            <Field label="Employer contribution"><input type="number" value={String(form.employerContribution ?? '')} onChange={(e) => set('employerContribution', e.target.value)} /></Field>
+          </div>
+          <p className="muted" style={{ marginTop: 10 }}>Categories come from Organisation Settings - HR, so they can change without a deploy.</p>
+        </Modal>
+      )}
+
+      {open === 'enroll' && (
+        <Modal title="Enrol employee" onClose={() => setOpen('')}
+          footer={<><button className="btn" onClick={() => setOpen('')}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy || !form.employeeId || !form.planId}
+              onClick={() => post('/api/ops/hcm/benefits/enrollments', {
+                employeeId: Number(form.employeeId),
+                planId: Number(form.planId),
+                effectiveFrom: form.effectiveFrom ? String(form.effectiveFrom) : today(),
+                effectiveTo: form.effectiveTo ? String(form.effectiveTo) : null,
+                monthlyCost: form.monthlyCost !== undefined && form.monthlyCost !== '' ? Number(form.monthlyCost) : null,
+              })}>Enrol</button></>}>
+          <div className="form-grid">
+            <Field label="Employee"><EmpSelect value={String(form.employeeId ?? '')} onChange={(v) => set('employeeId', v)} /></Field>
+            <Field label="Plan">
+              <select value={String(form.planId ?? '')} onChange={(e) => {
+                const p = activePlans.find((x) => String(x.id) === e.target.value);
+                setForm((f) => ({ ...f, planId: e.target.value, monthlyCost: p && Number(p.cost) > 0 ? String(p.cost) : f.monthlyCost }));
+              }}>
+                <option value="">Select plan...</option>
+                {activePlans.map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.name)} - {fmtMoney(p.cost)}</option>)}
+              </select>
+            </Field>
+            <Field label="Effective from"><input type="date" value={String(form.effectiveFrom ?? '')} onChange={(e) => set('effectiveFrom', e.target.value)} /></Field>
+            <Field label="Effective to"><input type="date" value={String(form.effectiveTo ?? '')} onChange={(e) => set('effectiveTo', e.target.value)} /></Field>
+            <Field label="Monthly cost"><input type="number" placeholder={selectedPlan ? String(selectedPlan.cost ?? '') : ''} value={String(form.monthlyCost ?? '')} onChange={(e) => set('monthlyCost', e.target.value)} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {open === 'resign' && detail && (
+        <Modal title="Resign from benefit" onClose={() => setOpen('')}
+          footer={<><button className="btn" onClick={() => setOpen('')}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy}
+              onClick={() => post(`/api/ops/hcm/benefits/enrollments/${String(detail.id)}/resign`, {
+                effectiveTo: form.effectiveTo ? String(form.effectiveTo) : null,
+              })}>Resign</button></>}>
+          <dl className="def-list" style={{ marginBottom: 12 }}>
+            <div><dt>Employee</dt><dd>{nameOf(detail)}</dd></div>
+            <div><dt>Plan</dt><dd>{String(detail.planName ?? '')}</dd></div>
+          </dl>
+          <div className="form-grid">
+            <Field label="Effective to"><input type="date" value={String(form.effectiveTo ?? '')} onChange={(e) => set('effectiveTo', e.target.value)} /></Field>
           </div>
         </Modal>
       )}

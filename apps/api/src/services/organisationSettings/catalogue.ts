@@ -287,6 +287,12 @@ export const ORG_CATEGORIES: OrgCategory[] = [
       leave_carryover_enabled: bool('Leave Carry-over', { group: 'Leave', default: true }),
       leave_carryover_max_days: num('Maximum Carry-over (days)', { group: 'Leave', default: 10, min: 0, max: 365 }),
       leave_min_notice_days: num('Minimum Notice (days)', { group: 'Leave', default: 7, min: 0, max: 365 }),
+      benefit_categories: f('Benefit Categories', 'text', {
+        group: 'Benefits',
+        default: 'MEDICAL,INSURANCE,MEAL,TRANSPORT,OTHER',
+        help: 'Comma-separated. Drives the category picker and the category filter on the benefits desk.',
+      }),
+      benefit_expiry_warning_days: num('Benefit Expiry Warning (days)', { group: 'Benefits', default: 30, min: 1, max: 365 }),
       disciplinary_requires_hr: bool('Disciplinary Requires HR', { group: 'Performance', default: true }),
       performance_cycle: sel('Performance Cycle', ['QUARTERLY', 'HALF_YEARLY', 'ANNUAL'], { group: 'Performance', default: 'ANNUAL' }),
       training_records_required: bool('Training Records Required', { group: 'Performance', default: true }),
