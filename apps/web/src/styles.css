@@ -1072,6 +1072,13 @@ html[data-theme='dark'] .delivery-row { border-color: #254154; }
 .meter-track { height: 8px; background: var(--paper); border-radius: 99px; overflow: hidden; }
 .meter-fill { height: 100%; background: var(--mill); }
 
+.ke-row { display: grid; grid-template-columns: 1.6fr 0.8fr 0.8fr 0.6fr 30px; gap: 8px; align-items: center; margin-bottom: 6px; }
+.ke-row-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 700; }
+.ke-row input { width: 100%; }
+.ke-row-del { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 4px; }
+.ke-row-del:hover { color: var(--clay); }
+.ke-add { margin-top: 4px; }
+
 .th-btn { border: 0; background: none; font: inherit; color: inherit; cursor: pointer; padding: 0; text-transform: inherit; letter-spacing: inherit; font-weight: inherit; }
 .col-pop { display: flex; flex-wrap: wrap; gap: 8px; }
 .density-compact table.data td, .density-compact table.data th { padding: 6px 8px; }

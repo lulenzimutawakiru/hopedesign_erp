@@ -296,6 +296,18 @@ export const ORG_CATEGORIES: OrgCategory[] = [
       disciplinary_requires_hr: bool('Disciplinary Requires HR', { group: 'Performance', default: true }),
       performance_cycle: sel('Performance Cycle', ['QUARTERLY', 'HALF_YEARLY', 'ANNUAL'], { group: 'Performance', default: 'ANNUAL' }),
       training_records_required: bool('Training Records Required', { group: 'Performance', default: true }),
+      performance_goal_categories: f('Goal Categories', 'text', {
+        group: 'Performance',
+        default: 'PERFORMANCE,FINANCIAL,CUSTOMER,OPERATIONAL,DEVELOPMENT',
+        help: 'Comma-separated. Drives the category picker and the category filter on the performance desk.',
+      }),
+      performance_review_types: f('Review Types', 'text', {
+        group: 'Performance',
+        default: 'ANNUAL,HALF_YEAR,QUARTERLY,PROBATION,PROMOTION,EXIT',
+        help: 'Comma-separated. Must be review types the payroll of record recognises.',
+      }),
+      performance_rating_min: num('Rating Scale Minimum', { group: 'Performance', default: 1, min: 0, max: 10 }),
+      performance_rating_max: num('Rating Scale Maximum', { group: 'Performance', default: 5, min: 1, max: 10 }),
       payroll_enrolment_default: bool('Enrol New Employees In Payroll', {
         group: 'Payroll boundary',
         default: false,

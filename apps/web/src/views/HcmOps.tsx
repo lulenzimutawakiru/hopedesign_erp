@@ -13,6 +13,29 @@ function nameOf(r: Rec) {
   return `${String(r.firstName ?? '')} ${String(r.lastName ?? '')}`.trim() || '—';
 }
 
+/** "HALF_YEAR" -> "Half Year". Shared by the performance and benefits desks. */
+function pretty(v: unknown) {
+  return String(v ?? '').replace(/_/g, ' ').toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+/** Inline progress bar, 0 to 100. */
+function Meter({ value }: { value: number }) {
+  const pct = Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+  const tone = pct >= 100 ? '#168A5B' : pct >= 50 ? 'var(--mill)' : '#D97706';
+  return (
+    <div className="meter" style={{ margin: 0, minWidth: 120 }}>
+      <div className="meter-head"><span>{fmtNum(Math.round(pct))}%</span></div>
+      <div className="meter-track"><div className="meter-fill" style={{ width: `${pct}%`, background: tone }} /></div>
+    </div>
+  );
+}
+
+const GOAL_STATUSES: Array<[string, string]> = [['', 'All'], ['NOT_STARTED', 'Not started'], ['IN_PROGRESS', 'In progress'], ['ACHIEVED', 'Achieved'], ['ON_TRACK', 'On track'], ['AT_RISK', 'At risk'], ['PAST_DUE', 'Past due'], ['CANCELLED', 'Cancelled']];
+const REVIEW_STATUSES: Array<[string, string]> = [['', 'All'], ['DRAFT', 'Draft'], ['IN_PROGRESS', 'In progress'], ['SUBMITTED', 'Submitted'], ['APPROVED', 'Approved'], ['COMPLETED', 'Completed'], ['CANCELLED', 'Cancelled']];
+const PIP_STATUSES: Array<[string, string]> = [['', 'All'], ['OPEN', 'Open'], ['IN_PROGRESS', 'In progress'], ['IMPROVED', 'Improved'], ['CLOSED', 'Closed'], ['FAILED', 'Failed']];
+/** Recorded on the PIP audit trail when the plan is closed. */
+const PIP_OUTCOMES = ['IMPROVED', 'PARTIALLY_IMPROVED', 'NOT_IMPROVED', 'CLOSED'];
+
 function useEmployees() {
   const [rows, setRows] = useState<Rec[]>([]);
   useEffect(() => {
@@ -508,80 +531,401 @@ function PerformanceDesk() {
   const goals = useList('/api/ops/hcm/performance/goals');
   const reviews = useList('/api/ops/hcm/performance/reviews');
   const pips = useList('/api/ops/hcm/performance/pips');
+  const [meta, setMeta] = useState<{ goalCategories: string[]; reviewTypes: string[]; ratingMin: number; ratingMax: number }>({
+    goalCategories: [], reviewTypes: [], ratingMin: 1, ratingMax: 5,
+  });
+  const [q, setQ] = useState('');
+  const [goalStatus, setGoalStatus] = useState('');
+  const [reviewStatus, setReviewStatus] = useState('');
+  const [pipStatus, setPipStatus] = useState('');
   const [open, setOpen] = useState('');
-  const [employeeId, setEmployeeId] = useState('');
-  const [title, setTitle] = useState('');
-  const [reason, setReason] = useState('');
+  const [detail, setDetail] = useState<Rec | null>(null);
+  const [form, setForm] = useState<Rec>({});
+  const [kpis, setKpis] = useState<Rec[]>([]);
+  const [pipGoals, setPipGoals] = useState<Rec[]>([]);
   const [busy, setBusy] = useState(false);
   const err = goals.error || reviews.error || pips.error;
-  const post = async (path: string, body: Rec, reload: () => void) => {
+  const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Goal categories, review types and the rating scale are configuration, not code.
+  useEffect(() => {
+    api<{ data: { goalCategories?: string[]; reviewTypes?: string[]; ratingScale?: { min?: number; max?: number } } }>('/api/ops/hcm/performance/meta')
+      .then((r) => setMeta({
+        goalCategories: r.data.goalCategories ?? [],
+        reviewTypes: r.data.reviewTypes ?? [],
+        ratingMin: Number(r.data.ratingScale?.min ?? 1),
+        ratingMax: Number(r.data.ratingScale?.max ?? 5),
+      }))
+      .catch(() => undefined);
+  }, []);
+
+  const post = async (path: string, body: Rec) => {
     setBusy(true);
-    try { await api(path, { method: 'POST', body: JSON.stringify(body) }); setOpen(''); reload(); }
-    catch (e) { goals.setError(e instanceof Error ? e.message : 'Action failed'); }
-    finally { setBusy(false); }
+    goals.setError('');
+    try {
+      await api(path, { method: 'POST', body: JSON.stringify(body) });
+      setOpen('');
+      goals.load();
+      reviews.load();
+      pips.load();
+    } catch (e) {
+      goals.setError(e instanceof Error ? e.message : 'Action failed');
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const goalTypes = meta.goalCategories.length ? meta.goalCategories : ['PERFORMANCE'];
+  const reviewTypes = meta.reviewTypes.length ? meta.reviewTypes : ['ANNUAL'];
+  const ratings = Array.from({ length: Math.max(1, meta.ratingMax - meta.ratingMin + 1) }, (_, i) => meta.ratingMin + i);
+
+  const openGoal = () => {
+    setForm({ category: goalTypes[0], startDate: today(), weight: '1' });
+    setKpis([{ name: '', unit: '', targetValue: '', weight: '1' }]);
+    setOpen('goal');
+  };
+  const openReview = () => {
+    setForm({ reviewType: reviewTypes[0], periodStart: today().slice(0, 8) + '01', periodEnd: today() });
+    setOpen('review');
+  };
+  const openPip = () => {
+    setForm({ startDate: today() });
+    setPipGoals([{ title: '', target: '' }]);
+    setOpen('pip');
+  };
+  const openComplete = (r: Rec) => { setDetail(r); setForm({ overallRating: '', summary: '' }); setOpen('complete'); };
+  const openClose = (r: Rec) => { setDetail(r); setForm({ outcome: PIP_OUTCOMES[0] }); setOpen('close'); };
+  const setKpi = (i: number, k: string, v: unknown) => setKpis((rows) => rows.map((row, j) => (j === i ? { ...row, [k]: v } : row)));
+  const setPipGoal = (i: number, k: string, v: unknown) => setPipGoals((rows) => rows.map((row, j) => (j === i ? { ...row, [k]: v } : row)));
+
+  const kpiBody = () => kpis
+    .filter((k) => String(k.name ?? '').trim())
+    .map((k) => ({
+      name: String(k.name).trim(),
+      unit: k.unit ? String(k.unit) : undefined,
+      targetValue: k.targetValue !== '' && k.targetValue !== undefined ? Number(k.targetValue) : undefined,
+      weight: k.weight !== '' && k.weight !== undefined ? Number(k.weight) : undefined,
+    }));
+  const pipGoalBody = () => pipGoals
+    .filter((g) => String(g.title ?? '').trim())
+    .map((g) => ({ title: String(g.title).trim(), target: g.target ? String(g.target) : undefined }));
+
+  const openGoals = goals.rows.filter((r) => !['ACHIEVED', 'CANCELLED'].includes(String(r.status)));
+  const avgProgress = goals.rows.length
+    ? Math.round(goals.rows.reduce((s, r) => s + Number(r.progress ?? 0), 0) / goals.rows.length)
+    : 0;
+  const reviewsRunning = reviews.rows.filter((r) => String(r.status) === 'IN_PROGRESS').length;
+  const pipsOpen = pips.rows.filter((r) => ['OPEN', 'IN_PROGRESS'].includes(String(r.status))).length;
+
+  const needle = q.trim().toLowerCase();
+  const goalRows = goals.rows.filter((r) => {
+    const byStatus = !goalStatus || String(r.status) === goalStatus;
+    const byText = !needle || `${nameOf(r)} ${String(r.employeeNo ?? '')} ${String(r.title ?? '')} ${String(r.category ?? '')}`.toLowerCase().includes(needle);
+    return byStatus && byText;
+  });
+  const reviewRows = reviews.rows.filter((r) => {
+    const byStatus = !reviewStatus || String(r.status) === reviewStatus;
+    const byText = !needle || `${nameOf(r)} ${String(r.employeeNo ?? '')} ${String(r.reviewType ?? '')}`.toLowerCase().includes(needle);
+    return byStatus && byText;
+  });
+  const pipRows = pips.rows.filter((r) => {
+    const byStatus = !pipStatus || String(r.status) === pipStatus;
+    const byText = !needle || `${nameOf(r)} ${String(r.employeeNo ?? '')} ${String(r.reason ?? '')}`.toLowerCase().includes(needle);
+    return byStatus && byText;
+  });
+
   return (
     <Page kicker="Performance" title="Goals, reviews and PIPs" back="/people"
-      actions={
-        <>
-          {can(user, 'hr.performance_goals.create') && <button className="btn" onClick={() => setOpen('goal')}>New goal</button>}
-          {can(user, 'hr.performance_reviews.create') && <button className="btn" onClick={() => setOpen('review')}>Start review</button>}
-          {can(user, 'hr.pips.create') && <button className="btn btn-primary" onClick={() => setOpen('pip')}>Open PIP</button>}
-        </>
-      }>
+      actions={<>
+        {can(user, 'hr.performance_goals.create') && <button className="btn" onClick={openGoal}>New goal</button>}
+        {can(user, 'hr.performance_reviews.create') && <button className="btn" onClick={openReview}>Start review</button>}
+        {can(user, 'hr.pips.create') && <button className="btn btn-primary" onClick={openPip}>Open PIP</button>}
+      </>}>
       {err && <ErrorBanner error={err} />}
-      <div className="tabs" style={{ marginBottom: 12 }}>
+
+      <HrKpiGrid>
+        <HrKpi label="Open goals" value={fmtNum(openGoals.length)} sub={`${fmtNum(goals.rows.length)} tracked`} />
+        <HrKpi label="Average progress" value={`${fmtNum(avgProgress)}%`} sub="across all goals" accent="#1261A0" tint="rgba(18, 97, 160, 0.12)" />
+        <HrKpi label="Reviews running" value={fmtNum(reviewsRunning)} sub={`${fmtNum(reviews.rows.length)} total`} accent="#D97706" tint="rgba(217, 119, 6, 0.12)" />
+        <HrKpi label="Open PIPs" value={fmtNum(pipsOpen)} sub={`${fmtNum(pips.rows.length)} on record`} accent="#C93636" tint="rgba(201, 54, 54, 0.12)" />
+      </HrKpiGrid>
+
+      <div className="tabs" style={{ margin: '16px 0 12px' }}>
         {[['goals', 'Goals'], ['reviews', 'Reviews'], ['pips', 'PIPs']].map(([k, l]) => (
           <button key={k} className={tab === k ? 'tab active' : 'tab'} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
+
       {tab === 'goals' && (
-        <section className="card"><div className="table-wrap"><table className="data">
-          <thead><tr><th>Employee</th><th>Goal</th><th className="cell-num">Progress</th><th>Status</th></tr></thead>
-          <tbody>{goals.rows.map((r) => (
-            <tr key={String(r.id)}><td>{nameOf(r)}</td><td>{String(r.title)}</td><td className="cell-num">{fmtNum(r.progress)}%</td><td><Badge value={r.status} /></td></tr>
-          ))}</tbody>
-        </table></div></section>
+        <section className="card">
+          <div className="card-head"><h3>Goals</h3><span className="muted">{fmtNum(goalRows.length)} shown</span></div>
+          <HrToolbar>
+            <input className="search-input" placeholder="Search employee, goal or category..." value={q} onChange={(e) => setQ(e.target.value)} />
+            <div className="chips">
+              {GOAL_STATUSES.map(([k, l]) => (
+                <button key={k || 'all'} className={goalStatus === k ? 'chip chip-on' : 'chip'} onClick={() => setGoalStatus(k)}>{l}</button>
+              ))}
+            </div>
+          </HrToolbar>
+          <div className="table-wrap"><table className="data">
+            <thead><tr><th>Employee</th><th>Goal</th><th>Category</th><th>Timeline</th><th className="cell-num">Progress</th><th>Status</th></tr></thead>
+            <tbody>
+              {goalRows.map((r) => (
+                <tr key={String(r.id)}>
+                  <td><Avatar name={nameOf(r)} sub={String(r.employeeNo ?? '')} size="sm" /></td>
+                  <td>{String(r.title ?? '')}{Number(r.weight ?? 1) !== 1 && <span className="muted">{' \u00b7 weight '}{fmtNum(r.weight)}</span>}</td>
+                  <td><Badge value={r.category} /></td>
+                  <td>{fmtDate(r.startDate)}{r.dueDate ? ` to ${fmtDate(r.dueDate)}` : ''}</td>
+                  <td className="cell-num"><Meter value={Number(r.progress ?? 0)} /></td>
+                  <td><Badge value={r.status} /></td>
+                </tr>
+              ))}
+              {goalRows.length === 0 && (
+                <HrTableEmpty colSpan={6}
+                  title={goals.rows.length === 0 ? 'No goals yet' : 'No matches'}
+                  hint={goals.rows.length === 0
+                    ? 'Set a goal to start tracking performance, and add KPIs so progress updates itself.'
+                    : 'Try a different search or status filter.'}>
+                  {goals.rows.length === 0 && can(user, 'hr.performance_goals.create') && (
+                    <button className="btn btn-primary" onClick={openGoal}>New goal</button>
+                  )}
+                </HrTableEmpty>
+              )}
+            </tbody>
+          </table></div>
+        </section>
       )}
+
       {tab === 'reviews' && (
-        <section className="card"><div className="table-wrap"><table className="data">
-          <thead><tr><th>Employee</th><th>Type</th><th>Period</th><th>Status</th><th></th></tr></thead>
-          <tbody>{reviews.rows.map((r) => (
-            <tr key={String(r.id)}>
-              <td>{nameOf(r)}</td><td><Badge value={r.reviewType} /></td><td>{fmtDate(r.periodStart)} – {fmtDate(r.periodEnd)}</td><td><Badge value={r.status} /></td>
-              <td>{String(r.status) === 'IN_PROGRESS' && can(user, 'hr.performance_reviews.complete') && (
-                <button className="btn btn-sm" onClick={() => post(`/api/ops/hcm/performance/reviews/${r.id}/complete`, { overallRating: 3, summary: 'Completed from HR desk' }, reviews.load)}>Complete</button>
-              )}</td>
-            </tr>
-          ))}</tbody>
-        </table></div></section>
+        <section className="card">
+          <div className="card-head"><h3>Reviews</h3><span className="muted">{fmtNum(reviewRows.length)} shown</span></div>
+          <HrToolbar>
+            <input className="search-input" placeholder="Search employee or review type..." value={q} onChange={(e) => setQ(e.target.value)} />
+            <div className="chips">
+              {REVIEW_STATUSES.map(([k, l]) => (
+                <button key={k || 'all'} className={reviewStatus === k ? 'chip chip-on' : 'chip'} onClick={() => setReviewStatus(k)}>{l}</button>
+              ))}
+            </div>
+          </HrToolbar>
+          <div className="table-wrap"><table className="data">
+            <thead><tr><th>Employee</th><th>Type</th><th>Period</th><th>Due</th><th className="cell-num">Rating</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {reviewRows.map((r) => (
+                <tr key={String(r.id)}>
+                  <td><Avatar name={nameOf(r)} sub={String(r.employeeNo ?? '')} size="sm" /></td>
+                  <td><Badge value={r.reviewType} /></td>
+                  <td>{fmtDate(r.periodStart)} to {fmtDate(r.periodEnd)}</td>
+                  <td>{r.dueDate ? fmtDate(r.dueDate) : <span className="muted">{'\u2014'}</span>}</td>
+                  <td className="cell-num">{Number(r.overallRating) > 0 ? fmtNum(r.overallRating) : <span className="muted">{'\u2014'}</span>}</td>
+                  <td><Badge value={r.status} /></td>
+                  <td>{String(r.status) === 'IN_PROGRESS' && can(user, 'hr.performance_reviews.complete') && (
+                    <button className="btn btn-sm" onClick={() => openComplete(r)}>Complete</button>
+                  )}</td>
+                </tr>
+              ))}
+              {reviewRows.length === 0 && (
+                <HrTableEmpty colSpan={7}
+                  title={reviews.rows.length === 0 ? 'No reviews yet' : 'No matches'}
+                  hint={reviews.rows.length === 0
+                    ? 'Start a review to record a rating and summary against an employee.'
+                    : 'Try a different search or status filter.'}>
+                  {reviews.rows.length === 0 && can(user, 'hr.performance_reviews.create') && (
+                    <button className="btn btn-primary" onClick={openReview}>Start review</button>
+                  )}
+                </HrTableEmpty>
+              )}
+            </tbody>
+          </table></div>
+        </section>
       )}
+
       {tab === 'pips' && (
-        <section className="card"><div className="table-wrap"><table className="data">
-          <thead><tr><th>Employee</th><th>Reason</th><th>Status</th><th></th></tr></thead>
-          <tbody>{pips.rows.map((r) => (
-            <tr key={String(r.id)}>
-              <td>{nameOf(r)}</td><td>{String(r.reason)}</td><td><Badge value={r.status} /></td>
-              <td>{String(r.status) === 'OPEN' && can(user, 'hr.pips.close') && (
-                <button className="btn btn-sm" onClick={() => post(`/api/ops/hcm/performance/pips/${r.id}/close`, { outcome: 'CLOSED' }, pips.load)}>Close</button>
-              )}</td>
-            </tr>
-          ))}</tbody>
-        </table></div></section>
+        <section className="card">
+          <div className="card-head"><h3>Improvement plans</h3><span className="muted">{fmtNum(pipRows.length)} shown</span></div>
+          <HrToolbar>
+            <input className="search-input" placeholder="Search employee or reason..." value={q} onChange={(e) => setQ(e.target.value)} />
+            <div className="chips">
+              {PIP_STATUSES.map(([k, l]) => (
+                <button key={k || 'all'} className={pipStatus === k ? 'chip chip-on' : 'chip'} onClick={() => setPipStatus(k)}>{l}</button>
+              ))}
+            </div>
+          </HrToolbar>
+          <div className="table-wrap"><table className="data">
+            <thead><tr><th>Employee</th><th>Reason</th><th>Window</th><th className="cell-num">Progress</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {pipRows.map((r) => (
+                <tr key={String(r.id)}>
+                  <td><Avatar name={nameOf(r)} sub={String(r.employeeNo ?? '')} size="sm" /></td>
+                  <td>{String(r.reason ?? '')}</td>
+                  <td>{fmtDate(r.startDate)}{r.endDate ? ` to ${fmtDate(r.endDate)}` : ''}</td>
+                  <td className="cell-num"><Meter value={Number(r.progress ?? 0)} /></td>
+                  <td><Badge value={r.status} /></td>
+                  <td>{String(r.status) === 'OPEN' && can(user, 'hr.pips.close') && (
+                    <button className="btn btn-sm" onClick={() => openClose(r)}>Close</button>
+                  )}</td>
+                </tr>
+              ))}
+              {pipRows.length === 0 && (
+                <HrTableEmpty colSpan={6}
+                  title={pips.rows.length === 0 ? 'No improvement plans yet' : 'No matches'}
+                  hint={pips.rows.length === 0
+                    ? 'Open a plan to document the support an employee needs, and what good looks like.'
+                    : 'Try a different search or status filter.'}>
+                  {pips.rows.length === 0 && can(user, 'hr.pips.create') && (
+                    <button className="btn btn-primary" onClick={openPip}>Open PIP</button>
+                  )}
+                </HrTableEmpty>
+              )}
+            </tbody>
+          </table></div>
+        </section>
       )}
-      {open && (
-        <Modal title={open === 'goal' ? 'New goal' : open === 'review' ? 'Start review' : 'Open PIP'} onClose={() => setOpen('')}
+
+      {open === 'goal' && (
+        <Modal title="New performance goal" wide onClose={() => setOpen('')}
           footer={<><button className="btn" onClick={() => setOpen('')}>Cancel</button>
-            <button className="btn btn-primary" disabled={busy || !employeeId} onClick={() => {
-              if (open === 'goal') post('/api/ops/hcm/performance/goals', { employeeId: Number(employeeId), title, startDate: today(), dueDate: today() }, goals.load);
-              else if (open === 'review') post('/api/ops/hcm/performance/reviews', { employeeId: Number(employeeId), reviewType: 'ANNUAL', periodStart: today().slice(0, 8) + '01', periodEnd: today() }, reviews.load);
-              else post('/api/ops/hcm/performance/pips', { employeeId: Number(employeeId), reason, startDate: today() }, pips.load);
-            }}>Save</button></>}>
+            <button className="btn btn-primary" disabled={busy || !form.employeeId || !String(form.title ?? '').trim()}
+              onClick={() => post('/api/ops/hcm/performance/goals', {
+                employeeId: Number(form.employeeId),
+                title: String(form.title).trim(),
+                description: form.description ? String(form.description) : undefined,
+                category: form.category ? String(form.category) : undefined,
+                startDate: form.startDate ? String(form.startDate) : undefined,
+                dueDate: form.dueDate ? String(form.dueDate) : undefined,
+                weight: form.weight !== '' && form.weight !== undefined ? Number(form.weight) : undefined,
+                kpis: kpiBody(),
+              })}>Save goal</button></>}>
           <div className="form-grid">
-            <Field label="Employee"><EmpSelect value={employeeId} onChange={setEmployeeId} /></Field>
-            {open === 'goal' && <Field label="Goal"><input value={title} onChange={(e) => setTitle(e.target.value)} /></Field>}
-            {open === 'pip' && <Field label="Reason"><input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>}
+            <Field label="Employee"><EmpSelect value={String(form.employeeId ?? '')} onChange={(v) => set('employeeId', v)} /></Field>
+            <Field label="Category">
+              <select value={String(form.category ?? '')} onChange={(e) => set('category', e.target.value)}>
+                {goalTypes.map((c) => <option key={c} value={c}>{pretty(c)}</option>)}
+              </select>
+            </Field>
+            <Field label="Goal"><input value={String(form.title ?? '')} placeholder="e.g. Grow regional revenue" onChange={(e) => set('title', e.target.value)} /></Field>
+            <Field label="Weight"><input type="number" value={String(form.weight ?? '')} onChange={(e) => set('weight', e.target.value)} /></Field>
+            <Field label="Start date"><input type="date" value={String(form.startDate ?? '')} onChange={(e) => set('startDate', e.target.value)} /></Field>
+            <Field label="Due date"><input type="date" value={String(form.dueDate ?? '')} onChange={(e) => set('dueDate', e.target.value)} /></Field>
           </div>
+          <Field label="Description"><textarea value={String(form.description ?? '')} placeholder="What does success look like?" onChange={(e) => set('description', e.target.value)} /></Field>
+          <div style={{ marginTop: 14 }}>
+            <div className="ke-row ke-row-head"><span>KPI</span><span>Unit</span><span>Target</span><span>Weight</span><span /></div>
+            {kpis.map((k, i) => (
+              <div className="ke-row" key={i}>
+                <input value={String(k.name ?? '')} placeholder="e.g. Deals closed" onChange={(e) => setKpi(i, 'name', e.target.value)} />
+                <input value={String(k.unit ?? '')} placeholder="Unit" onChange={(e) => setKpi(i, 'unit', e.target.value)} />
+                <input type="number" value={String(k.targetValue ?? '')} placeholder="100" onChange={(e) => setKpi(i, 'targetValue', e.target.value)} />
+                <input type="number" value={String(k.weight ?? '')} placeholder="1" onChange={(e) => setKpi(i, 'weight', e.target.value)} />
+                <button type="button" className="ke-row-del" title="Remove KPI" onClick={() => setKpis((rows) => rows.filter((_, j) => j !== i))}>{'\u00d7'}</button>
+              </div>
+            ))}
+            <button type="button" className="btn btn-sm ke-add" onClick={() => setKpis((rows) => [...rows, { name: '', unit: '', targetValue: '', weight: '1' }])}>Add KPI</button>
+            <p className="muted" style={{ marginTop: 8 }}>Progress tracks the weighted share of KPIs that reach their target.</p>
+          </div>
+          <p className="muted" style={{ marginTop: 10 }}>Categories come from Organisation Settings - HR, so they can change without a deploy.</p>
+        </Modal>
+      )}
+
+      {open === 'review' && (
+        <Modal title="Start performance review" onClose={() => setOpen('')}
+          footer={<><button className="btn" onClick={() => setOpen('')}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy || !form.employeeId}
+              onClick={() => post('/api/ops/hcm/performance/reviews', {
+                employeeId: Number(form.employeeId),
+                reviewType: form.reviewType ? String(form.reviewType) : undefined,
+                periodStart: form.periodStart ? String(form.periodStart) : undefined,
+                periodEnd: form.periodEnd ? String(form.periodEnd) : undefined,
+                dueDate: form.dueDate ? String(form.dueDate) : undefined,
+              })}>Start review</button></>}>
+          <div className="form-grid">
+            <Field label="Employee"><EmpSelect value={String(form.employeeId ?? '')} onChange={(v) => set('employeeId', v)} /></Field>
+            <Field label="Review type">
+              <select value={String(form.reviewType ?? '')} onChange={(e) => set('reviewType', e.target.value)}>
+                {reviewTypes.map((t) => <option key={t} value={t}>{pretty(t)}</option>)}
+              </select>
+            </Field>
+            <Field label="Period start"><input type="date" value={String(form.periodStart ?? '')} onChange={(e) => set('periodStart', e.target.value)} /></Field>
+            <Field label="Period end"><input type="date" value={String(form.periodEnd ?? '')} onChange={(e) => set('periodEnd', e.target.value)} /></Field>
+            <Field label="Due date"><input type="date" value={String(form.dueDate ?? '')} onChange={(e) => set('dueDate', e.target.value)} /></Field>
+          </div>
+          <p className="muted" style={{ marginTop: 10 }}>Review types come from Organisation Settings - HR, so they can change without a deploy.</p>
+        </Modal>
+      )}
+
+      {open === 'pip' && (
+        <Modal title="Open improvement plan" wide onClose={() => setOpen('')}
+          footer={<><button className="btn" onClick={() => setOpen('')}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy || !form.employeeId || !String(form.reason ?? '').trim()}
+              onClick={() => post('/api/ops/hcm/performance/pips', {
+                employeeId: Number(form.employeeId),
+                reason: String(form.reason).trim(),
+                startDate: form.startDate ? String(form.startDate) : undefined,
+                endDate: form.endDate ? String(form.endDate) : undefined,
+                goals: pipGoalBody(),
+              })}>Open plan</button></>}>
+          <div className="form-grid">
+            <Field label="Employee"><EmpSelect value={String(form.employeeId ?? '')} onChange={(v) => set('employeeId', v)} /></Field>
+            <Field label="Start date"><input type="date" value={String(form.startDate ?? '')} onChange={(e) => set('startDate', e.target.value)} /></Field>
+            <Field label="End date"><input type="date" value={String(form.endDate ?? '')} onChange={(e) => set('endDate', e.target.value)} /></Field>
+          </div>
+          <Field label="Reason"><textarea value={String(form.reason ?? '')} placeholder="Why is this plan being opened?" onChange={(e) => set('reason', e.target.value)} /></Field>
+          <div style={{ marginTop: 14 }}>
+            <div className="ke-row ke-row-head" style={{ gridTemplateColumns: '1fr 1fr 30px' }}><span>Improvement goal</span><span>Target</span><span /></div>
+            {pipGoals.map((g, i) => (
+              <div className="ke-row" style={{ gridTemplateColumns: '1fr 1fr 30px' }} key={i}>
+                <input value={String(g.title ?? '')} placeholder="e.g. Close 10 tickets a week" onChange={(e) => setPipGoal(i, 'title', e.target.value)} />
+                <input value={String(g.target ?? '')} placeholder="Target" onChange={(e) => setPipGoal(i, 'target', e.target.value)} />
+                <button type="button" className="ke-row-del" title="Remove goal" onClick={() => setPipGoals((rows) => rows.filter((_, j) => j !== i))}>{'\u00d7'}</button>
+              </div>
+            ))}
+            <button type="button" className="btn btn-sm ke-add" onClick={() => setPipGoals((rows) => [...rows, { title: '', target: '' }])}>Add goal</button>
+          </div>
+        </Modal>
+      )}
+
+      {open === 'complete' && detail && (
+        <Modal title="Complete review" onClose={() => setOpen('')}
+          footer={<><button className="btn" onClick={() => setOpen('')}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy || !form.overallRating}
+              onClick={() => post(`/api/ops/hcm/performance/reviews/${String(detail.id)}/complete`, {
+                overallRating: form.overallRating !== '' ? Number(form.overallRating) : undefined,
+                summary: form.summary ? String(form.summary) : undefined,
+              })}>Complete review</button></>}>
+          <dl className="def-list" style={{ marginBottom: 12 }}>
+            <div><dt>Employee</dt><dd>{nameOf(detail)}</dd></div>
+            <div><dt>Type</dt><dd><Badge value={detail.reviewType} /></dd></div>
+            <div><dt>Period</dt><dd>{fmtDate(detail.periodStart)} to {fmtDate(detail.periodEnd)}</dd></div>
+          </dl>
+          <Field label={`Overall rating (${meta.ratingMin}-${meta.ratingMax})`}>
+            <div className="chips">
+              {ratings.map((n) => (
+                <button key={n} type="button" className={Number(form.overallRating) === n ? 'chip chip-on' : 'chip'} onClick={() => set('overallRating', n)}>{'\u2605'.repeat(n)}</button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Summary"><textarea value={String(form.summary ?? '')} onChange={(e) => set('summary', e.target.value)} /></Field>
+        </Modal>
+      )}
+
+      {open === 'close' && detail && (
+        <Modal title="Close improvement plan" onClose={() => setOpen('')}
+          footer={<><button className="btn" onClick={() => setOpen('')}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy || !form.outcome}
+              onClick={() => post(`/api/ops/hcm/performance/pips/${String(detail.id)}/close`, {
+                outcome: String(form.outcome),
+              })}>Close plan</button></>}>
+          <dl className="def-list" style={{ marginBottom: 12 }}>
+            <div><dt>Employee</dt><dd>{nameOf(detail)}</dd></div>
+            <div><dt>Reason</dt><dd>{String(detail.reason ?? '')}</dd></div>
+          </dl>
+          <Field label="Outcome">
+            <div className="chips">
+              {PIP_OUTCOMES.map((o) => (
+                <button key={o} type="button" className={form.outcome === o ? 'chip chip-on' : 'chip'} onClick={() => set('outcome', o)}>{pretty(o)}</button>
+              ))}
+            </div>
+          </Field>
+          <p className="muted" style={{ marginTop: 10 }}>The outcome is written to the plan audit trail when it is closed.</p>
         </Modal>
       )}
     </Page>
@@ -750,7 +1094,6 @@ function BenefitsDesk() {
     const byText = !needle || `${nameOf(r)} ${String(r.employeeNo ?? '')} ${String(r.planName ?? '')} ${String(r.planCode ?? '')}`.toLowerCase().includes(needle);
     return byStatus && byText;
   });
-  const pretty = (v: unknown) => String(v ?? '').replace(/_/g, ' ').toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
   const selectedPlan = plans.rows.find((p) => String(p.id) === String(form.planId));
 
   return (

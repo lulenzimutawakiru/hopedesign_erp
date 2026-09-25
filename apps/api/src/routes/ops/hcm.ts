@@ -402,6 +402,34 @@ hcmOpsRouter.get('/leave/balances', ...runGet('hr.leave_balances.view', (c, ctx,
 hcmOpsRouter.get('/performance/goals', ...runGet('hr.performance_goals.view', (c, ctx, q) => hcmLists.listPerformanceGoals(c, ctx, q.status != null ? String(q.status) : null)));
 hcmOpsRouter.get('/performance/reviews', ...runGet('hr.performance_reviews.view', (c, ctx, q) => hcmLists.listPerformanceReviews(c, ctx, q.status != null ? String(q.status) : null)));
 hcmOpsRouter.get('/performance/pips', ...runGet('hr.pips.view', (c, ctx, q) => hcmLists.listPips(c, ctx, q.status != null ? String(q.status) : null)));
+/**
+ * Performance vocabulary for the HR desk.
+ *
+ * Goal categories, review types and the rating scale are Organisation Settings
+ * (the HR category), so HR can change them without a deploy. Readable by anyone
+ * who can view goals, reviews or PIPs - it is vocabulary, not secrets.
+ */
+hcmOpsRouter.get('/performance/meta', ...runGet(
+  ['hr.performance_goals.view', 'hr.performance_reviews.view', 'hr.pips.view'],
+  async (c, ctx) => {
+    const cat = ORG_CATEGORY_BY_ID.get('hr');
+    const values: Record<string, unknown> = cat ? (await loadCategoryValues(c, ctx, cat)).values : {};
+    const listOf = (key: string) => String((values[key] ?? defaultFor('hr', key)) ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const min = Number(values.performance_rating_min ?? defaultFor('hr', 'performance_rating_min'));
+    const max = Number(values.performance_rating_max ?? defaultFor('hr', 'performance_rating_max'));
+    const lo = Number.isFinite(min) ? min : 1;
+    const hi = Number.isFinite(max) && max > lo ? max : lo + 1;
+    return {
+      goalCategories: listOf('performance_goal_categories'),
+      reviewTypes: listOf('performance_review_types'),
+      ratingScale: { min: lo, max: hi },
+      cycle: String(values.performance_cycle ?? defaultFor('hr', 'performance_cycle') ?? 'ANNUAL'),
+    };
+  }
+));
 hcmOpsRouter.post('/performance/goals', ...run('hr.performance_goals.create', (c, ctx, b) => hcm.createPerformanceGoal(c, ctx, {
   employeeId: Number(b.employeeId),
   title: String(b.title ?? ''),
