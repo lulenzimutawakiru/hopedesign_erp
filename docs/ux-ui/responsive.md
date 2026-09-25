@@ -18,7 +18,7 @@ respect both.
 
 ### 1.1 The JS contract
 
-`apps/web/src/nav.ts` L1029–1038 — the authoritative six-point scale:
+`apps/web/src/nav.ts` L1057–1064 — the authoritative six-point scale:
 
 ```ts
 export type Breakpoint = 'mobile' | 'phablet' | 'tablet' | 'laptop' | 'desktop' | 'wide';
@@ -46,9 +46,15 @@ Consumed by `useBreakpoint()` (`components/nav.tsx`).
 
 ### 1.2 The CSS reality
 
-`styles.css` contains **60 `@media` blocks**. Of those, **54 are width-based**
-and 6 are capability/print-based (3 × `prefers-reduced-motion`, 1 × `print`,
-1 × `hover: none`, 1 × `pointer: coarse`).
+`styles.css` contains **59 `@media` blocks**. Of those, **53 are width-based**
+and 6 are capability-based: **3 × `prefers-reduced-motion`** (L1077, L4613,
+L6458), **1 × `(pointer: coarse)`** (L441), **1 × `(hover: none)`** (L4594)
+and **1 × `(orientation: landscape) and (max-height: 520px)`** (L1422).
+
+Across all of `apps/web/src` the totals are **68 blocks — 58 width, 10
+non-width**. The four extra non-width blocks are three `print` queries
+(`print.css`, `views/hikvision/shared.tsx`, `views/WorkforcePlanning.tsx`) and
+one `prefers-reduced-motion` in `styles/auth.css`.
 
 **16 distinct `max-width` values appear inside media queries:**
 
@@ -57,7 +63,10 @@ and 6 are capability/print-based (3 × `prefers-reduced-motion`, 1 × `print`,
 ```
 
 The most frequent widths are `640` (10 blocks) and `900` (10 blocks), then
-`960` (5), `720` (4), `767` (3), with the remainder used once or twice each.
+`720` (6), `960` (6), `767` (4), `860` (3), `560`/`760`/`1023` (2 each) and
+seven values used once each (`639`, `980`, `1080`, `1100`, `1200`, `1279`,
+`1535`). That accounts for 52 of the 53 width blocks; the fifty-third is the
+only **`min-width`** query in the file, `@media (min-width: 1080px)`.
 
 > ⚠️ **Correction to an earlier count.** A prior summary recorded "32 distinct
 > `max-width` values". The measured figure is **31 distinct `max-width`
@@ -66,6 +75,12 @@ The most frequent widths are `640` (10 blocks) and `900` (10 blocks), then
 > 1280px }`), not breakpoints. Full property list: `26, 110, 120, 130, 160, 200,
 > 240, 280, 320, 360, 420, 480, 520, 560, 639, 640, 720, 760, 767, 860, 900, 960,
 > 980, 1023, 1080, 1100, 1180, 1200, 1279, 1280, 1535`.
+
+> ⚠️ **A second correction.** The same earlier count also claimed
+> `styles.css` has `1 × print`. It has none: `styles.css` contains **no
+> `print` media query at all**. Printing is handled by `print.css` and by two
+> component-level `print` blocks (`views/hikvision/shared.tsx`,
+> `views/WorkforcePlanning.tsx`).
 
 ### 1.3 Where they agree, and where they do not
 
@@ -103,17 +118,17 @@ const focus = prefs.focusMode || isFocusPath(path)
 
 | Behaviour | Trigger | Mechanism |
 | --- | --- | --- |
-| Sidebar collapses to a **72 px rail** | `tablet || prefs.sidebarCollapsed` i.e. width < 1280 unless the user expanded it | `.rail-collapsed` class (L248) → CSS L1049–1051 |
-| Sidebar becomes an **overlay drawer** | `compact` + CSS `max-width: 767px` | `.sidebar.sidebar-open`, `margin-left: -252px` → `0` (CSS L1460–1461) |
-| Drawer scrim | `sideOpen` state | `.sidebar-scrim` L1462 + Shell L270 |
-| Hamburger | `compact` | `.menu-btn` L275, `aria-label="Open navigation"` |
+| Sidebar collapses to a **72 px rail** | `tablet || prefs.sidebarCollapsed` i.e. width < 1280 unless the user expanded it | `.rail-collapsed` class (Shell L251) → CSS L1373 (base rail width L975) |
+| Sidebar becomes an **overlay drawer** | `compact` + CSS `max-width: 767px` | `.sidebar.sidebar-open`, `margin-left: -252px` → `0` (CSS L1397–1398) |
+| Drawer scrim | `sideOpen` state | `.sidebar-scrim` L1399 + Shell L273 |
+| Hamburger | `compact` | `.menu-btn` L1400 (button Shell L278), `aria-label="Open navigation"` |
 | **Mobile dock** (5 items) | CSS `max-width: 767px` | `MobileDock` (`components/nav.tsx` L498) |
 | Focus mode auto-on | `compact` **and** path is `/warehouse` or `/operator*` | §49/§50 — the operator surfaces shed the shell entirely |
-| Focus mode hides the dock | — | CSS L1335 `.app-shell.is-focus .mobile-dock { display: none }` |
+| Focus mode hides the dock | — | CSS L1270 `.app-shell.is-focus .mobile-dock { display: none }` |
 
 ### 2.1 Breakpoint class hook
 
-The shell emits a class per breakpoint (Shell L248):
+The shell emits a class per breakpoint (Shell L251):
 
 ```tsx
 <div className={`app-shell ${collapsed ? 'rail-collapsed' : ''} ${focus ? 'is-focus' : ''} bp-${bp}`}>
@@ -133,14 +148,14 @@ breakpoint system.
 Home  ·  Work  ·  [Scan]  ·  Tasks  ·  More
 ```
 
-- Buttons are **`min-height: 52px`** (CSS L1399) — meets the 44 px target.
+- Buttons are **`min-height: 52px`** (CSS L1331–1335) — meets the 44 px target.
 - `Tasks` carries a `count-badge` when `taskCount > 0`.
 - `Scan` is the centre emphasis control (teal, `aria-label="Scan QR"`).
 - Rendered glyphs (`⌂ ▣ ◉ ☑ ☰`) are `aria-hidden`; the labels are text. ✅ §120.
-- `env(safe-area-inset-bottom)` padding is applied (CSS L1394) — correct for
+- `env(safe-area-inset-bottom)` padding is applied (CSS L1329) — correct for
   notched devices.
 - The content region reserves space via
-  `.app-shell:not(.is-focus) .content { padding-bottom: 108px; }` (CSS L1457).
+  `.app-shell:not(.is-focus) .content { padding-bottom: 108px; }` (CSS L1394).
 
 **This matches §68's mobile priority list** (My Work, Approvals, QR Scan, Tasks,
 Notifications, Quick Actions) with the exception that *Notifications* is reached
@@ -153,7 +168,7 @@ via the topbar bell rather than a dock slot.
 The mechanism is **progressive column disclosure**, not card conversion.
 
 ```css
-/* styles.css L1408–1410 */
+/* styles.css L1344–1345 */
 @media (max-width: 1023px) { .col-hide-md { display: none !important; } }
 @media (max-width: 767px)  { .col-hide-sm { display: none !important; } }
 ```
@@ -166,21 +181,40 @@ identifier*, *status*, *important amount* and *primary action*. The mechanism
 can express that, but **it is applied by hand on a per-table basis and there is
 no enforcement** — a table that omits `col-hide-*` markers will simply
 overflow or squash. §123 lists "broken tables" and horizontal overflow as
-things to check; with **470 `<table>` occurrences** and only 8 `<DataTable>`
-usages, that check is broad.
+things to check; with **509 `<table>` occurrences** and only 4 `<DataTable>`
+usages (across 3 files), that check is broad.
 
 ### 3.1 Horizontal overflow containment
 
-No global `overflow-x: auto` wrapper convention is documented. Any table that
-does not opt into `col-hide-*` must be assumed capable of forcing horizontal
-page scroll until individually verified.
+Tables are wrapped in a **`.table-wrap` container**, defined once in
+`styles.css` L642:
+
+```css
+.table-wrap { overflow-x: auto; }
+```
+
+That is the primary horizontal-overflow defence; `col-hide-*` above is the
+secondary one. The wrapper is applied at ~500 call sites in `apps/web/src`,
+and `DataTable` wraps its own table internally (`components/DataTable.tsx`
+L288), so `<DataTable>` consumers get containment for free. `styles.css`
+L1363 also gives `.table-wrap` a `transition: opacity 120ms ease` for the
+refresh state (L1359 `.is-refreshing .table-wrap`).
+
+Nine `<table>` sites remain deliberately unwrapped, all verified safe:
+
+- `components/hrUi.tsx` L47 — a JSDoc comment, not markup.
+- `views/CompliancePdpo.tsx` L1041, L1465, L2075, L2789, L3378 — `const table`
+  React nodes rendered at L513 inside `<div className="table-wrap desktop-only">`.
+- `views/hikvision/shared.tsx` L377, L397 — export HTML strings, not DOM.
+- `views/LeaveFlow.tsx` L394 — `.cal-grid`, `width: 100%`, `table-layout: fixed`.
+- `views/QrTrace.tsx` L341 — `.mini-table`, `width: 100%`.
 
 ### 3.2 Server-side table, client-side presentation
 
 `DataTable`'s server mode changes *query* semantics (§20) but not *layout*; the
 column-visibility and `col-hide-*` presentation rules remain the responsive
 mechanism. `Pager` renders a rows-per-page `<select>` with
-`aria-label="Rows per page"` (ui.tsx L181) at all widths.
+`aria-label="Rows per page"` (ui.tsx L195) at all widths.
 
 ---
 
@@ -206,41 +240,58 @@ rail) is a design change that has not been made.
 
 ## 5. Orientation, pointer and capability queries
 
-Beyond width, the stylesheet reacts to four non-width conditions. These are the
-rules that actually tailor the operational modes:
+Beyond width, the stylesheet reacts to four non-width conditions — six blocks
+in total, since `prefers-reduced-motion` appears three times (§1.2). These are
+the rules that actually tailor the operational modes:
 
 | Query | Line | Effect |
 | --- | --- | --- |
-| `@media (pointer: coarse)` | **L515** | `.link-btn { min-height: 44px }` — the only touch-target rule in the file |
-| `@media (hover: none)` | **L4656** | Suppresses hover-only affordances |
-| `@media (orientation: landscape) and (max-height: 520px)` | **L1485** | Short-landscape handling (phone held sideways) |
-| `@media (max-width: 960px) and (max-height: 540px)` | **L1039** | Short-viewport handling |
+| `@media (pointer: coarse)` | **L441** | `.link-btn { min-height: 44px }` — a full-size hit target on touch devices without inflating desktop rows |
+| `@media (hover: none)` | **L4594** | Suppresses hover-only affordances |
+| `@media (orientation: landscape) and (max-height: 520px)` | **L1422** | Short-landscape handling (phone held sideways) |
+| `@media (max-width: 960px) and (max-height: 540px)` | **L965–L970** | Short-viewport handling |
 
 Plus, inside the mobile block:
 
 ```css
-/* L1380–1384 */
+/* L1315–L1319 */
 .sheet-backdrop { align-items: flex-end; padding: 0; }
-.sheet-modal { max-width: none; width: 100%; border-radius: 16px 16px 0 0; max-height: 92vh; }
-/* L1385 */
+.sheet-modal {
+  max-width: none; width: 100%; border-radius: 16px 16px 0 0;
+  max-height: 92vh;
+}
+/* L1320 */
 .scan-actions .btn { min-height: 44px; }
 ```
 
-The `.sheet-modal` rule is the **bottom-sheet pattern** on small screens —
+Note that these rules are **free-standing**, not inside
+`@media (max-width: 767px)` — they carry no width condition at all, so the
+sheet layout applies at every viewport. The `.sheet-modal` rule is the
+**bottom-sheet pattern** on small screens —
 correct for §32's "very short forms" and for one-handed use.
 
 ### 5.1 Touch targets — honest status
 
-Only two rules guarantee 44 px:
+The main interactive families are covered by the `@media (max-width: 1023px)`
+block that opens at `styles.css` L1376:
 
-- `.link-btn` under `(pointer: coarse)` (L515)
-- `.scan-actions .btn` (L1385)
-- and the dock buttons' intrinsic `min-height: 52px` (L1399)
+- `.btn`, `.icon-btn`, `.nav-item`, `.tab` — `min-height: 44px` (L1383)
+- `.chip`, `.modal-close` — `min-height: 44px` (L1384)
+- `.modal-close` — `min-width: 44px` plus flex centring (L1385)
 
-`.btn`, `.chip`, `.tab`, table row actions and the icon-only `.modal-close`
-have **no** enforced minimum. For §49 (factory) and §50 (warehouse) this is the
-most consequential gap, because those are the surfaces used with gloves, at
-arm's length, on handheld devices.
+and by three **unconditional** rules that apply at every width:
+
+- `.scan-actions .btn` — `min-height: 44px` (L1320)
+- `.handheld-act` — `min-height: 52px` (L1313)
+- `.mobile-dock button` — `min-height: 52px` (L1331–1335)
+
+plus `.link-btn` under `(pointer: coarse)` — `min-height: 44px` (L441).
+
+The width-gated rules are the caveat: they bite only **below 1024 px**, so a
+coarse-pointer tablet wider than 1023 px falls back to the unconditional rules
+only. Table row actions are the surface where that matters most for §49
+(factory) and §50 (warehouse) — those are used with gloves, at arm's length,
+on handheld devices.
 
 ---
 
@@ -251,7 +302,7 @@ be modelled as "mobile layout".
 
 ### 6.1 Auto-entry
 
-Shell L108:
+Shell L110:
 
 ```ts
 const focus = prefs.focusMode || isFocusPath(path)
@@ -261,13 +312,13 @@ const focus = prefs.focusMode || isFocusPath(path)
 So on a phone/phablet, navigating to `/warehouse` or `/operator*`
 **automatically enters focus mode** — the shell chrome (sidebar, topbar
 decoration, mobile dock) is removed and the operator gets the full viewport.
-`isFocusPath` (`nav.ts` L895) is the explicit allow-list.
+`isFocusPath` (`nav.ts` L920) is the explicit allow-list.
 
 ### 6.2 Requirements (§49, §50)
 
 | Requirement | Status |
 | --- | --- |
-| Large controls | ⚠️ Only `.link-btn` (coarse), `.scan-actions .btn` and dock buttons guarantee ≥ 44 px |
+| Large controls | ⚠️ Guaranteed below 1024 px for `.btn`/`.icon-btn`/`.nav-item`/`.tab`/`.chip`/`.modal-close`; unconditional for `.link-btn` (coarse), `.scan-actions .btn`, `.handheld-act` and dock buttons |
 | High readability | ⚠️ Not verified; no typography audit at operator viewing distance |
 | Simple actions | ✅ Focus mode removes shell chrome; `OperatorFloor` / `WarehouseRoom` are purpose-built |
 | Minimal typing | ✅ Scan-first by design |
@@ -320,14 +371,19 @@ criterion as met.
 
 | # | Issue | Where |
 | --- | --- | --- |
-| 1 | Two breakpoint systems (JS 6-point vs CSS 16 max-width values) with no shared source | `nav.ts` L1031 vs `styles.css` |
-| 2 | `.bp-*` class emitted with no CSS rule | Shell L248 |
-| 3 | 44 px touch target guaranteed on only 3 control families | CSS L515, L1385, L1399 |
-| 4 | Tablet gets *compressed* navigation, not *simplified* navigation (§67) | Shell L106–107 |
-| 5 | Column disclosure is opt-in per table; no enforcement across 470 tables | CSS L1409–1410 |
-| 6 | No documented horizontal-overflow containment convention | — |
-| 7 | Spacing is not tokenised (0 `--space-N`) so responsive spacing cannot be tuned centrally | see `design-system.md` |
-| 8 | `--radius: 10px` single value; §8's `--radius-sm/md/lg` absent | see `design-system.md` |
+| 1 | Two breakpoint systems (JS 6-point vs CSS 16 max-width values) with no shared source | `nav.ts` L1057 vs `styles.css` |
+| 2 | `.bp-*` class emitted with no CSS rule | Shell L251 |
+| 3 | 44 px touch targets are width-gated (≤ 1023 px), so a wide coarse-pointer device is not covered | CSS L1383–L1385; unconditional: L441, L1313, L1320, L1331–1335 |
+| 4 | Tablet gets *compressed* navigation, not *simplified* navigation (§67) | Shell L107–L108 |
+| 5 | Column disclosure is opt-in per table; no enforcement across 509 tables | CSS L1344–L1345 |
+| 6 | Dead CSS: bare `.approval-head` / `.approval-row` rules have 0 JSX usages | CSS L828, L832–L833, L947–L948 |
+| 7 | Spacing tokens exist (`--space-1..8`, `tokens.css` L77–L84) but are consumed 0 times, so responsive spacing cannot be tuned centrally | see `design-system.md` |
+| 8 | Radius tokens all exist (`--radius`, `-sm`, `-md`, `-lg`, `-pill` at `tokens.css` L71–L75) and are consumed 21 times; the earlier absent claim was wrong | see `design-system.md` |
 
-Items 1, 7 and 8 are the ones that most constrain future responsive work: they
+Also worth recording: `table.data th` is declared twice — `position: relative`
+at L1085 and `position: sticky; top: 0` at L2661. The later rule wins; this
+predates the responsive work, but it makes the sticky header fragile to any
+rule reordering.
+
+Items 1 and 7 are the ones that most constrain future responsive work: they
 mean a density change cannot be made in one place.
