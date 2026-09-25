@@ -82,6 +82,17 @@ function numParam(job: CronJobRow, key: string, fallback: number): number {
  */
 const NAG_CHANNELS: string[] = ['IN_APP'];
 
+/**
+ * Next fire time for one job.
+ *
+ * TIME CONTRACT: `runTime` is read against the server clock, and every
+ * application container runs in UTC (see 0186_attendance_summary_email.sql).
+ * The `cron_jobs.timezone` column records the zone the schedule is *presented*
+ * in; the admin API converts to and from it at that boundary
+ * (routes/adminCron.ts) so what is stored here stays on the server clock. Do
+ * not apply the timezone column inside this function: doing so would move every
+ * existing job by its UTC offset on the day it ships.
+ */
 function nextRunFor(job: CronJobRow, from: Date): Date {
   if (job.scheduleType === 'INTERVAL' && job.intervalMinutes && job.intervalMinutes > 0) {
     return new Date(from.getTime() + job.intervalMinutes * 60_000);
@@ -90,6 +101,15 @@ function nextRunFor(job: CronJobRow, from: Date): Date {
     return new Date(from.getTime() + 24 * 60 * 60 * 1000);
   }
   return computeNextRun(job.scheduleType, job.runTime || '08:00', job.dayOfWeek, job.dayOfMonth, from);
+}
+
+/**
+ * Exported for the admin route: a schedule edit recomputes next_run_at with
+ * exactly the logic the runner uses, rather than a second implementation that
+ * could quietly drift from it.
+ */
+export function nextRunAtFor(job: CronJobRow, from: Date = new Date()): Date {
+  return nextRunFor(job, from);
 }
 
 // ---------------------------------------------------------------------------

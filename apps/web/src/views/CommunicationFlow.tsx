@@ -2229,6 +2229,7 @@ function CronJobsView() {
   const [runs, setRuns] = useState<Rec[]>([]);
   const [runsError, setRunsError] = useState('');
   const [runsLoading, setRunsLoading] = useState(false);
+  const [editing, setEditing] = useState<Rec | null>(null);
 
   const canView = can(user, 'system.cron.view');
   const canManage = can(user, 'system.cron.manage');
@@ -2296,6 +2297,14 @@ function CronJobsView() {
     void openRuns(id);
   };
 
+  const recipientsOf = (j: Rec): string => {
+    const p = pick(j, 'params');
+    const raw = p && typeof p === 'object' && !Array.isArray(p)
+      ? ((p as Rec).notify_roles ?? (p as Rec).notifyRoles)
+      : null;
+    return Array.isArray(raw) ? raw.map(String).join(', ') : '';
+  };
+
   const scheduleOf = (j: Rec): string => {
     const t = String(pick(j, 'scheduleType', 'schedule_type') ?? '');
     const runTime = pick(j, 'runTime', 'run_time');
@@ -2353,6 +2362,7 @@ function CronJobsView() {
                   {jobBadge(j)}
                   {canManage ? (
                     <>
+                      <button className="btn" disabled={!!busy} onClick={() => setEditing(j)}>Edit</button>
                       <button className="btn" disabled={!!busy} onClick={() => void toggle(j)}>
                         {busy === 'tog-' + id ? 'Saving\u2026' : j.enabled ? 'Disable' : 'Enable'}
                       </button>
@@ -2379,6 +2389,10 @@ function CronJobsView() {
                       ? ` (${String(pick(j, 'runDurationMs', 'last_run_duration_ms'))} ms)` : ''}
                   </>
                 ) : null}
+              </p>
+              <p className="muted">
+                <b>Zone:</b> {String(pick(j, 'timezone') ?? 'UTC')}
+                {recipientsOf(j) ? <> {'\u00b7'} <b>Notifies:</b> {recipientsOf(j)}</> : null}
               </p>
               {expanded === id ? (
                 <div className="stack" style={{ marginTop: 12 }}>
@@ -2424,6 +2438,9 @@ function CronJobsView() {
           </div>
         ) : null}
       </div>
+      {editing ? (
+        <CronJobModal initial={editing} onClose={() => setEditing(null)} onSaved={() => void load()} />
+      ) : null}
     </div>
   );
 }
@@ -2565,6 +2582,193 @@ function RulesView() {
   );
 }
 
+/**
+ * Editor for one scheduled job: its schedule and the roles it notifies.
+ *
+ * The API presents runTime as the wall clock in the job's own zone and
+ * converts it back on save (see routes/adminCron.ts), so the time typed here
+ * is the time the job actually fires.
+ */
+const CRON_SCHEDULE_TYPES = ['DAILY', 'WEEKLY', 'MONTHLY', 'INTERVAL', 'ONCE'];
+const CRON_TIMEZONES = [
+  'Africa/Kampala',
+  'Africa/Nairobi',
+  'Africa/Lagos',
+  'Africa/Accra',
+  'Africa/Johannesburg',
+  'Africa/Cairo',
+  'UTC',
+  'Europe/London',
+  'Asia/Dubai',
+];
+const CRON_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+function CronJobModal({ initial, onClose, onSaved }: { initial: Rec; onClose: () => void; onSaved: () => void }) {
+  const init: Rec = initial ?? {};
+  const [name, setName] = useState(String(pick(init, 'name') ?? ''));
+  const [description, setDescription] = useState(String(pick(init, 'description') ?? ''));
+  const [scheduleType, setScheduleType] = useState(String(pick(init, 'scheduleType', 'schedule_type') ?? 'DAILY').toUpperCase());
+  const [runTime, setRunTime] = useState(String(pick(init, 'runTime', 'run_time') ?? ''));
+  const [dayOfWeek, setDayOfWeek] = useState(String(pick(init, 'dayOfWeek', 'day_of_week') ?? '1'));
+  const [dayOfMonth, setDayOfMonth] = useState(String(pick(init, 'dayOfMonth', 'day_of_month') ?? '1'));
+  const [intervalMinutes, setIntervalMinutes] = useState(String(pick(init, 'intervalMinutes', 'interval_minutes') ?? ''));
+  const [timezone, setTimezone] = useState(String(pick(init, 'timezone') ?? 'Africa/Kampala'));
+  const [roleCodes, setRoleCodes] = useState<string[]>(() => {
+    const p = pick(init, 'params');
+    const raw = p && typeof p === 'object' && !Array.isArray(p)
+      ? ((p as Rec).notify_roles ?? (p as Rec).notifyRoles)
+      : null;
+    return Array.isArray(raw) ? raw.map(String) : [];
+  });
+  const [roles, setRoles] = useState<Rec[]>([]);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const roleRes = await api<{ data: { data: Rec[] } }>('/api/admin/roles?pageSize=100');
+        setRoles(roleRes.data?.data ?? []);
+      } catch { /* roles are optional enrichment */ }
+    })();
+  }, []);
+
+  // INTERVAL counts forward from the last run, so it is the one schedule type
+  // that does not read a time of day.
+  const usesRunTime = scheduleType !== 'INTERVAL';
+  const toggleRole = (code: string) => {
+    setRoleCodes((prev) => (prev.includes(code) ? prev.filter((x) => x !== code) : [...prev, code]));
+  };
+
+  const save = async () => {
+    if (busy) return;
+    setErr('');
+    setBusy(true);
+    try {
+      const current = pick(init, 'params');
+      const params: Rec = current && typeof current === 'object' && !Array.isArray(current) ? { ...(current as Rec) } : {};
+      delete params.notifyRoles;
+      if (roleCodes.length > 0) params.notify_roles = roleCodes;
+      else delete params.notify_roles;
+      const body: Record<string, unknown> = {
+        name,
+        description,
+        scheduleType,
+        timezone,
+        params,
+        // Every schedule field is posted on every save; null clears whichever
+        // ones the chosen schedule type does not use.
+        runTime: usesRunTime ? runTime || null : null,
+        dayOfWeek: scheduleType === 'WEEKLY' ? Number(dayOfWeek) || null : null,
+        dayOfMonth: scheduleType === 'MONTHLY' ? Number(dayOfMonth) || null : null,
+        intervalMinutes: scheduleType === 'INTERVAL' ? Number(intervalMinutes) || null : null,
+      };
+      await api('/api/admin/cron/jobs/' + String(pick(init, 'id')), {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      onSaved();
+      onClose();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not save the job');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const valid = !!name
+    && (!usesRunTime || !!runTime)
+    && (scheduleType !== 'INTERVAL' || Number(intervalMinutes) > 0);
+
+  return (
+    <Modal
+      title={'Edit job ' + String(pick(init, 'code') ?? pick(init, 'id') ?? '')}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-ghost" type="button" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" type="button" onClick={() => void save()} disabled={busy || !valid}>
+            {busy ? 'Saving\u2026' : 'Save job'}
+          </button>
+        </>
+      }
+    >
+      {err ? <ErrorBanner error={err} /> : null}
+      <div className="form-grid">
+        <div className="field">
+          <label>Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>Schedule</label>
+          <select value={scheduleType} onChange={(e) => setScheduleType(e.target.value)}>
+            {CRON_SCHEDULE_TYPES.map((t) => <option key={t} value={t}>{titleCase(t)}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="field">
+        <label>Description</label>
+        <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+      </div>
+      <div className="form-grid">
+        {usesRunTime ? (
+          <div className="field">
+            <label>Run time</label>
+            <input type="time" value={runTime} onChange={(e) => setRunTime(e.target.value)} />
+          </div>
+        ) : null}
+        {scheduleType === 'WEEKLY' ? (
+          <div className="field">
+            <label>Day of week</label>
+            <select value={dayOfWeek} onChange={(e) => setDayOfWeek(e.target.value)}>
+              {CRON_WEEKDAYS.map((d, i) => <option key={d} value={String(i + 1)}>{d}</option>)}
+            </select>
+          </div>
+        ) : null}
+        {scheduleType === 'MONTHLY' ? (
+          <div className="field">
+            <label>Day of month</label>
+            <input type="number" min={1} max={31} value={dayOfMonth} onChange={(e) => setDayOfMonth(e.target.value)} />
+          </div>
+        ) : null}
+        {scheduleType === 'INTERVAL' ? (
+          <div className="field">
+            <label>Every (minutes)</label>
+            <input type="number" min={1} value={intervalMinutes} onChange={(e) => setIntervalMinutes(e.target.value)} />
+          </div>
+        ) : null}
+        <div className="field">
+          <label>Time zone</label>
+          <select value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+            {CRON_TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
+          </select>
+        </div>
+      </div>
+      <p className="muted hint">Run time is the local clock in the time zone above.</p>
+      <div className="field">
+        <label>Notify roles</label>
+        <div className="card card-pad" style={{ maxHeight: 180, overflowY: 'auto' }}>
+          {roles.length === 0 ? (
+            <p className="muted">No roles loaded.</p>
+          ) : (
+            roles.map((r) => {
+              const code = String(pick(r, 'code') ?? '');
+              const roleName = String(pick(r, 'name') ?? '');
+              return (
+                <label key={code} className="check-line">
+                  <input type="checkbox" checked={roleCodes.includes(code)} onChange={() => toggleRole(code)} />
+                  {roleName || code}
+                </label>
+              );
+            })
+          )}
+        </div>
+        <p className="muted hint">Roles that receive this job's notifications, such as the attendance summary. Leave empty to use the recipients this job ships with.</p>
+      </div>
+    </Modal>
+  );
+}
 function RuleModal({ initial, onClose, onSaved }: { initial: Rec | null; onClose: () => void; onSaved: () => void }) {
   const init: Rec = initial ?? {};
   const [name, setName] = useState(String(pick(init, 'name') ?? ''));
