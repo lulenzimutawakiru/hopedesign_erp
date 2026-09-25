@@ -234,7 +234,6 @@ export default function Shell() {
 
   const counts = {
     approvals: approvalCount,
-    exceptions: approvalCount,
     inventory: moduleCounts.low_stock ?? 0,
     quality: moduleCounts.ncr ?? 0,
     security: moduleCounts.secure ?? 0,

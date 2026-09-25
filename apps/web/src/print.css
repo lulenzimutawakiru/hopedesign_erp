@@ -1,0 +1,8 @@
+/* ============================================================
+   HOPE DESIGN ERP - print overrides
+   Loaded LAST so print-only rules win over the screen stylesheet.
+   ============================================================ */
+
+@media print {
+  .sd-rail, .sd-filter-bar, .sd-card-actions, .sd-inline-actions, .sd-actionbar { display: none !important; }
+}

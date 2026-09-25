@@ -1,7 +1,8 @@
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useId, useRef, useState } from 'react';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { CREATE_ITEMS } from '../work';
+import { useDialogFocus } from './dialogFocus';
 
 export { Skeleton } from './states';
 
@@ -29,18 +30,24 @@ export function ConfirmDialog({
   confirmDisabled?: boolean;
 }) {
   const [reason, setReason] = useState('');
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const reasonId = useId();
+  // Escape is deliberately not wired here: this dialog guards a destructive or
+  // irreversible decision, so it must require an explicit Cancel or Confirm.
+  useDialogFocus(panelRef);
   const blocked = Boolean(confirmDisabled) || Boolean(reasonRequired && !reason.trim());
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
-      <div className="modal" role="alertdialog" aria-labelledby="confirm-title">
-        <div className="modal-head"><h3 id="confirm-title">{title}</h3></div>
+      <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby={titleId} ref={panelRef} tabIndex={-1}>
+        <div className="modal-head"><h3 id={titleId}>{title}</h3></div>
         <div className="modal-body">
           <p>{body}</p>
           {children}
           {reasonLabel !== null && (
             <div className="field">
-              <label htmlFor="confirm-reason">{reasonLabel}</label>
-              <input id="confirm-reason" value={reason} onChange={(e) => setReason(e.target.value)} aria-required={reasonRequired || undefined} />
+              <label htmlFor={reasonId}>{reasonLabel}</label>
+              <input id={reasonId} value={reason} onChange={(e) => setReason(e.target.value)} aria-required={reasonRequired || undefined} />
             </div>
           )}
         </div>
@@ -54,14 +61,11 @@ export function ConfirmDialog({
 }
 
 export function Drawer({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const panelRef = useRef<HTMLElement>(null);
+  useDialogFocus(panelRef, onClose);
   return (
     <div className="drawer-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className="drawer" role="dialog" aria-label={title}>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label={title} ref={panelRef} tabIndex={-1}>
         <div className="modal-head">
           <h3>{title}</h3>
           <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>

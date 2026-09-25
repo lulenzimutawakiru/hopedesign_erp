@@ -40,14 +40,21 @@ This document separates three tiers of evidence, because conflating them is how
 ## 2. The one-paragraph honesty statement
 
 > The **API test suite is real, extensive and green** (42 files / 380 tests, §3.1).
-> The **production build is real and green** (§3.2). The **frontend has no test
-> infrastructure whatsoever** — no test runner, no test script, no test files —
-> so every UI-level claim in this documentation set (accessibility, responsive
-> behaviour, keyboard support, visual consistency) rests on **static source
-> inspection**, not on executed verification. No screenshot, no screen-reader
-> pass, no keyboard pass and no viewport check has ever been performed against a
-> running instance of this application. CI exists and is currently **red**
-> because it runs a web test script that does not exist (§9).
+> The **production build is real and green** (§3.2). The **frontend test
+> infrastructure now exists and is green** — vitest + jsdom +
+> `@testing-library/react`, one `test` script, 8 test files / 71 tests, all
+> passing (§3.3). CI is consequently **green** (§9.1).
+>
+> What that infrastructure does **not** buy is coverage. The 71 tests exercise
+> authentication components, the sign-in error copy, one company-logic module and
+> dialog focus management. They do **not** exercise navigation, permission
+> visibility, forms, validation, tables, filters, sorting, workflow state,
+> approval gating, QR scanning, responsive behaviour or the loading/error/empty
+> states. Every remaining UI-level claim in this documentation set
+> (accessibility, responsive behaviour, keyboard support, visual consistency)
+> still rests on **static source inspection**, not on executed verification. No
+> screenshot, no screen-reader pass, no keyboard pass and no viewport check has
+> ever been performed against a running instance of this application.
 
 Nothing in this document should be read as claiming observed runtime behaviour
 that was not observed.
@@ -131,8 +138,8 @@ Command : npm.cmd run build
 Chain   : npm run build -w packages/db   (no-op / tsc)
           npm run build -w apps/api      (tsc)
           npm run build -w apps/web      (tsc --noEmit -p tsconfig.json && vite build)
-Result  : ✓ built in 28.80s
-          148 modules transformed
+Result  : ✓ built in 20.05s
+          194 modules transformed
 Exit    : 0
 ```
 
@@ -145,19 +152,55 @@ a substitute for behavioural tests.
 Notable emitted chunks (post-modernization):
 
 ```
-index-5kEHoauT.css            268.93 kB │ gzip  45.44 kB
-HrFlow-DaY3HM8m.js            468.03 kB │ gzip  96.80 kB
-FinanceFlow-WIqDPLDk.js       390.81 kB │ gzip  83.94 kB
-Shell-6FjJRKMf.js             376.66 kB │ gzip 109.79 kB
-ServiceDeskFlow-CoO6OwqM.js   336.85 kB │ gzip  82.41 kB
-AssetsFlow-SG9jsGl8.js        272.29 kB │ gzip  54.34 kB
-index-BTHkDY_L.js             177.47 kB │ gzip  57.70 kB
-EntityList-1skMD1Wf.js          4.43 kB │ gzip   2.05 kB
+index-BdPoeECd.css                 278.89 kB │ gzip  47.20 kB
+OrganisationSettings-CIGW-MKW.css   15.61 kB │ gzip   6.46 kB
+HrFlow-D7UJJPCD.js                 590.33 kB │ gzip 123.97 kB
+FinanceFlow-qb3luxCd.js            390.81 kB │ gzip  83.94 kB
+Shell-Bs5jTZ4C.js                  383.51 kB │ gzip 110.96 kB
+ServiceDeskFlow-dmdPZfpe.js        336.85 kB │ gzip  82.40 kB
+OrganisationSettings-BL8o_DW7.js   277.34 kB │ gzip  75.23 kB
+AssetsFlow-B-ZO4LEH.js             275.07 kB │ gzip  55.14 kB
+index-BSYCT7wM.js                  190.39 kB │ gzip  61.99 kB
+AdminFlow-BanHnYGC.js              163.19 kB │ gzip  37.04 kB
+ManufacturingFlow-PdONPOfd.js      160.48 kB │ gzip  34.05 kB
+HikvisionFlow-Clg8YWT3.js          153.55 kB │ gzip  32.77 kB
+ProcurementFlow-p8vyWE5P.js        151.80 kB │ gzip  29.29 kB
+MailWorkspace-C8Wo81TV.js          109.01 kB │ gzip  25.83 kB
+CompliancePdpo-ClzSmc2y.js         103.28 kB │ gzip  25.22 kB
+SpendFlow-IuPnRg96.js               91.46 kB │ gzip  18.71 kB
+CommunicationFlow-B3Vn3foa.js       85.65 kB │ gzip  20.75 kB
+InventoryIntel-5u4DoAb1.js          74.68 kB │ gzip  14.42 kB
+InventoryFlow-Ddp27T5W.js           72.54 kB │ gzip  14.68 kB
+CrmFlow-DRGEuLVS.js                 60.31 kB │ gzip  10.84 kB
+SalesFlow-BDTyqEW2.js               59.05 kB │ gzip  12.88 kB
+PayrollSettings-BevuAEHv.js         46.84 kB │ gzip  12.40 kB
+DocumentsFlow-WLTqN4Mb.js           42.29 kB │ gzip   9.31 kB
+ReamPacking-B5itMU8t.js             38.87 kB │ gzip  10.33 kB
+Settings-C2O8vW14.js                32.16 kB │ gzip   7.80 kB
+PublicVerify-CJisDL4q.js            17.11 kB │ gzip   4.66 kB
+hkutil-Cmb7lwl0.js                  10.86 kB │ gzip   4.41 kB
+EntityDetail-pYzIop4G.js             9.84 kB │ gzip   3.30 kB
+WorkOrderWizard-DFBWSCxw.js          9.03 kB │ gzip   2.80 kB
+LabelVarieties-BI2A7B0n.js           7.99 kB │ gzip   2.69 kB
+SupplierForm-Bpn6U1qO.js             7.21 kB │ gzip   2.32 kB
+Account-nEELhwPO.js                  6.43 kB │ gzip   2.13 kB
+SecuritySettings-PP6VSZVv.js         5.81 kB │ gzip   2.07 kB
+useMail-4bayfEZC.js                  5.59 kB │ gzip   2.10 kB
+assetsShared-BV7n7-2O.js             5.51 kB │ gzip   2.13 kB
+EntityList-DbsREGVi.js               4.43 kB │ gzip   2.05 kB
+payrollConfigShared-sogLYak7.js      3.76 kB │ gzip   1.55 kB
+JsonForm-BsvTYWuF.js                 3.23 kB │ gzip   1.40 kB
+ResetPassword-CJYJHXGe.js            2.33 kB │ gzip   1.07 kB
+AcceptInvite-CTZlWueP.js             2.17 kB │ gzip   1.01 kB
+dist/assets/index.html               1.23 kB │ gzip   0.61 kB
 ```
 
-`Shell-6FjJRKMf.js` is the largest **gzip** payload (109.79 kB) and sits on the
-hot path — every authenticated route loads it. `HrFlow` is the largest raw
-chunk (468.03 kB). Both are recorded as open performance items (§10).
+`Shell-Bs5jTZ4C.js` remains the heaviest **hot-path** chunk (383.51 kB raw /
+110.96 kB gzip) — every authenticated route loads it. `HrFlow-D7UJJPCD.js` is
+both the largest raw chunk (590.33 kB) and now the largest **gzip** payload
+(123.97 kB), and `FinanceFlow-qb3luxCd.js` (390.81 kB / 83.94 kB) still tracks
+its 452,154 B source file. All three are recorded as open performance items
+(§10).
 
 ### 3.3 Frontend test command — **FAIL (exit 1)**
 

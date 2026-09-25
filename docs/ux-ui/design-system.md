@@ -7,9 +7,11 @@ recorded below as deviations. Nothing in this document is aspirational.
 
 ## 1. Where the tokens live
 
-All design tokens are declared once, in the `:root` block of
-`apps/web/src/styles.css` (L6–L79, **67 declarations**). Views and components
-reference `var(--token)`; they do not inline hex values for brand or state colour.
+All design tokens are declared once, in `apps/web/src/tokens.css` (**98 lines,
+81 declarations**). That file is imported **first** in `main.tsx`, ahead of
+`styles.css`, so every `var(--token)` in the stylesheet resolves against it.
+Views and components reference `var(--token)`; they do not inline hex values for
+brand or state colour.
 
 ### 1.1 Brand and structure
 
@@ -48,11 +50,16 @@ ERP they are in:
 `--mod-exec | crm | sales | proc | inv | wh | mfg | qc | sec | mnt | log | fin | hr | ast | rpt | adm`
 
 It also carries a **state ramp** used by status chips:
-`--st-draft | pending | progress | ok | reject | hold`.
+`--st-draft | pending | progress | ok | reject | hold` — plus, for the tones that
+need a tinted surface, the paired background/foreground tokens
+**`--st-ok-bg` (`#E3F3EB`) / `--st-ok-fg` (`#0F4A32`)**.
 
 ### 1.5 Elevation, geometry, type
 
-`--shadow`, `--shadow-lg`, `--radius: 10px` ·
+`--shadow`, `--shadow-lg` · **radius scale** `--radius-sm: 6px` ·
+`--radius-md: 10px` · `--radius-lg: 16px` · `--radius-pill: 999px` ·
+legacy `--radius: 10px` (kept, equal to `--radius-md`) ·
+**space scale** `--space-1..8` = `4 / 8 / 12 / 16 / 20 / 24 / 32 / 48 px` ·
 `--font 'Outfit'` (UI) · `--serif 'Source Serif 4'` (documents) ·
 `--mono 'IBM Plex Mono'` (identifiers, money, codes).
 
@@ -61,53 +68,68 @@ Legacy aliases (`--bg`, `--panel`, `--text`, `--border`, `--primary`,
 
 ---
 
-## 2. Recorded gaps (§8 deviation)
+## 2. Recorded gaps
 
-The brief asks for a full token surface. Three items are **deliberately not added
-yet**, because renaming or extending the scale touches 7,070 lines of CSS and
-would be a visual-regression risk bundled with behaviour work:
+Two of the three gaps originally recorded here have since been **closed** when
+tokens were extracted into `tokens.css`. One remains open.
 
-1. **No `--space-N` scale.** Measured: **0** spacing tokens. Spacing is literal
-   (`gap: 12px`, `padding: 14px 16px`). Recommendation: introduce
-   `--space-1..8` and migrate **incrementally, per component**, never globally.
-2. **No radius scale.** `--radius: 10px` is a single value; there is no
-   `--radius-sm/md/lg`. Adding one without migrating call sites creates a
-   token that nothing reads.
-3. **No breakpoint tokens in CSS.** Measured: **32 distinct `max-width` values**
-   across 60 `@media` blocks (`26, 110, 120, 130, 160, 200, 240, 280, 320, 360,
-   420, 480, 520, 560, 639, 640, 720, 760, 767, 860, 900, 960, 980, 1023, 1080,
-   1100, 1180, 1200, 1279, 1280, 1535`). The JS breakpoint scale in
-   `nav.ts` `breakpointOf()` is the intended 6-point contract; CSS predates it.
-   See `responsive.md`.
+1. ~~No `--space-N` scale~~ — **closed.** `--space-1..8` now exist
+   (`4/8/12/16/20/24/32/48px`). Migrating literal spacing to the scale is still
+   **incremental, per component**; a literal `gap: 12px` is not a defect by
+   itself.
+2. ~~No radius scale~~ — **closed.** `--radius-sm/md/lg/pill` now exist, and
+   `--radius: 10px` is retained as the legacy alias for `--radius-md`.
+3. **No breakpoint tokens in CSS.** Measured: **16 distinct `max-width` values**
+   across **59 `@media` blocks** (`560, 639, 640, 720, 760, 767, 860, 900, 960,
+   980, 1023, 1080, 1100, 1200, 1279, 1535`) and only **1 distinct `min-width`**
+   (`1080`). The JS breakpoint scale in `nav.ts` `breakpointOf()` is the intended
+   6-point contract; CSS predates it. See `responsive.md`.
+   - An earlier revision of this table reported **32 max-width values across 60
+     blocks**. That figure double-counted repeated values and is superseded by
+     the measurement above.
 
 > Do **not** rename existing tokens. Downstream code, including print layouts,
-> depends on them.
+> depends on them; `tokens.css` opens with a header comment stating the same rule.
 
 ---
 
-## 3. CSS architecture (§9 deviation)
+## 3. CSS architecture
 
-The brief proposes splitting `styles.css` into ten files. **This was not done,
-and should not be done in one step.** Measured reality: a single 7,070-line
-stylesheet with a token block at the top and sections appended chronologically.
+The brief proposes splitting `styles.css` into ten files. **This was not done
+wholesale, and should not be done in one step.** Measured reality: a single
+**7,003-line** stylesheet with the token block extracted and sections appended
+chronologically.
 
-Reasons not to split now:
+Reasons not to split it now:
 
-- the stylesheet has **order-dependent cascade** — later sections override earlier
-  ones for the same class (for example `.timeline` is defined twice, see §6);
-  naive file splitting changes load order and therefore rendering;
+- the stylesheet has **order-dependent cascade**. Measured: **2,569 distinct
+  selectors, of which 204 appear in more than one rule** — 204 selectors whose
+  winner is decided by source order rather than specificity. Worst offenders
+  repeat four times: `.login-page` (L24, L889, L967, L1406), `.work-hero` (L477,
+  L944, L1377, L3713), `.kpi-grid` (L457, L1367, L1380, L1407), `.com-msg-layout`
+  (L3788, L3888, L3910, L3924), `.cmd-open` (L310, L972, L1400, L1416). Naive file
+  splitting changes load order and therefore rendering.
+  - Caveat: the census counts duplicates inside `@media` blocks alongside
+    top-level ones (the `L1365–1424` cluster is a single media block), so **204 is
+    an upper bound** on true cascade collisions — but the order-dependence it
+    measures is real and measurable.
 - a split with no visual regression suite cannot be verified (§11.13 — no visual
   testing tooling ran in this effort);
-- the build already emits **one 268.93 kB CSS chunk (45.44 kB gzip)**; splitting
-  the source does not reduce that.
+- the build emits a **278,899 B CSS chunk** (`index-*.css`) plus one route-level
+  `OrganisationSettings-*.css` at 15,607 B; splitting the source does not reduce
+  either figure.
 
 **Approved incremental path** (when a visual test harness exists):
 
-1. Extract `tokens.css` (L6–L79) and load it first — a pure move, zero cascade risk.
-2. Extract `print.css` from the single `@media print` block (L6159+).
+1. ~~Extract `tokens.css` and load it first~~ — **DONE.** 98 lines / 81
+   declarations, imported before `styles.css` in `main.tsx`. A pure move, zero
+   cascade risk.
+2. ~~Extract `print.css` from the `@media print` block~~ — **DONE.**
+   `styles.css` now contains **0** `@media print` blocks; `print.css` (9 lines,
+   363 B) is imported **last** on purpose, so print overrides win.
 3. Split by *feature*, not by *element type*: pull a feature's rules out only when
    that feature's view is being refactored anyway, and load the pulled file at the
-   same cascade position.
+   same cascade position. **Not started.**
 
 Splitting by element type (`tables.css`, `forms.css`) is explicitly rejected: it
 fragments one component's rules across files and makes specificity debugging worse.
@@ -156,7 +178,7 @@ What is true today:
 - the emoji in `statusMeta()` are **decorative reinforcement of a text label**,
   not the sole carrier of meaning — the badge always prints the word too, so the
   interface is not colour- or glyph-dependent;
-- `.visually-hidden` exists (L2560) for screen-reader-only text.
+- `.visually-hidden` exists (`styles.css:2490`) for screen-reader-only text.
 
 What remains to do, in priority order:
 
@@ -169,16 +191,18 @@ What remains to do, in priority order:
 
 ## 6. Known defects to fix before extending the system
 
-| Defect | Location | Impact |
+| Defect | Location | Status |
 | --- | --- | --- |
-| `.timeline` defined **twice** | L897–901 (working) and L1549–1557 (unused) | The second definition is dead but wins by cascade for any future user |
-| `.section-title` defined twice | L930 and L4323 | Same class, two rule sets |
-| `.pipeline` / `.pipeline-step` / `.pipeline-dot` | L871–881 | **0 TSX users** — dead CSS |
-| `.pipeline-step.done` | L879 | Uses a light-only literal `#E3F3EB` instead of a token |
-| `.timeline-body` | referenced by 5 views | **No CSS rule exists** |
-| `.kv` | used as a wrapper in markup | **No CSS rule exists** (the children `.kv-k`/`.kv-v` are styled) |
+| `.timeline` defined **twice** | was L897–901 / L1549–1557 | **Fixed** — one rule remains, `styles.css:822` |
+| `.section-title` defined twice | was L930 / L4323 | **Fixed** — one rule remains, `styles.css:4254` |
+| `.timeline-body` has no CSS rule | referenced by 5 views | **Fixed** — rule exists at `styles.css:825` |
+| `.kv` has no CSS rule | used as a wrapper in markup | **Fixed** — rule exists at `styles.css:4250` (`min-width: 0`) |
+| `.pipeline-step.done` uses light-only literal `#E3F3EB` | was L879 | **Fixed** — now `background: var(--st-ok-bg); color: var(--st-ok-fg);` (`styles.css:804`), dark override at L1073 |
+| `.pipeline` / `.pipeline-step` / `.pipeline-dot` "dead CSS" | L796–806 | **Not a defect — do not delete.** `.pipeline-step` and `.pipeline-dot` each have **5 live consumer files** (`PayrollFlow`, `ProcurementFlow`, `SalesFlow`, `SpendFlow`, `WorkOrderWizard`) |
+| Remaining green literals in `styles.css` | `#E3F3EB` ×8, `#E6F4EE` ×8, `#E9F7EF` ×1 | **Open** — tokenise **in place** when the owning view is next touched |
 
-Fix these **in place, one at a time**, when the owning view is next touched.
+Fix the remaining item **in place, one at a time**, when the owning view is next
+touched.
 
 ---
 

@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { getToken } from '../api';
+import { useDialogFocus } from './dialogFocus';
 import { describeError } from './errorText';
 import { CardSkeleton, TableSkeleton } from './skeleton';
 
@@ -143,11 +144,24 @@ export function Modal({
   footer?: ReactNode;
   wide?: boolean;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  // A modal is a blocking dialog: trap Tab inside the panel, restore focus to
+  // whatever opened it, and let Escape dismiss it.
+  useDialogFocus(panelRef, onClose);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={wide ? { maxWidth: 960 } : undefined}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        ref={panelRef}
+        tabIndex={-1}
+        style={wide ? { maxWidth: 960 } : undefined}
+      >
         <div className="modal-head">
-          <h3>{title}</h3>
+          <h3 id={titleId}>{title}</h3>
           <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
         </div>
         <div className="modal-body">{children}</div>

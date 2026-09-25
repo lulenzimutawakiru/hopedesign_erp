@@ -1,0 +1,97 @@
+/* ============================================================
+   HOPE DESIGN ERP - design tokens
+   Single source of truth for colour, spacing, radius, shadow and
+   elevation values. Loaded before styles.css so every rule in the
+   sheet resolves against these definitions. Never rename an
+   existing token: views reference them by name.
+   ============================================================ */
+
+:root {
+  --navy: #0B1F33;
+  --hope: #1261A0;
+  --hope-hover: #0E4F83;
+  --steel: #2E7DB2;
+  --teal: #00A6A6;
+  --success: #168A5B;
+  --warning: #D99A00;
+  --danger: #C93636;
+  --info: #2878D0;
+  --critical: #B42318;
+
+  --paper: #F5F7FA;
+  --paper-2: #EEF2F6;
+  --sheet: #FFFFFF;
+  --ink: #172B3A;
+  --ink-soft: #172B3A;
+  --muted: #5F6B76;
+  --muted-2: #8995A1;
+  --line: #D9E1E8;
+  --line-strong: #C5D0D9;
+
+  --mill: var(--hope);
+  --mill-2: var(--steel);
+  --brass: var(--teal);
+  --brass-soft: #7ED4D4;
+  --clay: var(--danger);
+  --amber: var(--warning);
+  --moss: var(--success);
+  --secure: #A52A2A;
+  --rail: var(--navy);
+  --rail-text: #A8B6C4;
+  --rail-dim: #7E8C99;
+
+  --mod-exec: #0B1F33;
+  --mod-crm: #1261A0;
+  --mod-sales: #4F46A5;
+  --mod-proc: #7C3AED;
+  --mod-inv: #00A6A6;
+  --mod-wh: #0891B2;
+  --mod-mfg: #D97706;
+  --mod-qc: #168A5B;
+  --mod-sec: #A52A2A;
+  --mod-mnt: #D99A00;
+  --mod-log: #2878D0;
+  --mod-fin: #087F5B;
+  --mod-hr: #8B5CF6;
+  --mod-ast: #475569;
+  --mod-rpt: #4338CA;
+  --mod-adm: #334155;
+
+  --st-draft: #64748B;
+  --st-pending: #D99A00;
+  --st-progress: #2878D0;
+  --st-ok: #168A5B;
+  --st-reject: #C93636;
+  --st-hold: #D97706;
+  --st-ok-bg: #E3F3EB;
+  --st-ok-fg: #0F4A32;
+
+  --shadow: 0 1px 0 rgba(11, 31, 51, 0.04), 0 8px 24px rgba(11, 31, 51, 0.05);
+  --shadow-lg: 0 18px 48px rgba(11, 31, 51, 0.14);
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+  --font: 'Outfit', 'Segoe UI', sans-serif;
+  --serif: 'Source Serif 4', Georgia, serif;
+  --mono: 'IBM Plex Mono', Consolas, monospace;
+  --bg: var(--paper);
+  --panel: var(--sheet);
+  --text: var(--ink);
+  --border: var(--line);
+  --primary: var(--hope);
+  --primary-dark: var(--hope-hover);
+  --sidebar-bg: var(--rail);
+  --sidebar-text: var(--rail-text);
+  --sidebar-active: var(--hope);
+}
