@@ -192,10 +192,17 @@ function BandRows({
 
 // --- the remaining category shapes ------------------------------------------
 
+/**
+ * Which employments a rule governs, as the editor presents it. Blank means the
+ * marker is left off the row, which the engine reads as "every employment".
+ */
+type EmploymentScopeDraft = '' | 'primary' | 'secondary';
+
 interface NssfDraft {
   employee: string;
   employer: string;
   ceiling: string;
+  employmentScope: EmploymentScopeDraft;
 }
 
 interface LstBand {
@@ -221,9 +228,13 @@ interface GenericDraft {
 }
 
 interface SecondaryDraft {
+  shape: 'rate' | 'flat' | 'bands';
   rate: string;
+  flat: string;
+  bands: LstBand[];
   minGross: string;
   applyToPayroll: boolean;
+  employmentScope: EmploymentScopeDraft;
 }
 
 interface ShapeDraft {
@@ -250,6 +261,39 @@ function objOf(value: unknown): Rec {
   return typeof value === 'object' ? (value as Rec) : {};
 }
 
+/**
+ * Read limits.applies_to_employment into the editor's three-way choice. A row
+ * that names both employments says the same thing as naming neither, so both
+ * come back blank and are written back by leaving the marker off.
+ */
+function scopeFromLimits(limits: Rec, fallback: EmploymentScopeDraft = ''): EmploymentScopeDraft {
+  const raw = limits.applies_to_employment;
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  const entries = (Array.isArray(raw) ? raw : [raw]).map((s) => String(s ?? '').trim().toLowerCase());
+  const primary = entries.includes('primary');
+  const secondary = entries.includes('secondary');
+  if (primary && secondary) return '';
+  if (primary) return 'primary';
+  if (secondary) return 'secondary';
+  return fallback;
+}
+
+/** The marker to write for a choice; null means leave it off the row. */
+function scopeToLimit(scope: EmploymentScopeDraft): string[] | null {
+  if (scope === 'primary') return ['primary'];
+  if (scope === 'secondary') return ['secondary'];
+  return null;
+}
+
+/** Copy a limits object and set or clear the employment marker to match a choice. */
+function withEmploymentScope(limits: Rec, scope: EmploymentScopeDraft): Rec {
+  const next: Rec = { ...limits };
+  const marker = scopeToLimit(scope);
+  if (marker) next.applies_to_employment = marker;
+  else delete next.applies_to_employment;
+  return next;
+}
+
 const pctOf = (value: unknown): string =>
   value === null || value === undefined || value === '' ? '' : String(Number((Number(value) * 100).toFixed(6)));
 
@@ -260,6 +304,7 @@ function nssfFrom(config: StatutoryConfig | null): NssfDraft {
     employee: pctOf(rates.employee),
     employer: pctOf(rates.employer),
     ceiling: limits.monthly_ceiling == null ? '' : String(limits.monthly_ceiling),
+    employmentScope: scopeFromLimits(limits, 'primary'),
   };
 }
 
@@ -287,10 +332,20 @@ function lstFrom(config: StatutoryConfig | null): LstDraft {
 function secondaryFrom(config: StatutoryConfig | null): SecondaryDraft {
   const limits = objOf(config?.limits);
   const rates = objOf(config?.rates);
+  const rawBands = Array.isArray(limits.bands) ? limits.bands : [];
+  const shape: SecondaryDraft['shape'] =
+    rawBands.length > 0 ? 'bands' : limits.monthly_amount != null || rates.monthly_amount != null ? 'flat' : 'rate';
   return {
+    shape,
     rate: rates.rate == null ? '' : String(rates.rate),
+    flat: limits.monthly_amount == null ? '' : String(limits.monthly_amount),
+    bands: rawBands.map((entry) => {
+      const o = objOf(entry);
+      return { max: o.max == null ? '' : String(o.max), amount: o.monthly_amount == null ? '' : String(o.monthly_amount) };
+    }),
     minGross: limits.min_gross == null ? '' : String(limits.min_gross),
     applyToPayroll: limits.apply_to_payroll !== false,
+    employmentScope: scopeFromLimits(limits, 'secondary'),
   };
 }
 
@@ -376,7 +431,7 @@ function buildShape(category: string, draft: ShapeDraft, config: StatutoryConfig
       shape: {
         rates: { ...baseRates, employee, employer },
         thresholds: [],
-        limits: { ...baseLimits, monthly_ceiling: ceiling },
+        limits: withEmploymentScope({ ...baseLimits, monthly_ceiling: ceiling }, draft.nssf.employmentScope),
         formula,
       },
       errors,
@@ -415,14 +470,31 @@ function buildShape(category: string, draft: ShapeDraft, config: StatutoryConfig
   if (category === 'PAYE_SECONDARY') {
     const limits: Rec = { ...baseLimits };
     const rates: Rec = { ...baseRates };
-    const rate = num(draft.secondary.rate);
+    delete limits.bands;
+    delete limits.monthly_amount;
+    delete limits.rate;
+    delete rates.monthly_amount;
+    delete rates.rate;
     const minGross = num(draft.secondary.minGross);
-    if (rate < 0 || rate > 100) errors.push('Rate must be between 0 and 100.');
-    if (minGross < 0) errors.push('Minimum gross cannot be negative.');
-    rates.rate = rate;
+    if (minGross < 0) errors.push('Minimum chargeable income cannot be negative.');
     limits.min_gross = minGross;
     limits.apply_to_payroll = draft.secondary.applyToPayroll;
-    return { shape: { rates, thresholds: [], limits, formula }, errors };
+    if (draft.secondary.shape === 'bands') {
+      errors.push(...lstBandsErrors(draft.secondary.bands));
+      limits.bands = draft.secondary.bands.map((b) => ({ max: numOrNull(b.max), monthly_amount: num(b.amount) }));
+    } else if (draft.secondary.shape === 'flat') {
+      const flat = num(draft.secondary.flat);
+      if (flat < 0) errors.push('Flat monthly amount cannot be negative.');
+      limits.monthly_amount = flat;
+    } else {
+      const rate = num(draft.secondary.rate);
+      if (rate < 0 || rate > 100) errors.push('Rate must be between 0 and 100.');
+      rates.rate = rate;
+    }
+    return {
+      shape: { rates, thresholds: [], limits: withEmploymentScope(limits, draft.secondary.employmentScope), formula },
+      errors,
+    };
   }
 
   const rates = parseJson(draft.generic.rates, 'Rates', errors) ?? [];
@@ -476,6 +548,15 @@ function NssfShapeEditor({ draft, setDraft }: { draft: ShapeDraft; setDraft: (ne
           <input type="number" min="0" value={draft.nssf.ceiling} placeholder="Blank = no ceiling" onChange={(e) => set({ ceiling: e.target.value })} />
           <p className="field-hint">Contributions stop once gross reaches this. Blank or 0 means no ceiling.</p>
         </div>
+      </div>
+      <div className="field">
+        <label>Applies to employment</label>
+        <select value={draft.nssf.employmentScope} onChange={(e) => set({ employmentScope: e.target.value as EmploymentScopeDraft })}>
+          <option value="">Every employment</option>
+          <option value="primary">Primary employment only</option>
+          <option value="secondary">Second employment only</option>
+        </select>
+        <p className="field-hint">Blank keeps the table on every employment. Narrow it when the table is meant for one kind only.</p>
       </div>
     </div>
   );
@@ -570,25 +651,61 @@ function LstShapeEditor({ draft, setDraft }: { draft: ShapeDraft; setDraft: (nex
   );
 }
 
+const SECONDARY_SHAPES: Array<[SecondaryDraft['shape'], string, string]> = [
+  ['rate', 'Fixed percentage', 'One rate charged on the whole chargeable income, the usual second-employment treatment.'],
+  ['flat', 'Flat monthly amount', 'One amount for everyone the table covers.'],
+  ['bands', 'Graduated bands', 'A monthly amount per band of chargeable income.'],
+];
+
 function SecondaryPayeShapeEditor({ draft, setDraft }: { draft: ShapeDraft; setDraft: (next: ShapeDraft) => void }) {
   const secondary = draft.secondary;
   const set = (patch: Partial<SecondaryDraft>) => setDraft({ ...draft, secondary: { ...secondary, ...patch } });
+  const chosen = SECONDARY_SHAPES.find(([key]) => key === secondary.shape) ?? SECONDARY_SHAPES[0];
   return (
     <div className="stack">
       <p className="hint">
-        Income from a second employment is taxed at one fixed rate instead of the resident bands. NSSF is not withheld
-        again on this payroll, because the member is already enrolled through the first employment.
+        Other employment income is taxed at one fixed rate instead of the resident bands. NSSF is not withheld again on
+        this payroll, because the member is already enrolled through the first employment.
       </p>
-      <div className="grid-3">
+      <div className="field">
+        <label>How the tax is worked out</label>
+        <div className="chips">
+          {SECONDARY_SHAPES.map(([key, label]) => (
+            <button key={key} type="button" className={secondary.shape === key ? 'chip chip-on' : 'chip'} onClick={() => set({ shape: key })}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="field-hint">{chosen[2]}</p>
+      </div>
+      {secondary.shape === 'bands' && <LstBandRows bands={secondary.bands} onChange={(bands) => set({ bands })} />}
+      {secondary.shape === 'flat' && (
+        <div className="field">
+          <label>Monthly amount (UGX)</label>
+          <input type="number" min="0" value={secondary.flat} placeholder="5000" onChange={(e) => set({ flat: e.target.value })} />
+        </div>
+      )}
+      {secondary.shape === 'rate' && (
         <div className="field">
           <label>Rate (%)</label>
           <input type="number" min="0" max="100" step="0.01" value={secondary.rate} placeholder="40" onChange={(e) => set({ rate: e.target.value })} />
           <p className="field-hint">Charged on the whole chargeable income, e.g. 40 for forty percent.</p>
         </div>
+      )}
+      <div className="grid-3">
         <div className="field">
           <label>Minimum gross (UGX)</label>
           <input type="number" min="0" value={secondary.minGross} placeholder="0" onChange={(e) => set({ minGross: e.target.value })} />
           <p className="field-hint">Nobody earning below this is charged.</p>
+        </div>
+        <div className="field">
+          <label>Applies to employment</label>
+          <select value={secondary.employmentScope} onChange={(e) => set({ employmentScope: e.target.value as EmploymentScopeDraft })}>
+            <option value="">Every employment</option>
+            <option value="primary">Primary employment only</option>
+            <option value="secondary">Second employment only</option>
+          </select>
+          <p className="field-hint">Keep this on second employment, so a first employment still falls to the resident bands.</p>
         </div>
         <div className="field">
           <label>

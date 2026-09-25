@@ -3,10 +3,12 @@ import pg from 'pg';
 import { pool, db } from './helpers.js';
 import type { Ctx } from '../src/db.js';
 import {
+  appliesToEmployment,
   computeLst,
   computeNssf,
   computePaye,
   computeSecondaryPaye,
+  employmentScopes,
   getStatutoryConfig,
   requireStatutoryConfig,
   statutorySnapshot,
@@ -23,6 +25,7 @@ import {
   recordStatutoryPayment,
   submitStatutoryFiling,
 } from '../src/services/statutoryFilings.js';
+import { prepareStatutoryConfig } from '../src/services/payrollSettings.js';
 
 /**
  * Uganda statutory rule engine.
@@ -274,6 +277,43 @@ describe('statutory rule engine', () => {
       expect(r.employer).toBe(0);
     });
 
+    describe('employment scope', () => {
+      // NSSF is owed once, through the employment the member is enrolled
+      // under, so a rule that names "primary" must not deduct again on a
+      // second employment. The marker is configuration, not a code branch.
+      const primaryOnly = nssf({
+        limits: { monthly_ceiling: 0, applies_to_employment: ['primary'] },
+      });
+
+      it('withholds nothing from an employment the rule does not name', () => {
+        const r = computeNssf(3000000, primaryOnly, { scope: 'secondary' });
+        expect(r.employee).toBe(0);
+        expect(r.employer).toBe(0);
+        expect(r.base).toBe(0);
+        expect(r.ceiling).toBeNull();
+      });
+
+      it('still withholds on the employment the rule names', () => {
+        expect(computeNssf(3000000, primaryOnly, { scope: 'primary' }).employee).toBe(150000);
+      });
+
+      it('applies to every employment when no scope is configured', () => {
+        expect(computeNssf(3000000, nssf(), { scope: 'primary' }).employee).toBe(150000);
+        expect(computeNssf(3000000, nssf(), { scope: 'secondary' }).employee).toBe(150000);
+      });
+
+      it('ignores the marker when the caller names no employment', () => {
+        expect(computeNssf(3000000, primaryOnly).employee).toBe(150000);
+      });
+
+      it('treats a rule naming both employments as un-narrowed', () => {
+        const both = nssf({
+          limits: { monthly_ceiling: 0, applies_to_employment: ['primary', 'secondary'] },
+        });
+        expect(computeNssf(3000000, both, { scope: 'secondary' }).employee).toBe(150000);
+      });
+    });
+
     it('resolves the seeded NSSF rule', async () => {
       const cfg = await requireStatutoryConfig(client, CTX, 'NSSF', { effectiveDate: '2027-01-15' });
       expect(cfg.code).toBe('UG-NSSF-2023');
@@ -439,6 +479,142 @@ describe('statutory rule engine', () => {
       expect(cfg.code).toBe('UG-PAYE-SECONDARY-2026');
       // Seeded at the 40% top-rate treatment pending URA confirmation.
       expect(computeSecondaryPaye(1000000, cfg)).toBe(400000);
+    });
+  });
+
+  describe('employment scope', () => {
+    // The marker is what keeps "first employment" and "second employment" out
+    // of the engine: a rule declares where it belongs and the caller says which
+    // employment it is computing for.
+    const marked = (value: unknown) =>
+      config({ category: 'NSSF', code: 'TEST-SCOPE', limits: { applies_to_employment: value } });
+
+    it('reads a single scope, an array, and mixed case', () => {
+      expect(employmentScopes(marked('primary'))).toEqual(['primary']);
+      expect(employmentScopes(marked(['SECONDARY']))).toEqual(['secondary']);
+      expect(employmentScopes(marked(['primary', 'secondary', 'primary']))).toEqual(['primary', 'secondary']);
+    });
+
+    it('treats a missing, blank or empty marker as every employment', () => {
+      for (const value of [undefined, null, '', []]) {
+        const cfg = marked(value);
+        expect(employmentScopes(cfg)).toEqual([]);
+        expect(appliesToEmployment(cfg, 'primary')).toBe(true);
+        expect(appliesToEmployment(cfg, 'secondary')).toBe(true);
+      }
+      expect(appliesToEmployment(config({}), 'secondary')).toBe(true);
+      expect(appliesToEmployment(null, 'secondary')).toBe(true);
+    });
+
+    it('narrows to the named employments only', () => {
+      const cfg = marked(['secondary']);
+      expect(appliesToEmployment(cfg, 'secondary')).toBe(true);
+      expect(appliesToEmployment(cfg, 'primary')).toBe(false);
+    });
+
+    it('ignores an unrecognised entry rather than widening the rule', () => {
+      expect(employmentScopes(marked(['primary', 'tertiary']))).toEqual(['primary']);
+    });
+
+    it('is declared on the seeded NSSF and secondary PAYE rules', async () => {
+      const nssfCfg = await requireStatutoryConfig(client, CTX, 'NSSF', { effectiveDate: '2027-01-15' });
+      // NSSF is deducted once, through the enrolled employment.
+      expect(appliesToEmployment(nssfCfg, 'primary')).toBe(true);
+      expect(appliesToEmployment(nssfCfg, 'secondary')).toBe(false);
+
+      const secondCfg = await requireStatutoryConfig(client, CTX, 'PAYE_SECONDARY', { effectiveDate: '2027-07-15' });
+      expect(appliesToEmployment(secondCfg, 'secondary')).toBe(true);
+      expect(appliesToEmployment(secondCfg, 'primary')).toBe(false);
+    });
+  });
+
+  describe('secondary-employment PAYE configuration', () => {
+    // The rule has three legal shapes and the settings screen writes whichever
+    // one was picked. These pin what each shape stores, and that an unusable or
+    // contradictory one is refused before it can reach a payslip.
+    it('stores a graduated band schedule, ordered from the bottom up', () => {
+      const p = prepareStatutoryConfig('PAYE_SECONDARY', {
+        rates: {},
+        limits: {
+          apply_to_payroll: true,
+          applies_to_employment: ['secondary'],
+          bands: [{ max: null, monthly_amount: 120000 }, { max: 410000, monthly_amount: 50000 }],
+        },
+      });
+      const limits = p.limits as Record<string, unknown>;
+      expect(limits.bands).toEqual([
+        { max: 410000, monthly_amount: 50000 },
+        { max: null, monthly_amount: 120000 },
+      ]);
+      expect(limits.applies_to_employment).toEqual(['secondary']);
+    });
+
+    it('stores a flat monthly amount and warns that the rate is ignored', () => {
+      const p = prepareStatutoryConfig('PAYE_SECONDARY', {
+        rates: { rate: 40 },
+        limits: { apply_to_payroll: true, monthly_amount: 75000 },
+      });
+      const limits = p.limits as Record<string, unknown>;
+      expect(limits.monthly_amount).toBe(75000);
+      expect(limits.bands).toBeUndefined();
+      expect(p.warnings.join(' ')).toMatch(/rates\.rate is ignored/);
+    });
+
+    it('stores a percentage of chargeable income', () => {
+      const p = prepareStatutoryConfig('PAYE_SECONDARY', {
+        rates: { rate: 40 },
+        limits: { apply_to_payroll: true },
+      });
+      expect((p.rates as Record<string, unknown>).rate).toBe(40);
+      expect((p.limits as Record<string, unknown>).bands).toBeUndefined();
+    });
+
+    it('refuses a schedule that declares no shape at all', () => {
+      expect(() => prepareStatutoryConfig('PAYE_SECONDARY', { rates: {}, limits: {} }))
+        .toThrow(/needs one of: limits\.bands, limits\.monthly_amount, or rates\.rate/);
+    });
+
+    it('refuses a percentage outside 0-100', () => {
+      expect(() => prepareStatutoryConfig('PAYE_SECONDARY', { rates: { rate: 140 }, limits: {} }))
+        .toThrow(/between 0 and 100/);
+    });
+
+    it('refuses a scope that is not an employment', () => {
+      expect(() => prepareStatutoryConfig('PAYE_SECONDARY', {
+        rates: { rate: 40 },
+        limits: { applies_to_employment: ['secondary', 'tertiary'] },
+      })).toThrow(/applies_to_employment must be primary or secondary \(got tertiary\)/);
+    });
+
+    it('drops a blank scope instead of storing an empty one', () => {
+      const p = prepareStatutoryConfig('PAYE_SECONDARY', {
+        rates: { rate: 40 },
+        limits: { applies_to_employment: [] },
+      });
+      expect((p.limits as Record<string, unknown>).applies_to_employment).toBeUndefined();
+    });
+
+    it('warns when the scope names every employment, which narrows nothing', () => {
+      const p = prepareStatutoryConfig('PAYE_SECONDARY', {
+        rates: { rate: 40 },
+        limits: { applies_to_employment: ['primary', 'secondary'] },
+      });
+      expect(p.warnings.join(' ')).toMatch(/does not narrow/);
+    });
+
+    it('keeps the scope declaration when validating an NSSF table', () => {
+      const p = prepareStatutoryConfig('NSSF', {
+        rates: { employee: 0.05, employer: 0.1 },
+        limits: { monthly_ceiling: 0, applies_to_employment: ['primary'] },
+      });
+      expect((p.limits as Record<string, unknown>).applies_to_employment).toEqual(['primary']);
+    });
+
+    it('routes PAYE_SECONDARY through its own shape check, not the generic one', () => {
+      // A generic table accepts any shape; the secondary schedule refuses an
+      // empty one, so meeting that refusal proves the dispatch is wired up.
+      expect(() => prepareStatutoryConfig('PAYE_SECONDARY', { rates: {}, limits: {} })).toThrow();
+      expect(() => prepareStatutoryConfig('LEVY', { rates: {}, limits: {} })).not.toThrow();
     });
   });
 

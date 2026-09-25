@@ -1283,23 +1283,27 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     // chargeable income before PAYE; LST is withheld separately and never
     // reduces taxable pay.
     const chargeableIncome = round2(basic + contractAllowances + extraForEmployee + taxableComponentEarnings + variableEarnings + taxableEmployeeEarnings + benefitsTaxable);
-    // Secondary employment: a second employer withholds PAYE at a fixed rate on
-    // the chargeable income instead of on the resident progressive bands, and
-    // does not withhold NSSF again — NSSF is an obligation of the employment
-    // relationship the member is enrolled under, and a second deduction here
-    // would double-charge one contributor. Such an employee is PAYE-only on
-    // this payroll. The tax schedule still needs the tenant to have adopted a
-    // PAYE_SECONDARY rule; without one the resident bands apply, so a missing
-    // rule degrades to normal taxation rather than to zero tax.
+    // Which employment this payslip is: the employee's own job, or a second job
+    // the company pays as a second employer. The flag is a fact about the
+    // employee; what each statutory rule does with that fact is configured on
+    // the rule, not branched here.
     const isSecondaryEmployment = emp.is_secondary_employment === true;
-    const secondEmploymentTax = isSecondaryEmployment && secondaryPayeCfg !== null;
-    const nssf = isSecondaryEmployment
-      ? { employee: 0, employer: 0, base: 0, ceiling: null as number | null }
-      : statutory.computeNssf(gross, nssfCfg);
+    const employmentScope: statutory.EmploymentScope = isSecondaryEmployment ? 'secondary' : 'primary';
+    // The NSSF rule names the employment it covers. Seeded for ["primary"],
+    // because a member is enrolled through one employment and a second employer
+    // deducting the same contribution again would double-charge one contributor.
+    const nssf = statutory.computeNssf(gross, nssfCfg, { scope: employmentScope });
     const lst = statutory.computeLst(gross, lstCfg, { periodStart, periodEnd });
     const taxableIncome = round2(Math.max(0, chargeableIncome - nssf.employee));
+    // A second employer withholds a fixed rate instead of on the resident
+    // bands. The tenant must have adopted a PAYE_SECONDARY rule that covers
+    // second employments; without one, or where the rule names a different
+    // employment, the resident bands apply, so a missing rule degrades to
+    // normal taxation rather than to zero tax.
+    const secondEmploymentTax =
+      isSecondaryEmployment && statutory.appliesToEmployment(secondaryPayeCfg, 'secondary');
     const paye = secondEmploymentTax
-      ? statutory.computeSecondaryPaye(chargeableIncome, secondaryPayeCfg)
+      ? statutory.computeSecondaryPaye(chargeableIncome, secondaryPayeCfg, { scope: 'secondary' })
       : statutory.computePaye(taxableIncome, payeCfg);
     // The config the PAYE figure came from, recorded on the payslip so a reprint
     // resolves the same schedule it was computed on.

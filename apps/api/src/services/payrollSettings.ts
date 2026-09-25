@@ -526,6 +526,43 @@ function preparePaye(body: Record<string, unknown>, base?: Record<string, unknow
 }
 
 /**
+ * Which employments a statutory rule governs.
+ *
+ * Payroll runs two kinds of employment through one code path: an employee's own
+ * job ("primary") and a second job the company pays as a second employer
+ * ("secondary"). Two rules genuinely differ by employment - NSSF is owed once,
+ * through the employment the member is enrolled under, and PAYE_SECONDARY
+ * exists only for a second employment - so the distinction is declared on the
+ * rule rather than branched in code.
+ *
+ * Leaving the marker off means "every employment", which is the behaviour every
+ * row written before the marker existed already had, so this stays backward
+ * compatible.
+ */
+function prepareEmploymentScopes(limits: Record<string, unknown>, warnings: string[]): void {
+  const raw = limits.applies_to_employment;
+  if (raw === undefined || raw === null || raw === '' || (Array.isArray(raw) && raw.length === 0)) {
+    delete limits.applies_to_employment;
+    return;
+  }
+  const entries = Array.isArray(raw) ? raw : [raw];
+  const scopes: statutory.EmploymentScope[] = [];
+  for (const entry of entries) {
+    const scope = String(entry ?? '').trim().toLowerCase();
+    if (!(statutory.EMPLOYMENT_SCOPES as readonly string[]).includes(scope)) {
+      throw badRequest(
+        `limits.applies_to_employment must be ${statutory.EMPLOYMENT_SCOPES.join(' or ')} (got ${String(entry)})`
+      );
+    }
+    if (!scopes.includes(scope as statutory.EmploymentScope)) scopes.push(scope as statutory.EmploymentScope);
+  }
+  if (scopes.length === statutory.EMPLOYMENT_SCOPES.length) {
+    warnings.push('applies_to_employment names every employment, so it does not narrow this rule.');
+  }
+  limits.applies_to_employment = scopes;
+}
+
+/**
  * NSSF rates.
  *
  * The engine multiplies gross pay by these numbers directly, so they are
@@ -537,6 +574,7 @@ function prepareNssf(body: Record<string, unknown>, base?: Record<string, unknow
   const warnings: string[] = [];
   const rateObj = plainObject(field(body, base, 'rates'), 'rates');
   const limits = { ...plainObject(field(body, base, 'limits'), 'limits') };
+  prepareEmploymentScopes(limits, warnings);
 
   const employee = numberOrNull(rateObj.employee, 'rates.employee') ?? 0;
   const employer = numberOrNull(rateObj.employer, 'rates.employer') ?? 0;
@@ -661,6 +699,101 @@ function prepareLst(body: Record<string, unknown>, base?: Record<string, unknown
   };
 }
 
+/**
+ * Secondary-employment PAYE.
+ *
+ * A second employer withholds at a fixed rate on the chargeable income instead
+ * of on the resident progressive bands. The Act publishes no numbered schedule
+ * for that case, so the shape is configuration and three are legal; the engine
+ * reads them in this order: limits.bands (graduated), then limits.monthly_amount
+ * (flat), then rates.rate (a percentage, 40 = 40%). A row carrying more than one
+ * is warned about rather than left to be discovered on a payslip.
+ *
+ * limits.applies_to_employment narrows the rule to the employments it governs.
+ * The seed names ["secondary"], which is what makes the fallback to the
+ * resident bands declarative: an employee who is not on a second employment
+ * never meets this rule.
+ */
+function prepareSecondaryPaye(body: Record<string, unknown>, base?: Record<string, unknown>): PreparedConfig {
+  const warnings: string[] = [];
+  const limits = { ...plainObject(field(body, base, 'limits'), 'limits') };
+  const rates = { ...plainObject(field(body, base, 'rates'), 'rates') };
+
+  prepareEmploymentScopes(limits, warnings);
+
+  limits.apply_to_payroll = bool(limits.apply_to_payroll, 'limits.apply_to_payroll', true);
+  if (limits.apply_to_payroll === false) {
+    warnings.push('apply_to_payroll is off, so payroll withholds no secondary-employment PAYE even though this schedule is saved.');
+  }
+  const minGross = numberOrNull(limits.min_gross, 'limits.min_gross') ?? 0;
+  if (minGross < 0) throw badRequest('limits.min_gross cannot be negative');
+  limits.min_gross = minGross;
+  if (minGross > 0) {
+    warnings.push(`Secondary-employment PAYE only applies once monthly chargeable income reaches ${minGross}.`);
+  }
+
+  const rawBands = limits.bands;
+  if (rawBands !== undefined && rawBands !== null && !Array.isArray(rawBands)) {
+    throw badRequest('limits.bands must be an array of { max, monthly_amount }');
+  }
+  const hasBands = Array.isArray(rawBands) && rawBands.length > 0;
+  const flat = numberOrNull(limits.monthly_amount ?? rates.monthly_amount, 'limits.monthly_amount');
+  const rawRate = rates.rate ?? limits.rate;
+  const hasRate = rawRate !== undefined && rawRate !== null && rawRate !== '';
+
+  if (hasBands) {
+    const bands = (rawBands as unknown[]).map((entry, i) => {
+      const o = (entry ?? {}) as Record<string, unknown>;
+      const amount = numberOrNull(o.monthly_amount ?? o.amount, `bands[${i}].monthly_amount`) ?? 0;
+      if (amount < 0) throw badRequest(`bands[${i}].monthly_amount cannot be negative`);
+      return {
+        max: o.max === null || o.max === undefined || o.max === '' ? null : numberOrNull(o.max, `bands[${i}].max`),
+        monthly_amount: amount,
+      };
+    });
+    bands.sort((a, b) => (a.max ?? Number.POSITIVE_INFINITY) - (b.max ?? Number.POSITIVE_INFINITY));
+    bands.forEach((band, i) => {
+      if (band.max !== null && band.max <= 0) throw badRequest(`bands[${i}].max must be above zero`);
+      if (band.max === null && i !== bands.length - 1) {
+        throw badRequest(`bands[${i}] is open-ended but more bands follow it; only the top band may run to infinity`);
+      }
+      if (i > 0) {
+        const previous = bands[i - 1].max;
+        if (previous === null) throw badRequest(`bands[${i}] follows an open-ended band, so it can never apply`);
+        if (band.max !== null && band.max <= previous) {
+          throw badRequest(`bands[${i}].max (${band.max}) must be above the previous band's ${previous}`);
+        }
+      }
+    });
+    limits.bands = bands;
+    if (flat !== null) warnings.push('limits.monthly_amount is ignored while a graduated band schedule is present.');
+    if (hasRate) warnings.push('rates.rate is ignored while a graduated band schedule is present.');
+  } else {
+    delete limits.bands;
+    if (flat !== null) {
+      if (flat < 0) throw badRequest('limits.monthly_amount cannot be negative');
+      limits.monthly_amount = flat;
+      if (hasRate) warnings.push('rates.rate is ignored while a flat monthly amount is present.');
+    } else if (hasRate) {
+      const pct = numberOrNull(rawRate, 'rates.rate');
+      if (pct === null) throw badRequest('rates.rate must be a number');
+      if (pct < 0 || pct > 100) throw badRequest(`rates.rate must be between 0 and 100, got ${pct}`);
+      rates.rate = pct;
+      delete limits.rate;
+    } else {
+      throw badRequest('A PAYE_SECONDARY configuration needs one of: limits.bands, limits.monthly_amount, or rates.rate');
+    }
+  }
+
+  return {
+    rates,
+    thresholds: field(body, base, 'thresholds') ?? [],
+    limits,
+    formula: field(body, base, 'formula') ?? null,
+    warnings,
+  };
+}
+
 /** Categories with no bespoke shape keep whatever JSON they were given. */
 function prepareGeneric(body: Record<string, unknown>, base?: Record<string, unknown>): PreparedConfig {
   const rates = field(body, base, 'rates') ?? [];
@@ -689,6 +822,8 @@ export function prepareStatutoryConfig(
       return preparePaye(body, base);
     case 'NSSF':
       return prepareNssf(body, base);
+    case 'PAYE_SECONDARY':
+      return prepareSecondaryPaye(body, base);
     case 'LST':
       return prepareLst(body, base);
     default:
@@ -925,8 +1060,12 @@ export async function previewStatutory(client: pg.PoolClient, ctx: Ctx, input: S
     statutory.getStatutoryConfig(client, ctx, 'LST', { effectiveDate: asOf, companyId, country }),
   ]);
 
+  // The preview contrasts the two employments an employee could be on, so NSSF
+  // is computed for the primary one: that is the contribution the member is
+  // enrolled under. A tenant whose NSSF rule names only the primary employment
+  // sees zero here for a second employment, which is what payroll would withhold.
   const nssf = nssfCfg
-    ? statutory.computeNssf(gross, nssfCfg)
+    ? statutory.computeNssf(gross, nssfCfg, { scope: 'primary' })
     : { employee: 0, employer: 0, base: 0, ceiling: null as number | null };
   const lst = statutory.computeLst(gross, lstCfg, {
     periodStart: periodStart ?? undefined,
@@ -950,7 +1089,7 @@ export async function previewStatutory(client: pg.PoolClient, ctx: Ctx, input: S
   // chargeable income instead of the resident bands. Computed alongside the
   // primary figure so switching an employee between the two is visible before
   // it is saved. Zero when the tenant has not adopted the schedule.
-  const secondaryPaye = statutory.computeSecondaryPaye(chargeableIncome, secondaryPayeCfg);
+  const secondaryPaye = statutory.computeSecondaryPaye(chargeableIncome, secondaryPayeCfg, { scope: 'secondary' });
 
   const totalDeductions = round2(paye + nssf.employee + lst);
   const net = round2(gross - totalDeductions);

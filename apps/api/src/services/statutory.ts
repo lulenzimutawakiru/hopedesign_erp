@@ -154,10 +154,60 @@ function configRates(cfg: StatutoryConfig): Record<string, unknown> {
 }
 
 /**
+ * Which employments a rule governs.
+ *
+ * Payroll runs two kinds of employment through one code path: an employee's own
+ * job ("primary") and an employee the company pays as a second employer
+ * ("secondary"). Most rules apply to both, but two genuinely differ by
+ * employment: NSSF is owed once, through the employment the member is enrolled
+ * under, and PAYE_SECONDARY exists only for a second employment. That
+ * distinction is policy, so it is declared in the config rather than branched in
+ * code:
+ *   limits: { applies_to_employment: ["secondary"] }
+ * Unmarked - or marked with both - means "every employment", so a row written
+ * before this marker existed keeps applying exactly where it applied before.
+ */
+export const EMPLOYMENT_SCOPES = ['primary', 'secondary'] as const;
+export type EmploymentScope = (typeof EMPLOYMENT_SCOPES)[number];
+
+/** The employments a config declares, normalised. Empty means "all employments". */
+export function employmentScopes(cfg: StatutoryConfig | null): EmploymentScope[] {
+  const limits = (cfg?.limits ?? {}) as Record<string, unknown>;
+  const raw = limits.applies_to_employment;
+  const entries = Array.isArray(raw) ? raw : raw === undefined || raw === null || raw === '' ? [] : [raw];
+  const out: EmploymentScope[] = [];
+  for (const entry of entries) {
+    const scope = String(entry ?? '').trim().toLowerCase();
+    if ((EMPLOYMENT_SCOPES as readonly string[]).includes(scope) && !out.includes(scope as EmploymentScope)) {
+      out.push(scope as EmploymentScope);
+    }
+  }
+  return out;
+}
+
+/**
+ * Does this rule apply to the given employment? A rule that names no employment
+ * applies to all of them, which is the behaviour every pre-existing row had.
+ */
+export function appliesToEmployment(cfg: StatutoryConfig | null, scope: EmploymentScope): boolean {
+  const scopes = employmentScopes(cfg);
+  return scopes.length === 0 || scopes.includes(scope);
+}
+
+/**
  * Social security split. rates: { employee: 0.05, employer: 0.10 };
  * limits: { monthly_ceiling: 0 } (0 = no ceiling).
+ *
+ * When the caller says which employment it is computing for and the config names
+ * a different one, nothing is withheld: NSSF follows the employment the member
+ * is enrolled under, so a second employer must not deduct it again. A zeroed
+ * result is returned rather than an error, because "nothing to withhold" is a
+ * normal outcome for both callers.
  */
-export function computeNssf(gross: number, cfg: StatutoryConfig): NssfResult {
+export function computeNssf(gross: number, cfg: StatutoryConfig, opts: { scope?: EmploymentScope } = {}): NssfResult {
+  if (opts.scope && !appliesToEmployment(cfg, opts.scope)) {
+    return { employee: 0, employer: 0, base: 0, ceiling: null };
+  }
   const g = Math.max(0, Number(gross) || 0);
   const rates = configRates(cfg);
   const limits = (cfg.limits ?? {}) as Record<string, unknown>;
@@ -261,22 +311,58 @@ export function computeLst(
  * earned from more than one employment relationship: the secondary employer
  * withholds at a fixed rate instead of on the resident progressive bands, which
  * is why this cannot reuse computePaye. The Act does not publish a numbered
- * schedule for that case, so the rate is configuration, not code:
- *   rates:  { rate: 40 }                       (percentage, 40 = 40%)
- *   limits: { apply_to_payroll: true, min_gross: 0 }
- * The seed ships 40% pending confirmation against URA guidance.
+ * schedule for that case, so the rate is configuration, not code. Three shapes
+ * are legal, and they are read in this order:
+ *   limits: { bands: [{ max: 500000, monthly_amount: 200000 }, ...] }  graduated
+ *   limits: { monthly_amount: 200000 }                                 flat amount
+ *   rates:  { rate: 40 }                                               percentage (40 = 40%)
+ * alongside limits.apply_to_payroll and limits.min_gross. The seed ships 40%
+ * pending confirmation against URA guidance.
  *
- * Returns 0 when no config is supplied: a tenant that has not adopted the
- * secondary schedule keeps taxing those employees on the resident bands.
+ * limits.apply_to_employment narrows the rule to second employments, which is
+ * what makes the fallback to the resident bands declarative: asked for an
+ * employment this rule does not cover, the function returns 0 and the caller's
+ * resident table stands. It returns 0 when no config is supplied too, so a
+ * tenant that has not adopted the secondary schedule keeps taxing those
+ * employees on the resident bands.
  */
-export function computeSecondaryPaye(base: number, cfg: StatutoryConfig | null): number {
+export function computeSecondaryPaye(
+  base: number,
+  cfg: StatutoryConfig | null,
+  opts: { scope?: EmploymentScope } = {}
+): number {
   if (!cfg) return 0;
+  if (opts.scope && !appliesToEmployment(cfg, opts.scope)) return 0;
   const rates = configRates(cfg);
   const limits = (cfg.limits ?? {}) as Record<string, unknown>;
   if (limits.apply_to_payroll === false) return 0;
+  const amount = Math.max(0, Number(base) || 0);
   const minGross = Number(limits.min_gross ?? 0);
-  if (minGross > 0 && (Number(base) || 0) < minGross) return 0;
+  if (minGross > 0 && amount < minGross) return 0;
+  // Graduated schedule: the first band whose ceiling covers the income wins,
+  // the same shape and reading as the KCCA-style LST table.
+  const bands = Array.isArray(limits.bands) ? (limits.bands as Array<Record<string, unknown>>) : [];
+  if (bands.length) {
+    const sorted = [...bands].sort((a, b) => {
+      const am = a.max != null ? Number(a.max) : Number.POSITIVE_INFINITY;
+      const bm = b.max != null ? Number(b.max) : Number.POSITIVE_INFINITY;
+      return am - bm;
+    });
+    let top = 0;
+    for (const b of sorted) {
+      const upper = b.max != null ? Number(b.max) : Number.POSITIVE_INFINITY;
+      const due = round2(Number(b.monthly_amount ?? b.amount ?? 0));
+      if (amount <= upper) return due;
+      top = due;
+    }
+    // Income above every declared ceiling is charged the top band rather than
+    // nothing: a bounded table that silently stopped taxing the highest earners
+    // would understate what the employer owes the authority.
+    return round2(top);
+  }
+  const flat = Number(limits.monthly_amount ?? rates.monthly_amount ?? 0);
+  if (flat > 0) return round2(flat);
   const rate = Number(rates.rate ?? limits.rate ?? 0);
   if (rate <= 0) return 0;
-  return round2(Math.max(0, Number(base) || 0) * (rate / 100));
+  return round2(amount * (rate / 100));
 }
