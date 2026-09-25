@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, DocFormat, fmtMoney, fmtNum, openDocument } from '../api';
 import { useAuth, can } from '../auth';
-import { navigate } from '../router';
+import { navigate, useHashQuery } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { ConfirmDialog, Drawer } from '../components/os';
 import { HrEmptyState, HrKpi, HrKpiGrid, HrPageHeader, HrTableEmpty, HrToolbar } from '../components/hrUi';
@@ -283,6 +283,7 @@ function EmployeesTab({
   onOpen,
   canPrintSlips,
   canCreate,
+  onHire,
   docBusy,
   onPayslip,
   onRegister,
@@ -291,6 +292,7 @@ function EmployeesTab({
   onOpen: (item: Rec) => void;
   canPrintSlips: boolean;
   canCreate: boolean;
+  onHire: () => void;
   docBusy: string;
   onPayslip: (slip: Rec, format: 'pdf' | 'print') => void;
   onRegister: (format: DocFormat) => void;
@@ -301,9 +303,14 @@ function EmployeesTab({
       title="Payroll register"
       actions={
         <div className="action-group">
-          {canCreate && (
-            <button className="btn btn-sm" onClick={() => navigate('/people/employees/new')}>New employee</button>
-          )}
+          <button
+            className="btn btn-sm"
+            disabled={!canCreate}
+            title={canCreate ? 'Hire someone onto the employee file' : 'Ask HR to grant this payroll role the right to add employees'}
+            onClick={onHire}
+          >
+            New employee
+          </button>
           <button className="btn btn-sm" disabled={docBusy !== ''} onClick={() => onRegister('pdf')}>
             {docBusy === 'registerpdf' ? 'Saving...' : 'Register PDF'}
           </button>
@@ -387,9 +394,14 @@ function EmployeesTab({
                 title="No employees in this run"
                 hint="Recalculate the payroll to pull in active contracts for the period, or hire someone new onto the file."
               >
-                {canCreate && (
-                  <button className="btn btn-primary btn-sm" onClick={() => navigate('/people/employees/new')}>New employee</button>
-                )}
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={!canCreate}
+                  title={canCreate ? 'Hire someone onto the employee file' : 'Ask HR to grant this payroll role the right to add employees'}
+                  onClick={onHire}
+                >
+                  New employee
+                </button>
               </HrTableEmpty>
             )}
           </tbody>
@@ -1122,6 +1134,7 @@ export function PayrollDesk({ id }: { id: number }) {
   const [drawer, setDrawer] = useState<Rec | null>(null);
   const [confirm, setConfirm] = useState<'release' | 'paid' | 'close' | 'reopen' | null>(null);
   const [simulation, setSimulation] = useState<Rec | null>(null);
+  const hashQuery = useHashQuery();
 
   const load = useCallback(() => {
     api<{ data: { payroll: Rec; items: Rec[]; exceptions: Rec[]; workflow?: Rec[] } }>(`/api/ops/hr/payrolls/${id}`)
@@ -1129,6 +1142,15 @@ export function PayrollDesk({ id }: { id: number }) {
       .catch((e) => setError(e instanceof Error ? e.message : 'Payroll failed'));
   }, [id]);
   useEffect(() => { load(); }, [load]);
+
+  // A hire that started from this run comes back with ?hired=1 so the desk can
+  // confirm the hand-off and point the operator at the next step.
+  useEffect(() => {
+    if (hashQuery.get('hired') !== '1') return;
+    setNotice('Employee added to the employee file. Recalculate this run to pull them into the register.');
+    setTab('Employees');
+    navigate('/people/payrolls/' + id, { replace: true });
+  }, [hashQuery, id]);
 
   const act = async (path: string, ok: string, body?: Rec): Promise<Rec | null> => {
     setBusy(true); setError(''); setNotice('');
@@ -1188,6 +1210,8 @@ export function PayrollDesk({ id }: { id: number }) {
     } finally { setDocBusy(''); }
   };
 
+  const hireFromRun = () => navigate('/people/employees/new', { query: { returnTo: 'payrolls/' + id } });
+
   if (error && !doc) return <ErrorBanner error={error} />;
   if (!doc) return <PageLoader variant="page" label="Opening payroll..." />;
 
@@ -1219,9 +1243,14 @@ export function PayrollDesk({ id }: { id: number }) {
         actions={
           <>
             <Badge value={p.status} />
-            {canCreate && (
-              <button className="btn btn-sm" onClick={() => navigate('/people/employees/new')}>New employee</button>
-            )}
+            <button
+              className="btn btn-sm"
+              disabled={!canCreate}
+              title={canCreate ? 'Hire someone onto this payroll' : 'Ask HR to grant this payroll role the right to add employees'}
+              onClick={hireFromRun}
+            >
+              New employee
+            </button>
             <button className="btn btn-sm" onClick={() => navigate('/people/payrolls')}>All runs</button>
           </>
         }
@@ -1341,6 +1370,7 @@ export function PayrollDesk({ id }: { id: number }) {
           items={items}
           onOpen={setDrawer}
           canCreate={canCreate}
+          onHire={hireFromRun}
           canPrintSlips={canPrintSlips}
           docBusy={docBusy}
           onPayslip={openPayslipDoc}

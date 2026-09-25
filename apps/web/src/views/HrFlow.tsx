@@ -1649,6 +1649,7 @@ function EmployeeEditor({ id }: { id: number }) {
 }
 
 function EmployeeComposer() {
+  const returnTo = useHashQuery().get('returnTo') ?? '';
   const [depts, setDepts] = useState<Rec[]>([]);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -1696,7 +1697,8 @@ function EmployeeComposer() {
           userId: userId ? Number(userId) : null,
         }),
       });
-      navigate(`/people/employees/${r.data.employeeId}`);
+      if (returnTo) navigate('/people/' + returnTo, { query: { hired: '1' } });
+      else navigate(`/people/employees/${r.data.employeeId}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
@@ -1706,7 +1708,7 @@ function EmployeeComposer() {
     <div className="page">
       <header className="page-head">
         <div>
-          <button className="btn btn-sm" onClick={() => navigate('/people/employees')}>Back</button>
+          <button className="btn btn-sm" onClick={() => navigate(returnTo ? '/people/' + returnTo : '/people/employees')}>Back</button>
           <h1>New employee</h1>
         </div>
       </header>
