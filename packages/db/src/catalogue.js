@@ -538,6 +538,12 @@ const EXTRA_PERMISSIONS = [
   { code: "documents.delete", module: "documents", resource: "library", action: "delete", description: "Delete or archive documents" },
   { code: "documents.folders.manage", module: "documents", resource: "folders", action: "manage", description: "Manage document folders" },
   { code: "documents.settings.manage", module: "documents", resource: "settings", action: "manage", description: "Configure document management settings" },
+  // Flat cron codes (introduced by migration 0118). The admin cron routes and the
+  // Communication -> Cron Jobs tab check these exact codes, so they have to exist in
+  // the catalogue for a `system.*` grant to resolve to anything, and for reconcileRbac
+  // to keep their permission rows alive across re-seeds.
+  { code: "system.cron.view", module: "system", resource: "cron", action: "view", description: "View cron jobs and run history" },
+  { code: "system.cron.manage", module: "system", resource: "cron", action: "manage", description: "Create, edit, toggle and manually run cron jobs" },
 ];
 
 function buildPermissions() {
@@ -1109,14 +1115,33 @@ const MAIL_ROLE_EXTENSIONS = {
   employee_self_service: MAIL_VIEW,
 };
 
+// ---------------------------------------------------------------------------
+// Cron administration grants. The cron routes and the Communication -> Cron Jobs
+// tab check `system.cron.view` / `system.cron.manage`. Declared centrally so the
+// capability survives reconcileRbac re-seeds, which rebuild role_permissions from
+// ROLES[].grants and would otherwise drop a migration-only INSERT.
+// ---------------------------------------------------------------------------
+const CRON_PERMISSIONS = ["system.cron.view", "system.cron.manage"];
+
+const CRON_ROLE_EXTENSIONS = {
+  super_administrator: CRON_PERMISSIONS,
+  system_administrator: CRON_PERMISSIONS,
+  managing_director: CRON_PERMISSIONS,
+  executive_director: CRON_PERMISSIONS,
+  general_manager: CRON_PERMISSIONS,
+  operations_director: CRON_PERMISSIONS,
+  production_director: CRON_PERMISSIONS,
+};
+
 for (const role of ROLES) {
   const extra = [
     ...(SERVICE_DESK_ROLE_EXTENSIONS[role.code] || []),
     ...(ORGANISATION_ROLE_EXTENSIONS[role.code] || []),
     ...(WORKFLOW_INSTANCE_ROLE_EXTENSIONS[role.code] || []),
     ...(MAIL_ROLE_EXTENSIONS[role.code] || []),
+    ...(CRON_ROLE_EXTENSIONS[role.code] || []),
   ];
   if (extra.length) role.grants = [...role.grants, ...extra];
 }
 
-module.exports = { ACTIONS, MODULES, EXTRA_PERMISSIONS, buildPermissions, ROLES };
+module.exports = { ACTIONS, MODULES, EXTRA_PERMISSIONS, CRON_ROLE_EXTENSIONS, buildPermissions, ROLES };
