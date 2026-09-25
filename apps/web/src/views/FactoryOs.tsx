@@ -1431,20 +1431,22 @@ export function WasteRecorder() {
         <section className="card card-pad">
           <div className="card-head"><h3>Recent waste</h3></div>
           {recent.length === 0 ? <p className="muted">No waste recorded yet.</p> : (
-            <table className="table data">
-              <thead><tr><th>No</th><th>Order</th><th>Type</th><th>Qty</th><th>Flag</th></tr></thead>
-              <tbody>
-                {recent.map((w) => (
-                  <tr key={String(w.id)}>
-                    <td className="cell-mono">{String(w.wasteNo ?? '')}</td>
-                    <td>{String(w.woNo ?? '')}</td>
-                    <td>{String(w.category ?? w.wasteType ?? '')}</td>
-                    <td className="cell-num">{fmtNum(w.wasteQty)}</td>
-                    <td><Badge value={w.isAbnormal ? 'ABNORMAL' : 'NORMAL'} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="table-wrap">
+              <table className="table data">
+                <thead><tr><th>No</th><th>Order</th><th>Type</th><th>Qty</th><th>Flag</th></tr></thead>
+                <tbody>
+                  {recent.map((w) => (
+                    <tr key={String(w.id)}>
+                      <td className="cell-mono">{String(w.wasteNo ?? '')}</td>
+                      <td>{String(w.woNo ?? '')}</td>
+                      <td>{String(w.category ?? w.wasteType ?? '')}</td>
+                      <td className="cell-num">{fmtNum(w.wasteQty)}</td>
+                      <td><Badge value={w.isAbnormal ? 'ABNORMAL' : 'NORMAL'} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
       </div>
@@ -1570,19 +1572,21 @@ export function MaterialIssueFlow() {
           ) : (
             <>
               <p><Badge value={pick(check, 'status')} /> <span className="muted">{String(check.message ?? '')}</span></p>
-              <table className="table data">
-                <thead><tr><th>Material</th><th>Required</th><th>On hand</th><th>Status</th></tr></thead>
-                <tbody>
-                  {lines.map((l) => (
-                    <tr key={String(l.productId)}>
-                      <td>{String(l.productName ?? l.productCode)} <span className="muted">{String(l.productCode ?? '')}</span></td>
-                      <td className="cell-num">{fmtNum(l.required)}</td>
-                      <td className="cell-num">{fmtNum(l.onHand)}</td>
-                      <td>{l.available ? <Badge value="OK" /> : <Badge value={l.critical ? 'SHORT' : 'LOW'} />}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-wrap">
+                <table className="table data">
+                  <thead><tr><th>Material</th><th>Required</th><th>On hand</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {lines.map((l) => (
+                      <tr key={String(l.productId)}>
+                        <td>{String(l.productName ?? l.productCode)} <span className="muted">{String(l.productCode ?? '')}</span></td>
+                        <td className="cell-num">{fmtNum(l.required)}</td>
+                        <td className="cell-num">{fmtNum(l.onHand)}</td>
+                        <td>{l.available ? <Badge value="OK" /> : <Badge value={l.critical ? 'SHORT' : 'LOW'} />}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {String(check.status ?? '') !== 'PASS' && (
                 <div className="fos-issue-actions">
                   <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -167,32 +167,34 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 function Breakdown({ lines, total, label, balanced, note }: { lines: TraceLine[]; total: number; label: string; balanced?: boolean; note?: string }) {
   return (
     <div className="stack" style={{ gap: 0 }}>
-      <table className="data">
-        <thead>
-          <tr>
-            <th>Line</th>
-            <th>Basis</th>
-            <th className="cell-num">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lines.map((l, i) => (
-            <tr key={String(i) + l.label}>
-              <td>{l.label}</td>
-              <td className="cell-sub">{l.detail}</td>
-              <td className="cell-num">{money(l.amount)}</td>
+      <div className="table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Line</th>
+              <th>Basis</th>
+              <th className="cell-num">Amount</th>
             </tr>
-          ))}
-          {lines.length === 0 && <HrTableEmpty colSpan={3} title="Nothing to show" hint="No lines were recorded for this section." />}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td><strong>{label}</strong></td>
-            <td className="cell-sub">{note ?? ''}</td>
-            <td className="cell-num"><strong>{money(total)}</strong></td>
-          </tr>
-        </tfoot>
-      </table>
+          </thead>
+          <tbody>
+            {lines.map((l, i) => (
+              <tr key={String(i) + l.label}>
+                <td>{l.label}</td>
+                <td className="cell-sub">{l.detail}</td>
+                <td className="cell-num">{money(l.amount)}</td>
+              </tr>
+            ))}
+            {lines.length === 0 && <HrTableEmpty colSpan={3} title="Nothing to show" hint="No lines were recorded for this section." />}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td><strong>{label}</strong></td>
+              <td className="cell-sub">{note ?? ''}</td>
+              <td className="cell-num"><strong>{money(total)}</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
       {balanced !== undefined && (
         <div className="chip-row">
           <span className={balanced ? 'chip chip-green' : 'chip chip-red'}>

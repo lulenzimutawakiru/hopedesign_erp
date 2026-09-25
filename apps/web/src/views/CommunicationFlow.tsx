@@ -1455,44 +1455,46 @@ function EmailView({ preset }: { preset?: 'inbox' | 'sent' | 'drafts' }) {
         </select>
       </div>
       <div className="card card-pad">
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Subject</th>
-              <th>Status</th>
-              <th>Recipients</th>
-              <th>Created</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
               <tr>
-                <td colSpan={5}>
-                  <div className="empty-state">
-                    <h3>No emails yet</h3>
-                    <p>Compose your first message or use a template.</p>
-                  </div>
-                </td>
+                <th>Subject</th>
+                <th>Status</th>
+                <th>Recipients</th>
+                <th>Created</th>
+                <th />
               </tr>
-            ) : (
-              rows.map((e) => (
-                <tr key={String(e.id)} className="row-click" onClick={() => setDetailId(Number(e.id))}>
-                  <td>
-                    <span className="cell-main">{String(e.subject ?? '')}</span>
-                    <span className="cell-sub muted">{String(e.templateCode ?? e.creatorName ?? '')}</span>
-                  </td>
-                  <td><Badge value={e.status} /></td>
-                  <td>{String(e.recipientCount ?? 0)}</td>
-                  <td className="cell-mono">{fmtDate(e.createdAt ?? e.created_at)}</td>
-                  <td>
-                    <button className="btn btn-sm btn-ghost" type="button" onClick={(ev) => { ev.stopPropagation(); setDetailId(Number(e.id)); }}>View</button>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={5}>
+                    <div className="empty-state">
+                      <h3>No emails yet</h3>
+                      <p>Compose your first message or use a template.</p>
+                    </div>
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                rows.map((e) => (
+                  <tr key={String(e.id)} className="row-click" onClick={() => setDetailId(Number(e.id))}>
+                    <td>
+                      <span className="cell-main">{String(e.subject ?? '')}</span>
+                      <span className="cell-sub muted">{String(e.templateCode ?? e.creatorName ?? '')}</span>
+                    </td>
+                    <td><Badge value={e.status} /></td>
+                    <td>{String(e.recipientCount ?? 0)}</td>
+                    <td className="cell-mono">{fmtDate(e.createdAt ?? e.created_at)}</td>
+                    <td>
+                      <button className="btn btn-sm btn-ghost" type="button" onClick={(ev) => { ev.stopPropagation(); setDetailId(Number(e.id)); }}>View</button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
         <Pager page={page} pageSize={pageSize} total={total} onPage={setPage} />
       </div>
       {compose ? <ComposeEmail onClose={() => setCompose(false)} onSaved={() => void load()} /> : null}

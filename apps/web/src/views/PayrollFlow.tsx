@@ -418,21 +418,23 @@ function TraceList({ title, rows, empty }: { title: string; rows: Rec[]; empty: 
       {rows.length === 0 ? (
         <div className="muted">{empty}</div>
       ) : (
-        <table className="data">
-          <thead>
-            <tr><th>Component</th><th>Kind</th><th>Taxable</th><th>Amount</th></tr>
-          </thead>
-          <tbody>
-            {rows.map((r, idx) => (
-              <tr key={str(r.code) + ':' + str(r.kind) + ':' + idx}>
-                <td>{str(r.name) || str(r.code)} <span className="cell-mono">{str(r.code)}</span></td>
-                <td className="cell-mono">{str(r.kind)}</td>
-                <td>{r.taxable === true ? 'Taxable' : r.taxable === false ? 'Exempt' : '-'}</td>
-                <td className="cell-num">{money(r.amount)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr><th>Component</th><th>Kind</th><th>Taxable</th><th>Amount</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r, idx) => (
+                <tr key={str(r.code) + ':' + str(r.kind) + ':' + idx}>
+                  <td>{str(r.name) || str(r.code)} <span className="cell-mono">{str(r.code)}</span></td>
+                  <td className="cell-mono">{str(r.kind)}</td>
+                  <td>{r.taxable === true ? 'Taxable' : r.taxable === false ? 'Exempt' : '-'}</td>
+                  <td className="cell-num">{money(r.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

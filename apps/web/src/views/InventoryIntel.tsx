@@ -387,25 +387,29 @@ function AtpCtp() {
           <div className="kpi-grid">
             <div className="card card-pad">
               <div className="card-head" style={{ marginBottom: 8 }}><h3>ATP build-up</h3></div>
-              <table className="data">
-                <tbody>
-                  {breakdown(data.atpBreakdown).map((b, i) => (
-                    <tr key={i}><td>{str(b.label)}</td><td className="num">{fmtNum(b.qty)}</td></tr>
-                  ))}
-                  <tr><td><strong>ATP</strong></td><td className="num"><strong>{fmtNum(data.atp)}</strong></td></tr>
-                </tbody>
-              </table>
+              <div className="table-wrap">
+                <table className="data">
+                  <tbody>
+                    {breakdown(data.atpBreakdown).map((b, i) => (
+                      <tr key={i}><td>{str(b.label)}</td><td className="num">{fmtNum(b.qty)}</td></tr>
+                    ))}
+                    <tr><td><strong>ATP</strong></td><td className="num"><strong>{fmtNum(data.atp)}</strong></td></tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
             <div className="card card-pad">
               <div className="card-head" style={{ marginBottom: 8 }}><h3>CTP build-up</h3></div>
-              <table className="data">
-                <tbody>
-                  {breakdown(data.ctpBreakdown).map((b, i) => (
-                    <tr key={i}><td>{str(b.label)}</td><td className="num">{fmtNum(b.qty)}</td></tr>
-                  ))}
-                  <tr><td><strong>CTP</strong></td><td className="num"><strong>{fmtNum(data.ctp)}</strong></td></tr>
-                </tbody>
-              </table>
+              <div className="table-wrap">
+                <table className="data">
+                  <tbody>
+                    {breakdown(data.ctpBreakdown).map((b, i) => (
+                      <tr key={i}><td>{str(b.label)}</td><td className="num">{fmtNum(b.qty)}</td></tr>
+                    ))}
+                    <tr><td><strong>CTP</strong></td><td className="num"><strong>{fmtNum(data.ctp)}</strong></td></tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </>
@@ -625,75 +629,85 @@ function Traceability({ batchId }: { batchId: number | null }) {
           <div className="kpi-grid">
             <div className="card card-pad">
               <div className="card-head" style={{ marginBottom: 8 }}><h3>Origin &amp; receipts</h3></div>
-              <table className="data">
-                <thead><tr><th>Movement</th><th className="num">Qty</th><th>Reference</th><th>Location</th><th>Date</th></tr></thead>
-                <tbody>{upstream.map(mv)}{upstream.length === 0 && <tr><td colSpan={5} className="muted">No inbound movements.</td></tr>}</tbody>
-              </table>
+              <div className="table-wrap">
+                <table className="data">
+                  <thead><tr><th>Movement</th><th className="num">Qty</th><th>Reference</th><th>Location</th><th>Date</th></tr></thead>
+                  <tbody>{upstream.map(mv)}{upstream.length === 0 && <tr><td colSpan={5} className="muted">No inbound movements.</td></tr>}</tbody>
+                </table>
+              </div>
             </div>
             <div className="card card-pad">
               <div className="card-head" style={{ marginBottom: 8 }}><h3>Consumption &amp; shipments</h3></div>
-              <table className="data">
-                <thead><tr><th>Movement</th><th className="num">Qty</th><th>Reference</th><th>Location</th><th>Date</th></tr></thead>
-                <tbody>{downstream.map(mv)}{downstream.length === 0 && <tr><td colSpan={5} className="muted">No outbound movements.</td></tr>}</tbody>
-              </table>
+              <div className="table-wrap">
+                <table className="data">
+                  <thead><tr><th>Movement</th><th className="num">Qty</th><th>Reference</th><th>Location</th><th>Date</th></tr></thead>
+                  <tbody>{downstream.map(mv)}{downstream.length === 0 && <tr><td colSpan={5} className="muted">No outbound movements.</td></tr>}</tbody>
+                </table>
+              </div>
             </div>
           </div>
           <div className="card card-pad">
             <div className="card-head" style={{ marginBottom: 8 }}><h3>Work orders using this batch</h3></div>
-            <table className="data">
-              <thead><tr><th>Order</th><th>Output</th><th className="num">Qty</th><th className="num">Produced</th><th>Machine</th><th>Status</th><th>Completed</th></tr></thead>
-              <tbody>
-                {workOrders.map((w) => (
-                  <tr key={String(w.id)}>
-                    <td className="cell-mono">{str(w.woNo)}</td>
-                    <td>{str(w.outputName)} <span className="cell-mono">({str(w.outputCode)})</span></td>
-                    <td className="num">{fmtNum(w.quantity)}</td>
-                    <td className="num">{fmtNum(w.producedQty)}</td>
-                    <td className="cell-mono">{str(w.machineCode) || '-'}</td>
-                    <td><Badge value={w.status} /></td>
-                    <td>{w.completedAt ? fmtDate(w.completedAt) : '-'}</td>
-                  </tr>
-                ))}
-                {workOrders.length === 0 && <tr><td colSpan={7} className="muted">Not used by any work order.</td></tr>}
-              </tbody>
-            </table>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Order</th><th>Output</th><th className="num">Qty</th><th className="num">Produced</th><th>Machine</th><th>Status</th><th>Completed</th></tr></thead>
+                <tbody>
+                  {workOrders.map((w) => (
+                    <tr key={String(w.id)}>
+                      <td className="cell-mono">{str(w.woNo)}</td>
+                      <td>{str(w.outputName)} <span className="cell-mono">({str(w.outputCode)})</span></td>
+                      <td className="num">{fmtNum(w.quantity)}</td>
+                      <td className="num">{fmtNum(w.producedQty)}</td>
+                      <td className="cell-mono">{str(w.machineCode) || '-'}</td>
+                      <td><Badge value={w.status} /></td>
+                      <td>{w.completedAt ? fmtDate(w.completedAt) : '-'}</td>
+                    </tr>
+                  ))}
+                  {workOrders.length === 0 && <tr><td colSpan={7} className="muted">Not used by any work order.</td></tr>}
+                </tbody>
+              </table>
+            </div>
           </div>
           <div className="card card-pad">
             <div className="card-head" style={{ marginBottom: 8 }}><h3>Customers reached</h3></div>
-            <table className="data">
-              <thead><tr><th>Order</th><th>Customer</th><th>Delivery</th><th>Status</th></tr></thead>
-              <tbody>
-                {customers.map((c) => (
-                  <tr key={String(c.salesOrderId)}>
-                    <td className="cell-mono">{str(c.orderNo)}</td>
-                    <td>{str(c.customerName)}</td>
-                    <td>{c.deliveryDate ? fmtDate(c.deliveryDate) : '-'}</td>
-                    <td><Badge value={c.status} /></td>
-                  </tr>
-                ))}
-                {customers.length === 0 && <tr><td colSpan={4} className="muted">No customer deliveries from this batch.</td></tr>}
-              </tbody>
-            </table>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Order</th><th>Customer</th><th>Delivery</th><th>Status</th></tr></thead>
+                <tbody>
+                  {customers.map((c) => (
+                    <tr key={String(c.salesOrderId)}>
+                      <td className="cell-mono">{str(c.orderNo)}</td>
+                      <td>{str(c.customerName)}</td>
+                      <td>{c.deliveryDate ? fmtDate(c.deliveryDate) : '-'}</td>
+                      <td><Badge value={c.status} /></td>
+                    </tr>
+                  ))}
+                  {customers.length === 0 && <tr><td colSpan={4} className="muted">No customer deliveries from this batch.</td></tr>}
+                </tbody>
+              </table>
+            </div>
           </div>
           <div className="card card-pad">
             <div className="card-head" style={{ marginBottom: 8 }}><h3>EPCIS traceability events</h3></div>
-            <table className="data">
-              <thead><tr><th>Event</th><th>Action</th><th>Biz step</th><th>Disposition</th><th>Device</th><th>Recorded by</th><th>Time</th></tr></thead>
-              <tbody>
-                {events.map((e) => (
-                  <tr key={String(e.id)}>
-                    <td className="cell-mono">{str(e.eventType)}</td>
-                    <td>{str(e.action)}</td>
-                    <td>{str(e.bizStep) || '-'}</td>
-                    <td>{str(e.disposition) || '-'}</td>
-                    <td className="cell-mono">{str(e.device) || '-'}</td>
-                    <td>{str(e.recordedByEmail) || '-'}</td>
-                    <td>{fmtDate(e.eventTime)}</td>
-                  </tr>
-                ))}
-                {events.length === 0 && <tr><td colSpan={7} className="muted">No EPCIS-style events recorded.</td></tr>}
-              </tbody>
-            </table>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Event</th><th>Action</th><th>Biz step</th><th>Disposition</th><th>Device</th><th>Recorded by</th><th>Time</th></tr></thead>
+                <tbody>
+                  {events.map((e) => (
+                    <tr key={String(e.id)}>
+                      <td className="cell-mono">{str(e.eventType)}</td>
+                      <td>{str(e.action)}</td>
+                      <td>{str(e.bizStep) || '-'}</td>
+                      <td>{str(e.disposition) || '-'}</td>
+                      <td className="cell-mono">{str(e.device) || '-'}</td>
+                      <td>{str(e.recordedByEmail) || '-'}</td>
+                      <td>{fmtDate(e.eventTime)}</td>
+                    </tr>
+                  ))}
+                  {events.length === 0 && <tr><td colSpan={7} className="muted">No EPCIS-style events recorded.</td></tr>}
+                </tbody>
+              </table>
+            </div>
           </div>
         </>
       )}

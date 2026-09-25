@@ -383,22 +383,24 @@ export default function PublicVerify() {
               {members.length > 0 && (
                 <>
                   <h4 style={{ margin: '12px 0 8px' }}>Reams in this carton</h4>
-                  <table className="data">
-                    <thead>
-                      <tr><th>#</th><th>Ream</th><th>QR code</th><th>Verified</th><th>Status</th></tr>
-                    </thead>
-                    <tbody>
-                      {members.map((m, i) => (
-                        <tr key={i}>
-                          <td>{i + 1}</td>
-                          <td className="cell-mono">{str(m.reamNo ?? m.ream_no)}</td>
-                          <td className="cell-mono">{str(m.code)}</td>
-                          <td>{m.verified ? 'Yes' : 'No'}</td>
-                          <td>{str(m.status ?? '')}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div className="table-wrap">
+                    <table className="data">
+                      <thead>
+                        <tr><th>#</th><th>Ream</th><th>QR code</th><th>Verified</th><th>Status</th></tr>
+                      </thead>
+                      <tbody>
+                        {members.map((m, i) => (
+                          <tr key={i}>
+                            <td>{i + 1}</td>
+                            <td className="cell-mono">{str(m.reamNo ?? m.ream_no)}</td>
+                            <td className="cell-mono">{str(m.code)}</td>
+                            <td>{m.verified ? 'Yes' : 'No'}</td>
+                            <td>{str(m.status ?? '')}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </>
               )}
             </div>

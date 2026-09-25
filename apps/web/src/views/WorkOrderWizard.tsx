@@ -203,19 +203,21 @@ export default function WorkOrderWizard() {
           <>
             <h3>6 · Materials (preview)</h3>
             <p className="muted">These quantities will be reserved on the work order. They are not issued until a storekeeper issues them.</p>
-            <table className="data">
-              <thead><tr><th>Component</th><th className="cell-num">Required</th><th className="cell-num">Cost</th></tr></thead>
-              <tbody>
-                {(setup?.materials ?? []).map((m) => (
-                  <tr key={String(m.productId)}>
-                    <td><span className="cell-mono">{String(m.productCode)}</span> {String(m.productName)}</td>
-                    <td className="cell-num">{fmtNum(m.requiredQty)}</td>
-                    <td className="cell-num">{fmtMoney(Number(m.unitCost) * Number(m.requiredQty))}</td>
-                  </tr>
-                ))}
-                {(setup?.materials ?? []).length === 0 && <tr><td colSpan={3} className="muted">No BOM lines.</td></tr>}
-              </tbody>
-            </table>
+            <div className="table-wrap">
+              <table className="data">
+                <thead><tr><th>Component</th><th className="cell-num">Required</th><th className="cell-num">Cost</th></tr></thead>
+                <tbody>
+                  {(setup?.materials ?? []).map((m) => (
+                    <tr key={String(m.productId)}>
+                      <td><span className="cell-mono">{String(m.productCode)}</span> {String(m.productName)}</td>
+                      <td className="cell-num">{fmtNum(m.requiredQty)}</td>
+                      <td className="cell-num">{fmtMoney(Number(m.unitCost) * Number(m.requiredQty))}</td>
+                    </tr>
+                  ))}
+                  {(setup?.materials ?? []).length === 0 && <tr><td colSpan={3} className="muted">No BOM lines.</td></tr>}
+                </tbody>
+              </table>
+            </div>
           </>
         )}
         {step === 6 && (

@@ -393,97 +393,101 @@ export default function MailReading({ id }: { id: number }) {
           </SecCard>
 
           <SecCard title="Delivery" pad>
-            <table className="data">
-              <thead>
-                <tr>
-                  <th scope="col">Event</th>
-                  <th scope="col">Provider confirmed</th>
-                  <th scope="col">When</th>
-                  <th scope="col">Detail</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.length === 0 ? (
-                  <EmptyRow cols={4}>
-                    <Nothing text="The mail provider has not reported any delivery events for this message yet." />
-                  </EmptyRow>
-                ) : (
-                  events.map((e) => (
-                    <tr key={e.id}>
-                      <td className="cell-main">{s(e.eventType)}</td>
-                      <td>{e.confirmedByProvider ? 'Yes' : 'No (inferred)'}</td>
-                      <td>{whenText(e.occurredAt)}</td>
-                      <td className="cell-sub">{s(e.detail) || '\u2014'}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th scope="col">Event</th>
+                    <th scope="col">Provider confirmed</th>
+                    <th scope="col">When</th>
+                    <th scope="col">Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {events.length === 0 ? (
+                    <EmptyRow cols={4}>
+                      <Nothing text="The mail provider has not reported any delivery events for this message yet." />
+                    </EmptyRow>
+                  ) : (
+                    events.map((e) => (
+                      <tr key={e.id}>
+                        <td className="cell-main">{s(e.eventType)}</td>
+                        <td>{e.confirmedByProvider ? 'Yes' : 'No (inferred)'}</td>
+                        <td>{whenText(e.occurredAt)}</td>
+                        <td className="cell-sub">{s(e.detail) || '\u2014'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </SecCard>
 
           <SecCard title="Attachments" sub={countText(attachments.length) + ' file(s)'} pad>
-            <table className="data">
-              <thead>
-                <tr>
-                  <th scope="col">File</th>
-                  <th scope="col">Source</th>
-                  <th scope="col">Size</th>
-                  <th scope="col">Scan</th>
-                  <th scope="col">Added</th>
-                  <th scope="col" aria-label="Actions" />
-                </tr>
-              </thead>
-              <tbody>
-                {attachments.length === 0 ? (
-                  <EmptyRow cols={6}>
-                    <Nothing text="No attachments on this message." />
-                  </EmptyRow>
-                ) : (
-                  attachments.map((a) => {
-                    const blockReason = attachmentDownloadBlocked(policy, { scanStatus: a.scanStatus });
-                    return (
-                      <tr key={a.id}>
-                        <td>
-                          <div className="cell-main">{s(a.fileName)}</div>
-                          <div className="cell-sub">{s(a.fileType)}</div>
-                        </td>
-                        <td className="cell-sub">{s(a.source) || 'UPLOAD'}</td>
-                        <td>{sizeText(a.fileSize)}</td>
-                        <td>
-                          <div className="cell-main">{s(a.scanStatus) || 'NOT_SCANNED'}</div>
-                          {blockReason ? <BlockedNote>{blockReason}</BlockedNote> : null}
-                        </td>
-                        <td>{whenText(a.createdAt)}</td>
-                        <td>
-                          <div className="row-actions">
-                            <button
-                              type="button"
-                              className="btn btn-xs btn-ghost"
-                              disabled={busy !== '' || !!blockReason}
-                              title={blockReason || undefined}
-                              onClick={() => void download(a)}
-                            >
-                              {busy === 'dl-' + a.id ? 'Downloading...' : 'Download'}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-xs btn-ghost"
-                              disabled={busy !== ''}
-                              onClick={() => {
-                                if (!window.confirm('Remove attachment "' + a.fileName + '" from this message?')) return;
-                                void run('adel', () => deleteAttachment(a.id), 'Attachment removed');
-                              }}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th scope="col">File</th>
+                    <th scope="col">Source</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">Scan</th>
+                    <th scope="col">Added</th>
+                    <th scope="col" aria-label="Actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {attachments.length === 0 ? (
+                    <EmptyRow cols={6}>
+                      <Nothing text="No attachments on this message." />
+                    </EmptyRow>
+                  ) : (
+                    attachments.map((a) => {
+                      const blockReason = attachmentDownloadBlocked(policy, { scanStatus: a.scanStatus });
+                      return (
+                        <tr key={a.id}>
+                          <td>
+                            <div className="cell-main">{s(a.fileName)}</div>
+                            <div className="cell-sub">{s(a.fileType)}</div>
+                          </td>
+                          <td className="cell-sub">{s(a.source) || 'UPLOAD'}</td>
+                          <td>{sizeText(a.fileSize)}</td>
+                          <td>
+                            <div className="cell-main">{s(a.scanStatus) || 'NOT_SCANNED'}</div>
+                            {blockReason ? <BlockedNote>{blockReason}</BlockedNote> : null}
+                          </td>
+                          <td>{whenText(a.createdAt)}</td>
+                          <td>
+                            <div className="row-actions">
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-ghost"
+                                disabled={busy !== '' || !!blockReason}
+                                title={blockReason || undefined}
+                                onClick={() => void download(a)}
+                              >
+                                {busy === 'dl-' + a.id ? 'Downloading...' : 'Download'}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-ghost"
+                                disabled={busy !== ''}
+                                onClick={() => {
+                                  if (!window.confirm('Remove attachment "' + a.fileName + '" from this message?')) return;
+                                  void run('adel', () => deleteAttachment(a.id), 'Attachment removed');
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
 
             <div className="filter-row">
               <label className="stack-row">
@@ -519,36 +523,38 @@ export default function MailReading({ id }: { id: number }) {
           </SecCard>
 
           <SecCard title="Approvals" sub={countText(approvals.length) + ' step(s)'} pad>
-            <table className="data">
-              <thead>
-                <tr>
-                  <th scope="col">Level</th>
-                  <th scope="col">Approver role</th>
-                  <th scope="col">Approver</th>
-                  <th scope="col">State</th>
-                  <th scope="col">Requested</th>
-                  <th scope="col">Decision</th>
-                </tr>
-              </thead>
-              <tbody>
-                {approvals.length === 0 ? (
-                  <EmptyRow cols={6}>
-                    <Nothing text="No approval was requested for this message." />
-                  </EmptyRow>
-                ) : (
-                  approvals.map((a) => (
-                    <tr key={a.id}>
-                      <td>{countText(a.requiredLevel)}</td>
-                      <td className="cell-sub">{s(a.approverRole) || '\u2014'}</td>
-                      <td className="cell-sub">{s(a.approverName) || '\u2014'}</td>
-                      <td className="cell-main">{s(a.status)}</td>
-                      <td>{whenText(a.requestedAt)}</td>
-                      <td className="cell-sub">{s(a.decisionNote) || '\u2014'}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th scope="col">Level</th>
+                    <th scope="col">Approver role</th>
+                    <th scope="col">Approver</th>
+                    <th scope="col">State</th>
+                    <th scope="col">Requested</th>
+                    <th scope="col">Decision</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {approvals.length === 0 ? (
+                    <EmptyRow cols={6}>
+                      <Nothing text="No approval was requested for this message." />
+                    </EmptyRow>
+                  ) : (
+                    approvals.map((a) => (
+                      <tr key={a.id}>
+                        <td>{countText(a.requiredLevel)}</td>
+                        <td className="cell-sub">{s(a.approverRole) || '\u2014'}</td>
+                        <td className="cell-sub">{s(a.approverName) || '\u2014'}</td>
+                        <td className="cell-main">{s(a.status)}</td>
+                        <td>{whenText(a.requestedAt)}</td>
+                        <td className="cell-sub">{s(a.decisionNote) || '\u2014'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
             <div className="filter-row">
               <button
                 type="button"

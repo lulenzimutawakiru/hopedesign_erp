@@ -1381,6 +1381,8 @@ html[data-theme='dark'] .record-card.is-selected { background: #231B36; }
   .aging-row, .aging-row-6 { grid-template-columns: 1fr 1fr; }
   .timeline li { grid-template-columns: 1fr; gap: 2px; }
   .btn, .icon-btn, .nav-item, .tab { min-height: 44px; }
+  .chip, .modal-close { min-height: 44px; }
+  .modal-close { min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
   .sticky-actions {
     display: flex; gap: 8px;
     position: sticky; bottom: 0;

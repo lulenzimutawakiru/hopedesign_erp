@@ -4101,27 +4101,29 @@ function PdpoConfigPanel({ reloadKey, busy, commit, notify }: {
               </span>
               <span className="muted">{when(testResult.testedAt)}</span>
             </div>
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Check</th>
-                  <th>Result</th>
-                  <th>Detail</th>
-                </tr>
-              </thead>
-              <tbody>
-                {testResult.checks.map((c) => (
-                  <tr key={c.key}>
-                    <td>
-                      {c.label}
-                      {c.critical && <span className="muted"> (critical)</span>}
-                    </td>
-                    <td><PdpoCheckChip ok={c.ok} /></td>
-                    <td className="muted">{c.detail}</td>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Check</th>
+                    <th>Result</th>
+                    <th>Detail</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {testResult.checks.map((c) => (
+                    <tr key={c.key}>
+                      <td>
+                        {c.label}
+                        {c.critical && <span className="muted"> (critical)</span>}
+                      </td>
+                      <td><PdpoCheckChip ok={c.ok} /></td>
+                      <td className="muted">{c.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </>
         )}
       </section>

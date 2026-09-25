@@ -143,36 +143,38 @@ export default function DataExports() {
         {history.length === 0 ? (
           <p className="muted" style={{ padding: 12 }}>No exports or prints recorded yet.</p>
         ) : (
-          <table className="data">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Who</th>
-                <th>Action</th>
-                <th>Resource</th>
-                <th>Format</th>
-                <th>Rows</th>
-                <th>Tenant</th>
-                <th>Company</th>
-                <th>Branch</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((h) => (
-                <tr key={h.id}>
-                  <td>{fmtDate(h.createdAt)}</td>
-                  <td>{h.user ?? h.email ?? '-'}</td>
-                  <td><span className="badge">{h.action}</span></td>
-                  <td>{h.resource}</td>
-                  <td>{h.format ?? '-'}</td>
-                  <td>{h.rows ?? '-'}</td>
-                  <td>{h.tenantCode ? `${h.tenantCode} · ${h.tenantName ?? ''}` : '-'}</td>
-                  <td>{h.companyCode ? `${h.companyCode} · ${h.companyName ?? ''}` : '-'}</td>
-                  <td>{h.branchCode ? `${h.branchCode} · ${h.branchName ?? ''}` : '-'}</td>
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Who</th>
+                  <th>Action</th>
+                  <th>Resource</th>
+                  <th>Format</th>
+                  <th>Rows</th>
+                  <th>Tenant</th>
+                  <th>Company</th>
+                  <th>Branch</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {history.map((h) => (
+                  <tr key={h.id}>
+                    <td>{fmtDate(h.createdAt)}</td>
+                    <td>{h.user ?? h.email ?? '-'}</td>
+                    <td><span className="badge">{h.action}</span></td>
+                    <td>{h.resource}</td>
+                    <td>{h.format ?? '-'}</td>
+                    <td>{h.rows ?? '-'}</td>
+                    <td>{h.tenantCode ? `${h.tenantCode} · ${h.tenantName ?? ''}` : '-'}</td>
+                    <td>{h.companyCode ? `${h.companyCode} · ${h.companyName ?? ''}` : '-'}</td>
+                    <td>{h.branchCode ? `${h.branchCode} · ${h.branchName ?? ''}` : '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
