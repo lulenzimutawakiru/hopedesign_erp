@@ -52,6 +52,8 @@ export interface CrudConfig {
   permResource?: string;
   /** Row filter applied to every scoped query (list, get, update, transitions, print). */
   filter?: { column: string; values: string[] };
+  /** Row exclusion applied to every scoped query (e.g. retired catalogue entries). */
+  excludeFilter?: { column: string; values: string[] };
   /** Column values forced on create when the caller omits them. */
   defaults?: Record<string, unknown>;
   transitions?: { cancel?: string; void?: string; archive?: string; restore?: string };
@@ -118,6 +120,10 @@ export function crudRouter(cfg: CrudConfig): Router {
     if (cfg.filter?.column && cols.includes(cfg.filter.column) && cfg.filter.values?.length) {
       const quoted = cfg.filter.values.map((v) => `'${String(v).replace(/'/g, "''")}'`).join(', ');
       conds.push(`${prefix}${cfg.filter.column} IN (${quoted})`);
+    }
+    if (cfg.excludeFilter?.column && cols.includes(cfg.excludeFilter.column) && cfg.excludeFilter.values?.length) {
+      const quoted = cfg.excludeFilter.values.map((v) => `'${String(v).replace(/'/g, "''")}'`).join(', ');
+      conds.push(`${prefix}${cfg.excludeFilter.column} NOT IN (${quoted})`);
     }
     return conds.length ? conds.join(' AND ') : '1=1';
   };

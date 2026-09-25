@@ -33,22 +33,18 @@ interface CatalogSpec {
   createLabel?: string;
   createPerm?: string;
   detail?: (id: number) => string;
-  /** Client-side type filter so the Products catalogue stays separated from raw materials. */
-  types?: string[];
 }
 
-// Products catalogue = finished goods only. Raw materials, packaging and
-// consumables belong to the Raw Materials catalogue (server-filtered).
-const FG_TYPES = ['REAM', 'FINISHED_GOODS', 'SHEET', 'SECURITY_ITEM'];
-
+// Products catalogue = the finished goods the company actually produces. Raw
+// materials, packaging and consumables live in their own server-filtered
+// catalogues, so the API scopes this list to produced goods.
 const CATALOGS: Record<string, CatalogSpec> = {
   items: {
-    resource: 'items', module: 'inventory', label: 'Products',
-    tagline: 'Finished goods, reams and security items that flow through stock, sales and manufacturing.',
+    resource: 'products', module: 'inventory', label: 'Products',
+    tagline: 'The finished goods this company produces. Raw materials, packaging and consumables have their own catalogues.',
     createLabel: 'New product',
     createPerm: 'inventory.items.create',
     detail: (id) => `/inventory/items/${id}`,
-    types: FG_TYPES,
   },
   materials: {
     resource: 'materials', module: 'inventory', label: 'Raw Materials',
@@ -642,7 +638,7 @@ function DocumentList({ resource }: { resource: string }) {
   );
 }
 
-function CatalogList({ resource, module = 'inventory', label, tagline, createLabel, createPerm, detail, types }: CatalogSpec) {
+function CatalogList({ resource, module = 'inventory', label, tagline, createLabel, createPerm, detail }: CatalogSpec) {
   const { user } = useAuth();
   const [meta, setMeta] = useState<EntityMeta | null>(null);
   const [rows, setRows] = useState<Rec[]>([]);
@@ -664,9 +660,8 @@ function CatalogList({ resource, module = 'inventory', label, tagline, createLab
     if (query.trim()) params.set('q', query.trim());
     api<ListResult>(`/api/${module}/${resource}?${params}`)
       .then((r) => {
-        const rows2 = types ? r.data.filter((x) => types.includes(String(pick(x, 'type') ?? ''))) : r.data;
-        setRows(rows2);
-        setTotal(types ? rows2.length : (r.pagination?.total ?? r.data.length));
+        setRows(r.data);
+        setTotal(r.pagination?.total ?? r.data.length);
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'));
   }, [meta, module, resource]);
