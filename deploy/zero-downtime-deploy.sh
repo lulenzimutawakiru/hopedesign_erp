@@ -145,6 +145,23 @@ log "[2/8] pulling origin/main"
 git fetch origin main
 git merge --ff-only origin/main
 
+# 2b) Reconcile the cross-node mesh fragments. The two files that publish the
+#     peer into this node's Caddy - webpeer.caddy for the public SPA pool,
+#     peer.caddy for the :8081 API retry door - live in the gitignored
+#     $LIVE_DIR, so the merge above can never deliver them and they drift from
+#     the repo. deploy/mesh-routes.sh is now their owner: it reads this node's
+#     role from wg0, installs the tracked set for that role and reloads Caddy
+#     only when the bytes actually changed, so it is a no-op on a correct node.
+#     A node that loses a fragment keeps passing every health check while
+#     silently not holding its peer, so a failure here is loud but not fatal:
+#     stack-watchdog.sh re-runs the same script, and its 1e drift guard
+#     force-recreates Caddy if disk and live ever disagree.
+if [[ -f "$APP_DIR/deploy/mesh-routes.sh" ]]; then
+  bash "$APP_DIR/deploy/mesh-routes.sh" || log "WARN: mesh route reconciliation failed; this node may be dropping its peer from the pool - the reconciler log names what is wrong"
+else
+  log "WARN: deploy/mesh-routes.sh is missing; the cross-node mesh fragments in $LIVE_DIR are unmanaged on this node"
+fi
+
 # 3) Build the new images. `worker` shares the api build target, so it is a
 #    cached re-tag rather than a second compile - but it must be listed, or the
 #    worker service would keep running whatever image it was created with.

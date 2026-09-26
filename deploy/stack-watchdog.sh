@@ -311,6 +311,25 @@ if [[ -n "$(docker inspect -f '{{.Id}}' "$CADDY_CONTAINER" 2>/dev/null)" ]]; the
   fi
 fi
 
+# 1f) Mesh route reconciliation. The two fragments that publish the OTHER node
+#     into this node's Caddy - webpeer.caddy for the public SPA pool, peer.caddy
+#     for the :8081 API retry door active.caddy falls through to - live in the
+#     gitignored $LIVE_DIR, so no deploy step and no `git merge` ever delivers
+#     them. They were hand-written once and then drift; a node that loses one
+#     keeps passing every health check while silently not holding its peer.
+#     deploy/mesh-routes.sh is now their owner. It reads this node's role from
+#     wg0 (never from which files exist - see the note above), installs the
+#     tracked set for that role, and is a no-op when the bytes already match, so
+#     on a healthy node it costs a stat and a sha256 and touches nothing.
+#     Deliberately ordered BEFORE the 1e drift guard below: if the reconciler
+#     had to write a fragment and its own reload failed, the guard still sees
+#     disk and live disagree and force-recreates in this same pass.
+if [[ -f "$APP_DIR/deploy/mesh-routes.sh" ]]; then
+  bash "$APP_DIR/deploy/mesh-routes.sh" >> "$LOG_FILE" 2>&1 || log "WARN: deploy/mesh-routes.sh exited non-zero - see $LOG_FILE"
+else
+  log "WARN: deploy/mesh-routes.sh is missing - the cross-node mesh fragments in $LIVE_DIR are unmanaged"
+fi
+
 # 1e) Live-overlay drift guard. Everything in $LIVE_DIR is bind-mounted at
 #     /etc/caddy/live and imported by deploy/Caddyfile, so a recreate picks all
 #     of it up - but nothing else does. A live/*.caddy file that is written or
