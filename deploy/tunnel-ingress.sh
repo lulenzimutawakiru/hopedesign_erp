@@ -110,6 +110,11 @@ CREDS_OUT="$OUT_DIR/credentials.json"
 COMPOSE_BASE="$DEPLOY_DIR/docker-compose.cloudflared.yml"
 COMPOSE_LOCAL="$DEPLOY_DIR/docker-compose.cloudflared.local.yml"
 TUNNEL_CONTAINER="hopedesign-erp-cloudflared"
+# The uid the connector process actually runs as inside the container. The
+# cloudflare/cloudflared image drops to its own non-root user (65532), which is
+# why a root-owned 0600 credentials.json is unreadable to it. Override in
+# deploy/tunnel-ingress.env only if the image pin ever changes that user.
+TUNNEL_CREDS_UID="${TUNNEL_CREDS_UID:-65532}"
 CF_API="https://api.cloudflare.com/client/v4"
 
 mkdir -p "$LOG_DIR" 2>/dev/null || true
@@ -272,6 +277,43 @@ zone_ns() {
 }
 zone_on_cloudflare() { zone_ns | grep -qi 'ns\.cloudflare\.com'; }
 
+# ---- is the connector actually connected? ----------------------------------
+# Everything else in `status` describes the FILES this node rendered. None of it
+# notices that the container cannot READ them. A credentials.json left
+# root-owned is unreadable to the image's non-root user (65532), so cloudflared
+# dies with "couldn't read tunnel credentials ... permission denied" and
+# crash-loops - while `mode=local provider_ready=yes routes=in-sync` still reads
+# as perfectly healthy. That combination took this node's ingress down on
+# 2026-09-26, so report the container's own view of the tunnel as well.
+connector_line() {
+  local running restarts conns err
+  if ! docker inspect "$TUNNEL_CONTAINER" >/dev/null 2>&1; then
+    printf 'connector=absent\n'
+    return 0
+  fi
+  running="$(docker inspect -f '{{.State.Running}}' "$TUNNEL_CONTAINER" 2>/dev/null)"
+  restarts="$(docker inspect -f '{{.RestartCount}}' "$TUNNEL_CONTAINER" 2>/dev/null)"
+  conns="$(docker logs --tail 400 "$TUNNEL_CONTAINER" 2>&1 \
+            | sed -n 's/.*Registered tunnel connection.*connIndex=\([0-9][0-9]*\).*/\1/p' \
+            | sort -u | wc -l | tr -d ' ')"
+  if [[ "$running" == "true" && "${conns:-0}" -gt 0 ]]; then
+    printf 'connector=running connections=%s restarts=%s\n' "$conns" "$restarts"
+    return 0
+  fi
+  if [[ "$running" == "true" ]]; then
+    printf 'connector=no-connections restarts=%s\n' "$restarts"
+  else
+    printf 'connector=down restarts=%s\n' "$restarts"
+  fi
+  # The last ERR is the whole diagnosis; strip the timestamp and anything that
+  # looks like a tunnel token so `status` stays safe to paste into a ticket.
+  err="$(docker logs --tail 60 "$TUNNEL_CONTAINER" 2>&1 \
+          | grep -i 'ERR' | tail -1 \
+          | sed -E 's#eyJ[A-Za-z0-9_-]{20,}#TOK#g; s/^[0-9T:.+-]+Z +//' \
+          | cut -c1-160)"
+  [[ -n "$err" ]] && printf 'connector_note=%s\n' "$err"
+  return 0
+}
 dns_points_at_tunnel() { # $1 = hostname
   local h="$1" body
   body="$(curl -fsS --max-time 10 "https://dns.google/resolve?name=$h&type=CNAME" 2>/dev/null)"
@@ -443,6 +485,7 @@ if [[ "$MODE" == "status" ]]; then
   printf 'tunnel_id=%s\n' "${TUNNEL_ID:-<undetermined>}"
   printf 'token_file=%s routes_file=%s routes=%s\n' "$TOKEN_FILE_STATE" "$ROUTES_FILE" "$NFIRST"
   printf 'mode=%s\n' "${TUNNEL_MODE:-<unset>}"
+  connector_line
 
   case "$TUNNEL_MODE" in
     api)
@@ -563,7 +606,18 @@ case "$TUNNEL_MODE" in
         "deploy/cloudflared.env holds no decodable TUNNEL_TOKEN, so deploy/tunnel-ingress.sh cannot write the credentials file that local mode needs. Set TUNNEL_TOKEN (Zero Trust -> Networks -> Tunnels -> Install and run a connector -> Docker) and re-run."
       exit 1
     fi
-    chmod 0600 "$CREDS_OUT.tmp.$$" 2>/dev/null || true
+    # The mounted credentials file is read by the CONTAINER process, not by
+    # root on the host: cloudflared runs as the image user (65532:65532). A
+    # root-owned 0600 file therefore fails with "couldn't read tunnel
+    # credentials ... permission denied" and the connector crash-loops while
+    # the host-side checks still look fine. Give the file to that user and
+    # keep the mode at 0600; only a host that refuses the numeric uid falls
+    # back to 0644, which is still no wider than the token it was built from.
+    if chown "$TUNNEL_CREDS_UID:$TUNNEL_CREDS_UID" "$CREDS_OUT.tmp.$$" 2>/dev/null; then
+      chmod 0600 "$CREDS_OUT.tmp.$$" 2>/dev/null || true
+    else
+      chmod 0644 "$CREDS_OUT.tmp.$$" 2>/dev/null || true
+    fi
     mv -f "$CREDS_OUT.tmp.$$" "$CREDS_OUT" 2>/dev/null || { log "FATAL: cannot write $CREDS_OUT"; exit 1; }
 
     render_compose_overlay > "$COMPOSE_LOCAL.tmp.$$" || { log "FATAL: cannot render overlay"; rm -f "$COMPOSE_LOCAL.tmp.$$"; exit 1; }
