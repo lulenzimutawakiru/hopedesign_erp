@@ -49,8 +49,10 @@ if ! flock -n 9; then exit 0; fi
 # same stack. The data primary adds deploy/docker-compose.peer-db.yml (which
 # publishes the primary's postgres + redis on 10.77.0.1:9101/9102 for the peer to
 # borrow) and deploy/docker-compose.primary-bridge.yml (the 10.77.0.1:9103
-# frontend door the peer pools). The peer adds deploy/docker-compose.peer.yml (its
-# API colours read the primary's data over the tunnel) and
+# frontend door the peer pools, plus the 10.77.0.1:9104 API door the peer retries
+# through). The peer adds deploy/docker-compose.peer.yml (its API colours read the
+# primary's data over the tunnel), deploy/docker-compose.peer-bridge.yml (the
+# 10.77.0.2:8081 API door this node's active.caddy retries through) and
 # deploy/docker-compose.peer-replica.yml (its own postgres standby and redis
 # replica) - or, once deploy/failover-agent.sh has promoted it,
 # deploy/docker-compose.peer-failover.yml INSTEAD of that replica overlay, so a
@@ -63,7 +65,8 @@ if ! flock -n 9; then exit 0; fi
 #     peer's redis from the base file alone would start an EMPTY master and
 #     silently break replication. Recreating the primary's caddy without the
 #     primary-bridge overlay would drop the 9103 door and silently halve the
-#     frontend pool the peer is holding open.
+#     frontend pool the peer is holding open, and it would drop the 9104 API
+#     door the peer retries through.
 #   * the peer's bare `postgres` service still holds a stale dataset from before
 #     the standby was seeded, so it is never resurrected there - data-dr is the
 #     authoritative copy on that node.
@@ -115,13 +118,17 @@ case "$NODE_ROLE" in
     #   * a promoted node owns the "worker", which is profile-gated
     #     (data-primary-only) in docker-compose.peer.yml, so the recreate below
     #     has to opt into that profile explicitly.
+    #
+    # deploy/docker-compose.peer-bridge.yml is in BOTH sets as well: the
+    # 10.77.0.2:8081 API door it publishes is the retry target the other machine
+    # holds open, and a recreate that dropped it would strand that upstream.
     if [[ -f "$PROMOTED_MARKER" ]]; then
       FAILOVER_ACTIVE=1
-      for overlay in docker-compose.peer.yml docker-compose.peer-failover.yml; do
+      for overlay in docker-compose.peer.yml docker-compose.peer-failover.yml docker-compose.peer-bridge.yml; do
         [[ -f "$APP_DIR/deploy/$overlay" ]] && compose_files+=(-f "$APP_DIR/deploy/$overlay")
       done
     else
-      for overlay in docker-compose.peer.yml docker-compose.peer-replica.yml; do
+      for overlay in docker-compose.peer.yml docker-compose.peer-replica.yml docker-compose.peer-bridge.yml; do
         [[ -f "$APP_DIR/deploy/$overlay" ]] && compose_files+=(-f "$APP_DIR/deploy/$overlay")
       done
     fi
@@ -156,6 +163,7 @@ current_active() {
 write_active() { # $1 = a | b
   cat > "$ACTIVE_FILE" <<EOF
 reverse_proxy api-$1:4000 {
+	import /etc/caddy/live/peer*.caddy
 	import /etc/caddy/live/options.caddy
 }
 EOF

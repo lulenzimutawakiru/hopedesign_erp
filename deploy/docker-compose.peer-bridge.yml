@@ -17,8 +17,9 @@
 # Without these listeners the demoted primary would still be pointing at its own
 # now-stale postgres and the two machines would silently diverge.
 #
-#   pgbridge-local   10.77.0.2:9101 -> data-dr:5432
+#   pgbridge-local    10.77.0.2:9101 -> data-dr:5432
 #   redisbridge-local 10.77.0.2:9102 -> redis:6379
+#   caddy             10.77.0.2:8081 = this node's internal API door
 #
 # Both are bound to the WireGuard address, so they are invisible to the public
 # internet - the packets arrive from the other VPS over wg0 and nothing else can
@@ -35,6 +36,13 @@
 # nothing connects to them. They are left running on purpose so the reversal
 # does not depend on a compose-up succeeding during the incident.
 #
+# The third service here is the API door. This node's `:8081` block (bottom of
+# deploy/Caddyfile) answers with THIS node's local api-a/api-b, and publishing it
+# on the tunnel address is what lets the other machine retry there when its own
+# active colour dies - the exact mirror of the primary publishing its own `:8081`
+# as 10.77.0.1:9104. Ports are host-side only, so 8081:8081 maps the container
+# port to itself on the WireGuard address: nothing but wg0 can reach either door.
+#
 # Portable: on the data primary this file is not used at all.
 services:
   pgbridge-local:
@@ -44,9 +52,13 @@ services:
     command: ["TCP-LISTEN:5432,fork,reuseaddr", "TCP:data-dr:5432"]
     ports:
       - "10.77.0.2:9101:5432"
-    depends_on:
-      data-dr:
-        condition: service_healthy
+    # NO depends_on: data-dr here, deliberately. data-dr is defined only in
+    # deploy/docker-compose.peer-replica.yml, which every failover file-set drops
+    # on purpose - so a depends_on pointing at it makes `docker compose up` fail
+    # with "service data-dr is not defined", on the one code path that runs
+    # during an outage. socat is restart: unless-stopped and reconnects by itself
+    # the moment data-dr starts listening, and nothing connects to this bridge in
+    # steady state, so the ordering buys nothing and costs a hard failure.
     networks:
       - internal
 
@@ -62,3 +74,12 @@ services:
         condition: service_healthy
     networks:
       - internal
+
+  caddy:
+    ports:
+      # The internal `:8081` API door, on the tunnel only. 10.77.0.1:9104 is
+      # this line's mirror on the data primary: it is where the primary's
+      # active.caddy retries when its own colour fails. Compose CONCATENATES
+      # ports across overlays, so the 10.77.0.2:8080 frontend door published
+      # elsewhere is left alone.
+      - "10.77.0.2:8081:8081"

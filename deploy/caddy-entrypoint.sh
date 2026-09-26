@@ -8,6 +8,7 @@ mkdir -p /etc/caddy/live
 if [ ! -s /etc/caddy/live/active.caddy ]; then
 	cat > /etc/caddy/live/active.caddy <<'EOF'
 reverse_proxy api-a:4000 {
+	import /etc/caddy/live/peer*.caddy
 	import /etc/caddy/live/options.caddy
 }
 EOF

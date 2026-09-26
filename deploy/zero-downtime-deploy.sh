@@ -45,6 +45,7 @@ write_active() { # $1 = a | b
   local color="$1"
   cat > "$ACTIVE_FILE" <<EOF
 reverse_proxy api-$color:4000 {
+	import /etc/caddy/live/peer*.caddy
 	import /etc/caddy/live/options.caddy
 }
 EOF
@@ -239,9 +240,11 @@ log "      web is healthy"
 # 7b) The same recreation on every PEER node in the pool, for the web replicas
 #     AND both API colours. The peer serves public HTML from its own replicas -
 #     deploy/caddy-live/webpeer*.caddy on this node adds it to the reverse_proxy
-#     pool above - and it answers /api from its own api-a/api-b, so rebuilding
-#     only the local replicas leaves the web pool split across two bundles and
-#     the peer's API on whatever build it was last shipped. A split pool does
+#     and its :8081 API door is the upstream this node's active.caddy retries
+#     through when the local colour dies, so rebuilding only the local replicas
+#     leaves the web pool split across two bundles AND the peer's API on
+#     whatever build it was last shipped - which is also what a user lands on
+#     mid-outage. A split pool does
 #     not look stale, it *alternates* between builds on every reload, and the
 #     single-request health gate below cannot see it: on 2026-09-20 a rollout
 #     reported success while 4 of 8 public responses carried the morning's

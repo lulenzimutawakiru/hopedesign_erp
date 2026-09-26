@@ -136,3 +136,34 @@ import /etc/caddy/live/uptime.caddy
 		}
 	}
 }
+
+# ---- Internal API door (added 2026-09-26) ----------------------------------
+# The API sibling of the :8080 block above, and it exists for the same reason:
+# to give the OTHER node a warm, healthy copy of this node's API to fall
+# back on. deploy/caddy-live/peer.caddy on the peer points at this door
+# (peer -> 10.77.0.1:9104), and this node's peer.caddy points at the peer's
+# :8081, so each node's public API pool holds one local colour plus the
+# other node's door.
+#
+# Why a door and not the peer's colours directly: an upstream address has to
+# be resolvable from THIS node, and the peer's api-a/api-b are container
+# names on the peer. The door is one stable WireGuard address that is
+# always reachable as long as the tunnel is up.
+#
+# Deliberately NO peer*.caddy import here, for exactly the reason spelled
+# out inside the :8080 block above: both nodes publish a door that maps to
+# their own local colours, so importing the peer's door file here would have
+# this door proxy into the other node's door, which points straight back -
+# a two-hop loop no health check can break. The door answers with LOCAL
+# colours only; it is each node's PUBLIC site block that pools the peer.
+#
+# Both local colours are listed so the door keeps answering while one colour
+# is being recreated by a rollout, and options.caddy supplies lb_try_duration
+# so a request is re-sent to the healthy sibling rather than returning a 502.
+:8081 {
+	handle {
+		reverse_proxy api-a:4000 api-b:4000 {
+			import /etc/caddy/live/options.caddy
+		}
+	}
+}

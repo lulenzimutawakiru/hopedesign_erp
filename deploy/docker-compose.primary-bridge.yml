@@ -21,13 +21,24 @@
 # members of the pool, so Caddy keeps sending to them. There is no failover
 # step to miss and nothing to promote.
 #
-# What is deliberately NOT here: the API. Cross-pooling api-a/api-b onto the
-# peer would put roughly a third of every request - each of which re-reads the
-# `sessions` table and burns a redis round-trip - behind a WireGuard hop, and
-# would make user-facing latency depend on the tunnel staying up. The API keeps
-# its in-node blue/green pair (deploy/caddy-live/active.caddy) plus
-# deploy/stack-watchdog.sh, and cross-node API continuity is the promoted peer's
-# job (deploy/failover-agent.sh), not a steady-state pool.
+# The API door is here too, and it is a different shape from the frontend pool.
+# The public site block pools this node's OWN api-a/api-b, and
+# deploy/caddy-live/active.caddy adds exactly ONE cross-node upstream - the
+# peer's :8081 door - to whichever colour is live right now. /api is therefore
+# never round-robined onto the tunnel: a request only crosses WireGuard after
+# the local colour has already failed and lb_try_duration is looking for
+# somewhere to retry. In steady state every /api request is served locally and
+# the tunnel carries no API traffic at all.
+#
+# The one case it does cover is the whole point: when this node loses its active
+# colour the pool is not empty - the peer door is already a warm, healthy pool
+# member - so the same request is re-sent across the tunnel instead of returning
+# a 503. That is what turns an api-a restart from a ~2 minute outage into a
+# non-event. Cross-node API continuity is a pool member here, not a promotion.
+#
+# 9104 on this node and 8081 on the peer are the mirror of 9103/8080 above: each
+# side publishes its own door on the tunnel and points at the other using a
+# DIFFERENT port number, so neither address can be confused for a local one.
 #
 # `ports` is a multi-value key: Compose CONCATENATES overlay values onto the
 # base list rather than replacing it, so 80/443/443udp from
@@ -43,3 +54,8 @@ services:
       # 9103 mirrors the peer's own 8080 door: the peer's webpeer.caddy points at
       # 10.77.0.1:9103, and this line is what answers there.
       - "10.77.0.1:9103:8080"
+      # The API half of the same idea: the internal `:8081` site block at the
+      # bottom of deploy/Caddyfile, published on the tunnel so the PEER can
+      # retry there when its own active colour fails. 10.77.0.2:8081 is this
+      # line's mirror on the peer.
+      - "10.77.0.1:9104:8081"

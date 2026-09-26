@@ -212,8 +212,16 @@ are_promoted() { [[ -f "$PROMOTED_MARKER" ]]; }
 # `redis --replicaof 10.77.0.1 9102`, so passing it would immediately demote the
 # redis we just promoted back into a replica of a host that is down - rejecting
 # every write. The promoted redis is simply left alone.
+#
+# deploy/docker-compose.peer-bridge.yml IS here, and it is not an oversight.
+# It publishes this node's 10.77.0.2:8081 API door, which is the retry target
+# the OTHER machine holds open inside its own active.caddy - if the promotion
+# dropped it, a returning primary would have nothing to retry through while its
+# own colour is down. Its socat bridges are safe in this set too: data-dr and
+# redis are both running locally by the time this composes (data-dr was promoted
+# in place at step 2), so they connect instead of restart-looping.
 #############################################################
-COMPOSE_BASE=(docker compose -f "$APP_DIR/docker-compose.prod.yml" -f "$DEPLOY_DIR/docker-compose.peer.yml")
+COMPOSE_BASE=(docker compose -f "$APP_DIR/docker-compose.prod.yml" -f "$DEPLOY_DIR/docker-compose.peer.yml" -f "$DEPLOY_DIR/docker-compose.peer-bridge.yml")
 compose_failover() { "${COMPOSE_BASE[@]}" -f "$DEPLOY_DIR/docker-compose.peer-failover.yml" --env-file "$ENV_FILE" "$@"; }
 
 #############################################################

@@ -189,7 +189,7 @@ local database: an idle, stale copy of the cluster's data. While the API runs
 against it, this node authenticates logins against rows that stopped changing,
 and every write it accepts is invisible to the primary. That is a split brain -
 which copy of the truth you get then depends on which node answered."
-    db_fix="cd $APP_DIR && docker compose -f docker-compose.prod.yml -f deploy/docker-compose.peer.yml --env-file .env.production up -d --no-deps api-a api-b"
+    db_fix="cd $APP_DIR && docker compose -f docker-compose.prod.yml -f deploy/docker-compose.peer.yml -f deploy/docker-compose.peer-bridge.yml --env-file .env.production up -d --no-deps api-a api-b"
   else
     db_why="This node is the data primary, so its colours must use the local
 postgres service. A colour pointed anywhere else is reading and writing a
