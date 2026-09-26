@@ -221,6 +221,45 @@ if [[ -n "$(docker inspect -f '{{.Id}}' "$CADDY_CONTAINER" 2>/dev/null)" ]]; the
   fi
 fi
 
+# 1d) Live-overlay drift guard. Everything in $LIVE_DIR is bind-mounted at
+#     /etc/caddy/live and imported by deploy/Caddyfile, so a recreate picks all
+#     of it up - but nothing else does. A live/*.caddy file that is written or
+#     replaced AFTER Caddy has parsed its config (a peer added to the pool, a
+#     deploy that rewrote webpeer.caddy without a reload) leaves Caddy serving
+#     the boot-time config: the pool silently loses that upstream while every
+#     health check still passes, because Caddy itself is perfectly healthy - it
+#     is just not holding the member we believe it is. The host files cannot
+#     tell us which config is live, so ask Caddy: every `to <addr>` declared on
+#     disk must appear in the config the admin API is actually serving.
+if [[ -n "$(docker inspect -f '{{.Id}}' "$CADDY_CONTAINER" 2>/dev/null)" ]]; then
+  # Only anchored directives count. An unanchored match would also pick up prose
+  # in a comment ("...to update...") and then "repair" a target that was never
+  # an upstream - a reload every two minutes, forever.
+  live_targets="$(awk '/^[[:space:]]*to[[:space:]]+/{print $2}' "$LIVE_DIR"/*.caddy 2>/dev/null | sort -u)"
+  if [[ -n "$live_targets" ]]; then
+    running_cfg="$(docker exec "$CADDY_CONTAINER" wget -qO- http://127.0.0.1:2019/config/ 2>/dev/null)"
+    if [[ -z "$running_cfg" ]]; then
+      log "WARN: cannot read $CADDY_CONTAINER live config from its admin API - skipping the live-overlay guard"
+    else
+      missing=""
+      while read -r target; do
+        [[ -n "$target" ]] || continue
+        grep -qF -- "$target" <<<"$running_cfg" || missing="$missing $target"
+      done <<<"$live_targets"
+      if [[ -n "$missing" ]]; then
+        log "WARN: $CADDY_CONTAINER is not serving every upstream declared in $LIVE_DIR (missing:$missing) - reloading"
+        if docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >> "$LOG_FILE" 2>&1; then
+          log "reloaded $CADDY_CONTAINER; live upstreams restored:$missing"
+        else
+          log "WARN: reload failed with live upstreams missing:$missing - force-recreating caddy"
+          "${compose[@]}" up -d --no-deps --force-recreate caddy >> "$LOG_FILE" 2>&1 || true
+          sleep 10
+        fi
+      fi
+    fi
+  fi
+fi
+
 # 2) Evaluate the two API colors.
 a_status="$(status_of hopedesign-erp-api-a)"
 b_status="$(status_of hopedesign-erp-api-b)"
