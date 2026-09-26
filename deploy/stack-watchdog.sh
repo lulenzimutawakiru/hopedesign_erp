@@ -30,31 +30,6 @@ WORKER_CONTAINER="hopedesign-erp-worker-1"
 UPTIME_CONTAINER="hopedesign-erp-uptime-kuma"
 WEB_REPLICAS=2 # keep in sync with docker-compose.prod.yml (web: deploy.replicas)
 
-# This same file is installed on BOTH nodes, but the two nodes do not run the
-# same stack. The peer adds deploy/docker-compose.peer.yml (its API colours read
-# the primary's data over the tunnel) and deploy/docker-compose.peer-replica.yml
-# (its own postgres standby and redis replica). Everything below is derived from
-# the files actually present, so one script heals both shapes:
-#
-#   * compose is layered with the peer overlays, so a service it recreates is
-#     rebuilt with its peer settings rather than the base ones. Recreating the
-#     peer's redis from the base file alone would start an EMPTY master and
-#     silently break replication.
-#   * the peer's bare `postgres` service still holds a stale dataset from before
-#     the standby was seeded, so it is never resurrected there - data-dr is the
-#     authoritative copy on that node.
-#   * the peer runs no `worker`: scheduled work happens exactly once,
-#     cluster-wide, on the data primary. Chasing a container this node is not
-#     meant to run would recreate it against a primary that may be gone. The one
-#     exception is a real failover, which is recorded by the marker below.
-PEER_NODE=0
-compose_files=(-f "$COMPOSE_FILE")
-for overlay in docker-compose.peer.yml docker-compose.peer-replica.yml; do
-  if [[ -f "$APP_DIR/deploy/$overlay" ]]; then
-    PEER_NODE=1
-    compose_files+=(-f "$APP_DIR/deploy/$overlay")
-  fi
-done
 # Same path deploy/failover-agent.sh writes when it promotes this node.
 PROMOTED_MARKER="$LOG_DIR/failover-state/promoted"
 
@@ -65,6 +40,65 @@ log() { echo "[watchdog $(now)] $*" >> "$LOG_FILE"; }
 LOCK_FILE="/run/lock/hopedesign-erp-watchdog.lock"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then exit 0; fi
+
+# This same file is installed on BOTH nodes, but the two nodes do not run the
+# same stack. The data primary adds deploy/docker-compose.peer-db.yml (which
+# publishes the primary's postgres + redis on 10.77.0.1:9101/9102 for the peer to
+# borrow) and deploy/docker-compose.primary-bridge.yml (the 10.77.0.1:9103
+# frontend door the peer pools). The peer adds deploy/docker-compose.peer.yml (its
+# API colours read the primary's data over the tunnel) and
+# deploy/docker-compose.peer-replica.yml (its own postgres standby and redis
+# replica). One script heals both shapes, so it has to pick the right layer set
+# before it recreates anything:
+#
+#   * compose is layered with THIS node's overlays, so a service it recreates is
+#     rebuilt with its real settings rather than the base ones. Recreating the
+#     peer's redis from the base file alone would start an EMPTY master and
+#     silently break replication. Recreating the primary's caddy without the
+#     primary-bridge overlay would drop the 9103 door and silently halve the
+#     frontend pool the peer is holding open.
+#   * the peer's bare `postgres` service still holds a stale dataset from before
+#     the standby was seeded, so it is never resurrected there - data-dr is the
+#     authoritative copy on that node.
+#   * the peer runs no `worker`: scheduled work happens exactly once,
+#     cluster-wide, on the data primary. Chasing a container this node is not
+#     meant to run would recreate it against a primary that may be gone. The one
+#     exception is a real failover, which is recorded by the marker below.
+#
+# ROLE COMES FROM THIS NODE'S OWN WIREGUARD ADDRESS, NEVER FROM WHICH FILES
+# EXIST. The data primary is the git checkout, so it holds a copy of every
+# overlay - including the peer-only ones - and an `[[ -f ... ]]` test therefore
+# reported the PRIMARY as the peer. This watchdog then recreated the primary's
+# caddy from the peer layer set, which silently removed the 10.77.0.1:9103
+# publish and unpooled every web replica the peer was holding. wg0 is the one
+# thing that genuinely differs between the two machines at runtime, and it is up
+# before any of these containers are.
+WG_ADDR="$(ip -4 -o addr show dev wg0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+case "$WG_ADDR" in
+  10.77.0.1) NODE_ROLE="primary" ;;
+  10.77.0.2) NODE_ROLE="peer" ;;
+  *)         NODE_ROLE="unknown" ;;
+esac
+
+PEER_NODE=0
+compose_files=(-f "$COMPOSE_FILE")
+case "$NODE_ROLE" in
+  peer)
+    PEER_NODE=1
+    for overlay in docker-compose.peer.yml docker-compose.peer-replica.yml; do
+      [[ -f "$APP_DIR/deploy/$overlay" ]] && compose_files+=(-f "$APP_DIR/deploy/$overlay")
+    done
+    ;;
+  primary)
+    for overlay in docker-compose.peer-db.yml docker-compose.primary-bridge.yml; do
+      [[ -f "$APP_DIR/deploy/$overlay" ]] && compose_files+=(-f "$APP_DIR/deploy/$overlay")
+    done
+    ;;
+  *)
+    log "FATAL: wg0 address '$WG_ADDR' is neither 10.77.0.1 nor 10.77.0.2 - refusing to heal, compose layering would be a guess"
+    exit 0
+    ;;
+esac
 
 compose=(docker compose "${compose_files[@]}" --env-file "$ENV_FILE")
 
