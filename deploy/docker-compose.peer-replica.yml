@@ -1,0 +1,114 @@
+# ---- Peer-node STANDBY overlay (added 2026-09-26) --------------------------
+# Applied on the SECOND VPS together with deploy/docker-compose.peer.yml, i.e.
+#
+#   docker compose -f docker-compose.prod.yml \
+#                  -f deploy/docker-compose.peer.yml \
+#                  -f deploy/docker-compose.peer-replica.yml \
+#                  --env-file .env.production up -d
+#
+# Why this exists: docker-compose.peer.yml alone makes the peer a SECOND COMPUTE
+# node that borrows the primary's postgres + redis across the WireGuard tunnel.
+# That survives the peer dying, but not the PRIMARY dying - the peer has no data
+# of its own and every request would 500. This overlay keeps a continuously
+# updated copy of the primary's data on the peer so that the peer can take over.
+#
+# Two independent replicas, because the API is not stateless (every
+# authenticated request re-checks the `sessions` table, rate limits live in
+# redis, and the BullMQ queue lives there too):
+#
+#   data-dr   a physical streaming standby of the primary's Postgres, fed by a
+#             replication slot so the primary retains the WAL the peer has not
+#             acked yet. Hot standby - it is readable while it streams.
+#   redis     the peer's own redis, demoted from standalone master to a replica
+#             of the primary's, so the job queue and sessions follow along.
+#
+# NEITHER of these is served to users in steady state. The peer's API colors
+# still point at 10.77.0.1:9101/9102 (see docker-compose.peer.yml) and the
+# primary is the only writer everywhere. They only become the live data plane
+# when deploy/failover-agent.sh promotes them, which requires DNS to be movable
+# first - promoting without being able to redirect traffic would turn a partial
+# outage into a total one.
+#
+# Portable: on the data primary this file is not used at all.
+services:
+  # Hot physical standby. Deliberately NOT a host port: nothing outside this
+  # node talks to it, and publishing 5432 would hand a stale-but-writable
+  # Postgres to anything that can guess a password.
+  data-dr:
+    image: postgres:16-alpine
+    container_name: hopedesign-erp-data-dr
+    restart: unless-stopped
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      # Only used by the healthcheck below; the standby never authenticates
+      # anyone, because it is never a writer while it is a standby.
+      POSTGRES_USER: ${POSTGRES_USER:-hopedesign}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+      POSTGRES_DB: ${POSTGRES_DB:-hopedesign}
+    volumes:
+      - pgdata-dr:/var/lib/postgresql/data
+    # Mirrors the primary's tuning, minus the write-heavy work_mem: this box has
+    # 5.4 GB but is also running four app containers, and the standby replays
+    # WAL rather than serving queries in steady state.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=100
+      - -c
+      - hot_standby=on
+    mem_limit: 1024m
+    mem_reservation: 256m
+    shm_size: 256m
+    pids_limit: 1024
+    # pg_isready succeeds on a standby, so it proves the postmaster is up and
+    # not that it is still replicating. deploy/failover-agent.sh does the
+    # "am I actually caught up" check - see its lag gate.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hopedesign} -d ${POSTGRES_DB:-hopedesign}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+
+  # Demote the peer's standalone redis to a replica of the primary's.
+  #
+  # The full command is re-listed on purpose: a compose override REPLACES the
+  # command sequence wholesale rather than appending to it, so omitting
+  # --requirepass here would silently start this redis with no password and
+  # --maxmemory-policy noeviction would be lost, letting the queue be evicted.
+  #
+  # redisdata is not thrown away: the first sync flushes this replica and
+  # reloads it from the primary, so the stale standalone dataset the peer has
+  # been carrying since 2026-09-19 is overwritten with the real one. That is
+  # what makes a later `REPLICAOF NO ONE` hand over a correct dataset.
+  redis:
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.production}
+      - --masterauth
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.production}
+      - --replicaof
+      - 10.77.0.1
+      - "9102"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - noeviction
+
+volumes:
+  pgdata-dr:
