@@ -41,6 +41,10 @@ deploy/alert.env
 # Cloudflare tunnel token - read only by deploy/docker-compose.cloudflared.yml.
 deploy/cloudflared.env
 
+# Postgres streaming-replication credentials (REPLICATION_PASSWORD) - read only by the
+# replication/standby scripts in deploy/. Never commit.
+deploy/replication.env
+
 # Vercel/Supabase diagnostic scratch
 hv-*.json
 hv-*.jsonl
