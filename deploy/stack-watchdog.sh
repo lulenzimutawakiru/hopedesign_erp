@@ -27,6 +27,10 @@ ACTIVE_FILE="$LIVE_DIR/active.caddy"
 CADDY_CONTAINER="hopedesign-erp-caddy-1"
 REDIS_CONTAINER="hopedesign-erp-redis-1"
 WORKER_CONTAINER="hopedesign-erp-worker-1"
+# The peer's promoted standby database. Not in the base compose file (it is
+# declared by docker-compose.peer-replica.yml, which the failover layer set
+# deliberately drops), so it is only ever reconciled by container name.
+DATA_DR_CONTAINER="hopedesign-erp-data-dr"
 UPTIME_CONTAINER="hopedesign-erp-uptime-kuma"
 WEB_REPLICAS=2 # keep in sync with docker-compose.prod.yml (web: deploy.replicas)
 
@@ -48,8 +52,11 @@ if ! flock -n 9; then exit 0; fi
 # frontend door the peer pools). The peer adds deploy/docker-compose.peer.yml (its
 # API colours read the primary's data over the tunnel) and
 # deploy/docker-compose.peer-replica.yml (its own postgres standby and redis
-# replica). One script heals both shapes, so it has to pick the right layer set
-# before it recreates anything:
+# replica) - or, once deploy/failover-agent.sh has promoted it,
+# deploy/docker-compose.peer-failover.yml INSTEAD of that replica overlay, so a
+# healed container comes back on the layer set the promotion actually used. One
+# script heals all three shapes, so it has to pick the right layer set before it
+# recreates anything:
 #
 #   * compose is layered with THIS node's overlays, so a service it recreates is
 #     rebuilt with its real settings rather than the base ones. Recreating the
@@ -81,13 +88,43 @@ case "$WG_ADDR" in
 esac
 
 PEER_NODE=0
+# Set below, and only on the peer, when deploy/failover-agent.sh has promoted
+# this node (its marker exists). Every later decision that differs between a
+# standby and a promoted node keys off this single flag.
+FAILOVER_ACTIVE=0
 compose_files=(-f "$COMPOSE_FILE")
 case "$NODE_ROLE" in
   peer)
     PEER_NODE=1
-    for overlay in docker-compose.peer.yml docker-compose.peer-replica.yml; do
-      [[ -f "$APP_DIR/deploy/$overlay" ]] && compose_files+=(-f "$APP_DIR/deploy/$overlay")
-    done
+    # A promoted peer has to be layered EXACTLY the way deploy/failover-agent.sh
+    # left it, or this watchdog rebuilds the node straight back onto the dead
+    # primary. Both halves of that matter:
+    #
+    #   * docker-compose.peer-replica.yml is DROPPED and
+    #     docker-compose.peer-failover.yml is added, mirroring the agent's
+    #     COMPOSE_BASE plus its failover overlay. The replica overlay is poison
+    #     after a promotion - it re-asserts "redis --replicaof 10.77.0.1 9102",
+    #     so a redis recreate from that layer set demotes the promoted master
+    #     back into a replica of a host that is down and rejects every write.
+    #     The failover overlay instead points the API colours at the local,
+    #     writable data-dr; without it, recreating api-a/api-b rebuilds them
+    #     against POSTGRES_HOST=10.77.0.1 and silently undoes the whole
+    #     failover. Redis needs no override: the base service in
+    #     docker-compose.prod.yml is already the local master this node wants
+    #     (--requirepass + --appendonly + noeviction, and no --replicaof).
+    #   * a promoted node owns the "worker", which is profile-gated
+    #     (data-primary-only) in docker-compose.peer.yml, so the recreate below
+    #     has to opt into that profile explicitly.
+    if [[ -f "$PROMOTED_MARKER" ]]; then
+      FAILOVER_ACTIVE=1
+      for overlay in docker-compose.peer.yml docker-compose.peer-failover.yml; do
+        [[ -f "$APP_DIR/deploy/$overlay" ]] && compose_files+=(-f "$APP_DIR/deploy/$overlay")
+      done
+    else
+      for overlay in docker-compose.peer.yml docker-compose.peer-replica.yml; do
+        [[ -f "$APP_DIR/deploy/$overlay" ]] && compose_files+=(-f "$APP_DIR/deploy/$overlay")
+      done
+    fi
     ;;
   primary)
     for overlay in docker-compose.peer-db.yml docker-compose.primary-bridge.yml; do
@@ -136,8 +173,12 @@ other_color() { [[ "$1" == "a" ]] && echo b || echo a; }
 restart_candidates=("$UPTIME_CONTAINER" "$REDIS_CONTAINER" $(web_containers) "$CADDY_CONTAINER")
 if [[ "$PEER_NODE" -eq 0 ]]; then
   restart_candidates+=(hopedesign-erp-postgres-1 "$WORKER_CONTAINER")
-elif [[ -f "$PROMOTED_MARKER" ]]; then
-  restart_candidates+=("$WORKER_CONTAINER")
+elif [[ "$FAILOVER_ACTIVE" -eq 1 ]]; then
+  # data-dr IS the database once this node is promoted, so it is reconciled
+  # like the primary's postgres. By name, never by compose: the container is
+  # not in the failover layer set, and the promoted dataset must not be
+  # rebuilt from a file.
+  restart_candidates+=("$WORKER_CONTAINER" "$DATA_DR_CONTAINER")
 fi
 for c in "${restart_candidates[@]}"; do
   s="$(status_of "$c")"
@@ -168,11 +209,20 @@ fi
 for svc in redis worker; do
   # A missing worker on the peer is the correct steady state, not a fault - it
   # only belongs there once failover-agent.sh has promoted this node.
-  if [[ "$svc" == "worker" && "$PEER_NODE" -eq 1 && ! -f "$PROMOTED_MARKER" ]]; then continue; fi
+  if [[ "$svc" == "worker" && "$PEER_NODE" -eq 1 && "$FAILOVER_ACTIVE" -eq 0 ]]; then continue; fi
   c="hopedesign-erp-$svc-1"
   if [[ -z "$(docker inspect -f '{{.Id}}' "$c" 2>/dev/null)" ]]; then
     log "queue container $c is missing - recreating the $svc service"
-    "${compose[@]}" up -d --no-deps "$svc" >> "$LOG_FILE" 2>&1 || true
+    # A promoted peer's worker lives in the data-primary-only profile, so it is
+    # only ever recreated with that profile. A bare "up -d worker" against a
+    # profile-gated service leaves the queue stopped, which would silently hold
+    # down report schedules, the Hikvision drain, EFRIS fiscalisation and
+    # notification delivery for the whole outage.
+    recreate_args=()
+    if [[ "$svc" == "worker" && "$FAILOVER_ACTIVE" -eq 1 ]]; then
+      recreate_args+=(--profile data-primary-only)
+    fi
+    "${compose[@]}" "${recreate_args[@]}" up -d --no-deps "$svc" >> "$LOG_FILE" 2>&1 || true
     sleep 5
   fi
 done
