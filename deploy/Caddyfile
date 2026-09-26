@@ -72,10 +72,18 @@
 			import /etc/caddy/live/webpeer*.caddy
 			lb_policy least_conn
 			health_uri /
-			health_interval 15s
+			health_interval 5s
 			health_timeout 3s
 			max_fails 2
 			fail_duration 30s
+			# A dead upstream is retried against a healthy one instead of being handed
+			# to the visitor. Without this, a node that is GONE (host down or tunnel
+			# down) refuses the dial, and reverse_proxy returns that error straight to
+			# the browser: intermittent 502s for about one request in three, for as
+			# long as it takes the active health check to eject the dead upstream.
+			# The try window also covers a replica that is merely restarting.
+			lb_try_duration 5s
+			lb_try_interval 200ms
 		}
 	}
 }
@@ -116,10 +124,15 @@ import /etc/caddy/live/uptime.caddy
 			# replicas; it is the public site block above that pools the peer.
 			lb_policy least_conn
 			health_uri /
-			health_interval 15s
+			health_interval 5s
 			health_timeout 3s
 			max_fails 2
 			fail_duration 30s
+			# Same retry window as the public door, so a caller never sees a 502 while
+			# one local replica is down or restarting: the request is simply re-sent
+			# to the healthy sibling.
+			lb_try_duration 5s
+			lb_try_interval 200ms
 		}
 	}
 }
