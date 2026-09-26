@@ -3065,3 +3065,81 @@ export async function createRouting(client: pg.PoolClient, ctx: Ctx, b: Record<s
   );
   return toCamelRow(res.rows[0]);
 }
+
+/**
+ * Mirrors `updateBom`: only the fields present in the body are written, so a
+ * partial edit from the desk cannot blank out columns it did not mean to touch.
+ * `routings` has no `updated_at` column and no trigger, so nothing is stamped.
+ */
+export async function updateRouting(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown>) {
+  if (!id) throw badRequest('Routing id is required');
+  if ('productId' in b && !Number(b.productId)) throw badRequest('productId is required');
+  const fields: Array<[string, string, (v: unknown) => unknown]> = [
+    ['productId', 'product_id', (v) => Number(v)],
+    ['code', 'code', (v) => (v != null ? String(v).trim() : null)],
+    ['name', 'name', (v) => String(v ?? 'Routing')],
+    ['version', 'version', (v) => Number(v ?? 1)],
+    ['isActive', 'is_active', (v) => v !== false],
+  ];
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const changes: Record<string, unknown> = {};
+  for (const [key, column, cast] of fields) {
+    if (!(key in b)) continue;
+    const value = cast(b[key]);
+    changes[key] = value;
+    vals.push(value);
+    sets.push(`${column} = $${vals.length}`);
+  }
+  if (sets.length === 0) throw badRequest('No routing fields to update');
+  vals.push(id);
+  const idIdx = vals.length;
+  vals.push(ctx.tenantId ?? 0);
+  const tenantIdx = vals.length;
+  const res = await client.query(
+    `UPDATE routings SET ${sets.join(', ')}
+     WHERE id = $${idIdx} AND tenant_id = $${tenantIdx}
+     RETURNING id, code, name`,
+    vals
+  );
+  if (res.rowCount === 0) throw notFound('Routing not found');
+  await logAudit(client, ctx, {
+    action: 'update',
+    resource: 'routings',
+    recordId: id,
+    recordCode: res.rows[0].code != null ? String(res.rows[0].code) : null,
+    newValues: changes,
+  });
+  return toCamelRow(res.rows[0]);
+}
+
+/**
+ * `routing_operations` cascade on delete, but `work_orders.routing_id` and
+ * `production_batches.routing_id` have no cascade rule, so a routing that has
+ * already been planned or batched against cannot be removed without orphaning
+ * production history. Postgres raises 23503 for that; it is translated here
+ * because the raw constraint name is meaningless to an operator.
+ */
+export async function deleteRouting(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown> = {}) {
+  if (!id) throw badRequest('Routing id is required');
+  try {
+    const res = await client.query(
+      `DELETE FROM routings WHERE id = $1 AND tenant_id = $2 RETURNING id, code`,
+      [id, ctx.tenantId ?? 0]
+    );
+    if (res.rowCount === 0) throw notFound('Routing not found');
+    await logAudit(client, ctx, {
+      action: 'delete',
+      resource: 'routings',
+      recordId: id,
+      recordCode: res.rows[0].code != null ? String(res.rows[0].code) : null,
+      metadata: { reason: b.reason != null ? String(b.reason) : 'Routing deleted' },
+    });
+    return { id: res.rows[0].id, code: res.rows[0].code, deleted: true };
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === '23503') {
+      throw badRequest('Routing is referenced by work orders or production batches; mark it inactive instead.');
+    }
+    throw err;
+  }
+}

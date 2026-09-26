@@ -582,6 +582,7 @@ export function MmsStandards() {
     isActive: true,
   });
   const set = (k: string, v: unknown) => setF((p) => ({ ...p, [k]: v }));
+
   const submit = () => {
     setErr('');
     if (!f.productId) {
@@ -1588,6 +1589,26 @@ export function MmsBoms() {
   });
   const set = (k: string, v: unknown) => setF((p) => ({ ...p, [k]: v }));
 
+  const [routingOpen, setRoutingOpen] = useState(false);
+  const [routingEditId, setRoutingEditId] = useState(0);
+  const [routingSaving, setRoutingSaving] = useState(false);
+  const [routingConfirm, setRoutingConfirm] = useState<{
+    title: string;
+    body: string;
+    label: string;
+    danger?: boolean;
+    reasonRequired?: boolean;
+    onConfirm: (reason: string) => Promise<void>;
+  } | null>(null);
+  const [rf, setRf] = useState<Rec>({
+    productId: '',
+    code: '',
+    name: '',
+    version: '1',
+    isActive: true,
+  });
+  const setR = (k: string, v: unknown) => setRf((p) => ({ ...p, [k]: v }));
+
   const [expProductId, setExpProductId] = useState('');
   const [expQty, setExpQty] = useState('1000');
   const [explosion, setExplosion] = useState<Rec | null>(null);
@@ -1807,6 +1828,88 @@ export function MmsBoms() {
     });
   };
 
+  const openRoutingCreate = () => {
+    setError('');
+    setRoutingEditId(0);
+    setRf({ productId: '', code: '', name: '', version: '1', isActive: true });
+    setRoutingOpen(true);
+  };
+
+  const openRoutingEdit = (r: Rec) => {
+    setError('');
+    setRoutingEditId(Number(r.id));
+    setRf({
+      productId: String(r.productId ?? ''),
+      code: String(r.code ?? ''),
+      name: String(r.name ?? ''),
+      version: String(r.version ?? '1'),
+      isActive: !!r.isActive,
+    });
+    setRoutingOpen(true);
+  };
+
+  const closeRoutingForm = () => {
+    setRoutingOpen(false);
+    setRoutingEditId(0);
+  };
+
+  const submitRouting = () => {
+    setError('');
+    setNotice('');
+    if (!rf.productId) {
+      setError('Select a product for the routing.');
+      return;
+    }
+    const editing = routingEditId > 0;
+    setRoutingSaving(true);
+    api<{ data: unknown }>(
+      editing ? '/api/ops/manufacturing/routings/' + String(routingEditId) : '/api/ops/manufacturing/routings',
+      {
+        method: editing ? 'PUT' : 'POST',
+        body: JSON.stringify({
+          productId: rf.productId,
+          code: String(rf.code ?? '').trim() || undefined,
+          name: String(rf.name ?? '').trim() || undefined,
+          version: num(rf.version) || 1,
+          isActive: !!rf.isActive,
+        }),
+      }
+    )
+      .then(() => {
+        setNotice('Routing ' + String(rf.code ?? '') + (editing ? ' updated.' : ' created.'));
+        closeRoutingForm();
+        load();
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Save failed'))
+      .finally(() => setRoutingSaving(false));
+  };
+
+  const removeRouting = (r: Rec) => {
+    setError('');
+    setNotice('');
+    setRoutingConfirm({
+      title: 'Delete routing',
+      body:
+        'Delete routing ' + String(r.code ?? '') + ' and all of its operations? This cannot be undone. ' +
+        'A routing already used on a work order or production batch is protected and must be marked inactive instead.',
+      label: 'Delete routing',
+      danger: true,
+      reasonRequired: true,
+      onConfirm: async (reason) => {
+        await api('/api/ops/manufacturing/routings/' + String(r.id), {
+          method: 'DELETE',
+          body: JSON.stringify({ reason }),
+        });
+        setNotice('Routing ' + String(r.code ?? '') + ' deleted.');
+        if (routingDetailId === Number(r.id)) {
+          setRoutingDetailId(0);
+          setRoutingDetail(null);
+        }
+        load();
+      },
+    });
+  };
+
   const canCreate = can(user, 'production.boms.create');
   const canUpdate = can(user, 'production.boms.update');
   const canDelete = can(user, 'production.boms.delete');
@@ -1879,11 +1982,12 @@ export function MmsBoms() {
         </div>
         <div className="head-actions">
           {canCreate && <button className="btn btn-primary" onClick={openCreate}>New BOM</button>}
+          {canCreate && <button className="btn" onClick={openRoutingCreate}>New routing</button>}
         </div>
       </header>
 
       {notice && <div className="alert alert-success">{notice}</div>}
-      {error && (!boms || !open) && <ErrorBanner error={error} />}
+      {error && (!boms || !open) && !routingOpen && <ErrorBanner error={error} />}
 
       <div className="kpi-grid">
         <Kpi
@@ -2116,6 +2220,10 @@ export function MmsBoms() {
                     loading={routingDetailLoading && routingDetailId === Number(r.id)}
                     detail={routingDetailId === Number(r.id) ? routingDetail : null}
                     onToggle={() => toggleRouting(r)}
+                    canUpdate={canUpdate}
+                    canDelete={canDelete}
+                    onEdit={() => openRoutingEdit(r)}
+                    onDelete={() => removeRouting(r)}
                   />
                 ))}
               </tbody>
@@ -2274,6 +2382,56 @@ export function MmsBoms() {
           }
         />
       )}
+      {routingOpen && (
+        <Modal
+          title={routingEditId ? 'Edit routing' : 'New routing'}
+          onClose={closeRoutingForm}
+          footer={
+            <>
+              <button className="btn" onClick={closeRoutingForm}>Cancel</button>
+              <button className="btn btn-primary" disabled={routingSaving} onClick={submitRouting}>
+                {routingSaving ? 'Saving...' : routingEditId ? 'Save changes' : 'Create routing'}
+              </button>
+            </>
+          }
+        >
+          {error && routingOpen && <ErrorBanner error={error} />}
+          <div className="form-grid">
+            <Field label="Product" required>
+              <ProductSelect value={String(rf.productId)} onChange={(v) => setR('productId', v)} />
+            </Field>
+            <Field label="Routing code">
+              <input type="text" placeholder="e.g. RT-A4-80" value={String(rf.code ?? '')} onChange={(e) => setR('code', e.target.value)} />
+            </Field>
+            <Field label="Name">
+              <input type="text" placeholder="e.g. NATEX A4 80gsm routing" value={String(rf.name ?? '')} onChange={(e) => setR('name', e.target.value)} />
+            </Field>
+            <Field label="Version">
+              <input type="number" min={1} value={String(rf.version ?? '')} onChange={(e) => setR('version', e.target.value)} />
+            </Field>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 13 }}>
+            <input type="checkbox" checked={!!rf.isActive} onChange={(e) => setR('isActive', e.target.checked)} />
+            Active routing - available for work orders and production batches
+          </label>
+        </Modal>
+      )}
+      {routingConfirm && (
+        <ConfirmDialog
+          title={routingConfirm.title}
+          body={routingConfirm.body}
+          confirmLabel={routingConfirm.label}
+          danger={routingConfirm.danger}
+          reasonRequired={routingConfirm.reasonRequired}
+          onCancel={() => setRoutingConfirm(null)}
+          onConfirm={(reason) =>
+            void routingConfirm
+              .onConfirm(reason)
+              .catch((e) => setError(e instanceof Error ? e.message : 'Request failed'))
+              .finally(() => setRoutingConfirm(null))
+          }
+        />
+      )}
     </div>
   );
 }
@@ -2429,12 +2587,20 @@ function RoutingRowFragments({
   loading,
   detail,
   onToggle,
+  canUpdate,
+  canDelete,
+  onEdit,
+  onDelete,
 }: {
   r: Rec;
   expanded: boolean;
   loading: boolean;
   detail: Rec | null;
   onToggle: () => void;
+  canUpdate: boolean;
+  canDelete: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
 }) {
   const operations = detail && Array.isArray(detail.operations) ? (detail.operations as Rec[]) : [];
   return (
@@ -2449,19 +2615,45 @@ function RoutingRowFragments({
         <td className="cell-num">{fmtNum(r.opCount)}</td>
         <td className="cell-num">{fmtNum(r.setupTeardownMin)}</td>
         <td>{r.isActive ? <Badge value="ACTIVE" /> : <Badge value="INACTIVE" />}</td>
-        <td className="cell-num">
-          <button
-            type="button"
-            className="row-toggle"
-            aria-expanded={expanded}
-            aria-label={expanded ? 'Collapse operations' : 'Expand operations'}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggle();
-            }}
-          >
-            {expanded ? '-' : '+'}
-          </button>
+        <td>
+          <div className="row-actions">
+            {canUpdate && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEdit();
+                }}
+              >
+                Edit
+              </button>
+            )}
+            {canDelete && (
+              <button
+                type="button"
+                className="btn btn-sm btn-danger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete();
+                }}
+              >
+                Delete
+              </button>
+            )}
+            <button
+              type="button"
+              className="row-toggle"
+              aria-expanded={expanded}
+              aria-label={expanded ? 'Collapse operations' : 'Expand operations'}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle();
+              }}
+            >
+              {expanded ? '-' : '+'}
+            </button>
+          </div>
         </td>
       </tr>
       {expanded && (

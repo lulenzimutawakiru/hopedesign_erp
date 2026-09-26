@@ -242,3 +242,5 @@ manufacturingOpsRouter.delete('/boms/:id', ...run('production.boms.delete', (c, 
 manufacturingOpsRouter.get('/routings', ...runGet('production.boms.view', (c, ctx) => mfg.routingsDesk(c, ctx)));
 manufacturingOpsRouter.get('/routings/:id', ...runGet('production.boms.view', (c, ctx, _q, p) => mfg.routingDetail(c, ctx, Number(p.id))));
 manufacturingOpsRouter.post('/routings', ...run('production.boms.create', (c, ctx, b) => mfg.createRouting(c, ctx, b)));
+manufacturingOpsRouter.put('/routings/:id', ...run('production.boms.update', (c, ctx, b, p) => mfg.updateRouting(c, ctx, Number(p.id), b)));
+manufacturingOpsRouter.delete('/routings/:id', ...run('production.boms.delete', (c, ctx, b, p) => mfg.deleteRouting(c, ctx, Number(p.id), b)));
