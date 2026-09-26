@@ -162,6 +162,23 @@ else
   log "WARN: deploy/mesh-routes.sh is missing; the cross-node mesh fragments in $LIVE_DIR are unmanaged on this node"
 fi
 
+# 2c) Report tunnel-route drift, never apply it. deploy/tunnel-routes.txt is the
+#     tracked table of hostname -> origin rules the Cloudflare tunnel serves, and
+#     deploy/tunnel-ingress.sh owns them. A deploy is the wrong place to PUT a
+#     new rule set: a bad route takes a public hostname down with it, and this
+#     step runs before the build, when a broken bundle could still abort the
+#     rollout. So this only *reads* - it warns when the live tunnel and the
+#     tracked table disagree and leaves the write to the weekly cron. Both
+#     redirects and the -f guard exist so that a missing script, an absent
+#     tunnel-ingress.env or an unreachable Cloudflare API can never fail a
+#     deploy; --only-if-configured keeps it quiet on a node that was never meant
+#     to hold the routes.
+if [[ -f "$APP_DIR/deploy/tunnel-ingress.sh" ]]; then
+  if ! bash "$APP_DIR/deploy/tunnel-ingress.sh" --dry-run --only-if-configured >/dev/null 2>&1; then
+    log "WARN: tunnel route drift - the live tunnel and deploy/tunnel-routes.txt disagree; the weekly cron reconciles, or run: bash deploy/tunnel-ingress.sh --dry-run"
+  fi
+fi
+
 # 3) Build the new images. `worker` shares the api build target, so it is a
 #    cached re-tag rather than a second compile - but it must be listed, or the
 #    worker service would keep running whatever image it was created with.

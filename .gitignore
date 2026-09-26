@@ -59,3 +59,7 @@ logs/
 # Cross-node failover settings + DNS API tokens - read only by
 # deploy/failover-agent.sh and deploy/dns-failover.sh. Never commit.
 deploy/failover.env
+
+# Cloudflare tunnel ingress route settings + API token - read only by
+# deploy/tunnel-ingress.sh. Never commit.
+deploy/tunnel-ingress.env

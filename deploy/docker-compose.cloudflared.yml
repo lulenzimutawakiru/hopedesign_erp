@@ -11,9 +11,12 @@
 #   2. It is ingress, not application: it has to keep running while the ERP
 #      stack is rebuilt, and an ERP deploy must never be able to restart it.
 #
-# This is NOT what serves hopedesign.jorlentech.com. That hostname resolves
-# straight to this VPS and is terminated by Caddy on 80/443; the tunnel is for
-# outbound-only Cloudflare Zero Trust access.
+# Today this is NOT what serves hopedesign.jorlentech.com: that hostname
+# resolves straight to this VPS and is terminated by Caddy on 80/443. Treat the
+# connector as the STANDBY path - it starts carrying these hostnames the moment
+# the zone moves onto Cloudflare and they become proxied CNAMEs onto the
+# tunnel. The routes for that cutover are declared in deploy/tunnel-routes.txt
+# and owned by deploy/tunnel-ingress.sh, not by this file.
 #
 # network_mode: bridge reproduces exactly how this container ran as a bare
 # `docker run` (default bridge, 172.17.0.2, gateway 172.17.0.1 - which is how it

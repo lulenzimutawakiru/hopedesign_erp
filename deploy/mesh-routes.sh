@@ -23,12 +23,22 @@
 #   holding its peer - and the pool loses a member without ever going red. This
 #   script is the missing owner.
 #
+#   The mesh has two halves: the fragments above, and the kernel route that
+#   carries traffic to the peer. The mesh route guard further down owns the
+#   route half, because a route that disappears is invisible from inside this
+#   box - every door still answers 200 while nothing reaches the peer.
+#
 # WHY IT IS SAFE TO RUN ON A TIMER
 #   It rewrites a fragment ONLY when its bytes differ, and it reloads Caddy
 #   ONLY when it actually wrote something. On a node already in sync (the
-#   normal case) it is a stat + sha256 and nothing else: no write, no reload,
-#   no service touched. That is what makes it safe to call from the watchdog
-#   every two minutes - a no-op must stay a no-op.
+#   normal case) it is a stat + sha256 plus the mesh route guard's read-only
+#   probes, and nothing else: no write, no reload, no service touched. That is
+#   what makes it safe to call from the watchdog every two minutes - a no-op
+#   must stay a no-op.
+#
+#   One deliberate exception lives in the mesh route guard below: it deletes a
+#   blackhole that is swallowing mesh traffic. That delete can only fire on an
+#   already-broken node, so it does not weaken the no-op contract above.
 #
 # ROLE COMES FROM THIS NODE'S OWN WIREGUARD ADDRESS, NEVER FROM WHICH FILES
 # EXIST. The data primary is a git checkout, so it holds a copy of the
@@ -55,6 +65,10 @@ SRC_DIR="$APP_DIR/deploy/mesh-routes"
 LOG_DIR="$APP_DIR/logs"
 LOG_FILE="$LOG_DIR/mesh-routes.log"
 CADDY_CONTAINER="hopedesign-erp-caddy-1"
+# The alert helper is shared with the other deploy scripts (dns-failover.sh,
+# stack-watchdog.sh); the mesh guard reports through the same channel.
+DEPLOY_DIR="$APP_DIR/deploy"
+ALERT_BIN="$DEPLOY_DIR/alert.sh"
 
 # Overridable so the same script can be exercised on a bench that uses a
 # different WireGuard subnet.
@@ -107,12 +121,173 @@ if [[ ! -d "$SRC_ROLE_DIR" ]]; then
   exit 1
 fi
 
+# ---- mesh route guard -------------------------------------------------------
+# WHY THIS EXISTS
+#   The two fragments this script installs are only half of the mesh it owns.
+#   The other half is the kernel's route to the peer, and until now nothing
+#   owned that at all. Two things can silently sever it:
+#
+#     1. The connected route. wg0 comes up with `10.77.0.0/24 dev wg0 proto
+#        kernel scope link`, and that one route is the only thing that makes the
+#        peer reachable. If it disappears the fragments are still byte-perfect
+#        on disk, Caddy still reloads cleanly, and both doors still answer 200
+#        on loopback - while every request Caddy proxies to the peer fails. The
+#        pool never goes red, because the address the health checks watch is not
+#        the address that stopped routing. A swallowed route is invisible from
+#        inside the box.
+#
+#     2. The Cloudflare WARP client running beside the mesh on this host. WARP
+#        installs `not from all fwmark 0x100cf lookup 65743` plus table 65743,
+#        and a WARP restart can leave a blackhole route behind. A blackhole
+#        covering the mesh subnet errors nothing and logs nothing on the data
+#        path: it just drops every mesh packet at this host.
+#
+# WHAT IT DOES, AND WHAT IT DELIBERATELY DOES NOT
+#   - Asserts the `dev wg0 proto kernel` connected route is present. Missing
+#     means this node cannot reach its peer; that is an alert, never something a
+#     script should try to re-add, because a wrong re-add is worse than the
+#     outage it is meant to fix.
+#   - Deletes a blackhole ONLY when the kernel prints its owning table and the
+#     blackhole sits inside this mesh's own /24. `ip route show table all type
+#     blackhole` prints the table on every line, so the delete can name it
+#     exactly; a blackhole anywhere else is left alone, and nothing is ever
+#     flushed wholesale.
+#   - REPORTS the WARP fwmark rule and whether table 65743 has grown a mesh
+#     route, and deletes neither: they belong to the WARP client, which
+#     reinstalls them on connect, so a delete here is a fight the client wins.
+#     The operator needs to see them; nothing here can safely own them.
+#
+# WHY IT IS NOT FOLDED INTO $changed / $failed
+#   Routing and Caddy fragments fail independently. A node with a good route and
+#   drifted fragments still deserves its reload; a node with correct fragments
+#   and no route still has to be told. Sharing either flag would let one failure
+#   suppress the fix for the other.
+#
+# WHY THE SUBNET IS READ, NOT HARDCODED
+#   The bench moves the mesh to another subnet via PRIMARY_WG_IP/PEER_WG_IP, so
+#   the /24 to guard is taken from the live connected route. A guard pinned to
+#   10.77.0.0/24 would silently stop guarding the moment the tunnel moved.
+#
+#   The two field offsets below were established by running the commands on the
+#   live node, not by reading iproute2 docs. Both were wrong on the first
+#   attempt and both fail SILENTLY - an empty parse reads as "no route", a wrong
+#   table reads as "route not found" - so neither would have looked broken in
+#   review. Do not "tidy" them:
+#     - `ip -4 route show dev wg0` OMITS the `dev wg0` token, so the device
+#       filter is implied and every field shifts left. Parsed from the
+#       unfiltered table instead, where `dev wg0` is printed and matched
+#       explicitly.
+#     - a kernel blackhole line is `blackhole <cidr> table <n>`, only 4 fields,
+#       so a scan starting at field 4 never executes and silently reports the
+#       table as `main`. The scan starts at field 3.
+MESH_CIDR="$(ip -4 route show 2>/dev/null \
+  | awk '$1 ~ /\// && $2 == "dev" && $3 == "wg0" && $4 == "proto" && $5 == "kernel" { print $1; exit }')"
+MESH_NET3="$(printf '%s' "$MESH_CIDR" | awk -F'[./]' 'NF >= 4 { print $1"."$2"."$3; exit }')"
+MESH_ALERT_KEY="mesh-routes-guard"
+MESH_HEALED_KEY="mesh-routes-blackhole"
+
+# Loud-degrade alerting, same contract as deploy/dns-failover.sh, so a missing
+# alert.sh reports "would have sent" here exactly as it does there.
+notify() { # $1 severity, $2 key, $3 subject, $4 body
+  [[ -x "$ALERT_BIN" ]] || { log "no alert.sh - would have sent [$1] $3"; return 0; }
+  "$ALERT_BIN" send "$1" "$2" "$3" "${4:-}" >> "$LOG_FILE" 2>&1 \
+    || log "WARN: alert.sh send failed for key $2"
+}
+
+notify_clear() { # $1 key
+  [[ -x "$ALERT_BIN" ]] || return 0
+  "$ALERT_BIN" clear "$1" >> "$LOG_FILE" 2>&1 || true
+}
+
+ROUTE_BAD=0      # 1 = the peer is unreachable from this node right now
+ROUTE_HEALED=""  # non-empty = a blackhole was found and removed this pass
+ROUTE_DETAIL=""
+
+mesh_route_guard() {
+  # (1) the connected route itself
+  if [[ -z "$MESH_CIDR" ]]; then
+    echo "  BAD     mesh route: no 'dev wg0 proto kernel' route - this node cannot reach the peer at all"
+    ROUTE_BAD=1
+    ROUTE_DETAIL="${ROUTE_DETAIL}no connected route on wg0. "
+  else
+    echo "  ok      mesh route: $MESH_CIDR dev wg0"
+  fi
+
+  # (2) any blackhole sitting inside this mesh's /24
+  #
+  # Compared on the first three octets, which is exactly "inside this mesh" for
+  # the /24 the tunnel actually uses, and also catches a /32 on the peer's own
+  # address. A blackhole outside the mesh is not this script's business even if
+  # it is broken. If the mesh is ever widened past a /24 this under-matches
+  # rather than over-matches, which is the safe direction: the cost of being
+  # wrong is a missed hijack, never a deleted route.
+  local cidr tbl net3
+  while read -r cidr tbl; do
+    [[ -n "$cidr" ]] || continue
+    net3="$(printf '%s' "$cidr" | awk -F'[./]' 'NF >= 4 { print $1"."$2"."$3; exit }')"
+    [[ -n "$MESH_NET3" && "$net3" == "$MESH_NET3" ]] || continue
+    if [[ "$MODE" == "apply" ]]; then
+      if ip -4 route del blackhole "$cidr" table "$tbl" 2>/dev/null; then
+        echo "  fixed   removed blackhole $cidr (table $tbl) that was swallowing mesh traffic"
+        log "removed hijacking blackhole $cidr table $tbl"
+        ROUTE_HEALED="${ROUTE_HEALED}${cidr} table ${tbl}. "
+        continue
+      fi
+      echo "  BAD     blackhole $cidr (table $tbl) over the mesh, and it could not be removed"
+      ROUTE_DETAIL="${ROUTE_DETAIL}blackhole ${cidr} table ${tbl} survived deletion. "
+    else
+      echo "  BAD     blackhole $cidr (table $tbl) is swallowing mesh traffic (${MODE}: not removing)"
+      ROUTE_DETAIL="${ROUTE_DETAIL}blackhole ${cidr} table ${tbl}. "
+    fi
+    ROUTE_BAD=1
+  done < <(ip -4 route show table all type blackhole 2>/dev/null \
+             | awk '$1 == "blackhole" { t = "main"; for (i = 3; i < NF; i++) if ($i == "table") t = $(i + 1); print $2, t }')
+
+  # (3) the WARP routing rule - reported, never touched
+  local fwrule
+  fwrule="$(ip -4 rule show 2>/dev/null | awk '/fwmark 0x100cf/ { print; exit }')"
+  if [[ -z "$fwrule" ]]; then
+    echo "  ok      no WARP fwmark rule"
+  elif [[ -n "$MESH_NET3" ]] \
+    && ip -4 route show table 65743 2>/dev/null | grep -qE "(^|[[:space:]])${MESH_NET3//./\\.}\\."; then
+    echo "  BAD     WARP fwmark rule sends marked traffic to table 65743, which now holds a mesh route"
+    ROUTE_BAD=1
+    ROUTE_DETAIL="${ROUTE_DETAIL}table 65743 ($fwrule) matches the mesh subnet. "
+  else
+    echo "  note    WARP fwmark rule present (table 65743); it holds no mesh route"
+  fi
+
+  return 0
+}
+
+mesh_route_guard
+
+# Only an apply run raises mail. `status` and `--dry-run` are operator commands
+# typed at a terminal, where printing the result IS the report - an interactive
+# check must never page anyone. The guard runs in every mode; only the alerting
+# is gated.
+if [[ "$MODE" == "apply" ]]; then
+  if [[ "$ROUTE_BAD" == "1" ]]; then
+    notify ERROR "$MESH_ALERT_KEY" "mesh route guard: this node cannot reach its peer" "$ROUTE_DETAIL"
+  else
+    notify_clear "$MESH_ALERT_KEY"
+  fi
+  [[ -n "$ROUTE_HEALED" ]] \
+    && notify WARN "$MESH_HEALED_KEY" "mesh route guard: removed a blackhole over the mesh" "$ROUTE_HEALED"
+fi
+
 # ---- fragment sanity -------------------------------------------------------
 # A fragment is exactly one `to <ip>:<port>` target line. Anything else -
 # empty, truncated, a whole reverse_proxy block copied by mistake - is refused.
 # This matters more than it looks: an empty or malformed file dropped into the
 # live overlay does not error, it silently REMOVES an upstream from the pool,
 # which is strictly worse than leaving the stale-but-working one in place.
+# NOTE ON ORDERING
+#   The mesh route guard above runs before changed/failed exist; they are
+#   initialised just below, at the top of the reconcile loop. The guard keeps
+#   its own ROUTE_BAD / ROUTE_HEALED flags so it never has to touch either one:
+#   its failures must not be able to suppress a fragment reload, and a fragment
+#   failure must not be able to hide a route that has gone missing.
 fragment_ok() { # $1 = path
   [[ -s "$1" ]] || return 1
   [[ "$(grep -c '^to[[:space:]]' "$1" 2>/dev/null)" == "1" ]] || return 1

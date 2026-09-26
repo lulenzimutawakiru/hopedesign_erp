@@ -45,16 +45,20 @@ The Caddy container entrypoint (`deploy/caddy-entrypoint.sh`) writes the initial
 - **Boot migrations are advisory-locked**, so both colors can start against the same database without racing DDL.
 - **Watchdog** (`deploy/stack-watchdog.sh`, installed every 2 minutes by `deploy/install-watchdog.sh`) flips Caddy to the healthy idle color if the active color dies, restarts dead `postgres`/`web`/`caddy` containers, and recreates both API colors if neither answers `/api/health`.
 - **Mesh routes are reconciled, not hand-written.** The two fragments that publish the peer node into this node's Caddy (`webpeer.caddy` for the public SPA pool, `peer.caddy` for the `:8081` API retry door that `active.caddy` falls through to) live in the gitignored `deploy/caddy-live/`, so `git merge` can never deliver them and they drift. `deploy/mesh-routes.sh` owns them now: it reads the node's role from its own `wg0` address (never from which files happen to exist, because the primary is a checkout and holds the peer's overlays too), installs the tracked set from `deploy/mesh-routes/<role>/`, and reloads Caddy only when the bytes actually changed - so on a correct node it is a stat and a sha256 and touches nothing. It runs from `zero-downtime-deploy.sh` step `[2b/8]` and from the watchdog every 2 minutes. A node that loses a fragment passes every health check while silently not holding its peer, which is the failure this closes.
+- **Tunnel routes are declared in the repo, not clicked in a dashboard.** The Cloudflare tunnel's ingress rules (hostname -> origin) live in `deploy/tunnel-routes.txt` and are owned by `deploy/tunnel-ingress.sh`, which either PUTs them to the Cloudflare API (`TUNNEL_MODE=api`) or renders `deploy/cloudflared/config.yml` from the same table (`TUNNEL_MODE=local`). It runs weekly from cron (installed by `deploy/install-watchdog.sh`) and `zero-downtime-deploy.sh` step `[2c/8]` re-reads the table in `--dry-run` so drift shows up in the deploy log. It is deliberately **not** on the watchdog's 2-minute cron: the reconcile is a full rule-set PUT, and issuing 720 of them a day to change nothing is a needless write against the edge.
 - **Backups.** `deploy/postgres-backup.sh` (daily) and `deploy/storage-backup.sh` (daily) run from cron and are safe during a rollout (storage backup snapshots from whichever API color is running).
 
 ## Cloudflare tunnel (separate compose project)
 
 The host also runs a Cloudflare `cloudflared` connector. It is **not** part of
-`docker-compose.prod.yml`, and it is not on the request path for
-`hopedesign.jorlentech.com` - that name resolves straight to this VPS and is
-terminated by Caddy on 80/443. The tunnel is for outbound-only Cloudflare Zero
-Trust access, so it is defined in its own project and an ERP deploy can never
-restart it.
+`docker-compose.prod.yml`, and it is not on the request path today:
+`hopedesign.jorlentech.com` resolves straight to this VPS and is terminated by
+Caddy on 80/443. Treat the connector as the **standby path** - it starts
+carrying the site the moment the zone moves onto Cloudflare and its hostnames
+become proxied CNAMEs onto the tunnel. The routes for that cutover are declared
+in `deploy/tunnel-routes.txt` and owned by `deploy/tunnel-ingress.sh`; and
+because the connector lives in its own project, an ERP deploy can never restart
+it.
 
 ```bash
 cp deploy/cloudflared.env.example deploy/cloudflared.env && chmod 600 deploy/cloudflared.env
@@ -121,7 +125,7 @@ The old topology used replicas `hopedesign-erp-api-1`/`api-2` and `--scale api=2
 | `web` | Dockerfile `web` | nginx serving the Vite SPA |
 | `api-a` / `api-b` | Dockerfile `api` | two API colors; migrations on boot (advisory-locked); only the active color receives traffic |
 | `postgres` | postgres:16-alpine | Database (not published) |
-| `cloudflared` (separate project) | cloudflare/cloudflared:2026.9.3 | Outbound Cloudflare connector; not on the site's request path |
+| `cloudflared` (separate project) | cloudflare/cloudflared:2026.9.3 | Outbound Cloudflare connector; standby second path - ingress routes owned by `deploy/tunnel-ingress.sh` |
 
 The API runtime role is `hopedesign_app` (no superuser, no BYPASSRLS). The owner role `hopedesign` is used only for migrations. The live database is `hopedesign` (809 tables); the legacy host `hopedesign_erp` database is stale and must not be used.
 

@@ -1,0 +1,34 @@
+# Desired tunnel ingress routes for the HOPE DESIGN ERP Cloudflare tunnel.
+#
+# Read by deploy/tunnel-ingress.sh, which renders deploy/cloudflared/config.yml
+# from it (local mode) or PUTs the same rules to the Cloudflare API (api mode).
+# One route per line:  <public hostname>  <origin service>
+#
+# THE ORIGIN IS ALWAYS https://172.17.0.1:443 - see the header of
+# tunnel-ingress.sh for why :80, localhost and 127.0.0.1 all break.
+#
+# The tunnel and the origin both live on the host. cloudflared runs on the
+# default docker bridge, so 172.17.0.1 is the way out to the Caddy that
+# terminates TLS on 443 and knows these hostnames.
+#
+# hopedesign.jorlentech.com is the name in production today: it has a DNS
+# record and a Caddy site block with a valid Let's Encrypt certificate.
+hopedesign.jorlentech.com  https://172.17.0.1:443
+
+# uptime.jorlentech.com is the Uptime Kuma status page. Caddy serves it from a
+# site block on BOTH nodes (deploy/caddy-live/uptime.caddy) with its own valid
+# certificate, and its A record already resolves - so unlike the apex below it
+# needs nothing new to start carrying traffic, only a proxied CNAME onto the
+# tunnel. That makes it the second route that can go live exactly as it is.
+uptime.jorlentech.com      https://172.17.0.1:443
+
+# The apex is what users actually type. It resolves today but Caddy has no site
+# block or certificate for it, so the route is listed (the intent is real) and
+# will fail loudly until the apex is added to the Caddy config. A route that
+# quietly served a certificate error would be worse than one that is visibly
+# unready.
+jorlentech.com             https://172.17.0.1:443
+
+# Not yet enabled - no DNS record and no Caddy site block. Uncomment only
+# together with both of those.
+#www.jorlentech.com        https://172.17.0.1:443
