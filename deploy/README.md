@@ -46,6 +46,29 @@ The Caddy container entrypoint (`deploy/caddy-entrypoint.sh`) writes the initial
 - **Watchdog** (`deploy/stack-watchdog.sh`, installed every 2 minutes by `deploy/install-watchdog.sh`) flips Caddy to the healthy idle color if the active color dies, restarts dead `postgres`/`web`/`caddy` containers, and recreates both API colors if neither answers `/api/health`.
 - **Backups.** `deploy/postgres-backup.sh` (daily) and `deploy/storage-backup.sh` (daily) run from cron and are safe during a rollout (storage backup snapshots from whichever API color is running).
 
+## Cloudflare tunnel (separate compose project)
+
+The host also runs a Cloudflare `cloudflared` connector. It is **not** part of
+`docker-compose.prod.yml`, and it is not on the request path for
+`hopedesign.jorlentech.com` - that name resolves straight to this VPS and is
+terminated by Caddy on 80/443. The tunnel is for outbound-only Cloudflare Zero
+Trust access, so it is defined in its own project and an ERP deploy can never
+restart it.
+
+```bash
+cp deploy/cloudflared.env.example deploy/cloudflared.env && chmod 600 deploy/cloudflared.env
+$EDITOR deploy/cloudflared.env   # set TUNNEL_TOKEN (Zero Trust -> Networks -> Tunnels)
+docker compose -f deploy/docker-compose.cloudflared.yml --env-file deploy/cloudflared.env up -d
+docker logs -f hopedesign-erp-cloudflared    # expect 4x "Registered tunnel connection"
+```
+
+The image tag is pinned (`cloudflare/cloudflared:2026.9.3`). Do not move it back
+to `latest`: from `latest`, nothing but a container restart would pull an
+unreviewed upstream release into the ingress path. The token lives in
+`deploy/cloudflared.env` (gitignored) rather than `.env.production`, because
+every service in the main compose file inherits `.env.production` and editing it
+can recreate both API colours - the same reasoning as `deploy/alert.env`.
+
 ## Day-2 operations
 
 ```bash
@@ -97,6 +120,7 @@ The old topology used replicas `hopedesign-erp-api-1`/`api-2` and `--scale api=2
 | `web` | Dockerfile `web` | nginx serving the Vite SPA |
 | `api-a` / `api-b` | Dockerfile `api` | two API colors; migrations on boot (advisory-locked); only the active color receives traffic |
 | `postgres` | postgres:16-alpine | Database (not published) |
+| `cloudflared` (separate project) | cloudflare/cloudflared:2026.9.3 | Outbound Cloudflare connector; not on the site's request path |
 
 The API runtime role is `hopedesign_app` (no superuser, no BYPASSRLS). The owner role `hopedesign` is used only for migrations. The live database is `hopedesign` (809 tables); the legacy host `hopedesign_erp` database is stale and must not be used.
 

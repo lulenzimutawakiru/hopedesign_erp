@@ -1,0 +1,57 @@
+# ---- Cloudflare Tunnel (cloudflared) --------------------------------------
+# The outbound-only Cloudflare connector for this host. Deliberately a SECOND
+# compose project (`hopedesign-erp-tunnel`), not a service in
+# docker-compose.prod.yml:
+#
+#   1. Its credential is a bearer token. Every service in
+#      docker-compose.prod.yml inherits `env_file: .env.production`, so putting
+#      the token there would change the main stack's compose config hash and
+#      could recreate both API colours on the next `up -d` - the same trap
+#      deploy/alert.env.example documents for ALERT_EMAIL.
+#   2. It is ingress, not application: it has to keep running while the ERP
+#      stack is rebuilt, and an ERP deploy must never be able to restart it.
+#
+# This is NOT what serves hopedesign.jorlentech.com. That hostname resolves
+# straight to this VPS and is terminated by Caddy on 80/443; the tunnel is for
+# outbound-only Cloudflare Zero Trust access.
+#
+# network_mode: bridge reproduces exactly how this container ran as a bare
+# `docker run` (default bridge, 172.17.0.2, gateway 172.17.0.1 - which is how it
+# reaches host-published ports), so adopting it into compose changes no routing.
+#
+# The image is PINNED on purpose. On `latest`, nothing but a container restart
+# would pull an unreviewed upstream release into the ingress path. 2026.9.3 is
+# the version that was running and verified on 2026-09-26; its digest
+# (sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c)
+# was identical to the `latest` digest at that moment, so the pin changed the
+# bits on disk by nothing at all - it only stops the next drift.
+#
+#   cp deploy/cloudflared.env.example deploy/cloudflared.env && chmod 600 deploy/cloudflared.env
+#   $EDITOR deploy/cloudflared.env
+#   docker compose -f deploy/docker-compose.cloudflared.yml --env-file deploy/cloudflared.env up -d
+name: hopedesign-erp-tunnel
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: hopedesign-erp-cloudflared
+    restart: unless-stopped
+    # Outbound-only: the connector dials Cloudflare's edge, so no ports are
+    # published and nothing has to be opened inbound.
+    network_mode: bridge
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
+      - --token
+      - ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in deploy/cloudflared.env}
+    mem_limit: 256m
+    mem_reservation: 64m
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

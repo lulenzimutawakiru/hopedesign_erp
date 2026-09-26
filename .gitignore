@@ -38,6 +38,9 @@ backups/
 # Operator host-alert overrides (ALERT_EMAIL etc) - read by deploy/alert.sh only.
 deploy/alert.env
 
+# Cloudflare tunnel token - read only by deploy/docker-compose.cloudflared.yml.
+deploy/cloudflared.env
+
 # Vercel/Supabase diagnostic scratch
 hv-*.json
 hv-*.jsonl
