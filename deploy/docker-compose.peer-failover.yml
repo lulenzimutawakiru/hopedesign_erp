@@ -1,0 +1,45 @@
+# ---- Peer-node FAILOVER overlay (added 2026-09-26) --------------------------
+# Applied on the SECOND VPS, and ONLY while a failover is in force, on top of
+# docker-compose.prod.yml and deploy/docker-compose.peer.yml:
+#
+#   docker compose -f docker-compose.prod.yml \
+#                  -f deploy/docker-compose.peer.yml \
+#                  -f deploy/docker-compose.peer-failover.yml \
+#                  --env-file .env.production up -d --no-deps api-a api-b
+#
+# Why this exists: docker-compose.peer.yml points this node's API colours at the
+# PRIMARY's postgres + redis over the WireGuard tunnel (10.77.0.1:9101/9102).
+# That is the correct steady state - one writer, one source of truth - but it is
+# also a hard dependency on a machine that may be gone. deploy/failover-agent.sh
+# promotes this node's own data-dr standby and redis replica, then re-runs the
+# command above so the API colours talk to the LOCAL, now-writable copies.
+#
+# Note what is deliberately absent:
+#
+#   deploy/docker-compose.peer-replica.yml is NOT passed on the failover `up`.
+#   That file re-asserts `redis --replicaof 10.77.0.1 9102`; including it would
+#   demote the freshly promoted redis back into a replica of a host that is
+#   down, rejecting every write - exactly the failure being escaped. The
+#   promoted redis is left running and is never recreated here.
+#
+#   `worker` is not listed either. It is profile-gated in
+#   docker-compose.peer.yml so scheduled work runs exactly once cluster-wide.
+#   The agent opts in separately with
+#   `--profile data-primary-only up -d worker`, and only once promotion has
+#   succeeded and the primary's own worker is known to be gone.
+#
+# Portable: on the data primary this file is not used at all.
+services:
+  api-a:
+    environment: &failover-db-env
+      # data-dr, not postgres. The peer's own `postgres` service still holds a
+      # stale dataset from before the standby was seeded, so pointing at it
+      # would quietly serve months-old rows. data-dr is the promoted,
+      # WAL-current copy.
+      POSTGRES_HOST: data-dr
+      POSTGRES_PORT: "5432"
+      DATABASE_URL: postgres://${POSTGRES_USER:-hopedesign}:${POSTGRES_PASSWORD}@data-dr:5432/${POSTGRES_DB:-hopedesign}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.production}@redis:6379/0
+
+  api-b:
+    environment: *failover-db-env

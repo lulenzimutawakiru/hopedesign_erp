@@ -56,3 +56,6 @@ hv-*.txt
 # Runtime operational logs written by cron/deploy scripts on the server
 logs/
 
+# Cross-node failover settings + DNS API tokens - read only by
+# deploy/failover-agent.sh and deploy/dns-failover.sh. Never commit.
+deploy/failover.env
