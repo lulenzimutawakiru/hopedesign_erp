@@ -236,29 +236,31 @@ if [[ "$WEB_OK" != "1" ]]; then
 fi
 log "      web is healthy"
 
-# 7b) The same recreation on every PEER node in the web pool. The peer serves
-#     public HTML from its own replicas - deploy/caddy-live/webpeer*.caddy on
-#     this node adds it to the reverse_proxy pool above - so rebuilding only the
-#     local replicas leaves that pool split across two bundles. A split pool
-#     does not look stale, it *alternates* between builds on every reload, and
-#     the single-request health gate below cannot see it: on 2026-09-20 a
-#     rollout reported success while 4 of 8 public responses carried the
-#     morning's build. Aborting here keeps the old colour live and Caddy serving
-#     one consistent frontend, so a failed peer sync is a failed deploy rather
-#     than a warning nobody reads.
-log "[7b/8] syncing the web image to every peer node in the web pool"
+# 7b) The same recreation on every PEER node in the pool, for the web replicas
+#     AND both API colours. The peer serves public HTML from its own replicas -
+#     deploy/caddy-live/webpeer*.caddy on this node adds it to the reverse_proxy
+#     pool above - and it answers /api from its own api-a/api-b, so rebuilding
+#     only the local replicas leaves the web pool split across two bundles and
+#     the peer's API on whatever build it was last shipped. A split pool does
+#     not look stale, it *alternates* between builds on every reload, and the
+#     single-request health gate below cannot see it: on 2026-09-20 a rollout
+#     reported success while 4 of 8 public responses carried the morning's
+#     build. Aborting here keeps the old colour live and Caddy serving one
+#     consistent frontend, so a failed peer sync is a failed deploy rather than
+#     a warning nobody reads.
+log "[7b/8] syncing the web and api images to every peer node in the pool"
 shopt -s nullglob
 WEBPEER_FILES=("$LIVE_DIR"/webpeer*.caddy)
 shopt -u nullglob
 if [[ ${#WEBPEER_FILES[@]} -eq 0 ]]; then
   log "      no peer node is in the web pool; nothing to sync"
-elif [[ -f deploy/sync-web-to-peer.sh ]]; then
-  bash deploy/sync-web-to-peer.sh || {
-    log "ABORT: a peer node could not be put onto the new bundle; the API is still on $ACTIVE and untouched, so Caddy keeps serving one consistent frontend. The failing node is named in the web-sync output above."
+elif [[ -f deploy/sync-images-to-peer.sh ]]; then
+  bash deploy/sync-images-to-peer.sh || {
+    log "ABORT: a peer node could not be put onto the new web/api images; the API is still on $ACTIVE and untouched, so Caddy keeps serving one consistent frontend. The failing node and service are named in the image-sync output above."
     exit 1
   }
 else
-  log "ABORT: $LIVE_DIR pools a peer node into the web upstreams but deploy/sync-web-to-peer.sh is missing; refusing to finish a rollout that would leave two frontends in the pool."
+  log "ABORT: $LIVE_DIR pools a peer node into the pool but deploy/sync-images-to-peer.sh is missing; refusing to finish a rollout that would leave two frontends and a stale peer API in the pool."
   exit 1
 fi
 

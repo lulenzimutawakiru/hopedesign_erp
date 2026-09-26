@@ -171,8 +171,8 @@ async function verify(domain) {
       console.log('       ' + samples.get(id).count + ' x ' + id);
     }
     if (split) {
-      console.log('       the web pool must serve one build id end to end; sync the peer');
-      console.log('       nodes with deploy/sync-web-to-peer.sh');
+      console.log('       the web and api pools must serve one build id end to end; sync the');
+      console.log('       peer nodes with deploy/sync-images-to-peer.sh');
     }
   }
 
