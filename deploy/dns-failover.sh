@@ -42,7 +42,16 @@
 #               refuses to run unless DNS_RECORDS gives every record that should
 #               exist, and it always re-sends that full set with just the A
 #               address swapped. Enumerate the records first (they are listed in
-#               the Namecheap panel for the domain).
+#               the Namecheap panel for the domain), and make sure that list
+#               includes the record naming $DOMAIN itself: a subdomain is stored
+#               under its own label ("hopedesign"), not "@". If no listed record
+#               matches, the agent refuses to publish instead of reporting a
+#               failover that moved nothing.
+#
+#               Only the record that names $DOMAIN is rewritten. When $DOMAIN is
+#               a subdomain the apex record ("@") is a DIFFERENT hostname, so it
+#               is re-sent unchanged and keeps its old address - name the apex in
+#               DNS_MOVE_ALSO if it is served by the same node and should follow.
 #
 #   (unset)     Refuses to guess and raises a CRITICAL alert naming the manual
 #               step, so a failover degrades to "someone must edit DNS" rather
@@ -81,6 +90,10 @@ DNS_PROVIDER="${DNS_PROVIDER:-}"
 PRIMARY_PUBLIC_IP="${PRIMARY_PUBLIC_IP:-23.239.220.214}"
 PEER_PUBLIC_IP="${PEER_PUBLIC_IP:-}"
 RECORD_TTL="${RECORD_TTL:-60}"
+# Extra host labels a namecheap failover is allowed to rewrite ALONGSIDE the
+# record naming $DOMAIN, comma separated (e.g. "@" for the apex). Empty - the
+# default - moves only $DOMAIN's own record and leaves everything else alone.
+DNS_MOVE_ALSO="${DNS_MOVE_ALSO:-}"
 # Refuse to point users at an address that is not actually serving the ERP.
 # Turning a "primary is down" incident into a "primary and standby are both
 # unreachable" incident is strictly worse.
@@ -97,6 +110,14 @@ notify() { # $1 severity, $2 key, $3 subject, $4 body
 resolved_ip() { # what the public internet is being told, via Google DNS
   curl -fsS --max-time 10 "https://dns.google/resolve?name=$DOMAIN&type=A" 2>/dev/null \
     | tr ',' '\n' | sed -n 's/.*"data":"\([0-9.]*\)".*/\1/p' | head -1
+}
+
+resolved_ttl() { # the TTL resolvers are actually honouring right now
+  # RECORD_TTL is only what the agent WOULD publish. Reporting that as "ttl" made
+  # status claim 60s while the live record was still 1799s - exactly the number
+  # that decides how long an outage lasts, so read it from the wire.
+  curl -fsS --max-time 10 "https://dns.google/resolve?name=$DOMAIN&type=A" 2>/dev/null \
+    | tr ',' '\n' | sed -n 's/.*"TTL":\([0-9]*\).*/\1/p' | head -1
 }
 
 target_serving() { # $1 = ip -> does that address serve the ERP health payload
@@ -156,7 +177,8 @@ dns_move_cloudflare() { # $1 = target ip
 # Namecheap replaces the whole record set, so this is only safe with the full
 # list. DNS_RECORDS is one record per line: host,type,address[,ttl]
 dns_move_namecheap() { # $1 = target ip
-  local ip="$1" sld tld i=1 args clientip resp line host type addr ttl
+  local ip="$1" sld tld host_label is_apex want extra i=1 args clientip resp line host type addr ttl
+  local swapped=0 moved_names="" kept_apex="" n_records=0
   if [[ -z "${NAMECHEAP_API_USER:-}" || -z "${NAMECHEAP_API_KEY:-}" ]]; then
     log "namecheap: NAMECHEAP_API_USER/NAMECHEAP_API_KEY not set"
     return 1
@@ -165,7 +187,25 @@ dns_move_namecheap() { # $1 = target ip
     log "namecheap: DNS_RECORDS is empty - refusing to call setHosts, which would delete every record not listed"
     return 1
   fi
-  sld="${DOMAIN%%.*}"; tld="${DOMAIN#*.}"
+  # Namecheap's SLD/TLD identify the REGISTERED domain, which is ZONE - not the
+  # hostname we publish. For hopedesign.jorlentech.com that is SLD=jorlentech,
+  # TLD=com. Deriving them from $DOMAIN instead sends SLD=hopedesign to an API
+  # that has never heard of it, so every failover would fail with a name error.
+  sld="${ZONE%%.*}"; tld="${ZONE#*.}"
+  # The record to rewrite is the one that names $DOMAIN: its first label,
+  # "hopedesign". Namecheap spells the APEX "@" (or as the bare SLD), so those
+  # two spellings only mean "$DOMAIN" when $DOMAIN is the apex itself.
+  host_label="${DOMAIN%%.*}"
+  if [[ "$DOMAIN" == "$ZONE" || "$host_label" == "$sld" ]]; then is_apex=1; else is_apex=0; fi
+  extra=",$(printf '%s' "${DNS_MOVE_ALSO:-}" | tr -d '[:space:]'),"
+
+  # setHosts rejects the ENTIRE set for a single bad TTL, and reports that as an
+  # opaque API error, so validate the value this script is about to publish.
+  if ! [[ "$RECORD_TTL" =~ ^[0-9]{1,6}$ ]] || (( 10#$RECORD_TTL < 60 || 10#$RECORD_TTL > 172800 )); then
+    log "namecheap: RECORD_TTL='$RECORD_TTL' is outside the range Namecheap accepts (60-172800)"
+    return 1
+  fi
+
   clientip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null)"
   [[ -n "$clientip" ]] || { log "namecheap: could not determine request IP (required as ClientIp)"; return 1; }
 
@@ -181,19 +221,47 @@ dns_move_namecheap() { # $1 = target ip
     addr="$(printf '%s' "$addr" | tr -d '[:space:]')"
     ttl="$(printf '%s' "$ttl" | tr -d '[:space:]')"
     [[ -n "$host" && -n "$type" && -n "$addr" ]] || continue
-    # Swap the address on the record that names this hostname and is an A record.
-    if [[ "$type" == "A" && ( "$host" == "@" || "$host" == "$sld" ) ]]; then
-      addr="$ip"
-      ttl="$RECORD_TTL"
-    fi
     [[ -n "$ttl" ]] || ttl="1799"
+    if ! [[ "$ttl" =~ ^[0-9]{1,6}$ ]] || (( 10#$ttl < 60 || 10#$ttl > 172800 )); then
+      log "namecheap: DNS_RECORDS entry '$host,$type,$addr,$ttl' has a TTL outside 60-172800 - nothing published"
+      return 1
+    fi
+    if [[ "$type" == "A" ]]; then
+      # Only the record naming the hostname users type may be rewritten. When
+      # $DOMAIN is a subdomain, the apex ("@" / bare SLD) is a DIFFERENT record:
+      # matching it here would move a name nobody asked about and leave the real
+      # one stale, while setHosts still returned OK and the log claimed success.
+      want=0
+      if [[ "$host" == "$host_label" || "$host" == "$DOMAIN" ]]; then want=1; fi
+      if [[ "$want" == "0" && "$is_apex" == "1" && ( "$host" == "@" || "$host" == "$sld" ) ]]; then want=1; fi
+      if [[ "$want" == "0" && "$extra" != ",," && "$extra" == *",$host,"* ]]; then want=1; fi
+      if [[ "$want" == "1" ]]; then
+        addr="$ip"; ttl="$RECORD_TTL"; swapped=1; moved_names="$moved_names $host"
+      elif [[ "$is_apex" == "0" && ( "$host" == "@" || "$host" == "$sld" ) ]]; then
+        # Still re-sent, so setHosts does not delete it - but it does not follow.
+        kept_apex="$kept_apex $host"
+      fi
+    fi
     args="$args&HostName$i=$host&RecordType$i=$type&Address$i=$addr&TTL$i=$ttl"
-    i=$((i+1))
+    i=$((i+1)); n_records=$((n_records+1))
   done <<< "$DNS_RECORDS"
+
+  # Nothing matched, so DNS_RECORDS does not describe $DOMAIN. Publishing it would
+  # succeed while republishing an unchanged A record, so refuse instead of
+  # reporting a failover that moved nothing.
+  if [[ "$swapped" != "1" ]]; then
+    if [[ "$is_apex" == "1" ]]; then
+      log "namecheap: no A record in DNS_RECORDS names the apex $DOMAIN (looked for '@', '$sld' or '$DOMAIN') - refusing to republish an unchanged record set"
+    else
+      log "namecheap: no A record in DNS_RECORDS names $DOMAIN (looked for '$host_label' or '$DOMAIN') - refusing to republish, which would have reported a failover that moved nothing. Add '$host_label,A,<current address>' to DNS_RECORDS."
+    fi
+    return 1
+  fi
 
   resp="$(curl -fsS --max-time 30 "https://api.namecheap.com/xml.response?$args" 2>/dev/null)"
   if printf '%s' "$resp" | grep -q 'Status="OK"'; then
-    log "namecheap: republished $((i-1)) records, $DOMAIN -> $ip (ttl $RECORD_TTL)"
+    log "namecheap: republished $n_records records for $sld.$tld, $DOMAIN -> $ip (ttl $RECORD_TTL); moved:$moved_names"
+    [[ -z "$kept_apex" ]] || log "namecheap: NOTE apex record(s)$kept_apex were re-sent unchanged - $DOMAIN is a subdomain, so they keep their old address. Set DNS_MOVE_ALSO=@ in failover.env to move them too."
     return 0
   fi
   log "namecheap: setHosts failed: $(printf '%s' "$resp" | tr -d '\n' | head -c 500)"
@@ -215,9 +283,20 @@ dns_move() { # $1 = target ip
 
 case "$action" in
   status)
+    case "$DNS_PROVIDER" in
+      cloudflare|namecheap) provider_ready=yes ;;
+      *)                    provider_ready=no ;;
+    esac
     printf 'provider=%s zone=%s domain=%s\n' "${DNS_PROVIDER:-<unset>}" "$ZONE" "$DOMAIN"
-    printf 'resolved_now=%s primary=%s peer=%s ttl=%s\n' \
-      "$(resolved_ip)" "$PRIMARY_PUBLIC_IP" "${PEER_PUBLIC_IP:-<unset>}" "$RECORD_TTL"
+    printf 'resolved_now=%s primary=%s peer=%s\n' \
+      "$(resolved_ip)" "$PRIMARY_PUBLIC_IP" "${PEER_PUBLIC_IP:-<unset>}"
+    printf 'live_ttl=%s would_publish_ttl=%s\n' "$(resolved_ttl)" "$RECORD_TTL"
+    printf 'provider_ready=%s\n' "$provider_ready"
+    if [[ "$provider_ready" == "no" ]]; then
+      printf 'NOTE: no DNS provider is configured, so lower-ttl and move-to-* cannot\n'
+      printf '      change anything - a failover needs the record moved by hand in\n'
+      printf '      the registrar panel. Set DNS_PROVIDER in deploy/failover.env to fix.\n'
+    fi
     exit 0
     ;;
 
@@ -244,14 +323,18 @@ case "$action" in
       exit 1
     fi
 
-    if dns_move "$target"; then
+    # Capture the provider's own status. Reading $? after an `if` would always
+    # yield 0, which made the "could not move the record" alert report rc=0 and
+    # hide the real reason (no provider, bad creds, API rejection).
+    dns_move "$target"
+    rc=$?
+    if [[ "$rc" == "0" ]]; then
       notify INFO failover-dns-moved \
         "ERP DNS moved to $target" \
-        "$DOMAIN now resolves to $target (ttl ${RECORD_TTL}s). Propagnation is bounded by the TTL, not instant."
+        "$DOMAIN now resolves to $target (ttl ${RECORD_TTL}s). Propagation is bounded by the TTL, not instant."
       exit 0
     fi
 
-    rc=$?
     log "$action: provider move failed (rc=$rc)"
     notify CRITICAL failover-dns-manual \
       "ERP DNS must be moved BY HAND to $DOMAIN" \
