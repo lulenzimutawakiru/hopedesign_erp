@@ -221,7 +221,7 @@ if [[ -n "$(docker inspect -f '{{.Id}}' "$CADDY_CONTAINER" 2>/dev/null)" ]]; the
   fi
 fi
 
-# 1d) Live-overlay drift guard. Everything in $LIVE_DIR is bind-mounted at
+# 1e) Live-overlay drift guard. Everything in $LIVE_DIR is bind-mounted at
 #     /etc/caddy/live and imported by deploy/Caddyfile, so a recreate picks all
 #     of it up - but nothing else does. A live/*.caddy file that is written or
 #     replaced AFTER Caddy has parsed its config (a peer added to the pool, a
