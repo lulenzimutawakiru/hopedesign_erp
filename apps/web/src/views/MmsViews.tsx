@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
@@ -14,6 +14,10 @@ const num = (v: unknown): number => {
 };
 const d10 = (v: unknown): string => String(v ?? '').slice(0, 10);
 const pct = (v: unknown): string => num(v).toFixed(1) + '%';
+const prettyType = (v: unknown): string => {
+  const s = String(v ?? '').replace(/_/g, ' ').toLowerCase();
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+};
 
 const STATE_COLORS: Record<string, string> = {
   RUNNING: 'var(--success)',
@@ -30,9 +34,9 @@ function StateDot({ state }: { state: unknown }) {
   return <span className="machine-state-dot" style={{ background: STATE_COLORS[s] ?? 'var(--muted)' }} title={s} />;
 }
 
-function MmsSection({ title, sub, actions, children }: { title: string; sub?: string; actions?: ReactNode; children: ReactNode }) {
+function MmsSection({ id, title, sub, actions, children }: { id?: string; title: string; sub?: string; actions?: ReactNode; children: ReactNode }) {
   return (
-    <section className="card">
+    <section className="card" id={id}>
       <div className="card-head">
         <div>
           <h3>{title}</h3>
@@ -66,7 +70,7 @@ export function loadProductChoices(): Promise<Rec[]> {
   return productChoicesPromise;
 }
 
-function ProductSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function ProductSelect({ value, onChange, restrictIds }: { value: string; onChange: (v: string) => void; restrictIds?: number[] }) {
   const [items, setItems] = useState<Rec[] | null>(null);
   useEffect(() => {
     let live = true;
@@ -77,10 +81,12 @@ function ProductSelect({ value, onChange }: { value: string; onChange: (v: strin
       live = false;
     };
   }, []);
+  const allow = restrictIds ? new Set(restrictIds.map(String)) : null;
+  const choices = allow ? (items ?? []).filter((p) => allow.has(String(p.id))) : items ?? [];
   return (
     <select value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">- select product -</option>
-      {(items ?? []).map((p) => (
+      <option value="">{allow ? '- select a product with a BOM -' : '- select product -'}</option>
+      {choices.map((p) => (
         <option key={String(p.id)} value={String(p.id)}>
           {String(p.code)} - {String(p.name)}
         </option>
@@ -1555,7 +1561,8 @@ export function MmsBoms() {
   const [bomDetail, setBomDetail] = useState<Rec | null>(null);
   const [routingDetailId, setRoutingDetailId] = useState(0);
   const [routingDetail, setRoutingDetail] = useState<Rec | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [bomDetailLoading, setBomDetailLoading] = useState(false);
+  const [routingDetailLoading, setRoutingDetailLoading] = useState(false);
 
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1576,6 +1583,14 @@ export function MmsBoms() {
   const [expQty, setExpQty] = useState('1000');
   const [explosion, setExplosion] = useState<Rec | null>(null);
   const [explosionBusy, setExplosionBusy] = useState(false);
+
+  const [bomQuery, setBomQuery] = useState('');
+  const [bomStatus, setBomStatus] = useState('');
+  const [bomType, setBomType] = useState('');
+  const [bomActiveOnly, setBomActiveOnly] = useState(false);
+  const [bomSort, setBomSort] = useState('product');
+  const [groupBoms, setGroupBoms] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const load = useCallback(() => {
     setError('');
@@ -1600,11 +1615,11 @@ export function MmsBoms() {
     }
     setBomDetailId(id);
     setBomDetail(null);
-    setDetailLoading(true);
+    setBomDetailLoading(true);
     api<{ data: unknown }>('/api/ops/manufacturing/boms/' + String(id))
       .then((res) => setBomDetail(res.data && typeof res.data === 'object' ? (res.data as Rec) : null))
       .catch((e) => setError(e instanceof Error ? e.message : 'Request failed'))
-      .finally(() => setDetailLoading(false));
+      .finally(() => setBomDetailLoading(false));
   };
 
   const toggleRouting = (r: Rec) => {
@@ -1616,11 +1631,11 @@ export function MmsBoms() {
     }
     setRoutingDetailId(id);
     setRoutingDetail(null);
-    setDetailLoading(true);
+    setRoutingDetailLoading(true);
     api<{ data: unknown }>('/api/ops/manufacturing/routings/' + String(id))
       .then((res) => setRoutingDetail(res.data && typeof res.data === 'object' ? (res.data as Rec) : null))
       .catch((e) => setError(e instanceof Error ? e.message : 'Request failed'))
-      .finally(() => setDetailLoading(false));
+      .finally(() => setRoutingDetailLoading(false));
   };
 
   const pickBom = useCallback((): Rec | null => {
@@ -1719,6 +1734,58 @@ export function MmsBoms() {
   const totalOps = routingRows.reduce((s, r) => s + num(r.opCount), 0);
   const expItems = Array.isArray(explosion?.items) ? (explosion.items as Rec[]) : [];
 
+  const bomTypes = Array.from(new Set(bomRows.map((b) => String(b.productType ?? '').trim()).filter(Boolean))).sort();
+  const bomStatuses = Array.from(new Set(bomRows.map((b) => String(b.status ?? '').trim()).filter(Boolean))).sort();
+  const bomFiltersActive = Boolean(bomQuery.trim() || bomStatus || bomType || bomActiveOnly);
+  const bomProductIds = Array.from(new Set(bomRows.map((b) => Number(b.productId)).filter((id) => id > 0)));
+  const filteredBoms = useMemo(() => {
+    const q = bomQuery.trim().toLowerCase();
+    const rows = bomRows.filter((b) => {
+      if (bomStatus && String(b.status ?? '') !== bomStatus) return false;
+      if (bomType && String(b.productType ?? '') !== bomType) return false;
+      if (bomActiveOnly && !b.isActive) return false;
+      if (!q) return true;
+      return [b.code, b.name, b.productCode, b.productName, b.productType]
+        .map((v) => String(v ?? '').toLowerCase())
+        .join(' ')
+        .includes(q);
+    });
+    const sorted = [...rows];
+    if (bomSort === 'code') {
+      sorted.sort((a, b) => String(a.code ?? '').localeCompare(String(b.code ?? '')));
+    } else if (bomSort === 'version') {
+      sorted.sort((a, b) => num(b.version) - num(a.version) || String(a.productCode ?? '').localeCompare(String(b.productCode ?? '')));
+    } else if (bomSort === 'items') {
+      sorted.sort((a, b) => num(b.itemCount) - num(a.itemCount));
+    } else if (bomSort === 'material') {
+      sorted.sort((a, b) => num(b.totalMaterialQty) - num(a.totalMaterialQty));
+    } else {
+      sorted.sort((a, b) => String(a.productCode ?? '').localeCompare(String(b.productCode ?? '')) || num(b.version) - num(a.version));
+    }
+    return sorted;
+  }, [bomRows, bomQuery, bomStatus, bomType, bomActiveOnly, bomSort]);
+  const bomGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; rows: Rec[] }>();
+    filteredBoms.forEach((b) => {
+      const key = String(b.productId ?? '') + '|' + String(b.productCode ?? '');
+      const group = groups.get(key);
+      if (group) group.rows.push(b);
+      else groups.set(key, { key, rows: [b] });
+    });
+    return Array.from(groups.values());
+  }, [filteredBoms]);
+
+  const clearBomFilters = () => {
+    setBomQuery('');
+    setBomStatus('');
+    setBomType('');
+    setBomActiveOnly(false);
+  };
+  const toggleGroup = (key: string) => setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+  const scrollToSection = (sectionId: string) => {
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <div className="page">
       <header className="page-head">
@@ -1736,61 +1803,204 @@ export function MmsBoms() {
       {error && !boms && <ErrorBanner error={error} />}
 
       <div className="kpi-grid">
-        <Kpi label="BOMs" value={bomRows.length} sub={activeBoms + ' active'} />
-        <Kpi label="Material lines" value={materialLines} sub="across all BOMs" />
-        <Kpi label="Routings" value={routingRows.length} sub={totalOps + ' operations'} />
-        <Kpi label="Explosion" value="Live" sub="plan quantities below" />
+        <Kpi
+          label="BOMs"
+          value={bomRows.length}
+          sub={activeBoms + ' active'}
+          onClick={() => {
+            clearBomFilters();
+            setBomSort('product');
+            scrollToSection('bom-section');
+          }}
+        />
+        <Kpi
+          label="Material lines"
+          value={materialLines}
+          sub="across all BOMs"
+          onClick={() => {
+            clearBomFilters();
+            setBomSort('material');
+            scrollToSection('bom-section');
+          }}
+        />
+        <Kpi label="Routings" value={routingRows.length} sub={totalOps + ' operations'} onClick={() => scrollToSection('routings-section')} />
+        <Kpi label="Explosion" value="Live" sub="plan quantities below" onClick={() => scrollToSection('explosion-section')} />
       </div>
 
       <MmsSection
+        id="bom-section"
         title="Bills of Materials"
         sub="Click a row to expand material lines. Basis quantity is the batch the BOM covers (e.g. 1000 reams)."
+        actions={
+          bomRows.length > 0 ? (
+            <label className="filter-check">
+              <input type="checkbox" checked={groupBoms} onChange={(e) => setGroupBoms(e.target.checked)} />
+              Group by product
+            </label>
+          ) : undefined
+        }
       >
         {!boms && <PageLoader label="Loading BOMs..." />}
         {boms && bomRows.length === 0 && (
-          <p className="muted">No bills of materials yet. Create one to structure product inputs.</p>
+          <EmptyState
+            title="No bills of materials yet"
+            body="A BOM lists the raw materials, consumables and packaging that go into one production batch."
+            action={canCreate ? 'Create the first BOM' : undefined}
+            onAction={canCreate ? () => setOpen(true) : undefined}
+          />
         )}
         {boms && bomRows.length > 0 && (
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>BOM</th>
-                  <th>Product</th>
-                  <th className="cell-num">Version</th>
-                  <th className="cell-num">Basis qty</th>
-                  <th>Unit</th>
-                  <th className="cell-num">Items</th>
-                  <th>Effective</th>
-                  <th>Status</th>
-                  <th>Active</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {bomRows.map((r) => (
-                  <BomRowFragments
-                    key={String(r.id)}
-                    r={r}
-                    expanded={bomDetailId === Number(r.id) && !!bomDetail}
-                    loading={detailLoading && bomDetailId === Number(r.id)}
-                    detail={bomDetailId === Number(r.id) ? bomDetail : null}
-                    onToggle={() => toggleBom(r)}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="bom-toolbar">
+              <input
+                className="search-input"
+                type="search"
+                placeholder="Search BOM code, product or name..."
+                aria-label="Search bills of materials"
+                value={bomQuery}
+                onChange={(e) => setBomQuery(e.target.value)}
+              />
+              <label className="filter-check">
+                <input type="checkbox" checked={bomActiveOnly} onChange={(e) => setBomActiveOnly(e.target.checked)} />
+                Active only
+              </label>
+              <label className="bom-sort">
+                <span className="muted">Sort</span>
+                <select value={bomSort} onChange={(e) => setBomSort(e.target.value)}>
+                  <option value="product">Product</option>
+                  <option value="code">BOM code</option>
+                  <option value="version">Version</option>
+                  <option value="items">Material lines</option>
+                  <option value="material">Material qty</option>
+                </select>
+              </label>
+            </div>
+
+            {(bomTypes.length > 0 || bomStatuses.length > 0) && (
+              <div className="bom-facets">
+                {bomTypes.length > 0 && (
+                  <div className="chips">
+                    <span className="chips-label">Product type</span>
+                    <button className={'chip' + (bomType === '' ? ' chip-on' : '')} onClick={() => setBomType('')}>All</button>
+                    {bomTypes.map((t) => (
+                      <button
+                        key={t}
+                        className={'chip' + (bomType === t ? ' chip-on' : '')}
+                        onClick={() => setBomType(bomType === t ? '' : t)}
+                      >
+                        {prettyType(t)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {bomStatuses.length > 0 && (
+                  <div className="chips">
+                    <span className="chips-label">Status</span>
+                    <button className={'chip' + (bomStatus === '' ? ' chip-on' : '')} onClick={() => setBomStatus('')}>All</button>
+                    {bomStatuses.map((s) => (
+                      <button
+                        key={s}
+                        className={'chip' + (bomStatus === s ? ' chip-on' : '')}
+                        onClick={() => setBomStatus(bomStatus === s ? '' : s)}
+                      >
+                        {prettyType(s)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="bom-count-row">
+              <span className="muted">Showing {fmtNum(filteredBoms.length)} of {fmtNum(bomRows.length)} BOMs</span>
+              {bomFiltersActive && <button className="link-btn" onClick={clearBomFilters}>Clear filters</button>}
+            </div>
+
+            {filteredBoms.length === 0 ? (
+              <EmptyState
+                title="No BOMs match these filters"
+                body="Try a different product type or status, or clear the search term."
+                action="Clear filters"
+                onAction={clearBomFilters}
+              />
+            ) : (
+              <div className="table-wrap">
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>BOM</th>
+                      <th>Product</th>
+                      <th>Type</th>
+                      <th className="cell-num">Ver</th>
+                      <th className="cell-num">Basis</th>
+                      <th className="cell-num">Lines</th>
+                      <th className="cell-num">Material qty</th>
+                      <th>Effective</th>
+                      <th>Status</th>
+                      <th>Active</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupBoms
+                      ? bomGroups.map((g) => {
+                          const collapsed = !!collapsedGroups[g.key];
+                          const head = g.rows[0];
+                          return (
+                            <Fragment key={g.key}>
+                              <tr className="bom-group-row">
+                                <td colSpan={11}>
+                                  <button type="button" className="bom-group-toggle" aria-expanded={!collapsed} onClick={() => toggleGroup(g.key)}>
+                                    <span className="bom-group-caret" aria-hidden="true">{collapsed ? '+' : '-'}</span>
+                                    <span className="cell-mono">{String(head?.productCode ?? '')}</span>
+                                    <span>{String(head?.productName ?? '')}</span>
+                                    <span className="muted">{fmtNum(g.rows.length)} {g.rows.length === 1 ? 'version' : 'versions'}</span>
+                                  </button>
+                                </td>
+                              </tr>
+                              {!collapsed &&
+                                g.rows.map((r) => (
+                                  <BomRowFragments
+                                    key={String(r.id)}
+                                    r={r}
+                                    expanded={bomDetailId === Number(r.id) && !!bomDetail}
+                                    loading={bomDetailLoading && bomDetailId === Number(r.id)}
+                                    detail={bomDetailId === Number(r.id) ? bomDetail : null}
+                                    onToggle={() => toggleBom(r)}
+                                  />
+                                ))}
+                            </Fragment>
+                          );
+                        })
+                      : filteredBoms.map((r) => (
+                          <BomRowFragments
+                            key={String(r.id)}
+                            r={r}
+                            expanded={bomDetailId === Number(r.id) && !!bomDetail}
+                            loading={bomDetailLoading && bomDetailId === Number(r.id)}
+                            detail={bomDetailId === Number(r.id) ? bomDetail : null}
+                            onToggle={() => toggleBom(r)}
+                          />
+                        ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </MmsSection>
 
       <MmsSection
+        id="routings-section"
         title="Routings"
-        sub="Click a row to expand the operation sequence — work centre, machine and standard times."
+        sub="Click a row to expand the operation sequence - work centre, machine and standard times."
       >
         {!routings && <PageLoader label="Loading routings..." />}
         {routings && routingRows.length === 0 && (
-          <p className="muted">No routings yet. Create one to define the production operation sequence.</p>
+          <EmptyState
+            title="No routings yet"
+            body="A routing defines the sequence of operations, work centres and standard times used to produce a product."
+          />
         )}
         {routings && routingRows.length > 0 && (
           <div className="table-wrap">
@@ -1812,7 +2022,7 @@ export function MmsBoms() {
                     key={String(r.id)}
                     r={r}
                     expanded={routingDetailId === Number(r.id) && !!routingDetail}
-                    loading={detailLoading && routingDetailId === Number(r.id)}
+                    loading={routingDetailLoading && routingDetailId === Number(r.id)}
                     detail={routingDetailId === Number(r.id) ? routingDetail : null}
                     onToggle={() => toggleRouting(r)}
                   />
@@ -1824,30 +2034,40 @@ export function MmsBoms() {
       </MmsSection>
 
       <MmsSection
+        id="explosion-section"
         title="BOM Explosion"
-        sub="Pick a product and a planned quantity — required materials and scrap load are computed live from the active BOM."
+        sub="Pick a product and a planned quantity - required materials and scrap load are computed live from the active BOM."
       >
         <div className="form-grid" style={{ marginBottom: 14 }}>
           <Field label="Product" required>
-            <ProductSelect value={expProductId} onChange={setExpProductId} />
+            <ProductSelect value={expProductId} onChange={setExpProductId} restrictIds={bomProductIds} />
           </Field>
           <Field label="Planned quantity">
             <input inputMode="numeric" value={expQty} onChange={(e) => setExpQty(e.target.value)} />
           </Field>
         </div>
-        {explosionBusy && <p className="muted">Computing requirements...</p>}
-        {!explosionBusy && !!explosion && explosion.missing ? (
-          <div className="alert alert-warn">
-            No active BOM found for this product — create one first, then recalculate.
-          </div>
+        {!expProductId && !explosionBusy && (
+          <EmptyState
+            title="Pick a product to plan"
+            body="Choose a product with a BOM and a planned quantity to see the raw materials, consumables and scrap load it needs."
+          />
+        )}
+        {!!expProductId && explosionBusy && <p className="muted">Computing requirements...</p>}
+        {!!expProductId && !explosionBusy && !!explosion && explosion.missing ? (
+          <EmptyState
+            title="No active BOM for this product"
+            body="Create a BOM for the selected product, then recalculate to see its material requirements."
+            action="Go to bills of materials"
+            onAction={() => scrollToSection('bom-section')}
+          />
         ) : null}
-        {!explosionBusy && !!explosion && !explosion.missing && expItems.length > 0 ? (
+        {!!expProductId && !explosionBusy && !!explosion && !explosion.missing && expItems.length > 0 ? (
           <>
             <div className="kpi-grid">
               <Kpi label="Product" value={String(explosion.productCode ?? '')} sub={String(explosion.productName ?? '')} />
               <Kpi label="Planned qty" value={fmtNum(explosion.plannedQty)} sub={String(explosion.unitCode ?? '')} />
               <Kpi label="BOM basis" value={fmtNum(explosion.basis)} sub={String(explosion.unitCode ?? '')} />
-              <Kpi label="Factor" value={num(explosion.factor).toFixed(3)} sub="planned ÷ basis" />
+              <Kpi label="Factor" value={num(explosion.factor).toFixed(3)} sub="planned / basis" />
             </div>
             <div className="table-wrap">
               <table className="data">
@@ -1867,18 +2087,18 @@ export function MmsBoms() {
                     <tr key={String(it.id)}>
                       <td>
                         <div className="cell-mono">{String(it.materialCode ?? '')}</div>
-                        <div>{String(it.materialName ?? '')}</div>
+                        <div className="muted">{String(it.materialName ?? '')}</div>
                       </td>
-                      <td>{String(it.materialType ?? '-')}</td>
+                      <td>{it.materialType ? <span className="code-chip">{prettyType(it.materialType)}</span> : '-'}</td>
                       <td className="cell-mono">{String(it.unitCode ?? '-')}</td>
                       <td className="cell-num">{fmtNum(it.required)}</td>
                       <td className="cell-num">{pct(it.scrapPercent)}</td>
                       <td className="cell-num">{fmtNum(it.gross)}</td>
                       <td>
                         {it.isConsumable ? (
-                          <span className="badge badge-blue">● Consumable</span>
+                          <span className="badge badge-blue">Consumable</span>
                         ) : (
-                          <span className="badge badge-neutral">● Direct</span>
+                          <span className="badge badge-neutral">Direct</span>
                         )}
                       </td>
                     </tr>
@@ -1888,8 +2108,11 @@ export function MmsBoms() {
             </div>
           </>
         ) : null}
-        {!explosionBusy && !!explosion && !explosion.missing && expItems.length === 0 ? (
-          <p className="muted">This BOM has no material lines yet.</p>
+        {!!expProductId && !explosionBusy && !!explosion && !explosion.missing && expItems.length === 0 ? (
+          <EmptyState
+            title="This BOM has no material lines"
+            body="Add raw materials, consumables or packaging lines to the BOM so it can be exploded."
+          />
         ) : null}
       </MmsSection>
 
@@ -1961,73 +2184,95 @@ function BomRowFragments({
   detail: Rec | null;
   onToggle: () => void;
 }) {
+  const detailItems = detail && Array.isArray(detail.items) ? (detail.items as Rec[]) : [];
   return (
     <>
       <tr className="row-click" onClick={onToggle}>
         <td className="cell-mono">{String(r.code ?? '')}</td>
         <td>
           <div className="cell-mono">{String(r.productCode ?? '')}</div>
-          <div>{String(r.productName ?? '')}</div>
+          <div className="muted">{String(r.productName ?? '')}</div>
         </td>
+        <td>{r.productType ? <span className="code-chip">{prettyType(r.productType)}</span> : '-'}</td>
         <td className="cell-num">{String(r.version ?? '')}</td>
-        <td className="cell-num">{fmtNum(r.quantity)}</td>
-        <td className="cell-mono">{String(r.unitCode ?? '-')}</td>
+        <td className="cell-num">
+          {fmtNum(r.quantity)} <span className="muted">{String(r.unitCode ?? '')}</span>
+        </td>
         <td className="cell-num">{fmtNum(r.itemCount)}</td>
+        <td className="cell-num">{fmtNum(r.totalMaterialQty)}</td>
         <td className="cell-mono">
           {r.effectiveFrom ? d10(r.effectiveFrom) : '-'}
-          {r.effectiveTo ? ' → ' + d10(r.effectiveTo) : ''}
+          {r.effectiveTo ? ' to ' + d10(r.effectiveTo) : ''}
         </td>
         <td><Badge value={r.status} /></td>
         <td>{r.isActive ? <Badge value="ACTIVE" /> : <Badge value="INACTIVE" />}</td>
-        <td className="cell-num">{expanded ? '−' : '+'}</td>
+        <td className="cell-num">
+          <button
+            type="button"
+            className="row-toggle"
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse material lines' : 'Expand material lines'}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+          >
+            {expanded ? '-' : '+'}
+          </button>
+        </td>
       </tr>
       {expanded && (
         <tr className="row-detail">
-          <td colSpan={10}>
+          <td colSpan={11}>
             {loading ? (
               <p className="muted">Loading detail...</p>
             ) : detail ? (
-              <div style={{ padding: '8px 2px' }}>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <div className="bom-detail">
+                <div className="bom-detail-head">
                   <strong>{String(detail.name ?? '')}</strong>
                   <Badge value={detail.status} />
-                  <span className="muted">Basis: {fmtNum(detail.quantity)} {String(detail.unitCode ?? '')}</span>
+                  {detail.productType ? <span className="code-chip">{prettyType(detail.productType)}</span> : null}
+                  <span className="muted">Basis {fmtNum(detail.quantity)} {String(detail.unitCode ?? '')}</span>
                 </div>
-                <div className="table-wrap">
-                  <table className="data">
-                    <thead>
-                      <tr>
-                        <th>Material</th>
-                        <th>Type</th>
-                        <th>UoM</th>
-                        <th className="cell-num">Qty per basis</th>
-                        <th className="cell-num">Scrap %</th>
-                        <th>Consumable</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(Array.isArray(detail.items) ? (detail.items as Rec[]) : []).map((it) => (
-                        <tr key={String(it.id)}>
-                          <td>
-                            <div className="cell-mono">{String(it.materialCode ?? '')}</div>
-                            <div>{String(it.materialName ?? '')}</div>
-                          </td>
-                          <td>{String(it.materialType ?? '-')}</td>
-                          <td className="cell-mono">{String(it.unitCode ?? '-')}</td>
-                          <td className="cell-num">{fmtNum(it.quantity)}</td>
-                          <td className="cell-num">{pct(it.scrapPercent)}</td>
-                          <td>
-                            {it.isConsumable ? (
-                              <span className="badge badge-blue">● Consumable</span>
-                            ) : (
-                              <span className="badge badge-neutral">● Direct</span>
-                            )}
-                          </td>
+                {detailItems.length === 0 ? (
+                  <p className="muted">No material lines on this BOM yet.</p>
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data">
+                      <thead>
+                        <tr>
+                          <th>Material</th>
+                          <th>Type</th>
+                          <th>UoM</th>
+                          <th className="cell-num">Qty per basis</th>
+                          <th className="cell-num">Scrap %</th>
+                          <th>Consumable</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {detailItems.map((it) => (
+                          <tr key={String(it.id)}>
+                            <td>
+                              <div className="cell-mono">{String(it.materialCode ?? '')}</div>
+                              <div className="muted">{String(it.materialName ?? '')}</div>
+                            </td>
+                            <td>{it.materialType ? <span className="code-chip">{prettyType(it.materialType)}</span> : '-'}</td>
+                            <td className="cell-mono">{String(it.unitCode ?? '-')}</td>
+                            <td className="cell-num">{fmtNum(it.quantity)}</td>
+                            <td className="cell-num">{pct(it.scrapPercent)}</td>
+                            <td>
+                              {it.isConsumable ? (
+                                <span className="badge badge-blue">Consumable</span>
+                              ) : (
+                                <span className="badge badge-neutral">Direct</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             ) : null}
           </td>
@@ -2050,19 +2295,33 @@ function RoutingRowFragments({
   detail: Rec | null;
   onToggle: () => void;
 }) {
+  const operations = detail && Array.isArray(detail.operations) ? (detail.operations as Rec[]) : [];
   return (
     <>
       <tr className="row-click" onClick={onToggle}>
         <td className="cell-mono">{String(r.code ?? '')}</td>
         <td>
           <div className="cell-mono">{String(r.productCode ?? '')}</div>
-          <div>{String(r.productName ?? '')}</div>
+          <div className="muted">{String(r.productName ?? '')}</div>
         </td>
         <td className="cell-num">{String(r.version ?? '')}</td>
         <td className="cell-num">{fmtNum(r.opCount)}</td>
         <td className="cell-num">{fmtNum(r.setupTeardownMin)}</td>
         <td>{r.isActive ? <Badge value="ACTIVE" /> : <Badge value="INACTIVE" />}</td>
-        <td className="cell-num">{expanded ? '−' : '+'}</td>
+        <td className="cell-num">
+          <button
+            type="button"
+            className="row-toggle"
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse operations' : 'Expand operations'}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+          >
+            {expanded ? '-' : '+'}
+          </button>
+        </td>
       </tr>
       {expanded && (
         <tr className="row-detail">
@@ -2070,45 +2329,49 @@ function RoutingRowFragments({
             {loading ? (
               <p className="muted">Loading detail...</p>
             ) : detail ? (
-              <div style={{ padding: '8px 2px' }}>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <div className="bom-detail">
+                <div className="bom-detail-head">
                   <strong>{String(detail.name ?? '')}</strong>
                   <span className="muted">Version {String(detail.version ?? '')}</span>
                 </div>
-                <div className="table-wrap">
-                  <table className="data">
-                    <thead>
-                      <tr>
-                        <th className="cell-num">Seq</th>
-                        <th>Operation</th>
-                        <th>Work centre</th>
-                        <th>Machine</th>
-                        <th className="cell-num">Setup min</th>
-                        <th className="cell-num">Run min/unit</th>
-                        <th className="cell-num">Teardown min</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(Array.isArray(detail.operations) ? (detail.operations as Rec[]) : []).map((op) => (
-                        <tr key={String(op.id)}>
-                          <td className="cell-num">{String(op.seq ?? '')}</td>
-                          <td><strong>{String(op.name ?? '')}</strong></td>
-                          <td>
-                            {op.workCentreCode ? <span className="cell-mono">{String(op.workCentreCode)}</span> : '-'}
-                            {op.workCentreName ? <span className="muted"> · {String(op.workCentreName)}</span> : null}
-                          </td>
-                          <td>
-                            {op.machineCode ? <span className="cell-mono">{String(op.machineCode)}</span> : '-'}
-                            {op.machineName ? <span className="muted"> · {String(op.machineName)}</span> : null}
-                          </td>
-                          <td className="cell-num">{fmtNum(op.setupTimeMin)}</td>
-                          <td className="cell-num">{fmtNum(op.runTimePerUnitMin)}</td>
-                          <td className="cell-num">{fmtNum(op.teardownTimeMin)}</td>
+                {operations.length === 0 ? (
+                  <p className="muted">No operations defined on this routing yet.</p>
+                ) : (
+                  <div className="table-wrap">
+                    <table className="data">
+                      <thead>
+                        <tr>
+                          <th className="cell-num">Seq</th>
+                          <th>Operation</th>
+                          <th>Work centre</th>
+                          <th>Machine</th>
+                          <th className="cell-num">Setup min</th>
+                          <th className="cell-num">Run min/unit</th>
+                          <th className="cell-num">Teardown min</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {operations.map((op) => (
+                          <tr key={String(op.id)}>
+                            <td className="cell-num">{String(op.seq ?? '')}</td>
+                            <td><strong>{String(op.name ?? '')}</strong></td>
+                            <td>
+                              {op.workCentreCode ? <span className="cell-mono">{String(op.workCentreCode)}</span> : '-'}
+                              {op.workCentreName ? <span className="muted"> | {String(op.workCentreName)}</span> : null}
+                            </td>
+                            <td>
+                              {op.machineCode ? <span className="cell-mono">{String(op.machineCode)}</span> : '-'}
+                              {op.machineName ? <span className="muted"> | {String(op.machineName)}</span> : null}
+                            </td>
+                            <td className="cell-num">{fmtNum(op.setupTimeMin)}</td>
+                            <td className="cell-num">{fmtNum(op.runTimePerUnitMin)}</td>
+                            <td className="cell-num">{fmtNum(op.teardownTimeMin)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             ) : null}
           </td>

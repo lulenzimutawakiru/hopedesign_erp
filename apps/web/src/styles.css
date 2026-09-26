@@ -7005,3 +7005,65 @@ html[data-theme='dark'] .account-hero { background: #102536; border-color: #2541
   .toast-stack { left: 12px; right: 12px; bottom: 12px; max-width: none; }
   .stat-value { font-size: 21px; }
 }
+/* ---------- BOM workspace: filters, grouping, row detail ---------- */
+section#bom-section, section#routings-section, section#explosion-section { scroll-margin-top: 96px; }
+
+.bom-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.bom-toolbar .search-input { flex: 1 1 260px; max-width: none; }
+.bom-sort { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.bom-sort select {
+  font-family: var(--font); font-size: 13px; color: var(--ink);
+  background: var(--sheet); border: 1px solid var(--line); border-radius: 9px;
+  padding: 8px 10px; max-width: 100%;
+}
+.bom-sort select:focus { outline: none; border-color: var(--mill); box-shadow: 0 0 0 3px rgba(18, 97, 160, 0.16); }
+
+.bom-facets { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.chips-label { align-self: center; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+
+.bom-count-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 2px 10px; font-size: 12px; }
+
+/* Collapsible product group header row inside the BOM table. */
+table.data tr.bom-group-row td { padding: 0; background: var(--paper-2); border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+table.data tr.bom-group-row:hover td { background: var(--paper-2); }
+.bom-group-toggle {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 9px 12px;
+  border: 0; background: transparent; cursor: pointer; text-align: left;
+  font-family: var(--font); font-size: 13px; color: var(--ink);
+}
+.bom-group-toggle:hover { color: var(--hope); }
+.bom-group-toggle .muted { margin-left: auto; font-size: 12px; }
+.bom-group-caret {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; width: 18px; height: 18px;
+  border: 1px solid var(--line-strong); border-radius: 5px;
+  font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--muted);
+}
+
+/* Per-row expander for material lines and routing operations. */
+.row-toggle {
+  width: 24px; height: 24px; padding: 0; line-height: 1;
+  border: 1px solid var(--line-strong); border-radius: 6px;
+  background: var(--sheet); color: var(--muted);
+  font-family: var(--mono); font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.row-toggle:hover { border-color: var(--hope); color: var(--hope); }
+.row-toggle[aria-expanded='true'] { border-color: var(--hope); background: var(--paper-2); color: var(--hope); }
+
+.bom-detail { display: flex; flex-direction: column; gap: 10px; padding: 2px 0; }
+.bom-detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* Expanded detail rows had no dark-theme background, so they rendered light-on-dark. */
+html[data-theme='dark'] table.data tr.row-detail > td { background: #102536; }
+html[data-theme='dark'] table.data tr.row-detail:hover td { background: #102536; }
+html[data-theme='dark'] .bom-sort select:focus { box-shadow: 0 0 0 3px rgba(59, 145, 209, 0.24); }
+
+@media (max-width: 767px) {
+  .bom-toolbar { align-items: stretch; }
+  .bom-toolbar .search-input { flex: 1 1 100%; }
+  .bom-sort { justify-content: space-between; }
+  .bom-sort select { flex: 1; }
+  .bom-count-row { flex-wrap: wrap; }
+}
+
