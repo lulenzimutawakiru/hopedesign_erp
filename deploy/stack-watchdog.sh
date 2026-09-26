@@ -30,6 +30,34 @@ WORKER_CONTAINER="hopedesign-erp-worker-1"
 UPTIME_CONTAINER="hopedesign-erp-uptime-kuma"
 WEB_REPLICAS=2 # keep in sync with docker-compose.prod.yml (web: deploy.replicas)
 
+# This same file is installed on BOTH nodes, but the two nodes do not run the
+# same stack. The peer adds deploy/docker-compose.peer.yml (its API colours read
+# the primary's data over the tunnel) and deploy/docker-compose.peer-replica.yml
+# (its own postgres standby and redis replica). Everything below is derived from
+# the files actually present, so one script heals both shapes:
+#
+#   * compose is layered with the peer overlays, so a service it recreates is
+#     rebuilt with its peer settings rather than the base ones. Recreating the
+#     peer's redis from the base file alone would start an EMPTY master and
+#     silently break replication.
+#   * the peer's bare `postgres` service still holds a stale dataset from before
+#     the standby was seeded, so it is never resurrected there - data-dr is the
+#     authoritative copy on that node.
+#   * the peer runs no `worker`: scheduled work happens exactly once,
+#     cluster-wide, on the data primary. Chasing a container this node is not
+#     meant to run would recreate it against a primary that may be gone. The one
+#     exception is a real failover, which is recorded by the marker below.
+PEER_NODE=0
+compose_files=(-f "$COMPOSE_FILE")
+for overlay in docker-compose.peer.yml docker-compose.peer-replica.yml; do
+  if [[ -f "$APP_DIR/deploy/$overlay" ]]; then
+    PEER_NODE=1
+    compose_files+=(-f "$APP_DIR/deploy/$overlay")
+  fi
+done
+# Same path deploy/failover-agent.sh writes when it promotes this node.
+PROMOTED_MARKER="$LOG_DIR/failover-state/promoted"
+
 mkdir -p "$LOG_DIR" "$LIVE_DIR"
 now() { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
 log() { echo "[watchdog $(now)] $*" >> "$LOG_FILE"; }
@@ -38,7 +66,7 @@ LOCK_FILE="/run/lock/hopedesign-erp-watchdog.lock"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then exit 0; fi
 
-compose=(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
+compose=(docker compose "${compose_files[@]}" --env-file "$ENV_FILE")
 
 status_of() { # $1 = container name
   docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || echo missing
@@ -68,7 +96,16 @@ other_color() { [[ "$1" == "a" ]] && echo b || echo a; }
 #    `web` runs WEB_REPLICAS replicas, so they are discovered by compose label
 #    rather than hardcoding hopedesign-erp-web-1 - a hardcoded name would
 #    silently ignore every replica added by deploy.replicas.
-for c in hopedesign-erp-postgres-1 "$REDIS_CONTAINER" "$WORKER_CONTAINER" "$UPTIME_CONTAINER" $(web_containers) "$CADDY_CONTAINER"; do
+#    On the peer, two of these are deliberately left out: its bare `postgres`
+#    still holds a stale pre-standby dataset (data-dr is the copy that matters
+#    there), and it has no `worker` unless a failover promoted it.
+restart_candidates=("$UPTIME_CONTAINER" "$REDIS_CONTAINER" $(web_containers) "$CADDY_CONTAINER")
+if [[ "$PEER_NODE" -eq 0 ]]; then
+  restart_candidates+=(hopedesign-erp-postgres-1 "$WORKER_CONTAINER")
+elif [[ -f "$PROMOTED_MARKER" ]]; then
+  restart_candidates+=("$WORKER_CONTAINER")
+fi
+for c in "${restart_candidates[@]}"; do
   s="$(status_of "$c")"
   if [[ "$s" != "healthy" && "$s" != "running" ]]; then
     log "restarting unhealthy container $c ($s)"
@@ -95,6 +132,9 @@ fi
 #     timers as soon as REDIS_URL is set. Both are reconciled by name because
 #     `docker restart` cannot resurrect a container that no longer exists.
 for svc in redis worker; do
+  # A missing worker on the peer is the correct steady state, not a fault - it
+  # only belongs there once failover-agent.sh has promoted this node.
+  if [[ "$svc" == "worker" && "$PEER_NODE" -eq 1 && ! -f "$PROMOTED_MARKER" ]]; then continue; fi
   c="hopedesign-erp-$svc-1"
   if [[ -z "$(docker inspect -f '{{.Id}}' "$c" 2>/dev/null)" ]]; then
     log "queue container $c is missing - recreating the $svc service"
