@@ -1656,6 +1656,8 @@ button.linkish {
   font-weight: 700;
   cursor: pointer;
 }
+button.chip { cursor: pointer; }
+button.chip:hover { border-color: var(--hope); }
 
 /* Stock table rows: status stack, quick actions, foot summary. */
 .row-actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -1976,6 +1978,7 @@ html[data-theme='dark'] .progress { background: #223A52; }
 html[data-theme='dark'] .progress-fill { background: linear-gradient(90deg, #1F8A5B, #3BB97C); }
 html[data-theme='dark'] .alert-warn { background: #3A2E12; color: #F0D48A; border-color: #6B5418; }
 html[data-theme='dark'] .chip-on, html[data-theme='dark'] .chip-active { background: #16324A; color: #7FB6E3; border-color: #2E7DB2; }
+html[data-theme='dark'] button.chip:hover { border-color: #2E7DB2; }
 
 
 /* Compact success row used after generate / create actions. */

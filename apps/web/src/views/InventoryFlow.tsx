@@ -13,16 +13,17 @@ type Rec = Record<string, unknown>;
 
 const TABS: { resource: string; label: string; perm: string }[] = [
   { resource: 'stock', label: 'Stock', perm: 'inventory.stock.view' },
-  { resource: 'assets', label: 'Assets', perm: 'assets.register.view' },
   { resource: 'materials', label: 'Raw Materials', perm: 'inventory.items.view' },
-  { resource: 'consumables', label: 'Consumables', perm: 'inventory.items.view' },
-  { resource: 'warehouses', label: 'Warehouses', perm: 'inventory.warehouses.view' },
+  { resource: 'consumables', label: 'Factory Consumables', perm: 'inventory.items.view' },
+  { resource: 'office', label: 'Office Consumables', perm: 'inventory.items.view' },
+  { resource: 'items', label: 'Products', perm: 'inventory.items.view' },
   { resource: 'movements', label: 'Movements', perm: 'inventory.movements.view' },
   { resource: 'transfers', label: 'Transfers', perm: 'inventory.transfers.view' },
   { resource: 'adjustments', label: 'Adjustments', perm: 'inventory.adjustments.view' },
-  { resource: 'items', label: 'Products', perm: 'inventory.items.view' },
   { resource: 'batches', label: 'Batches', perm: 'inventory.batches.view' },
   { resource: 'reservations', label: 'Reservations', perm: 'inventory.reservations.view' },
+  { resource: 'warehouses', label: 'Warehouses', perm: 'inventory.warehouses.view' },
+  { resource: 'assets', label: 'Assets', perm: 'assets.register.view' },
 ];
 
 interface CatalogSpec {
@@ -54,7 +55,7 @@ const CATALOGS: Record<string, CatalogSpec> = {
     detail: (id) => `/inventory/materials/${id}`,
   },
   consumables: {
-    resource: 'consumables', module: 'inventory', label: 'Consumables',
+    resource: 'consumables', module: 'inventory', label: 'Factory Consumables',
     tagline: 'Consumables, spares and other production supplies — kept separate from raw materials.',
     createLabel: 'New consumable',
     createPerm: 'inventory.items.create',
@@ -158,8 +159,27 @@ export default function InventoryFlow({ path }: { path: string }) {
 }
 
 function Tabs({ resource }: { resource: string }) {
-  void resource;
-  return null;
+  const { user } = useAuth();
+  const tabs = TABS.filter((t) => can(user, t.perm));
+  if (tabs.length < 2) return null;
+  return (
+    <nav className="chips" style={{ marginBottom: 14 }} aria-label="Inventory sections">
+      {tabs.map((t) => {
+        const on = t.resource === resource;
+        return (
+          <button
+            key={t.resource}
+            type="button"
+            className={`chip ${on ? 'chip-on' : ''}`}
+            aria-current={on ? 'page' : undefined}
+            onClick={() => navigate(`/inventory/${t.resource}`)}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </nav>
+  );
 }
 
 function StockBoard({ warehouseId }: { warehouseId?: number }) {
@@ -800,6 +820,7 @@ function OfficeConsumablesPage() {
           {canCreate && <button className="btn btn-primary" onClick={openCreate}>+ New office consumable</button>}
         </div>
       </header>
+      <Tabs resource="office" />
       <div className="toolbar">
         <input className="search-input" placeholder="Search code, name or SKU..." value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
       </div>
