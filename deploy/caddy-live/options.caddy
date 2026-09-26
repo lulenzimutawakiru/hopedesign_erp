@@ -1,4 +1,14 @@
-	lb_policy least_conn
+	# Steady state must stay on the LOCAL colour. The peer door in this pool is a
+	# retry target, not a load-balanced peer: with `least_conn` the pool has two
+	# members, so ~half of every /api request was dialled across the ~390 ms
+	# WireGuard leg (measured 53% of requests >50 ms, p50 365 ms, against a local
+	# p50 of 12 ms). `first` selects the first HEALTHY upstream and write_active()
+	# always lists the local colour first, so only a colour that has actually
+	# failed spills onto the tunnel - lb_try_duration below still covers the gap
+	# until the health check ejects it. Deliberately not `first_policy
+	# always_first`: that re-selects a dead first upstream on every single
+	# request, paying a retry per request for the whole fail_duration window.
+	lb_policy first
 	health_uri /api/health
 	health_interval 5s
 	health_timeout 2s
