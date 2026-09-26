@@ -107,7 +107,13 @@ import /etc/caddy/live/uptime.caddy
 :8080 {
 	handle {
 		reverse_proxy hopedesign-erp-web-1:80 hopedesign-erp-web-2:80 {
-			import /etc/caddy/live/webpeer*.caddy
+			# Deliberately NO webpeer*.caddy import here. Both nodes publish a
+			# door that maps to this same container port (primary 10.77.0.1:9103,
+			# peer 10.77.0.2:8080) and the two webpeer files point at each other.
+			# Importing the peer here would have this door proxy into the other
+			# node's door, which points straight back: a two-hop loop that no
+			# health check can break. The door always answers with LOCAL
+			# replicas; it is the public site block above that pools the peer.
 			lb_policy least_conn
 			health_uri /
 			health_interval 15s
