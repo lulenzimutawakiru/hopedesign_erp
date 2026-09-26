@@ -1,0 +1,45 @@
+# ---- Primary-node cross-node pool overlay (added 2026-09-26) ----------------
+# Applied on the DATA PRIMARY together with docker-compose.prod.yml and
+# deploy/docker-compose.peer-db.yml:
+#
+#   docker compose -f docker-compose.prod.yml \
+#                  -f deploy/docker-compose.peer-db.yml \
+#                  -f deploy/docker-compose.primary-bridge.yml \
+#                  --env-file .env.production up -d --no-deps caddy
+#
+# Why this exists: the frontend is the one tier that can be pool members on BOTH
+# machines at once. It is a static SPA - no sessions, no writes - so a replica
+# living on the other VPS is exactly as valid as a local one. deploy/caddy-live/
+# webpeer.caddy (untracked, written at deploy time) adds the peer as an extra
+# upstream to this node's Caddy pool:
+#
+#   to 10.77.0.2:8080
+#
+# and the PEER holds the mirror image, `to 10.77.0.1:9103` (this file is what
+# makes that address exist). Losing every web replica on one node is then
+# invisible to users: the other node's replicas were already warm, healthy
+# members of the pool, so Caddy keeps sending to them. There is no failover
+# step to miss and nothing to promote.
+#
+# What is deliberately NOT here: the API. Cross-pooling api-a/api-b onto the
+# peer would put roughly a third of every request - each of which re-reads the
+# `sessions` table and burns a redis round-trip - behind a WireGuard hop, and
+# would make user-facing latency depend on the tunnel staying up. The API keeps
+# its in-node blue/green pair (deploy/caddy-live/active.caddy) plus
+# deploy/stack-watchdog.sh, and cross-node API continuity is the promoted peer's
+# job (deploy/failover-agent.sh), not a steady-state pool.
+#
+# `ports` is a multi-value key: Compose CONCATENATES overlay values onto the
+# base list rather than replacing it, so 80/443/443udp from
+# docker-compose.prod.yml are still published and must not be restated here.
+# Restating them would ask Docker for the same host port twice.
+#
+# Portable: on the peer this file is not used at all.
+services:
+  caddy:
+    ports:
+      # The internal `:8080` site block at the bottom of deploy/Caddyfile, bound
+      # to the WireGuard address so it is unreachable from the public internet.
+      # 9103 mirrors the peer's own 8080 door: the peer's webpeer.caddy points at
+      # 10.77.0.1:9103, and this line is what answers there.
+      - "10.77.0.1:9103:8080"

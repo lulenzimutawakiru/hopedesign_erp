@@ -85,3 +85,35 @@
 # comment when it is not. The target always exists, so the Caddyfile parses the
 # same either way and this import is a no-op by default.
 import /etc/caddy/live/uptime.caddy
+# Internal frontend door for the OTHER node, and the reason a whole VPS can go
+# away without the frontend blinking. Plain HTTP, no hostname, no ACME, no log
+# of its own: the only thing that can reach it is the peer VPS over WireGuard,
+# because the container port is published on the tunnel address only
+# (deploy/docker-compose.primary-bridge.yml publishes 10.77.0.1:9103, and the
+# peer's own overlay publishes 10.77.0.2:8080).
+#
+# The two nodes point at each other's copy of this block through their
+# node-local `webpeer*.caddy` files, so each node's public pool ends up holding
+# its own replicas PLUS the other machine's:
+#
+#   primary:  webpeer.caddy -> to 10.77.0.2:8080
+#   peer:     webpeer.caddy -> to 10.77.0.1:9103
+#
+# Losing web-1 and web-2 on one node is then not a failover event at all - the
+# surviving node's replicas were already healthy pool members, so Caddy simply
+# keeps sending to them. There is no promotion step to miss and nothing to
+# trigger. A request that arrives here is served by THIS node's replicas, so the
+# mutual includes cost at most one hop and cannot loop.
+:8080 {
+	handle {
+		reverse_proxy hopedesign-erp-web-1:80 hopedesign-erp-web-2:80 {
+			import /etc/caddy/live/webpeer*.caddy
+			lb_policy least_conn
+			health_uri /
+			health_interval 15s
+			health_timeout 3s
+			max_fails 2
+			fail_duration 30s
+		}
+	}
+}

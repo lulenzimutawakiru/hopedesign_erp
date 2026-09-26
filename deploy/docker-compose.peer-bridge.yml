@@ -1,0 +1,64 @@
+# ---- Peer-node standby data bridge (added 2026-09-26) ----------------------
+# Applied on the SECOND VPS together with docker-compose.prod.yml,
+# deploy/docker-compose.peer.yml and deploy/docker-compose.peer-replica.yml:
+#
+#   docker compose -f docker-compose.prod.yml \
+#                  -f deploy/docker-compose.peer.yml \
+#                  -f deploy/docker-compose.peer-replica.yml \
+#                  -f deploy/docker-compose.peer-bridge.yml \
+#                  --env-file .env.production up -d
+#
+# Why this exists: deploy/docker-compose.peer-db.yml (on the primary) publishes
+# the primary's postgres + redis on 10.77.0.1:9101/9102 so the PEER can borrow
+# them. This file is the mirror image, and it exists for one reason only - the
+# day the roles swap. After deploy/failover-agent.sh promotes this node's
+# data-dr standby, the DEMOTED primary needs to reach the peer's data exactly
+# the way the peer reached the primary's: same ports, same direction, reversed.
+# Without these listeners the demoted primary would still be pointing at its own
+# now-stale postgres and the two machines would silently diverge.
+#
+#   pgbridge-local   10.77.0.2:9101 -> data-dr:5432
+#   redisbridge-local 10.77.0.2:9102 -> redis:6379
+#
+# Both are bound to the WireGuard address, so they are invisible to the public
+# internet - the packets arrive from the other VPS over wg0 and nothing else can
+# reach them. Ports 9101/9102 are the same numbers the primary uses, so the
+# reversing rule is "swap the IP, keep the port" and one compose overlay can be
+# reused on either side.
+#
+# pgbridge-local targets data-dr, NOT postgres, on purpose. This node's own
+# `postgres` service still carries a stale dataset from before the standby was
+# seeded; handing that to the demoted primary would quietly serve months-old
+# rows. data-dr is the copy that has been streaming WAL the whole time.
+#
+# These listeners are inert until the roles actually swap: in steady state
+# nothing connects to them. They are left running on purpose so the reversal
+# does not depend on a compose-up succeeding during the incident.
+#
+# Portable: on the data primary this file is not used at all.
+services:
+  pgbridge-local:
+    image: alpine/socat:latest
+    container_name: hopedesign-erp-pgbridge-local
+    restart: unless-stopped
+    command: ["TCP-LISTEN:5432,fork,reuseaddr", "TCP:data-dr:5432"]
+    ports:
+      - "10.77.0.2:9101:5432"
+    depends_on:
+      data-dr:
+        condition: service_healthy
+    networks:
+      - internal
+
+  redisbridge-local:
+    image: alpine/socat:latest
+    container_name: hopedesign-erp-redisbridge-local
+    restart: unless-stopped
+    command: ["TCP-LISTEN:6379,fork,reuseaddr", "TCP:redis:6379"]
+    ports:
+      - "10.77.0.2:9102:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
