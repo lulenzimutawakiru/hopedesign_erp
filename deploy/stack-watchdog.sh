@@ -13,6 +13,10 @@
 #     a container removed outright is invisible to `docker restart`, and losing
 #     either of them silently stops every scheduled task (the API colors do not
 #     run those timers once REDIS_URL is set).
+#   - on the peer, the cross-node bridge doors that publish 10.77.0.2:9101/9102
+#     (this node's data and cache, reversed) are likewise recreated by name: no
+#     other pass here can create a container that no longer exists, so a removed
+#     bridge would silently strand the other machine's reverse-direction upstream.
 # Safe to run repeatedly.
 #############################################################
 set -uo pipefail
@@ -234,6 +238,34 @@ for svc in redis worker; do
     sleep 5
   fi
 done
+
+# 1c2) Reconcile the cross-node bridge doors on the peer. The
+#      deploy/docker-compose.peer-bridge.yml overlay publishes 10.77.0.2:9101
+#      (this node's data, reversed into the demoted primary) and 10.77.0.2:9102
+#      (its cache). Nothing above ever CREATES one of these: the restart pass
+#      only acts on a container that still exists, and `docker restart` cannot
+#      resurrect one that is gone - which is exactly how the reverse-direction
+#      door stayed down in production. Gated on the overlay genuinely being in
+#      this node's layer set, so it can never fire on the data primary (the
+#      primary never layers peer-bridge.yml) and never resurrects a bridge that
+#      a promotion deliberately dropped.
+if [[ "$PEER_NODE" -eq 1 ]]; then
+  for svc in pgbridge-local redisbridge-local; do
+    c="hopedesign-erp-$svc"
+    s="$(status_of "$c")"
+    if [[ "$s" != "running" && "$s" != "healthy" ]]; then
+      log "cross-node bridge $c is $s - recreating the $svc service"
+      # --no-deps on purpose. pgbridge-local deliberately has no depends_on (it
+      # targets data-dr, which every failover layer set drops, so a dependency
+      # there turns `up` into a hard failure on the one path that runs during an
+      # outage), and redisbridge-local's depends_on: redis is ordering-only -
+      # socat reconnects by itself once redis is listening, so a recreate must
+      # not drag the broker through a restart mid-heal.
+      "${compose[@]}" up -d --no-deps "$svc" >> "$LOG_FILE" 2>&1 || true
+      sleep 5
+    fi
+  done
+fi
 
 # 1d) Report the worker's Redis heartbeat. This is deliberately observational:
 #     container health already drives the healing above (the worker's /health
