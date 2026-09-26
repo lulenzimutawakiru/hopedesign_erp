@@ -237,6 +237,8 @@ manufacturingOpsRouter.get('/downtime', ...runGet('production.downtime.view', (c
 manufacturingOpsRouter.get('/boms', ...runGet('production.boms.view', (c, ctx) => mfg.bomsDesk(c, ctx)));
 manufacturingOpsRouter.get('/boms/:id', ...runGet('production.boms.view', (c, ctx, _q, p) => mfg.bomDetail(c, ctx, Number(p.id))));
 manufacturingOpsRouter.post('/boms', ...run('production.boms.create', (c, ctx, b) => mfg.createBom(c, ctx, b)));
+manufacturingOpsRouter.put('/boms/:id', ...run('production.boms.update', (c, ctx, b, p) => mfg.updateBom(c, ctx, Number(p.id), b)));
+manufacturingOpsRouter.delete('/boms/:id', ...run('production.boms.delete', (c, ctx, b, p) => mfg.deleteBom(c, ctx, Number(p.id), b)));
 manufacturingOpsRouter.get('/routings', ...runGet('production.boms.view', (c, ctx) => mfg.routingsDesk(c, ctx)));
 manufacturingOpsRouter.get('/routings/:id', ...runGet('production.boms.view', (c, ctx, _q, p) => mfg.routingDetail(c, ctx, Number(p.id))));
 manufacturingOpsRouter.post('/routings', ...run('production.boms.create', (c, ctx, b) => mfg.createRouting(c, ctx, b)));

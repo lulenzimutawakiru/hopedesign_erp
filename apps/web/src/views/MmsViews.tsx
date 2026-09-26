@@ -4,7 +4,7 @@ import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
-import { EmptyState } from '../components/os';
+import { ConfirmDialog, EmptyState } from '../components/os';
 
 type Rec = Record<string, unknown>;
 
@@ -1565,7 +1565,16 @@ export function MmsBoms() {
   const [routingDetailLoading, setRoutingDetailLoading] = useState(false);
 
   const [open, setOpen] = useState(false);
+  const [editId, setEditId] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    body: string;
+    label: string;
+    danger?: boolean;
+    reasonRequired?: boolean;
+    onConfirm: (reason: string) => Promise<void>;
+  } | null>(null);
   const [f, setF] = useState<Rec>({
     productId: '',
     code: '',
@@ -1694,6 +1703,46 @@ export function MmsBoms() {
     };
   }, [expProductId, expQty, pickBom]);
 
+  const openCreate = () => {
+    setError('');
+    setEditId(0);
+    setF((p) => ({
+      ...p,
+      productId: '',
+      code: '',
+      name: '',
+      version: '1',
+      quantity: '1000',
+      status: 'DRAFT',
+      isActive: true,
+      effectiveFrom: '',
+      effectiveTo: '',
+    }));
+    setOpen(true);
+  };
+
+  const openEdit = (r: Rec) => {
+    setError('');
+    setEditId(Number(r.id));
+    setF({
+      productId: String(r.productId ?? ''),
+      code: String(r.code ?? ''),
+      name: String(r.name ?? ''),
+      version: String(r.version ?? '1'),
+      quantity: String(num(r.quantity) || 1),
+      status: String(r.status ?? 'DRAFT'),
+      isActive: !!r.isActive,
+      effectiveFrom: d10(r.effectiveFrom),
+      effectiveTo: d10(r.effectiveTo),
+    });
+    setOpen(true);
+  };
+
+  const closeForm = () => {
+    setOpen(false);
+    setEditId(0);
+  };
+
   const submit = () => {
     setError('');
     setNotice('');
@@ -1701,24 +1750,30 @@ export function MmsBoms() {
       setError('Select a product for the BOM.');
       return;
     }
+    const editing = editId > 0;
     setSaving(true);
-    api<{ data: unknown }>('/api/ops/manufacturing/boms', {
-      method: 'POST',
-      body: JSON.stringify({
-        productId: f.productId,
-        code: String(f.code ?? '').trim() || undefined,
-        name: String(f.name ?? '').trim() || undefined,
-        version: num(f.version) || 1,
-        quantity: num(f.quantity) || 1,
-        status: String(f.status ?? 'DRAFT'),
-        isActive: !!f.isActive,
-        effectiveFrom: f.effectiveFrom ? String(f.effectiveFrom) : undefined,
-        effectiveTo: f.effectiveTo ? String(f.effectiveTo) : undefined,
-      }),
-    })
+    api<{ data: unknown }>(
+      editing ? '/api/ops/manufacturing/boms/' + String(editId) : '/api/ops/manufacturing/boms',
+      {
+        method: editing ? 'PUT' : 'POST',
+        body: JSON.stringify({
+          productId: f.productId,
+          code: String(f.code ?? '').trim() || undefined,
+          name: String(f.name ?? '').trim() || undefined,
+          version: num(f.version) || 1,
+          quantity: num(f.quantity) || 1,
+          status: String(f.status ?? 'DRAFT'),
+          isActive: !!f.isActive,
+          // Empty dates go as null rather than undefined: JSON.stringify drops
+          // undefined, which would silently keep the old date when cleared.
+          effectiveFrom: f.effectiveFrom ? String(f.effectiveFrom) : null,
+          effectiveTo: f.effectiveTo ? String(f.effectiveTo) : null,
+        }),
+      }
+    )
       .then(() => {
-        setNotice('BOM ' + String(f.code ?? '') + ' created.');
-        setOpen(false);
+        setNotice('BOM ' + String(f.code ?? '') + (editing ? ' updated.' : ' created.'));
+        closeForm();
         setF((p) => ({ ...p, code: '', name: '', version: '1', status: 'DRAFT', effectiveFrom: '', effectiveTo: '' }));
         load();
       })
@@ -1726,7 +1781,35 @@ export function MmsBoms() {
       .finally(() => setSaving(false));
   };
 
+  const remove = (r: Rec) => {
+    setError('');
+    setNotice('');
+    setConfirm({
+      title: 'Delete bill of materials',
+      body:
+        'Delete BOM ' + String(r.code ?? '') + ' and all of its material lines? This cannot be undone. ' +
+        'A BOM already used on a work order is protected and must be marked obsolete instead.',
+      label: 'Delete BOM',
+      danger: true,
+      reasonRequired: true,
+      onConfirm: async (reason) => {
+        await api('/api/ops/manufacturing/boms/' + String(r.id), {
+          method: 'DELETE',
+          body: JSON.stringify({ reason }),
+        });
+        setNotice('BOM ' + String(r.code ?? '') + ' deleted.');
+        if (bomDetailId === Number(r.id)) {
+          setBomDetailId(0);
+          setBomDetail(null);
+        }
+        load();
+      },
+    });
+  };
+
   const canCreate = can(user, 'production.boms.create');
+  const canUpdate = can(user, 'production.boms.update');
+  const canDelete = can(user, 'production.boms.delete');
   const bomRows = boms ?? [];
   const routingRows = routings ?? [];
   const activeBoms = bomRows.filter((b) => b.isActive).length;
@@ -1795,12 +1878,12 @@ export function MmsBoms() {
           <p className="muted">Engineering hub — material structures, routing operations and BOM explosion for production planning.</p>
         </div>
         <div className="head-actions">
-          {canCreate && <button className="btn btn-primary" onClick={() => setOpen(true)}>New BOM</button>}
+          {canCreate && <button className="btn btn-primary" onClick={openCreate}>New BOM</button>}
         </div>
       </header>
 
       {notice && <div className="alert alert-success">{notice}</div>}
-      {error && !boms && <ErrorBanner error={error} />}
+      {error && (!boms || !open) && <ErrorBanner error={error} />}
 
       <div className="kpi-grid">
         <Kpi
@@ -1966,7 +2049,11 @@ export function MmsBoms() {
                                     expanded={bomDetailId === Number(r.id) && !!bomDetail}
                                     loading={bomDetailLoading && bomDetailId === Number(r.id)}
                                     detail={bomDetailId === Number(r.id) ? bomDetail : null}
+                                    canUpdate={canUpdate}
+                                    canDelete={canDelete}
                                     onToggle={() => toggleBom(r)}
+                                    onEdit={() => openEdit(r)}
+                                    onDelete={() => remove(r)}
                                   />
                                 ))}
                             </Fragment>
@@ -1979,7 +2066,11 @@ export function MmsBoms() {
                             expanded={bomDetailId === Number(r.id) && !!bomDetail}
                             loading={bomDetailLoading && bomDetailId === Number(r.id)}
                             detail={bomDetailId === Number(r.id) ? bomDetail : null}
+                            canUpdate={canUpdate}
+                            canDelete={canDelete}
                             onToggle={() => toggleBom(r)}
+                            onEdit={() => openEdit(r)}
+                            onDelete={() => remove(r)}
                           />
                         ))}
                   </tbody>
@@ -2118,14 +2209,14 @@ export function MmsBoms() {
 
       {open && (
         <Modal
-          title="New bill of materials"
-          onClose={() => setOpen(false)}
+          title={editId ? 'Edit bill of materials' : 'New bill of materials'}
+          onClose={closeForm}
           wide
           footer={
             <>
-              <button className="btn" onClick={() => setOpen(false)}>Cancel</button>
+              <button className="btn" onClick={closeForm}>Cancel</button>
               <button className="btn btn-primary" disabled={saving} onClick={submit}>
-                {saving ? 'Saving...' : 'Create BOM'}
+                {saving ? 'Saving...' : editId ? 'Save changes' : 'Create BOM'}
               </button>
             </>
           }
@@ -2150,7 +2241,7 @@ export function MmsBoms() {
             <Field label="Status">
               <select value={String(f.status ?? 'DRAFT')} onChange={(e) => set('status', e.target.value)}>
                 <option value="DRAFT">Draft</option>
-                <option value="PENDING">Pending approval</option>
+                <option value="OBSOLETE">Obsolete</option>
                 <option value="APPROVED">Approved</option>
               </select>
             </Field>
@@ -2167,6 +2258,22 @@ export function MmsBoms() {
           </label>
         </Modal>
       )}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.label}
+          danger={confirm.danger}
+          reasonRequired={confirm.reasonRequired}
+          onCancel={() => setConfirm(null)}
+          onConfirm={(reason) =>
+            void confirm
+              .onConfirm(reason)
+              .catch((e) => setError(e instanceof Error ? e.message : 'Request failed'))
+              .finally(() => setConfirm(null))
+          }
+        />
+      )}
     </div>
   );
 }
@@ -2176,13 +2283,21 @@ function BomRowFragments({
   expanded,
   loading,
   detail,
+  canUpdate,
+  canDelete,
   onToggle,
+  onEdit,
+  onDelete,
 }: {
   r: Rec;
   expanded: boolean;
   loading: boolean;
   detail: Rec | null;
+  canUpdate: boolean;
+  canDelete: boolean;
   onToggle: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
 }) {
   const detailItems = detail && Array.isArray(detail.items) ? (detail.items as Rec[]) : [];
   return (
@@ -2206,19 +2321,45 @@ function BomRowFragments({
         </td>
         <td><Badge value={r.status} /></td>
         <td>{r.isActive ? <Badge value="ACTIVE" /> : <Badge value="INACTIVE" />}</td>
-        <td className="cell-num">
-          <button
-            type="button"
-            className="row-toggle"
-            aria-expanded={expanded}
-            aria-label={expanded ? 'Collapse material lines' : 'Expand material lines'}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggle();
-            }}
-          >
-            {expanded ? '-' : '+'}
-          </button>
+        <td>
+          <div className="row-actions">
+            {canUpdate && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEdit();
+                }}
+              >
+                Edit
+              </button>
+            )}
+            {canDelete && (
+              <button
+                type="button"
+                className="btn btn-sm btn-danger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete();
+                }}
+              >
+                Delete
+              </button>
+            )}
+            <button
+              type="button"
+              className="row-toggle"
+              aria-expanded={expanded}
+              aria-label={expanded ? 'Collapse material lines' : 'Expand material lines'}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle();
+              }}
+            >
+              {expanded ? '-' : '+'}
+            </button>
+          </div>
         </td>
       </tr>
       {expanded && (

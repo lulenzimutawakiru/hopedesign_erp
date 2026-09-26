@@ -2961,6 +2961,89 @@ export async function createBom(client: pg.PoolClient, ctx: Ctx, b: Record<strin
   return toCamelRow(res.rows[0]);
 }
 
+/**
+ * Only the fields actually present in the body are written, so a partial edit
+ * from the desk cannot blank out columns it did not mean to touch. `updated_at`
+ * has no database trigger on `boms`, so it is stamped explicitly here.
+ */
+export async function updateBom(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown>) {
+  if (!id) throw badRequest('BOM id is required');
+  if ('productId' in b && !Number(b.productId)) throw badRequest('productId is required');
+  const fields: Array<[string, string, (v: unknown) => unknown]> = [
+    ['productId', 'product_id', (v) => Number(v)],
+    ['code', 'code', (v) => (v != null ? String(v).trim() : null)],
+    ['name', 'name', (v) => String(v ?? 'BOM')],
+    ['version', 'version', (v) => Number(v ?? 1)],
+    ['quantity', 'quantity', (v) => (v != null ? Number(v) : 1)],
+    ['unitId', 'unit_id', (v) => (v != null ? Number(v) : null)],
+    ['isActive', 'is_active', (v) => v !== false],
+    ['effectiveFrom', 'effective_from', (v) => (v != null && v !== '' ? new Date(String(v)) : null)],
+    ['effectiveTo', 'effective_to', (v) => (v != null && v !== '' ? new Date(String(v)) : null)],
+    ['status', 'status', (v) => String(v ?? 'DRAFT')],
+  ];
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const changes: Record<string, unknown> = {};
+  for (const [key, column, cast] of fields) {
+    if (!(key in b)) continue;
+    const value = cast(b[key]);
+    changes[key] = value;
+    vals.push(value);
+    sets.push(`${column} = $${vals.length}`);
+  }
+  if (sets.length === 0) throw badRequest('No BOM fields to update');
+  vals.push(id);
+  const idIdx = vals.length;
+  vals.push(ctx.tenantId ?? 0);
+  const tenantIdx = vals.length;
+  const res = await client.query(
+    `UPDATE boms SET ${sets.join(', ')}, updated_at = now()
+     WHERE id = $${idIdx} AND tenant_id = $${tenantIdx}
+     RETURNING id, code, name`,
+    vals
+  );
+  if (res.rowCount === 0) throw notFound('BOM not found');
+  await logAudit(client, ctx, {
+    action: 'update',
+    resource: 'boms',
+    recordId: id,
+    recordCode: res.rows[0].code != null ? String(res.rows[0].code) : null,
+    newValues: changes,
+  });
+  return toCamelRow(res.rows[0]);
+}
+
+/**
+ * `bom_items` and `bom_versions` cascade on delete, but `work_orders.bom_id`
+ * has no cascade rule, so a BOM that has already been planned against cannot be
+ * removed without orphaning production history. Postgres raises 23503 for that;
+ * it is translated here because the raw constraint name is meaningless to an
+ * operator.
+ */
+export async function deleteBom(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown> = {}) {
+  if (!id) throw badRequest('BOM id is required');
+  try {
+    const res = await client.query(
+      `DELETE FROM boms WHERE id = $1 AND tenant_id = $2 RETURNING id, code`,
+      [id, ctx.tenantId ?? 0]
+    );
+    if (res.rowCount === 0) throw notFound('BOM not found');
+    await logAudit(client, ctx, {
+      action: 'delete',
+      resource: 'boms',
+      recordId: id,
+      recordCode: res.rows[0].code != null ? String(res.rows[0].code) : null,
+      metadata: { reason: b.reason != null ? String(b.reason) : 'BOM deleted' },
+    });
+    return { id: res.rows[0].id, code: res.rows[0].code, deleted: true };
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === '23503') {
+      throw badRequest('BOM is referenced by production records; mark it obsolete instead.');
+    }
+    throw err;
+  }
+}
+
 export async function createRouting(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
   const productId = Number(b.productId);
   if (!productId) throw badRequest('productId is required');
