@@ -158,6 +158,35 @@ cf_record_id() { # $1 zone id
     | tr ',' '\n' | sed -n 's/.*"id":"\([a-f0-9]\{32\}\)".*/\1/p' | head -1
 }
 
+# A provider NAME in failover.env is a claim about the account, not evidence of
+# it. `status` used to answer provider_ready=yes on the strength of the word
+# "namecheap" alone, so a key that was mistyped or never enabled read as
+# "failover is armed" right up until the incident - when setHosts was rejected
+# and DNS stayed on the dead node. Ask the API instead. getHosts is a read: it
+# republishes nothing, so this is safe to run at any time.
+namecheap_client_ip() { # ClientIp must be the IP Namecheap has whitelisted
+  curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null \
+    || curl -fsS --max-time 10 https://ifconfig.me/ip 2>/dev/null
+}
+
+namecheap_preflight() { # stdout: "ok <records>" | unset | noip | "err <code> <msg>"
+  local clientip sld tld resp n
+  if [[ -z "${NAMECHEAP_API_USER:-}" || -z "${NAMECHEAP_API_KEY:-}" ]]; then
+    printf 'unset'; return 1
+  fi
+  clientip="$(namecheap_client_ip)"
+  [[ -n "$clientip" ]] || { printf 'noip'; return 1; }
+  sld="${ZONE%%.*}"; tld="${ZONE#*.}"
+  resp="$(curl -fsS --max-time 25 "https://api.namecheap.com/xml.response?ApiUser=$NAMECHEAP_API_USER&ApiKey=$NAMECHEAP_API_KEY&UserName=${NAMECHEAP_USER_NAME:-$NAMECHEAP_API_USER}&ClientIp=$clientip&Command=namecheap.domains.dns.getHosts&SLD=$sld&TLD=$tld" 2>/dev/null)"
+  if printf '%s' "$resp" | grep -q 'Status="OK"'; then
+    n="$(printf '%s' "$resp" | grep -o 'HostName="' | wc -l | tr -d '[:space:]')"
+    printf 'ok %s' "${n:-0}"; return 0
+  fi
+  printf 'err %s' "$(printf '%s' "$resp" | tr -d '\n' \
+    | sed -n 's/.*<Error Number="\([0-9]*\)">\([^<]*\)<.*/\1 \2/p' | head -1)"
+  return 1
+}
+
 dns_move_cloudflare() { # $1 = target ip
   local ip="$1" zid rid resp
   zid="$(cf_zone_id)"
@@ -206,7 +235,7 @@ dns_move_namecheap() { # $1 = target ip
     return 1
   fi
 
-  clientip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null)"
+  clientip="$(namecheap_client_ip)"
   [[ -n "$clientip" ]] || { log "namecheap: could not determine request IP (required as ClientIp)"; return 1; }
 
   args="ApiUser=$NAMECHEAP_API_USER&ApiKey=$NAMECHEAP_API_KEY&UserName=${NAMECHEAP_USER_NAME:-$NAMECHEAP_API_USER}&ClientIp=$clientip"
@@ -283,19 +312,41 @@ dns_move() { # $1 = target ip
 
 case "$action" in
   status)
+    provider_note=""
     case "$DNS_PROVIDER" in
-      cloudflare|namecheap) provider_ready=yes ;;
-      *)                    provider_ready=no ;;
+      cloudflare)
+        if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+          provider_ready=yes
+        else
+          provider_ready=no
+          provider_note="CLOUDFLARE_API_TOKEN is not set"
+        fi
+        ;;
+      namecheap)
+        nc_state="$(namecheap_preflight || true)"
+        case "$nc_state" in
+          ok*)    provider_ready=yes
+                  provider_note="namecheap API accepted the credentials; ${nc_state#ok } records in zone $ZONE" ;;
+          unset)  provider_ready=no
+                  provider_note="NAMECHEAP_API_USER/NAMECHEAP_API_KEY are not set - the key is a 32-hex string from Profile > Tools > API Access" ;;
+          noip)   provider_ready=no
+                  provider_note="could not determine this host's public IP, which Namecheap requires as ClientIp" ;;
+          *)      provider_ready=no
+                  provider_note="namecheap API rejected the credentials (${nc_state#err })" ;;
+        esac
+        ;;
+      *) provider_ready=no ;;
     esac
     printf 'provider=%s zone=%s domain=%s\n' "${DNS_PROVIDER:-<unset>}" "$ZONE" "$DOMAIN"
     printf 'resolved_now=%s primary=%s peer=%s\n' \
       "$(resolved_ip)" "$PRIMARY_PUBLIC_IP" "${PEER_PUBLIC_IP:-<unset>}"
     printf 'live_ttl=%s would_publish_ttl=%s\n' "$(resolved_ttl)" "$RECORD_TTL"
     printf 'provider_ready=%s\n' "$provider_ready"
+    [[ -z "$provider_note" ]] || printf 'provider_note=%s\n' "$provider_note"
     if [[ "$provider_ready" == "no" ]]; then
-      printf 'NOTE: no DNS provider is configured, so lower-ttl and move-to-* cannot\n'
-      printf '      change anything - a failover needs the record moved by hand in\n'
-      printf '      the registrar panel. Set DNS_PROVIDER in deploy/failover.env to fix.\n'
+      printf 'NOTE: failover cannot move DNS, so lower-ttl and move-to-* would change\n'
+      printf '      nothing and a failover needs the record moved by hand in the\n'
+      printf '      registrar panel. Fix the reason above, then re-run status.\n'
     fi
     exit 0
     ;;
