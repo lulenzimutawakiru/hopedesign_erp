@@ -81,8 +81,12 @@ API_HEALTH_TRIES="${API_SYNC_HEALTH_TRIES:-60}"
 # 2026-09-29 rollout the peer recreated api-a was read back 10s after Started
 # as the image it was replacing, which failed a rollout whose sync had in fact
 # worked. Reading once, immediately, turns a slow hand-off into a failed
-# deploy, so the id check polls before it fails. A peer that is genuinely on
-# the wrong image still fails, just after the last poll.
+# deploy, so the id check polls before it fails. Polling only converges when the
+# comparison itself is sound, though: how long to wait is not the whole story,
+# because what the peer is held to has to be the build this node is shipping and
+# not whatever its active colour happens to be running. See the LOCAL_REFS /
+# LOCAL_IDS resolve below. A peer that is genuinely on the wrong image still
+# fails, just after the last poll.
 SYNC_VERIFY_TRIES="${SYNC_VERIFY_TRIES:-6}"
 SYNC_VERIFY_SLEEP="${SYNC_VERIFY_SLEEP:-5}"
 
@@ -104,7 +108,7 @@ USAGE="usage: bash deploy/sync-images-to-peer.sh [--help] [host ...]
 
 Ships this node's web and api images to every peer node in the pool and
 recreates that node's replicas of each, then asserts per service that every
-peer replica runs the same image id this node runs for that service. With no
+peer replica runs the image this node is shipping for that service. With no
 host argument the peers are read from $LIVE_DIR/webpeer*.caddy, which is what
 Caddy itself uses to build the pool.
 
@@ -257,9 +261,15 @@ if [[ ${#PEERS[@]} -eq 0 ]]; then
   exit 0
 fi
 
-# Resolve, once, what this node is serving for each service. A service with a
-# `build:` section and no explicit `image:` key is referenced untagged by some
-# compose versions, and docker save needs a tag that resolves.
+# Resolve, once, what this node is shipping for each service. Both halves are
+# read from the image, never from the running container: step 5 of the rollout
+# recreates only the idle colour, so the active colour is legitimately still on
+# the build being replaced and its containers would name that old build. The
+# peer is recreated from LOCAL_REFS, so LOCAL_IDS has to be what LOCAL_REFS
+# resolves to here - assert anything else and the sync succeeds while the check
+# that is supposed to confirm it fails.
+# A service with a `build:` section and no explicit `image:` key is referenced
+# untagged by some compose versions, and docker save needs a tag that resolves.
 declare -A LOCAL_REFS=() LOCAL_IDS=()
 for svc in "${SYNC_SERVICES[@]}"; do
   names="$(containers_on '' "$svc")"
@@ -274,9 +284,11 @@ for svc in "${SYNC_SERVICES[@]}"; do
   if [[ "$(echo "$ids" | grep -c . || true)" != "1" ]]; then
     fail "this node's own $svc replicas already disagree about their image ($(echo "$ids" | tr '\n' ' ')); recreate them before syncing peers."
   fi
+  ref_id="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null || true)"
+  [[ -n "$ref_id" ]] || fail "image $ref is not present on this node; rebuild it before syncing peers."
   LOCAL_REFS[$svc]="$ref"
-  LOCAL_IDS[$svc]="$ids"
-  log "this node serves $svc $ref ($ids)"
+  LOCAL_IDS[$svc]="$ref_id"
+  log "this node serves $svc $ref ($ref_id)"
 done
 
 RC=0
