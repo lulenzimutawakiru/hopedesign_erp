@@ -8,7 +8,8 @@ export type Persona =
   | 'security'
   | 'finance'
   | 'quality'
-  | 'people';
+  | 'people'
+  | 'admin';
 
 export interface Workspace {
   id: string;
@@ -27,6 +28,7 @@ export const WORKSPACES: Workspace[] = [
   { id: 'quality', label: 'Quality', hint: 'NCR and CAPA', href: '/records/quality/ncrs', personas: ['executive', 'quality', 'plant'], perm: 'quality.ncrs.view' },
   { id: 'money', label: 'Money', hint: 'AR, AP, books', href: '/records/finance/journals', personas: ['executive', 'finance'], perm: 'finance.journals.view' },
   { id: 'people', label: 'People', hint: 'HR and payroll', href: '/people', personas: ['executive', 'people'], perm: 'hr.employees.view' },
+  { id: 'admin', label: 'Administration', hint: 'Users, roles, controls', href: '/admin/users', personas: ['executive', 'admin'], perm: 'admin.users.view' },
 ];
 
 export function roleCodes(user: MeUser | null): string[] {
@@ -42,6 +44,7 @@ export function personaOf(user: MeUser | null): Persona {
   if (/cfo|finance|accountant|ar_|ap_|cashier|treasury|payroll_accountant/.test(codes)) return 'finance';
   if (/sales|crm|commercial|account_manager/.test(codes)) return 'commercial';
   if (/hr_|recruitment|training|employee_self/.test(codes)) return 'people';
+  if (/admin|sysadmin|super_admin|it_support|platform_ops/.test(codes)) return 'admin';
   return 'executive';
 }
 
@@ -55,6 +58,7 @@ export function personaLabel(p: Persona): string {
     finance: 'Finance desk',
     quality: 'Quality desk',
     people: 'People operations',
+    admin: 'Platform administration',
   }[p];
 }
 
@@ -109,6 +113,9 @@ export const COMMANDS: CommandAction[] = [
   { id: 'op', label: 'Operator floor', hint: 'Start job', href: '/operator', keywords: 'start pause output waste', perm: 'production.work_orders.start' },
   { id: 'people-board', label: 'People board', hint: 'HR and payroll', href: '/people', keywords: 'hr employee leave payroll nssf paye', perm: 'hr.employees.view' },
   { id: 'payroll', label: 'Payroll runs', hint: 'Calculate and post', href: '/people/payrolls', keywords: 'payroll paye nssf payslip', perm: 'hr.payrolls.view' },
+  { id: 'admin-console', label: 'Admin console', hint: 'Users and roles', href: '/admin/users', keywords: 'admin user account role permission rbac', perm: 'admin.users.view' },
+  { id: 'sod', label: 'Segregation of duties', hint: 'Conflicts and exceptions', href: '/admin/sod', keywords: 'sod conflict segregation duties rule', perm: 'admin.sod.view' },
+  { id: 'api-keys', label: 'API keys', hint: 'Rotation and expiry', href: '/admin/security', keywords: 'api key token secret rotate expiry', perm: 'admin.security.view' },
   { id: 'comms', label: 'Communication', hint: 'Health and inbox', href: '/communication', keywords: 'email sms notify comms inbox', perm: 'communication.command.view' },
   { id: 'comms-health', label: 'Comms health', hint: 'Test email and SMS', href: '/communication/admin', keywords: 'provider test resend africastalking', perm: 'communication.command.view' },
   { id: 'comms-deliv', label: 'Delivery logs', hint: 'Failed email and SMS', href: '/communication/deliveries', keywords: 'retry failed sms email delivery', perm: 'communication.delivery_logs.view' },
@@ -245,6 +252,9 @@ export function interpretCommand(raw: string): string | null {
   if (/crm|pipeline|new lead|customer account/.test(q)) return '/crm';
   if (/payroll|leave request|employee|nssf|paye|hr desk/.test(q)) return '/people';
   if (/new work order|create wo|create work order/.test(q)) return '/plant/new';
+  if (/segregation|sod|conflict/.test(q)) return '/admin/sod';
+  if (/api key|rotate key|token expiry/.test(q)) return '/admin/security';
+  if (/roles?|permissions?|rbac|user account/.test(q)) return '/admin/users';
   return null;
 }
 

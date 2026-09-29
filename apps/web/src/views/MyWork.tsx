@@ -17,6 +17,11 @@ interface WorkBundle {
   opportunities?: Rec[];
   activities?: Rec[];
   complaints?: Rec[];
+  leaveRequests?: Rec[];
+  contracts?: Rec[];
+  payrollRuns?: Rec[];
+  sodConflicts?: Rec[];
+  apiKeys?: Rec[];
   counts: {
     tasks: number;
     approvals: number;
@@ -25,6 +30,11 @@ interface WorkBundle {
     opportunities?: number;
     activities?: number;
     complaints?: number;
+    leaveRequests?: number;
+    contracts?: number;
+    payrollRuns?: number;
+    sodConflicts?: number;
+    apiKeys?: number;
     overdue?: number;
     unread?: number;
   };
@@ -52,6 +62,8 @@ const NOW_ICONS: Record<string, string> = {
   plant: '🏭',
   stock: '📦',
   reports: '📊',
+  people: '🧑‍💼',
+  admin: '🛡️',
 };
 
 export default function MyWork() {
@@ -95,6 +107,11 @@ export default function MyWork() {
   const opps = bundle.opportunities ?? [];
   const acts = bundle.activities ?? [];
   const complaints = bundle.complaints ?? [];
+  const leaveReqs = bundle.leaveRequests ?? [];
+  const contractRows = bundle.contracts ?? [];
+  const payrollRuns = bundle.payrollRuns ?? [];
+  const sodRows = bundle.sodConflicts ?? [];
+  const apiKeyRows = bundle.apiKeys ?? [];
   const exceptionTotal = ex.reduce((s, e) => s + e.count, 0);
   const empty =
     !bundle.approvals.length &&
@@ -104,6 +121,11 @@ export default function MyWork() {
     !opps.length &&
     !acts.length &&
     !complaints.length &&
+    !leaveReqs.length &&
+    !contractRows.length &&
+    !payrollRuns.length &&
+    !sodRows.length &&
+    !apiKeyRows.length &&
     !ex.length;
 
   const name = user ? `${user.first_name}` : 'there';
@@ -114,6 +136,18 @@ export default function MyWork() {
     tile('followups', 'Follow-ups', fmtNum((bundle.counts.activities ?? 0) + bundle.counts.tasks), `${fmtNum(bundle.counts.overdue)} overdue`, '📅', '#00A6A6', () => navigate('/crm/activities')),
     tile('pipeline', 'My pipeline', fmtNum(bundle.counts.opportunities), `${fmtNum(bundle.counts.leads)} leads · ${fmtNum(bundle.counts.complaints)} complaints`, '📈', '#1261A0', () => navigate('/crm/mine')),
     tile('jobs', 'My jobs', fmtNum(bundle.counts.workOrders), 'live work orders', '⚙️', '#D97706', () => navigate('/operator')),
+    ...(can(user, 'hr.leave.view') && personaOf(user) === 'people'
+      ? [tile('leave', 'Leave requests', fmtNum(bundle.counts.leaveRequests), `${fmtNum(bundle.counts.contracts)} contracts expiring`, '🗓️', '#0E7490', () => navigate('/people/leave'))]
+      : []),
+    ...(can(user, 'hr.payrolls.view') && personaOf(user) === 'people'
+      ? [tile('payroll', 'Payroll runs', fmtNum(bundle.counts.payrollRuns), 'awaiting approval', '💰', '#7C3AED', () => navigate('/people/payrolls/runs'))]
+      : []),
+    ...(can(user, 'admin.sod.view') && personaOf(user) === 'admin'
+      ? [tile('sod', 'SoD conflicts', fmtNum(bundle.counts.sodConflicts), 'segregation of duties', '🛡️', '#C93636', () => navigate('/admin/sod'))]
+      : []),
+    ...(can(user, 'admin.security.view') && personaOf(user) === 'admin'
+      ? [tile('keys', 'API keys', fmtNum(bundle.counts.apiKeys), 'expiring within 30 days', '🔑', '#B45309', () => navigate('/admin/security'))]
+      : []),
     tile('exceptions', 'Exceptions', fmtNum(exceptionTotal), 'need a person', '⚠️', '#C93636', () => navigate('/inbox')),
   ];
 
@@ -122,6 +156,8 @@ export default function MyWork() {
     { id: 'crm-mine', label: 'CRM desk', hint: 'Leads and pipeline', href: '/crm/mine' },
     { id: 'sales', label: 'Sales', hint: 'Quote to cash', href: '/sales' },
     { id: 'plant', label: 'Plant', hint: 'Live work orders', href: '/plant' },
+    ...(personaOf(user) === 'people' ? [{ id: 'people', label: 'People', hint: 'HR and payroll', href: '/people' }] : []),
+    ...(personaOf(user) === 'admin' ? [{ id: 'admin', label: 'Admin', hint: 'Users and controls', href: '/admin/users' }] : []),
   ];
 
   return (
@@ -361,6 +397,111 @@ export default function MyWork() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {leaveReqs.length > 0 && (
+        <section className="card">
+          <div className="card-head"><h3>Leave requests</h3><button className="btn btn-sm" onClick={() => navigate('/people/leave')}>Leave</button></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Type</th><th>Employee</th><th>Dates</th><th className="cell-num">Days</th><th>Status</th></tr></thead>
+              <tbody>
+                {leaveReqs.map((r) => (
+                  <tr key={String(r.id)} className="row-click" onClick={() => navigate('/people/leave')}>
+                    <td>{String(pick(r, 'leave_type', 'leaveType') ?? '—')}</td>
+                    <td>{String(pick(r, 'employee') ?? '—')}</td>
+                    <td className="cell-mono">{fmtDate(pick(r, 'start_date', 'startDate'))} – {fmtDate(pick(r, 'end_date', 'endDate'))}</td>
+                    <td className="cell-num">{fmtNum(pick(r, 'days'))}</td>
+                    <td><Badge value={pick(r, 'status')} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {contractRows.length > 0 && (
+        <section className="card">
+          <div className="card-head"><h3>Contracts expiring</h3><button className="btn btn-sm" onClick={() => navigate('/people/contracts/expiring')}>Contracts</button></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Contract</th><th>Employee</th><th>Role</th><th>Ends</th></tr></thead>
+              <tbody>
+                {contractRows.map((r) => (
+                  <tr key={String(r.id)} className="row-click" onClick={() => navigate('/people/contracts/expiring')}>
+                    <td className="cell-mono">{String(pick(r, 'contract_no', 'contractNo') ?? '—')}</td>
+                    <td>{String(pick(r, 'employee') ?? '—')}</td>
+                    <td>{String(pick(r, 'job_title', 'jobTitle') ?? '—')}</td>
+                    <td className="cell-mono">{fmtDate(pick(r, 'end_date', 'endDate'))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {payrollRuns.length > 0 && (
+        <section className="card">
+          <div className="card-head"><h3>Payroll runs</h3><button className="btn btn-sm" onClick={() => navigate('/people/payrolls/runs')}>Payroll</button></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Run</th><th>Period</th><th>Status</th><th className="cell-num">Net</th></tr></thead>
+              <tbody>
+                {payrollRuns.map((r) => (
+                  <tr key={String(r.id)} className="row-click" onClick={() => navigate('/people/payrolls/runs')}>
+                    <td className="cell-mono">{String(pick(r, 'run_no', 'runNo') ?? '—')}</td>
+                    <td className="cell-mono">{fmtDate(pick(r, 'period_start', 'periodStart'))} – {fmtDate(pick(r, 'period_end', 'periodEnd'))}</td>
+                    <td><Badge value={pick(r, 'status')} /></td>
+                    <td className="cell-num">{fmtMoney(pick(r, 'net_total', 'netTotal'))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {sodRows.length > 0 && (
+        <section className="card">
+          <div className="card-head"><h3>SoD conflicts</h3><button className="btn btn-sm" onClick={() => navigate('/admin/sod')}>Segregation</button></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Rule</th><th>Subject</th><th>Severity</th><th>Status</th></tr></thead>
+              <tbody>
+                {sodRows.map((r) => (
+                  <tr key={String(r.id)} className="row-click" onClick={() => navigate('/admin/sod')}>
+                    <td><span className="cell-mono">{String(pick(r, 'rule_code', 'ruleCode') ?? '—')}</span> {String(pick(r, 'rule_name', 'ruleName') ?? '')}</td>
+                    <td>{String(pick(r, 'subject') ?? '—')}</td>
+                    <td><Badge value={pick(r, 'severity')} /></td>
+                    <td><Badge value={pick(r, 'status')} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {apiKeyRows.length > 0 && (
+        <section className="card">
+          <div className="card-head"><h3>Expiring API keys</h3><button className="btn btn-sm" onClick={() => navigate('/admin/security')}>Security</button></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Name</th><th>Expires</th><th>Last used</th></tr></thead>
+              <tbody>
+                {apiKeyRows.map((r) => (
+                  <tr key={String(r.id)} className="row-click" onClick={() => navigate('/admin/security')}>
+                    <td>{String(pick(r, 'name') ?? '—')}</td>
+                    <td className="cell-mono">{fmtDate(pick(r, 'expires_at', 'expiresAt'))}</td>
+                    <td className="cell-mono">{pick(r, 'last_used_at', 'lastUsedAt') ? fmtDate(pick(r, 'last_used_at', 'lastUsedAt')) : '—'}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

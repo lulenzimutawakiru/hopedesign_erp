@@ -190,6 +190,37 @@ dashboardRouter.get(
        WHERE cm.tenant_id = $1 AND cm.assigned_to = $2 AND cm.status IN ('OPEN','IN_PROGRESS','ESCALATED')`,
       [tenant, req.auth!.id]
     );
+    const pendingLeave = await safe(
+      `SELECT count(*)::int AS c FROM leave_requests l
+       JOIN employees e ON e.id = l.employee_id
+       WHERE e.tenant_id = $1 AND ($2::bigint IS NULL OR e.company_id = $2) AND l.status = 'SUBMITTED'`,
+      [tenant, company]
+    );
+    const expiringContracts = await safe(
+      `SELECT count(*)::int AS c FROM employment_contracts ec
+       WHERE ec.tenant_id = $1 AND ($2::bigint IS NULL OR ec.company_id = $2)
+         AND ec.deleted_at IS NULL
+         AND ec.status IN ('EXECUTED','ACTIVE','VARIED','RENEWED')
+         AND ec.end_date IS NOT NULL AND ec.end_date <= CURRENT_DATE + interval '60 days'`,
+      [tenant, company]
+    );
+    const pendingPayrolls = await safe(
+      `SELECT count(*)::int AS c FROM payroll_runs pr
+       WHERE pr.tenant_id = $1 AND ($2::bigint IS NULL OR pr.company_id = $2)
+         AND pr.status IN ('REVIEW','PENDING_APPROVAL')`,
+      [tenant, company]
+    );
+    const sodConflicts = await safe(
+      `SELECT count(*)::int AS c FROM sod_conflicts sc
+       WHERE sc.tenant_id = $1 AND sc.status IN ('POTENTIAL_CONFLICT','ACTIVE_CONFLICT')`,
+      [tenant]
+    );
+    const expiringKeys = await safe(
+      `SELECT count(*)::int AS c FROM api_keys k
+       WHERE k.tenant_id = $1 AND k.status = 'ACTIVE'
+         AND k.expires_at IS NOT NULL AND k.expires_at < now() + interval '30 days'`,
+      [tenant]
+    );
 
     const exceptions = [
       { code: 'approvals', label: 'Approve or reject', hint: 'Waiting on your sign-off', count: n(approvals.rows[0], 'count'), href: '/inbox', severity: 'high' as const, persona: 'all' },
@@ -203,6 +234,11 @@ dashboardRouter.get(
       { code: 'secure', label: 'Move secure jobs', hint: 'In production, not yet delivered', count: n(secJobs.rows[0], 'c'), href: '/security-jobs', severity: 'high' as const, persona: 'security' },
       { code: 'qr', label: 'Investigate QR flags', hint: 'Open authenticity anomalies', count: n(qrAnom.rows[0], 'c'), href: '/qr/scan', severity: 'critical' as const, persona: 'security' },
       { code: 'ar', label: 'Collect overdue invoices', hint: 'Past due receivables', count: n(overdueAr.rows[0], 'c'), href: '/sales/invoices', severity: 'high' as const, persona: 'finance' },
+      { code: 'leave', label: 'Approve leave requests', hint: 'Submitted and awaiting a decision', count: n(pendingLeave.rows[0], 'c'), href: '/people/leave', severity: 'high' as const, persona: 'people' },
+      { code: 'contracts', label: 'Renew expiring contracts', hint: 'Ending within 60 days', count: n(expiringContracts.rows[0], 'c'), href: '/people/contracts/expiring', severity: 'medium' as const, persona: 'people' },
+      { code: 'payroll', label: 'Approve payroll runs', hint: 'In review or pending approval', count: n(pendingPayrolls.rows[0], 'c'), href: '/people/payrolls/runs', severity: 'high' as const, persona: 'people' },
+      { code: 'sod', label: 'Resolve SoD conflicts', hint: 'Segregation-of-duties violations', count: n(sodConflicts.rows[0], 'c'), href: '/admin/sod', severity: 'high' as const, persona: 'admin' },
+      { code: 'keys', label: 'Rotate expiring API keys', hint: 'Expiring within 30 days', count: n(expiringKeys.rows[0], 'c'), href: '/admin/security', severity: 'medium' as const, persona: 'admin' },
     ].filter((e) => e.count > 0);
 
     res.json({
@@ -295,6 +331,50 @@ dashboardRouter.get(
        WHERE n.tenant_id = $1 AND n.user_id = $2 AND n.read_at IS NULL`,
       [tenant, userId]
     );
+    const leaveRows = await safe(
+      `SELECT l.id, l.leave_type, l.start_date, l.end_date, l.days, l.status,
+              COALESCE(NULLIF(TRIM(e.first_name || ' ' || e.last_name), ''), e.employee_no) AS employee
+       FROM leave_requests l JOIN employees e ON e.id = l.employee_id
+       WHERE e.tenant_id = $1 AND ($2::bigint IS NULL OR e.company_id = $2) AND l.status = 'SUBMITTED'
+       ORDER BY l.start_date, l.id LIMIT 12`,
+      [tenant, company]
+    );
+    const contractRows = await safe(
+      `SELECT ec.id, ec.contract_no, ec.contract_type, ec.job_title, ec.end_date,
+              COALESCE(NULLIF(TRIM(e.first_name || ' ' || e.last_name), ''), e.employee_no) AS employee
+       FROM employment_contracts ec JOIN employees e ON e.id = ec.employee_id
+       WHERE ec.tenant_id = $1 AND ($2::bigint IS NULL OR ec.company_id = $2)
+         AND ec.deleted_at IS NULL AND ec.status IN ('EXECUTED','ACTIVE','VARIED','RENEWED')
+         AND ec.end_date IS NOT NULL AND ec.end_date <= CURRENT_DATE + interval '60 days'
+       ORDER BY ec.end_date, ec.id LIMIT 12`,
+      [tenant, company]
+    );
+    const payrollRows = await safe(
+      `SELECT pr.id, pr.run_no, pr.status, pr.period_start, pr.period_end, pr.net_total
+       FROM payroll_runs pr
+       WHERE pr.tenant_id = $1 AND ($2::bigint IS NULL OR pr.company_id = $2)
+         AND pr.status IN ('REVIEW','PENDING_APPROVAL')
+       ORDER BY pr.period_end DESC, pr.id DESC LIMIT 12`,
+      [tenant, company]
+    );
+    const sodRows = await safe(
+      `SELECT sc.id, sc.severity, sc.status, sc.detected_at, sr.code AS rule_code, sr.name AS rule_name,
+              COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''), u.email) AS subject
+       FROM sod_conflicts sc
+       LEFT JOIN sod_rules sr ON sr.id = sc.sod_rule_id
+       LEFT JOIN users u ON u.id = sc.user_id
+       WHERE sc.tenant_id = $1 AND sc.status IN ('POTENTIAL_CONFLICT','ACTIVE_CONFLICT')
+       ORDER BY sc.detected_at DESC, sc.id DESC LIMIT 12`,
+      [tenant]
+    );
+    const apiKeyRows = await safe(
+      `SELECT k.id, k.name, k.expires_at, k.last_used_at
+       FROM api_keys k
+       WHERE k.tenant_id = $1 AND k.status = 'ACTIVE'
+         AND k.expires_at IS NOT NULL AND k.expires_at < now() + interval '30 days'
+       ORDER BY k.expires_at LIMIT 12`,
+      [tenant]
+    );
     res.json({
       data: {
         tasks: tasks.rows,
@@ -304,6 +384,11 @@ dashboardRouter.get(
         opportunities: opps.rows,
         activities: activities.rows,
         complaints: complaints.rows,
+        leaveRequests: leaveRows.rows,
+        contracts: contractRows.rows,
+        payrollRuns: payrollRows.rows,
+        sodConflicts: sodRows.rows,
+        apiKeys: apiKeyRows.rows,
         counts: {
           tasks: tasks.rows.length,
           approvals: approvals.rows.length,
@@ -312,6 +397,11 @@ dashboardRouter.get(
           opportunities: opps.rows.length,
           activities: activities.rows.length,
           complaints: complaints.rows.length,
+          leaveRequests: leaveRows.rows.length,
+          contracts: contractRows.rows.length,
+          payrollRuns: payrollRows.rows.length,
+          sodConflicts: sodRows.rows.length,
+          apiKeys: apiKeyRows.rows.length,
           unread: Number(unread.rows[0]?.c ?? 0),
           overdue: activities.rows.filter((r) => r.overdue === true || r.overdue === 't').length,
         },
