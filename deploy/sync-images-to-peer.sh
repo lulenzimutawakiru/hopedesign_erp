@@ -76,6 +76,15 @@ SYNC_ATTEMPTS="${SYNC_ATTEMPTS:-${WEB_SYNC_ATTEMPTS:-3}}"
 # for callers that still set the old names.
 WEB_HEALTH_TRIES="${SYNC_HEALTH_TRIES:-${WEB_SYNC_HEALTH_TRIES:-24}}"
 API_HEALTH_TRIES="${API_SYNC_HEALTH_TRIES:-60}"
+# A container that has just been force-recreated can still answer an inspect
+# with the image id of the container compose is retiring behind it: on the
+# 2026-09-29 rollout the peer recreated api-a was read back 10s after Started
+# as the image it was replacing, which failed a rollout whose sync had in fact
+# worked. Reading once, immediately, turns a slow hand-off into a failed
+# deploy, so the id check polls before it fails. A peer that is genuinely on
+# the wrong image still fails, just after the last poll.
+SYNC_VERIFY_TRIES="${SYNC_VERIFY_TRIES:-6}"
+SYNC_VERIFY_SLEEP="${SYNC_VERIFY_SLEEP:-5}"
 
 SSH_OPTS=(
   -i "$PEER_SSH_KEY"
@@ -103,7 +112,9 @@ env:
   PEER_SSH_KEY          ssh key for the peer        (default /root/.ssh/id_ed25519)
   SYNC_ATTEMPTS         whole-recreate attempts     (default 3)
   SYNC_HEALTH_TRIES     web health polls, 5s apart  (default 24)
-  API_SYNC_HEALTH_TRIES api health polls, 5s apart  (default 60)"
+  API_SYNC_HEALTH_TRIES api health polls, 5s apart  (default 60)
+  SYNC_VERIFY_TRIES     image-id polls, 5s apart    (default 6)
+  SYNC_VERIFY_SLEEP     seconds between those polls (default 5)"
 
 # Every replica of one service in this compose project on a node, discovered by
 # compose label and never by container name: deploy.replicas decides the count,
@@ -282,6 +293,11 @@ for host in "${PEERS[@]}"; do
       continue
     fi
     PEER_IDS="$(image_ids_on "root@$host" "$svc" | sort -u)"
+    for _ in $(seq 1 "$SYNC_VERIFY_TRIES"); do
+      [[ "$PEER_IDS" == "${LOCAL_IDS[$svc]}" ]] && break
+      sleep "$SYNC_VERIFY_SLEEP"
+      PEER_IDS="$(image_ids_on "root@$host" "$svc" | sort -u)"
+    done
     if [[ "$PEER_IDS" != "${LOCAL_IDS[$svc]}" ]]; then
       log "FAIL $host runs $svc [$(echo "$PEER_IDS" | tr '\n' ' ')] but this node runs ${LOCAL_IDS[$svc]}"
       NODE_OK=0
