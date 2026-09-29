@@ -1,4 +1,4 @@
-﻿import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { can, useAuth } from '../auth';
 import { useHashRoute, navigate, matchRoute } from '../router';
 import { api } from '../api';
@@ -11,11 +11,9 @@ import DataExports from './DataExports';
 import SecurityJobs from './SecurityJobs';
 import QrScanner from './QrScanner';
 import QrTrace from './QrTrace';
-import NotificationsBell from './NotificationsBell';
 import CommandPalette from './CommandPalette';
 import { Toaster } from '../components/toast';
 import { WarehouseRoom, OperatorFloor } from './Rooms';
-import { CreateMenu } from '../components/os';
 import { PageLoader } from '../components/ui';
 
 // Route-gated views load on demand so the initial shell stays lean.
@@ -49,19 +47,15 @@ const PayrollSettings = lazy(() => import('./PayrollSettings'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
   AccessDenied,
-  Breadcrumbs,
   MobileDock,
-  ModuleNav,
   MoreDrawer,
   NetworkBanner,
-  ScopeChip,
   Sidebar,
   SkipLink,
-  UserMenu,
   useBreakpoint,
 } from '../components/nav';
+import TopHeader from '../components/TopHeader';
 import { isFocusPath, itemVisible, normalizePath, requiredPermForPath, track } from '../nav';
-import { BrandMark, BrandWordmark, hasBrandAsset } from '../components/BrandMark';
 import { useCompanyProfile } from '../company';
 
 /** Badge counts keyed by dashboard exception code (low_stock, ncr, secure, ...). */
@@ -245,8 +239,6 @@ export default function Shell() {
     setMoreOpen(false);
   };
 
-  const showModuleNav = !denied && !focus && !path.startsWith('/operator');
-
   return (
     <div className={`app-shell ${collapsed ? 'rail-collapsed' : ''} ${focus ? 'is-focus' : ''} bp-${bp}`}>
       <SkipLink />
@@ -273,54 +265,23 @@ export default function Shell() {
       {sideOpen && <div className="sidebar-scrim" onClick={() => setSideOpen(false)} />}
 
       <div className="main-col">
-        <header className="topbar">
-          {compact && !focus && (
-            <button className="icon-btn menu-btn" onClick={() => setSideOpen((s) => !s)} aria-label="Open navigation">☰</button>
-          )}
-          {focus && (
-            <button className="icon-btn" onClick={() => history.back()} aria-label="Back">←</button>
-          )}
-          {compact && hasBrandAsset(company.logo_url) && (
-            <button className="topbar-brand" onClick={() => navigate('/dashboard')} aria-label={`${brandCompany.name} dashboard`}>
-              <BrandMark size="sm" logoUrl={company.logo_url} />
-            </button>
-          )}
-          <button className="cmd-open" onClick={() => setCmdOpen(true)} aria-label="Search or command">
-            <span>Search or type a command…</span>
-            <kbd>Ctrl K</kbd>
-          </button>
-          <div className="topbar-actions">
-            <button className="btn btn-sm btn-scan" onClick={() => setScannerOpen(true)}>Scan QR</button>
-            <span className="hide-phone"><CreateMenu /></span>
-            <button className="btn btn-sm hide-phone" onClick={() => navigate('/inbox')}>
-              Tasks {approvalCount > 0 && <span className="count-badge">{approvalCount}</span>}
-            </button>
-            <NotificationsBell />
-            <ScopeChip user={user} />
-            <UserMenu
-              user={user}
-              prefsLabel={`${prefs.theme} · ${prefs.density}`}
-              focusMode={prefs.focusMode}
-              onHelp={() => setHelpOpen(true)}
-              onFocus={() => setPrefs(savePrefs({ focusMode: !prefs.focusMode }))}
-              onPin={() => setPrefs(toggleFavorite(path))}
-              onLogout={logout}
-            />
-          </div>
-          <BrandWordmark
-            size="md"
-            className="topbar-brand-alt hide-phone"
-            logoUrl={company.secondary_logo_url}
-            title={`${brandCompany.name} logo`}
-          />
-        </header>
-
-        {showModuleNav && (
-          <div className="module-bar">
-            <Breadcrumbs path={path} />
-            <ModuleNav path={path} user={user} />
-          </div>
-        )}
+        <TopHeader
+          path={path}
+          user={user}
+          approvalCount={approvalCount}
+          compact={compact}
+          focus={focus}
+          company={company}
+          brandCompany={brandCompany}
+          prefs={prefs}
+          onOpenSidebar={() => setSideOpen((s) => !s)}
+          onOpenSearch={() => setCmdOpen(true)}
+          onOpenScanner={() => setScannerOpen(true)}
+          onOpenHelp={() => setHelpOpen(true)}
+          onToggleFocus={() => setPrefs(savePrefs({ focusMode: !prefs.focusMode }))}
+          onPin={() => setPrefs(toggleFavorite(path))}
+          onLogout={logout}
+        />
 
         <main id="main-content" className="content" tabIndex={-1}>
           <Suspense fallback={<PageLoader variant="page" />}>{body}</Suspense>

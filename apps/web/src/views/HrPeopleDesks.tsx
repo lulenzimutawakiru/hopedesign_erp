@@ -71,7 +71,7 @@ export function PeopleBoard() {
           {can(user, 'hr.payrolls.create') && <button className="btn btn-primary" onClick={() => navigate('/people/payrolls/new')}>New payroll</button>}
         </div>
       </header>
-      <div className="kpi-grid--tiles">
+      <div className="kpi-grid--tiles kpi-grid--6">
         {tiles.map((t) => (
           <button key={t.label} className="kpi-tile" style={tileStyle(t.accent, t.tint)} onClick={() => navigate(t.href)}>
             <span className="kpi-tile-icon" aria-hidden>{t.icon}</span>

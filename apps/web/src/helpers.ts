@@ -1,3 +1,5 @@
+import { fmtMoney, fmtNum } from './api';
+
 /** Read a value from a row that may use snake_case or camelCase keys. */
 export function pick<T = unknown>(row: Record<string, unknown>, ...keys: string[]): T | undefined {
   for (const k of keys) {
@@ -8,15 +10,62 @@ export function pick<T = unknown>(row: Record<string, unknown>, ...keys: string[
 
 /** Stable display of a value. */
 export function displayValue(v: unknown): string {
-  if (v === null || v === undefined) return '-';
-  if (typeof v === 'object') {
-    try {
-      return JSON.stringify(v);
-    } catch {
-      return '[object]';
-    }
+  return formatCellValue('', v);
+}
+
+/** Keys whose numeric values are money rather than counts. */
+const MONEY_RE = /(amount|total|subtotal|tax|price|cost|value|balance|limit|rate|debit|credit|net|gross|salary|wage|pay|fee|charge|discount)/i;
+
+/**
+ * `2450pcs` / `6 %` render as `2,450 pcs` / `6%`. Only matches a whole value
+ * that is a number followed by a known unit, so free text is left untouched.
+ */
+export const UNIT_RE = /^(-?[\d,]+(?:\.\d+)?)\s*(pcs|pc|units?|pairs?|sets?|rolls?|boxes?|cartons?|bags?|bundles?|kg|g|mg|tonnes?|m2|m3|mm|cm|km|ml|l|hrs?|min|sec|%)$/i;
+
+export function normaliseUnit(raw: string): string {
+  const m = raw.match(UNIT_RE);
+  if (!m) return raw;
+  const n = Number(m[1].replace(/,/g, ''));
+  if (!Number.isFinite(n)) return raw;
+  const numText = Number.isInteger(n) ? n.toLocaleString('en-UG') : fmtNum(n);
+  return m[2] === '%' ? `${numText}%` : `${numText} ${m[2]}`;
+}
+
+/** Render structured key/value data as compact text instead of raw JSON. */
+export function keyValueText(v: unknown, maxEntries = 4): string {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v !== 'object') return normaliseUnit(String(v));
+  if (Array.isArray(v)) {
+    return v.length ? v.map((x) => keyValueText(x, maxEntries)).filter(Boolean).join(', ') : '';
   }
-  return String(v);
+  const entries = Object.entries(v as Record<string, unknown>)
+    .filter(([, val]) => val !== null && val !== undefined && val !== '');
+  if (!entries.length) return '';
+  const parts = entries.slice(0, maxEntries).map(([k, val]) => {
+    const label = titleCase(k);
+    if (typeof val === 'number' || (typeof val === 'string' && /^-?\d/.test(val))) {
+      const n = Number(val);
+      if (Number.isFinite(n)) {
+        return MONEY_RE.test(k) ? `${label}: ${fmtMoney(n)} UGX` : `${label}: ${fmtNum(n)}`;
+      }
+    }
+    if (typeof val === 'object') return `${label}: ${keyValueText(val, maxEntries)}`;
+    return `${label}: ${String(val)}`;
+  });
+  const extra = entries.length - maxEntries;
+  return parts.join(' \u00B7 ') + (extra > 0 ? ` \u00B7 View details` : '');
+}
+
+/** Table-cell formatter: numbers, objects and unit strings are rendered, not dumped. */
+export function formatCellValue(name: string, value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return '-';
+    return MONEY_RE.test(name) ? fmtMoney(value) : fmtNum(value);
+  }
+  if (typeof value === 'object') return keyValueText(value) || '-';
+  return normaliseUnit(String(value));
 }
 
 export function titleCase(s: string): string {

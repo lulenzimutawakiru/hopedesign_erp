@@ -25,32 +25,55 @@ export function statusMeta(status: string | null | undefined): {
   const raw = String(status ?? '');
   const s = raw.toUpperCase();
   const label = raw.replace(/_/g, ' ');
-  if (['APPROVED', 'COMPLETED', 'POSTED', 'ACTIVE', 'EXECUTED', 'SIGNED', 'RENEWED', 'VARIED', 'DISPATCHED', 'DELIVERED', 'DONE', 'AUTHENTIC', 'RECEIVED', 'PASSED', 'PASS', 'RELEASED', 'RESOLVED', 'VERIFIED', 'OK', 'MATCHED', 'GREEN', 'REGISTERED', 'AVAILABLE', 'IN_STORE', 'IN_USE', 'ASSIGNED', 'PAID', 'SETTLED', 'RECONCILED'].includes(s)) {
+  if (['APPROVED', 'COMPLETED', 'POSTED', 'ACTIVE', 'EXECUTED', 'SIGNED', 'RENEWED', 'VARIED', 'DISPATCHED', 'DELIVERED', 'DONE', 'AUTHENTIC', 'RECEIVED', 'PASSED', 'PASS', 'RELEASED', 'RESOLVED', 'VERIFIED', 'OK', 'MATCHED', 'GREEN', 'REGISTERED', 'AVAILABLE', 'IN_STORE', 'IN_STOCK', 'IN_USE', 'ASSIGNED', 'PAID', 'FULFILLED', 'SETTLED', 'RECONCILED'].includes(s)) {
     return { kind: 'ok', tone: 'badge-green', icon: '✓', label };
   }
-  if (['IN_PROGRESS', 'IN_REVIEW', 'REVIEW', 'PARTIALLY_DISPATCHED', 'PARTIAL', 'PARTIALLY_PAID', 'UNDER_REVIEW', 'VALIDATING', 'SENT_FOR_SIGNATURE', 'PARTIALLY_SIGNED'].includes(s)) {
+  if (['IN_PROGRESS', 'IN_REVIEW', 'REVIEW', 'PARTIALLY_DISPATCHED', 'PARTIAL', 'PARTIALLY_PAID', 'UNDER_REVIEW', 'VALIDATING', 'SENT_FOR_SIGNATURE', 'PARTIALLY_SIGNED', 'QUOTATION_SENT', 'SENT', 'ACKNOWLEDGED', 'IN_TRANSIT', 'SHIPPED'].includes(s)) {
     return { kind: 'progress', tone: 'badge-progress', icon: '●', label };
   }
-  if (['PENDING', 'SUBMITTED', 'PENDING_APPROVAL', 'HR_REVIEW', 'MANAGER_REVIEW', 'FINANCE_REVIEW', 'LEGAL_REVIEW', 'WAITING', 'OVERDUE', 'RETURNED', 'LOW', 'NOT_RECEIVED', 'NOT_INVOICED', 'AMBER', 'WARN'].includes(s)) {
+  if (['PENDING', 'SUBMITTED', 'PENDING_APPROVAL', 'HR_REVIEW', 'MANAGER_REVIEW', 'FINANCE_REVIEW', 'LEGAL_REVIEW', 'WAITING', 'OVERDUE', 'RETURNED', 'LOW', 'LOW_STOCK', 'PAUSED', 'NOT_RECEIVED', 'NOT_INVOICED', 'AMBER', 'WARN'].includes(s)) {
     return { kind: 'pending', tone: 'badge-amber', icon: '⚠', label };
   }
-  if (['REJECTED', 'TERMINATED', 'FAILED', 'FAIL', 'QUARANTINE', 'QUARANTINED', 'COMPROMISED', 'RECALLED', 'SPOILED', 'DAMAGED', 'LOST', 'MISSING', 'STOLEN', 'DIFFERENCE', 'RED'].includes(s)) {
+  if (['REJECTED', 'TERMINATED', 'FAILED', 'FAIL', 'QUARANTINE', 'QUARANTINED', 'COMPROMISED', 'RECALLED', 'SPOILED', 'DAMAGED', 'LOST', 'MISSING', 'STOLEN', 'DIFFERENCE', 'OUT_OF_STOCK', 'SCRAP', 'SCRAPPED', 'VOID', 'VOIDED', 'CANCELLED', 'CANCELED', 'RED'].includes(s)) {
     return { kind: 'reject', tone: 'badge-red', icon: '✕', label };
   }
   if (['CRITICAL', 'LOCKED'].includes(s)) {
     return { kind: 'critical', tone: 'badge-critical', icon: '✕', label };
   }
-  if (['SUSPENDED', 'ON_HOLD', 'MAINTENANCE', 'UNDER_MAINTENANCE', 'UNDER_INSPECTION', 'RESERVED', 'REWORK', 'SUSPICIOUS'].includes(s)) {
+  if (['SUSPENDED', 'ON_HOLD', 'HOLD', 'MAINTENANCE', 'UNDER_MAINTENANCE', 'UNDER_INSPECTION', 'REWORK', 'SUSPICIOUS'].includes(s)) {
     return { kind: 'hold', tone: 'badge-hold', icon: '⚠', label };
   }
-  if (['CANCELLED', 'CANCELED', 'VOID', 'VOIDED', 'DRAFT', 'CLOSED', 'ARCHIVED', 'EXPIRED', 'IDLE', 'OFFLINE', 'UNKNOWN', 'DISPOSED', 'RETIRED'].includes(s)) {
+  if (['DRAFT', 'CLOSED', 'ARCHIVED', 'EXPIRED', 'IDLE', 'OFFLINE', 'UNKNOWN', 'DISPOSED', 'RETIRED', 'RESERVED', 'SCHEDULED'].includes(s)) {
     return { kind: 'draft', tone: 'badge-neutral', icon: '–', label };
   }
-  if (['OPEN', 'NEW', 'REQUESTED', 'SCHEDULED', 'PLANNED', 'ALREADY_VERIFIED'].includes(s)) {
+  if (['OPEN', 'NEW', 'REQUESTED', 'PLANNED', 'ALREADY_VERIFIED'].includes(s)) {
     return { kind: 'info', tone: 'badge-blue', icon: '●', label };
+  }
+  if (['CONFIRMED', 'ALLOCATED', 'RESERVED_FOR_ORDER', 'PICKED'].includes(s)) {
+    return { kind: 'info', tone: 'badge-purple', icon: '●', label };
   }
   if (['SECRET', 'TOP_SECRET', 'CLASSIFIED', 'CONFIDENTIAL', 'RESTRICTED'].includes(s)) {
     return { kind: 'secure', tone: 'badge-purple', icon: '●', label };
+  }
+  /*
+   * General-ledger account classifications. These are not workflow states,
+   * but they are rendered through the same Badge primitive, so they need
+   * explicit tones: asset, liability, equity, revenue, expense.
+   */
+  if (['ASSET', 'CURRENT_ASSET', 'NON_CURRENT_ASSET', 'FIXED_ASSET'].includes(s)) {
+    return { kind: 'info', tone: 'badge-blue', icon: '●', label };
+  }
+  if (['LIABILITY', 'CURRENT_LIABILITY', 'NON_CURRENT_LIABILITY', 'PAYABLE'].includes(s)) {
+    return { kind: 'pending', tone: 'badge-amber', icon: '●', label };
+  }
+  if (['EQUITY', 'CAPITAL', 'RETAINED_EARNINGS'].includes(s)) {
+    return { kind: 'info', tone: 'badge-purple', icon: '●', label };
+  }
+  if (['REVENUE', 'INCOME', 'SALES'].includes(s)) {
+    return { kind: 'ok', tone: 'badge-green', icon: '●', label };
+  }
+  if (['EXPENSE', 'COST_OF_SALES', 'COGS', 'EXPENDITURE'].includes(s)) {
+    return { kind: 'reject', tone: 'badge-red', icon: '●', label };
   }
   return { kind: 'neutral', tone: 'badge-neutral', icon: '●', label };
 }

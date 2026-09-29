@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { EntityMeta } from '../api';
 import { fmtBool, fmtDate, fmtMoney, fmtNum } from '../api';
-import { pick, titleCase } from '../helpers';
+import { keyValueText, normaliseUnit, pick, titleCase } from '../helpers';
 import { Badge, Pager } from './ui';
 import { EmptyState } from './os';
 import { ErrorState, TableSkeleton, safeMessage } from './states';
@@ -64,8 +64,8 @@ function fmtCell(name: string, value: unknown): string {
     if (/amount|total|subtotal|tax|price|cost|value|balance|limit|rate/.test(name)) return fmtMoney(value);
     return fmtNum(value);
   }
-  if (typeof value === 'object') return JSON.stringify(value);
-  return String(value);
+  if (typeof value === 'object') return keyValueText(value) || '-';
+  return normaliseUnit(String(value));
 }
 
 export type DataTableQuery = {

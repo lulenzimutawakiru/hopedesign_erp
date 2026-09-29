@@ -3,13 +3,14 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
 import { useCompanyProfile } from '../company';
-import { navigate, useHashQuery } from '../router';
+import { navigate, useHashQuery, useHashRoute } from '../router';
 import { Badge, ErrorBanner, PageLoader, Modal, Pager } from '../components/ui';
 import { ConfirmDialog, EmptyState, Skeleton } from '../components/os';
 import DownloadMenu from '../components/DownloadMenu';
 import { FinanceKcb } from './FinanceKcb';
 import { FinanceEquity } from './FinanceEquity';
 import { pathForEntity } from '../work';
+import { keyValueText } from '../helpers';
 
 type Rec = Record<string, unknown>;
 
@@ -75,6 +76,56 @@ function viewOf(path: string): { view: string; id: string | null; sub: string | 
   const parts = path.split('/').filter(Boolean);
   if (parts[0] !== 'finance') return { view: 'overview', id: null, sub: null };
   return { view: parts[1] ?? 'overview', id: parts[2] ?? null, sub: parts[3] ?? null };
+}
+
+function downloadCsv(filename: string, rows: string[][]): void {
+  const esc = (v: unknown) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const body = '\uFEFF' + rows.map((r) => r.map(esc).join(',')).join('\r\n');
+  const blob = new Blob([body], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Single authoritative General Ledger strip. Order matches the finance cluster
+// in src/nav.ts; every target is an existing route.
+const GL_TABS: Array<{ href: string; label: string }> = [
+  { href: '/finance/trial-balance', label: 'Trial Balance' },
+  { href: '/finance/accounts', label: 'Chart of Accounts' },
+  { href: '/finance/journals', label: 'Journal Entries' },
+  { href: '/finance/periods', label: 'Periods' },
+  { href: '/finance/close', label: 'Period Close' },
+];
+
+function FinanceGlTabs() {
+  const route = useHashRoute();
+  return (
+    <div className="tabs" role="tablist" aria-label="General ledger">
+      {GL_TABS.map((t) => {
+        const active = route === t.href;
+        return (
+          <button
+            key={t.href}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            className={active ? 'tab active' : 'tab'}
+            onClick={() => navigate(t.href)}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function FinanceFlow({ path }: { path: string }) {
@@ -1382,19 +1433,34 @@ function TrialBalance() {
   if (error) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader variant="page" label="Preparing trial balance..." />;
   const ok = Math.round(Number(data.totals.debit) * 100) === Math.round(Number(data.totals.credit) * 100);
+  const zero = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) !== 0 ? fmtMoney(v) : '-');
+  const exportCsv = () => downloadCsv('trial-balance.csv', [
+    ['Code', 'Account', 'Type', 'Debit', 'Credit', 'Balance'],
+    ...data.rows.map((r) => [String(r.code), String(r.name), String(r.accountType), String(r.debit ?? ''), String(r.credit ?? ''), String(r.balance ?? '')]),
+    ['Total', '', '', String(data.totals.debit ?? ''), String(data.totals.credit ?? ''), String(data.totals.balance ?? '')],
+  ]);
   return (
     <div className="page">
       <header className="page-head">
-        <div>
+        <div style={{ minWidth: 0 }}>
           <p className="mod-kicker" data-mod="fin">Statement</p>
           <h1>Trial balance</h1>
           <p className="muted">{ok ? 'Debits equal credits.' : 'Out of balance - do not close the period.'}</p>
         </div>
+        <div className="head-actions">
+          <button className="btn btn-sm" type="button" onClick={load}>Refresh</button>
+        </div>
       </header>
-      <div className="toolbar">
-        <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
-        <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To" />
-        <span className="muted">Leave dates blank for all time</span>
+      <FinanceGlTabs />
+      <div className="toolbar toolbar-sticky">
+        <div className="toolbar-left">
+          <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From date" />
+          <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To date" />
+          <span className="muted">Leave dates blank for all time</span>
+        </div>
+        <div className="toolbar-right">
+          <button className="btn btn-sm" type="button" onClick={exportCsv}>Export CSV</button>
+        </div>
       </div>
       <div className="table-wrap card">
         <table className="data">
@@ -1404,18 +1470,18 @@ function TrialBalance() {
               <tr key={String(r.id)}>
                 <td className="cell-mono">{String(r.code)}</td>
                 <td>{String(r.name)}</td>
-                <td>{String(r.accountType)}</td>
-                <td className="cell-num">{fmtMoney(r.debit)}</td>
-                <td className="cell-num">{fmtMoney(r.credit)}</td>
-                <td className="cell-num">{fmtMoney(r.balance)}</td>
+                <td><Badge value={String(r.accountType)} /></td>
+                <td className="cell-num">{zero(r.debit)}</td>
+                <td className="cell-num">{zero(r.credit)}</td>
+                <td className="cell-num">{zero(r.balance)}</td>
               </tr>
             ))}
             {data.rows.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 24 }}>No movements in this range.</td></tr>}
             <tr>
               <td colSpan={3}><strong>Total</strong></td>
-              <td className="cell-num"><strong>{fmtMoney(data.totals.debit)}</strong></td>
-              <td className="cell-num"><strong>{fmtMoney(data.totals.credit)}</strong></td>
-              <td className="cell-num"><strong>{fmtMoney(data.totals.balance)}</strong></td>
+              <td className="cell-num"><strong>{zero(data.totals.debit)}</strong></td>
+              <td className="cell-num"><strong>{zero(data.totals.credit)}</strong></td>
+              <td className="cell-num"><strong>{zero(data.totals.balance)}</strong></td>
             </tr>
           </tbody>
         </table>
@@ -7287,6 +7353,10 @@ function FinanceAudit() {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [dateRange, setDateRange] = useState<'all' | '7d' | '30d' | 'custom'>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+
   const AUDIT_LIMIT = 200;
   const load = useCallback(() => {
     const p = new URLSearchParams();
@@ -7309,7 +7379,7 @@ function FinanceAudit() {
     return () => clearTimeout(t);
   }, [moduleDraft, docTypeDraft, module, docType]);
   const fmtTs = (v: unknown) => String(v ?? '').slice(0, 19).replace('T', ' ');
-  const changeText = (r: Rec) => (r.newValue ? JSON.stringify(r.newValue) : r.previousValue ? `prev: ${JSON.stringify(r.previousValue)}` : '');
+  const changeText = (r: Rec) => (r.newValue ? keyValueText(r.newValue) : r.previousValue ? `prev: ${keyValueText(r.previousValue)}` : '');
   const SORTS: Record<string, (r: Rec) => string | number> = {
     time: (r) => String(r.createdAt ?? ''),
     user: (r) => String(r.userName ?? r.userEmail ?? 'system'),
@@ -7322,10 +7392,27 @@ function FinanceAudit() {
     time: 'Time', user: 'User', action: 'Action', module: 'Module', docType: 'Doc', docCode: 'Ref',
   };
   const term = search.trim().toLowerCase();
-  const filtered = term
-    ? rows.filter((r) => [r.action, r.module, r.docType, r.docCode, r.userName, r.userEmail, changeText(r)]
-        .map((v) => String(v ?? '')).join(' ').toLowerCase().includes(term))
-    : rows;
+  const day = (v: unknown) => String(v ?? '').slice(0, 10);
+  const dateBounds = useMemo(() => {
+    const now = new Date();
+    if (dateRange === '7d' || dateRange === '30d') {
+      const d = new Date(now);
+      d.setDate(d.getDate() - (dateRange === '7d' ? 7 : 30));
+      return { from: d.toISOString().slice(0, 10), to: day(now) };
+    }
+    if (dateRange === 'custom') return { from: fromDate, to: toDate };
+    return { from: '', to: '' };
+  }, [dateRange, fromDate, toDate]);
+  const inRange = (r: Rec) => {
+    const d = day(r.createdAt);
+    if (!d) return true;
+    if (dateBounds.from && d < dateBounds.from) return false;
+    if (dateBounds.to && d > dateBounds.to) return false;
+    return true;
+  };
+  const filtered = rows.filter((r) => inRange(r) && (!term
+    || [r.action, r.module, r.docType, r.docCode, r.userName, r.userEmail, changeText(r)]
+        .map((v) => String(v ?? '')).join(' ').toLowerCase().includes(term)));
   const visible = sortBy && SORTS[sortBy]
     ? [...filtered].sort((a, b) => {
         const av = SORTS[sortBy](a); const bv = SORTS[sortBy](b);
@@ -7342,41 +7429,74 @@ function FinanceAudit() {
   const ariaSort = (col: string): 'ascending' | 'descending' | undefined =>
     sortBy === col ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined;
   const capped = rows.length >= AUDIT_LIMIT;
-  const hasFilters = Boolean(module || docType || term);
+  const hasFilters = Boolean(module || docType || term || dateRange !== 'all');
   const clearFilters = () => {
     setSearch(''); setSortBy('');
     setModuleDraft(''); setDocTypeDraft('');
     setModule(''); setDocType('');
+    setDateRange('all'); setFromDate(''); setToDate('');
   };
   const activeFilters: Array<{ key: string; label: string; value: string }> = [];
   if (module) activeFilters.push({ key: 'module', label: 'Module', value: module });
   if (docType) activeFilters.push({ key: 'docType', label: 'Doc type', value: docType });
   if (term) activeFilters.push({ key: 'q', label: 'Search', value: search.trim() });
+  if (dateRange !== 'all') {
+    activeFilters.push({
+      key: 'date',
+      label: 'Date',
+      value: dateRange === '7d' ? 'Last 7 days'
+        : dateRange === '30d' ? 'Last 30 days'
+        : `${fromDate || 'any'} \u2192 ${toDate || 'any'}`,
+    });
+  }
   const removeFilter = (key: string) => {
     if (key === 'module') { setModuleDraft(''); setModule(''); }
     if (key === 'docType') { setDocTypeDraft(''); setDocType(''); }
     if (key === 'q') setSearch('');
+    if (key === 'date') { setDateRange('all'); setFromDate(''); setToDate(''); }
   };
   return (
     <div className="page">
       <header className="page-head">
-        <div>
+        <div style={{ minWidth: 0 }}>
           <p className="mod-kicker" data-mod="fin">Compliance</p>
           <h1>Financial audit trail</h1>
           <p className="muted">Immutable for ordinary users. Every create, change, approval, posting and reversal is recorded with actor and value deltas.</p>
         </div>
+        <div className="head-actions">
+          <button className="btn btn-sm" onClick={load} disabled={refreshing}>Refresh</button>
+        </div>
       </header>
       {error && <ErrorBanner error={error} />}
-      <div className="card card-pad" style={{ marginBottom: 14 }}>
-        <div className="toolbar" style={{ marginBottom: 10 }}>
+      <div className="card card-pad audit-toolbar" style={{ marginBottom: 14, position: 'sticky', top: 0, zIndex: 50 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <input className="search-input" type="search" value={search} aria-label="Search loaded audit records"
             placeholder="Search action, user, doc or value..."
+            style={{ flex: '1 1 200px', minWidth: 0, maxWidth: 320 }}
             onChange={(e) => setSearch(e.target.value)} />
           <input className="search-input" value={moduleDraft} aria-label="Filter by module" placeholder="Module"
             style={{ maxWidth: 150 }} onChange={(e) => setModuleDraft(e.target.value)} />
           <input className="search-input" value={docTypeDraft} aria-label="Filter by document type" placeholder="Doc type"
             style={{ maxWidth: 160 }} onChange={(e) => setDocTypeDraft(e.target.value)} />
-          {hasFilters && <button className="btn btn-sm btn-ghost" onClick={clearFilters}>Clear filters</button>}
+          <select className="search-input" aria-label="Date range filter" value={dateRange}
+            style={{ maxWidth: 150 }}
+            onChange={(e) => setDateRange(e.target.value as 'all' | '7d' | '30d' | 'custom')}>
+            <option value="all">All time</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+            <option value="custom">Custom range</option>
+          </select>
+          {dateRange === 'custom' && (
+            <>
+              <input className="search-input" type="date" value={fromDate} aria-label="From date"
+                style={{ maxWidth: 160 }} onChange={(e) => setFromDate(e.target.value)} />
+              <input className="search-input" type="date" value={toDate} aria-label="To date"
+                style={{ maxWidth: 160 }} onChange={(e) => setToDate(e.target.value)} />
+            </>
+          )}
+          {hasFilters && (
+            <button className="btn btn-sm btn-ghost" style={{ marginLeft: 'auto' }} onClick={clearFilters}>Clear filters</button>
+          )}
         </div>
         {(activeFilters.length > 0 || sortBy) && (
           <div className="filter-chips" style={{ padding: '12px 0 0' }}>

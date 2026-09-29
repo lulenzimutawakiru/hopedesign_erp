@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api, fmtDate, fmtMoney, fmtNum, ListResult, openDocument } from '../api';
 import { useAuth, can } from '../auth';
-import { navigate, useHashQuery } from '../router';
+import { navigate, useHashQuery, useHashRoute } from '../router';
 import { pick } from '../helpers';
 import DownloadMenu from '../components/DownloadMenu';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
@@ -277,15 +277,45 @@ function SalesBoard() {
   );
 }
 
-function ResourceTabs({ resource }: { resource: string }) {
-  void resource;
-  return null;
+// Single authoritative commercial strip. Order mirrors the sales cluster in
+// src/nav.ts; every target is an existing route ("Price Lists" has no route and
+// is intentionally omitted).
+const SALES_TABS: Array<{ href: string; label: string }> = [
+  { href: '/sales', label: 'Overview' },
+  { href: '/sales/quotations', label: 'Quotations' },
+  { href: '/sales/orders', label: 'Sales Orders' },
+  { href: '/sales/customers', label: 'Customers' },
+  { href: '/sales/invoices', label: 'Invoicing' },
+];
+
+function SalesTabs() {
+  const route = useHashRoute();
+  return (
+    <div className="tabs" role="tablist" aria-label="Commercial workspace">
+      {SALES_TABS.map((t) => {
+        const active = route === t.href;
+        return (
+          <button
+            key={t.href}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            className={active ? 'tab active' : 'tab'}
+            onClick={() => navigate(t.href)}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function CustomerDirectory() {
   const [rows, setRows] = useState<Rec[]>([]);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
+  const { user } = useAuth();
   const load = useCallback(() => {
     const p = new URLSearchParams();
     if (q.trim()) p.set('q', q.trim());
@@ -304,18 +334,24 @@ function CustomerDirectory() {
           <h1>Customers</h1>
           <p className="muted">Directory with credit position and sales activity for every account.</p>
         </div>
-        <div className="head-actions">
-          <button className="btn btn-primary" onClick={() => navigate('/sales/quotations/new')}>New quotation</button>
-        </div>
       </header>
+      <SalesTabs />
       {error && <ErrorBanner error={error} />}
       <div className="summary-chips">
         <span className="summary-chip"><b>{fmtNum(rows.length)}</b> accounts</span>
         <span className="summary-chip"><b>{fmtNum(openAccts)}</b> with open orders</span>
         <span className="summary-chip"><b>{fmtMoney(totalOutstanding)}</b> outstanding</span>
       </div>
-      <div className="toolbar">
-        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search code, name, email, phone" />
+      <div className="toolbar toolbar-sticky">
+        <div className="toolbar-left">
+          <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search code, name, email, phone" />
+        </div>
+        <div className="toolbar-right">
+          <button className="btn" type="button" onClick={() => navigate('/sales/quotations/new')}>New quotation</button>
+          {can(user, 'sales.orders.create') && (
+            <button className="btn btn-primary" type="button" onClick={() => navigate('/sales/orders/new')}>+ New sales order</button>
+          )}
+        </div>
       </div>
       <div className="table-wrap card">
         <table className="data">
@@ -697,20 +733,22 @@ function DocumentList({ resource }: { resource: string }) {
           <h1>{meta.label}</h1>
           <p className="muted">Quote, commit, allocate, ship, invoice, collect.</p>
         </div>
-        <div className="head-actions">
+      </header>
+      <SalesTabs />
+      <div className="toolbar toolbar-sticky">
+        <div className="toolbar-left">
+          <input className="search-input" placeholder="Search document number…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+        </div>
+        <div className="toolbar-right">
           {canCreateQuote && resource !== 'quotations' && (
-            <button className="btn" onClick={() => navigate('/sales/quotations/new')}>New quotation</button>
+            <button className="btn" type="button" onClick={() => navigate('/sales/quotations/new')}>New quotation</button>
           )}
           {showNew && (
-            <button className="btn btn-primary" onClick={() => navigate(`/sales/${resource}/new`)}>
+            <button className="btn btn-primary" type="button" onClick={() => navigate(`/sales/${resource}/new`)}>
               + New {meta.label.replace(/s$/, '')}
             </button>
           )}
         </div>
-      </header>
-      <ResourceTabs resource={resource} />
-      <div className="toolbar">
-        <input className="search-input" placeholder="Search document number…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
       </div>
       {error && <ErrorBanner error={error} />}
       {busy ? <PageLoader label="Loading documents…" /> : (

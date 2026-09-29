@@ -43,7 +43,7 @@ export function HcmBoard() {
         </div>
       </header>
       {error && <ErrorBanner error={error} />}
-      <div className="kpi-grid--tiles">
+      <div className="kpi-grid--tiles kpi-grid--4">
         {[
           { label: 'Headcount', value: fmtNum(kpis.headcount), sub: fmtNum(kpis.onLeave) + ' on leave · ' + fmtNum(kpis.probation) + ' probation', href: '/people/employees', icon: '👥', accent: '#8B5CF6', tint: 'rgba(139,92,246,0.12)' },
           { label: 'Positions gap', value: fmtNum(kpis.headcountGap), sub: fmtNum(kpis.occupiedHeadcount) + ' of ' + fmtNum(kpis.approvedHeadcount) + ' filled', href: '/people/positions', icon: '⊞', accent: '#1261A0', tint: 'rgba(18,97,160,0.12)' },

@@ -1,4 +1,4 @@
-import { ReactNode, useId, useRef, useState } from 'react';
+import { ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { CREATE_ITEMS } from '../work';
@@ -80,11 +80,25 @@ export function Drawer({ title, onClose, children, footer }: { title: string; on
 export function CreateMenu() {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
   const items = CREATE_ITEMS.filter((i) => can(user, i.perm));
   if (!items.length) return null;
   return (
-    <div className="topbar-item">
-      <button className="btn btn-primary btn-sm" onClick={() => setOpen((v) => !v)} aria-expanded={open}>+ Create</button>
+    <div className="topbar-item" ref={ref}>
+      <button className="btn btn-primary btn-sm" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="menu">+ Create</button>
       {open && (
         <div className="topbar-dropdown">
           <div className="dropdown-head">Start work</div>
@@ -104,7 +118,7 @@ export function Meter({ label, value, max = 100 }: { label: string; value: numbe
   return (
     <div className="meter">
       <div className="meter-head"><span>{label}</span><strong>{Math.round(pct)}%</strong></div>
-      <div className="meter-track" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} role="progressbar">
+      <div className="meter-track" aria-label={label} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} role="progressbar">
         <div className="meter-fill" style={{ width: `${pct}%` }} />
       </div>
     </div>

@@ -10,11 +10,6 @@ import {
   fmtWhen, fmtStatusLabel,
 } from './shared';
 
-const SECONDARY_TABS: { id: string; label: string; href: string; perm: string }[] = [
-  { id: 'd', label: 'Live Attendance', href: '/hikvision', perm: 'hikvision.dashboard.view' },
-  { id: 'm', label: 'Devices', href: '/hikvision/devices', perm: 'hikvision.devices.view' },
-];
-
 function KpiTile({ label, value, sub, onClick, tone }: { label: string; value: unknown; sub?: string; onClick?: () => void; tone?: string }) {
   return (
     <button type="button" className="kpi-card" onClick={onClick} disabled={!onClick} style={onClick ? undefined : { cursor: 'default' }}>
@@ -84,11 +79,6 @@ export default function LiveBoard() {
         }
       />
       <HikTabs active="live" />
-      <div className="hk-band-actions">
-        {SECONDARY_TABS.filter((t) => can(user, t.perm)).map((t) => (
-          <button key={t.id} type="button" className="btn btn-sm btn-ghost" onClick={() => navigate(t.href)}>{t.label}</button>
-        ))}
-      </div>
       <div className="kpi-grid hk-kpi-5">
         <KpiTile label="Present Today" value={present} sub="Present + late + early + half day" onClick={() => navigate('/hikvision/attendance')} tone="var(--ok)" />
         <KpiTile label="Checked In" value={checkedIn} sub="Punch events processed today" onClick={() => navigate('/hikvision/events')} />

@@ -249,7 +249,7 @@ function DelegationsCenter() {
       />
       <ActingStrip />
       <GovSubNav active="delegations" />
-      <div className="kpi-grid--tiles">
+      <div className="kpi-grid--tiles kpi-grid--4">
         <GovKpi label="Active" value={summary ? Number(s(summary.active)) : '-'} sub="Currently granting acting authority" icon="live" accent="#0b8f5f" tint="rgba(11,143,95,0.10)" onClick={() => setQuery({ status: 'ACTIVE' })} />
         <GovKpi label="Awaiting approval" value={summary ? Number(s(summary.pendingApproval)) : '-'} sub="Delegations submitted but not yet approved" icon="clock" accent="#d97706" tint="rgba(217,119,6,0.10)" onClick={() => setQuery({ status: 'PENDING_APPROVAL' })} />
         <GovKpi label="Total" value={summary ? Number(s(summary.total)) : '-'} sub="All delegations on record" icon="list" accent="#2563eb" tint="rgba(37,99,235,0.10)" onClick={() => setQuery({ status: '' })} />
@@ -874,7 +874,7 @@ function SignaturesCenter() {
         actions={canCreate ? <button className="btn btn-primary" onClick={() => setShowNew(true)}>New signature profile</button> : undefined}
       />
       <GovSubNav active="signatures" />
-      <div className="kpi-grid--tiles">
+      <div className="kpi-grid--tiles kpi-grid--4">
         <GovKpi label="Active signatures" value={summary ? Number(s(summary.active)) : '-'} sub="Authorized to sign inside their window" icon="pen" accent="#0b8f5f" tint="rgba(11,143,95,0.10)" onClick={() => setQuery({ status: 'ACTIVE' })} />
         <GovKpi label="Awaiting approval" value={summary ? Number(s(summary.pending)) : '-'} sub="Profiles submitted but not yet approved" icon="clock" accent="#d97706" tint="rgba(217,119,6,0.10)" onClick={() => setQuery({ status: 'PENDING' })} />
         <GovKpi label="Scope approvals" value={summary ? Number(s(summary.pendingScopes)) : '-'} sub="Document-type authorities awaiting approval" icon="shield" accent="#2563eb" tint="rgba(37,99,235,0.10)" />

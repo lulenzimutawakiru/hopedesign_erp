@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, fmtMoney, fmtNum } from '../api';
 import { useAuth, can } from '../auth';
-import { navigate } from '../router';
+import { navigate, useHashRoute } from '../router';
 import { Badge, ErrorBanner, PageLoader } from '../components/ui';
 import { Meter } from '../components/os';
 import {
@@ -46,6 +46,37 @@ function parsePlant(path: string): { view: string; id: string | null } {
 }
 
 void loadProductChoices();
+
+const MFG_TABS: Array<{ href: string; label: string }> = [
+  { href: '/plant', label: 'Board' },
+  { href: '/plant/outputs', label: 'Production Runs' },
+  { href: '/plant/orders', label: 'Work Orders' },
+  { href: '/plant/boms', label: 'BOMs & Routing' },
+  { href: '/plant/inspections', label: 'Quality Control' },
+];
+
+function MfgPlantTabs() {
+  const route = useHashRoute();
+  return (
+    <div className="tabs" role="tablist" aria-label="Manufacturing workspace">
+      {MFG_TABS.map((t) => {
+        const active = route === t.href;
+        return (
+          <button
+            key={t.href}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            className={active ? 'tab active' : 'tab'}
+            onClick={() => navigate(t.href)}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function ManufacturingFlow({ path }: { path: string }) {
   const { view, id } = parsePlant(path);
@@ -115,6 +146,7 @@ function PlantBoard() {
           {can(user, 'production.work_orders.create') && <button className="btn btn-primary" onClick={() => navigate('/plant/new')}>New work order</button>}
         </div>
       </header>
+      <MfgPlantTabs />
       <div className="kpi-grid">
         <button className="kpi-card" onClick={() => navigate('/plant/orders')}>
           <span className="kpi-label">Live jobs</span>
@@ -201,6 +233,7 @@ function PlantBoard() {
 }
 
 function WoList() {
+  const { user } = useAuth();
   const [rows, setRows] = useState<Rec[]>([]);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
@@ -219,11 +252,18 @@ function WoList() {
           <p className="mod-kicker" data-mod="mfg">Work orders</p>
           <h1>Shop orders</h1>
         </div>
-        <button className="btn btn-primary" onClick={() => navigate('/plant/new')}>New work order</button>
       </header>
+      <MfgPlantTabs />
       {error && <ErrorBanner error={error} />}
-      <div className="toolbar">
-        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search WO or product…" />
+      <div className="toolbar toolbar-sticky">
+        <div className="toolbar-left">
+          <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search WO, product, machine..." />
+        </div>
+        <div className="toolbar-right">
+          {can(user, 'production.work_orders.create') && <button className="btn btn-primary" onClick={() => navigate('/plant/new')}>+ New Work Order</button>}
+          <button className="btn" onClick={() => navigate('/plant/boms')}>Export BOM</button>
+          <button className="btn" onClick={() => navigate('/plant/machines')}>Machine Telemetry</button>
+        </div>
       </div>
       <div className="table-wrap card">
         <table className="data">

@@ -108,7 +108,7 @@ function Dashboard() {
           </>
         }
       />
-      <div className="kpi-grid--tiles">
+      <div className="kpi-grid--tiles kpi-grid--7">
         {cards.map(({ key, ...rest }) => <KpiTile key={key} {...rest} />)}
       </div>
       <section className="card card-pad" style={{ marginTop: 16 }}>
@@ -124,8 +124,8 @@ function Dashboard() {
                   <tr key={s(r.id)}>
                     <td className="td-cell-mono">{fmtDate(r.createdAt)}</td>
                     <td>{s(r.actor)}</td>
-                    <td>{labelize(r.action)}</td>
-                    <td>{labelize(r.resource)}</td>
+                    <td><Badge value={labelize(r.action)} /></td>
+                    <td><Badge value={labelize(r.resource)} /></td>
                     <td className="td-cell-mono">{s(r.recordCode)}</td>
                   </tr>
                 ))}
@@ -2211,7 +2211,7 @@ function Audit() {
                         <td className="td-cell-mono">{fmtDate(r.createdAt)}</td>
                         <td>{s(r.actor) || s(r.actorEmail)}</td>
                         <td><Badge value={labelize(r.action)} /></td>
-                        <td>{labelize(r.resource)}</td>
+                        <td><Badge value={labelize(r.resource)} /></td>
                         <td className="td-cell-mono">{s(r.recordCode)}</td>
                         <td className="td-cell-mono">{s(r.ip)}</td>
                         <td>

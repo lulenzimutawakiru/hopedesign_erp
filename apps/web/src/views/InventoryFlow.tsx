@@ -163,22 +163,23 @@ function Tabs({ resource }: { resource: string }) {
   const tabs = TABS.filter((t) => can(user, t.perm));
   if (tabs.length < 2) return null;
   return (
-    <nav className="chips" style={{ marginBottom: 14 }} aria-label="Inventory sections">
+    <div className="tabs" role="tablist" aria-label="Inventory sections">
       {tabs.map((t) => {
         const on = t.resource === resource;
         return (
           <button
             key={t.resource}
             type="button"
-            className={`chip ${on ? 'chip-on' : ''}`}
-            aria-current={on ? 'page' : undefined}
+            role="tab"
+            aria-selected={on}
+            className={on ? 'tab active' : 'tab'}
             onClick={() => navigate(`/inventory/${t.resource}`)}
           >
             {t.label}
           </button>
         );
       })}
-    </nav>
+    </div>
   );
 }
 
@@ -269,22 +270,29 @@ function StockBoard({ warehouseId }: { warehouseId?: number }) {
         </div>
       )}
 
-      <div className="toolbar">
-        <input className="search-input" placeholder="Search product code or name…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
-        <select className="search-input" style={{ maxWidth: 220 }} value={wh} onChange={(e) => { setWh(e.target.value); setPage(1); }}>
-          <option value="">All warehouses</option>
-          {warehouses.map((w) => (
-            <option key={String(w.id)} value={String(w.id)}>{String(pick(w, 'code'))} · {String(pick(w, 'name'))}</option>
-          ))}
-        </select>
-        <label className="filter-check">
-          <input type="checkbox" checked={lowOnly} onChange={(e) => { setLowOnly(e.target.checked); setPage(1); }} />
-          Low stock only
-        </label>
-        <label className="filter-check">
-          <input type="checkbox" checked={expOnly} onChange={(e) => { setExpOnly(e.target.checked); setPage(1); }} />
-          Expiring soon
-        </label>
+      <div className="toolbar toolbar-sticky">
+        <div className="toolbar-left">
+          <input className="search-input" placeholder="Search SKU, barcode, location..." value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+          <select className="search-input" style={{ maxWidth: 220 }} value={wh} onChange={(e) => { setWh(e.target.value); setPage(1); }}>
+            <option value="">All warehouses</option>
+            {warehouses.map((w) => (
+              <option key={String(w.id)} value={String(w.id)}>{String(pick(w, 'code'))} · {String(pick(w, 'name'))}</option>
+            ))}
+          </select>
+          <label className="filter-check">
+            <input type="checkbox" checked={lowOnly} onChange={(e) => { setLowOnly(e.target.checked); setPage(1); }} />
+            Low stock only
+          </label>
+          <label className="filter-check">
+            <input type="checkbox" checked={expOnly} onChange={(e) => { setExpOnly(e.target.checked); setPage(1); }} />
+            Expiring soon
+          </label>
+        </div>
+        <div className="toolbar-right">
+          {can(user, 'inventory.stock.view') && <button type="button" className="btn" onClick={() => navigate('/inventory/receive')}>+ Receive Stock (GRN)</button>}
+          {can(user, 'inventory.transfers.create') && <button type="button" className="btn" onClick={() => navigate('/inventory/transfers/new')}>+ New Transfer</button>}
+          {can(user, 'inventory.adjustments.create') && <button type="button" className="btn btn-primary" onClick={() => navigate('/inventory/adjustments/new')}>Stocktake Count</button>}
+        </div>
       </div>
       <div className="chips" style={{ marginBottom: 12 }}>
         {TYPE_CHIPS.map((c) => (
@@ -346,8 +354,8 @@ function StockBoard({ warehouseId }: { warehouseId?: number }) {
                         <div className="progress-fill" style={{ width: `${availPct}%`, background: low ? 'linear-gradient(90deg, #E0A63A, #F0C070)' : undefined }} />
                       </div>
                     </td>
-                    <td className="cell-num">{fmtMoney(pick(row, 'avgCost'))}</td>
-                    <td className="cell-num">{fmtMoney(pick(row, 'stockValue'))}</td>
+                    <td className="cell-num">{fmtMoney(pick(row, 'avgCost'))} <span className="muted">UGX</span></td>
+                    <td className="cell-num">{fmtMoney(pick(row, 'stockValue'))} <span className="muted">UGX</span></td>
                     <td>
                       <div className="row-status">
                         {low ? <Badge value="LOW" /> : <Badge value="OK" />}
@@ -413,7 +421,7 @@ function WarehouseBoard() {
                 <Badge value={pick(w, 'type')} />
               </div>
               <strong>{String(pick(w, 'name'))}</strong>
-              <div className="kpi-value" style={{ fontSize: 20, marginTop: 10 }}>{fmtMoney(pick(w, 'stockValue'))}</div>
+              <div className="kpi-value" style={{ fontSize: 20, marginTop: 10 }}>{fmtMoney(pick(w, 'stockValue'))} <span className="muted">UGX</span></div>
               <div className="muted">{fmtNum(pick(w, 'products'))} products · {fmtNum(pick(w, 'lines'))} lines</div>
               {Boolean(pick(w, 'isSecure')) && <span className="badge badge-purple" style={{ marginTop: 8 }}><span className="badge-icon" aria-hidden>●</span>Secure</span>}
             </button>
@@ -467,7 +475,7 @@ function ProductStock({ id }: { id: number }) {
         <div className="kpi-card"><span className="kpi-label">On hand</span><span className="kpi-value">{fmtNum(onHand)}</span></div>
         <div className="kpi-card"><span className="kpi-label">Reserved</span><span className="kpi-value">{fmtNum(reserved)}</span></div>
         <div className="kpi-card"><span className="kpi-label">Available</span><span className="kpi-value">{fmtNum(onHand - reserved)}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Value</span><span className="kpi-value">{fmtMoney(value)}</span></div>
+        <div className="kpi-card"><span className="kpi-label">Value</span><span className="kpi-value">{fmtMoney(value)} <span className="muted">UGX</span></span></div>
         <div className={`kpi-card ${low ? 'card-warn' : ''}`}><span className="kpi-label">Reorder point</span><span className="kpi-value">{fmtNum(reorder)}</span><span className="kpi-sub">{low ? 'on hand is below this level' : 'replenish when on hand falls to this level'}</span></div>
       </div>
       <section className="card">
@@ -492,7 +500,7 @@ function ProductStock({ id }: { id: number }) {
                   <td className="cell-num">{fmtNum(pick(row, 'quantity'))}</td>
                   <td className="cell-num">{fmtNum(pick(row, 'reservedQty'))}</td>
                   <td className="cell-num">{fmtNum(pick(row, 'availableQty'))}</td>
-                  <td className="cell-num">{fmtMoney(pick(row, 'stockValue'))}</td>
+                  <td className="cell-num">{fmtMoney(pick(row, 'stockValue'))} <span className="muted">UGX</span></td>
                 </tr>
               ))}
               {data.locations.length === 0 && <tr><td colSpan={6} className="muted" style={{ padding: 20 }}>No stock for this product yet.</td></tr>}
@@ -846,8 +854,8 @@ function OfficeConsumablesPage() {
                   <td className="cell-mono">{String(pick(row, 'code') ?? '')}</td>
                   <td>{String(pick(row, 'name') ?? '')}</td>
                   <td>{String(pick(row, 'unitCode') ?? pick(row, 'unit_code') ?? '')}</td>
-                  <td className="cell-num">{fmtMoney(pick(row, 'standardCost', 'standard_cost'))}</td>
-                  <td className="cell-num">{fmtMoney(pick(row, 'standardPrice', 'standard_price'))}</td>
+                  <td className="cell-num">{fmtMoney(pick(row, 'standardCost', 'standard_cost'))} <span className="muted">UGX</span></td>
+                  <td className="cell-num">{fmtMoney(pick(row, 'standardPrice', 'standard_price'))} <span className="muted">UGX</span></td>
                   <td className="cell-num">{fmtNum(pick(row, 'reorderPoint', 'reorder_point'))}</td>
                   <td className="cell-num">{fmtNum(pick(row, 'safetyStock', 'safety_stock'))}</td>
                   <td><Badge value={pick(row, 'status')} /></td>
@@ -1211,7 +1219,7 @@ function TransferDetail({ id }: { id: number }) {
                   <tr key={String(i.id)}>
                     <td><div className="cell-mono">{String(pick(i, 'productCode'))}</div>{String(pick(i, 'productName'))}</td>
                     <td className="cell-num">{fmtNum(pick(i, 'quantity'))}</td>
-                    <td className="cell-num">{fmtMoney(pick(i, 'unitCost'))}</td>
+                    <td className="cell-num">{fmtMoney(pick(i, 'unitCost'))} <span className="muted">UGX</span></td>
                   </tr>
                 ))}
               </tbody>

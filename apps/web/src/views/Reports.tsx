@@ -1062,16 +1062,22 @@ export default function Reports() {
 
       {error && <ErrorBanner error={error} />}
 
-      <div className="analytics-tabs">
+      <div className="tabs" role="tablist" aria-label="Report views">
         <button
-          className={`analytics-tab ${tab === 'center' ? 'active' : ''}`}
+          type="button"
+          role="tab"
+          aria-selected={tab === 'center'}
+          className={`tab ${tab === 'center' ? 'active' : ''}`}
           onClick={() => setTab('center')}
         >
           Report Center
         </button>
         {canKpis && (
           <button
-            className={`analytics-tab ${tab === 'kpis' ? 'active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === 'kpis'}
+            className={`tab ${tab === 'kpis' ? 'active' : ''}`}
             onClick={() => setTab('kpis')}
           >
             KPI Engine
@@ -1079,7 +1085,10 @@ export default function Reports() {
         )}
         {canDashboards && (
           <button
-            className={`analytics-tab ${tab === 'dashboards' ? 'active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === 'dashboards'}
+            className={`tab ${tab === 'dashboards' ? 'active' : ''}`}
             onClick={() => setTab('dashboards')}
           >
             Dashboards
@@ -1087,7 +1096,10 @@ export default function Reports() {
         )}
         {canBuilder && (
           <button
-            className={`analytics-tab ${tab === 'builder' ? 'active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === 'builder'}
+            className={`tab ${tab === 'builder' ? 'active' : ''}`}
             onClick={() => setTab('builder')}
           >
             Report Builder
@@ -1096,7 +1108,7 @@ export default function Reports() {
       </div>
 
       {canExec && kpis.length > 0 && (
-        <div className="kpi-grid">
+        <div className="kpi-grid kpi-grid--4">
           {kpis.map((k) => (
             <button
               key={k.key}

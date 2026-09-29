@@ -332,6 +332,8 @@ export function HikTabs({ active }: { active: string }) {
         <button
           key={t.id}
           type="button"
+          role="tab"
+          aria-selected={t.id === active}
           className={'tab' + (t.id === active ? ' active' : '')}
           onClick={() => navigate(t.href)}
         >

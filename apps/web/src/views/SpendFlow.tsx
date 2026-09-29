@@ -244,6 +244,7 @@ export default function SpendFlow({ path }: { path: string }) {
   const deptRows = (dash?.spendingByDepartment as Rec[] | undefined) ?? [];
   const maxDept = Math.max(1, ...deptRows.map((d) => num(d.total)));
   const alerts = dash?.alerts as Rec | undefined;
+  const overBudgetCount = (alerts?.overBudgetAccounts as Rec[] | undefined)?.length ?? 0;
 
   return (
     <SpendShell
@@ -275,7 +276,11 @@ export default function SpendFlow({ path }: { path: string }) {
               <span className="spend-kpi-value">{fmtMoney(mtd)}</span>
               <span className="spend-kpi-sub">{num(dash.mtd ? (dash.mtd as Rec).count : 0)} transactions</span>
             </button>
-            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/requisitions')}>
+            <button
+              type="button"
+              className={num(budget?.consumedPct) > 100 ? 'spend-kpi is-alert' : 'spend-kpi'}
+              onClick={() => navigate('/spend/requisitions')}
+            >
               <span className="spend-kpi-label">Budget consumed</span>
               <span className="spend-kpi-value">{budget ? `${num(budget.consumedPct)}%` : '—'}</span>
               <span className="spend-kpi-sub">of {fmtMoney(num(budget?.approved))} approved</span>
@@ -300,9 +305,13 @@ export default function SpendFlow({ path }: { path: string }) {
               <span className="spend-kpi-value">{num(alerts?.missingReceipts ?? 0)}</span>
               <span className="spend-kpi-sub">expenses without evidence</span>
             </button>
-            <button type="button" className="spend-kpi" onClick={() => navigate('/spend/requisitions')}>
+            <button
+              type="button"
+              className={overBudgetCount > 0 ? 'spend-kpi is-alert' : 'spend-kpi'}
+              onClick={() => navigate('/spend/requisitions')}
+            >
               <span className="spend-kpi-label">Over budget</span>
-              <span className="spend-kpi-value">{(alerts?.overBudgetAccounts as Rec[] | undefined)?.length ?? 0}</span>
+              <span className="spend-kpi-value">{overBudgetCount}</span>
               <span className="spend-kpi-sub">accounts over position</span>
             </button>
           </div>

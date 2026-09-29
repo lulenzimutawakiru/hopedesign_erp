@@ -81,6 +81,47 @@ function tile(key: string, label: string, value: string, sub: string, icon: stri
   return { key, label, value, sub, icon, accent, action };
 }
 
+type EventTone = 'ok' | 'info' | 'neutral' | 'warn' | 'crit';
+
+const EVENT_TONE_RULES: [RegExp, EventTone][] = [
+  [/receipt posted|payment posted/, 'neutral'],
+  [/reject|fail|error|scrap|void|cancel|overdue|breach|missed/, 'crit'],
+  [/approv|confirm|complet|paid|settle|posted|clos/, 'ok'],
+  [/allocat|created|submit|updat|open|schedul|receiv|sent|issu|assign|dispatch/, 'info'],
+];
+
+function eventMeta(raw: unknown): { label: string; tone: EventTone } {
+  const text = String(raw ?? '')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const tone = EVENT_TONE_RULES.find(([re]) => re.test(text.toLowerCase()))?.[1] ?? 'neutral';
+  const label = text
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+  return { label: label || 'Activity', tone };
+}
+
+const TONE_META: Record<EventTone, { cls: string; fg: string }> = {
+  ok: { cls: 'badge-green', fg: 'var(--success)' },
+  info: { cls: 'badge-blue', fg: 'var(--info)' },
+  neutral: { cls: 'badge-neutral', fg: 'var(--muted)' },
+  warn: { cls: 'badge-amber', fg: 'var(--warning)' },
+  crit: { cls: 'badge-red', fg: 'var(--danger)' },
+};
+
+const SPACE_ICONS: Record<string, string> = {
+  commercial: '\u{1F9ED}',
+  warehouse: '\u{1F4E6}',
+  plant: '\u{1F3ED}',
+  security: '\u{1F510}',
+  quality: '\u{1F3AF}',
+  money: '\u{1F4B0}',
+  people: '\u{1F9D1}\u200D\u{1F91D}\u200D\u{1F9D1}',
+};
+
 export default function Dashboard() {
   const { user } = useAuth();
   const persona = personaOf(user);
@@ -213,7 +254,7 @@ export default function Dashboard() {
       </div>
 
       <h3 className="section-title">At a glance</h3>
-      <div className="kpi-grid--tiles">
+      <div className="kpi-grid--tiles kpi-grid--row">
         {cards.map((c) => (
           <button
             key={c.key}
@@ -263,28 +304,46 @@ export default function Dashboard() {
         <section className="card">
           <div className="card-head"><h3>What happened</h3></div>
           <div className="timeline" style={{ padding: 16 }}>
-            {activity.slice(0, 8).map((ev) => (
-              <div key={String(ev.id)} className="timeline-item">
-                <div className="timeline-title">{String(ev.event_type ?? ev.eventType).replace(/_/g, ' ')}</div>
-                <div className="timeline-meta">
-                  {String(ev.entity_code ?? ev.entityCode ?? '')}
-                  {ev.entity_code || ev.entityCode ? ' · ' : ''}
-                  {String(ev.first_name ?? ev.firstName ?? 'System')}
-                  {ev.created_at ? ` · ${fmtDate(ev.created_at)}` : ''}
+            {activity.slice(0, 8).map((ev) => {
+              const m = eventMeta(ev.event_type ?? ev.eventType);
+              return (
+                <div key={String(ev.id)} className="timeline-item">
+                  <span className="timeline-dot" style={{ background: TONE_META[m.tone].fg }} />
+                  <div className="timeline-title">
+                    <span className={`badge ${TONE_META[m.tone].cls}`}>{m.label}</span>
+                  </div>
+                  <div className="timeline-meta">
+                    {String(ev.entity_code ?? ev.entityCode ?? '')}
+                    {ev.entity_code || ev.entityCode ? ' · ' : ''}
+                    {String(ev.first_name ?? ev.firstName ?? 'System')}
+                    {ev.created_at ? ` · ${fmtDate(ev.created_at)}` : ''}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}
 
       <section className="card">
         <div className="card-head"><h3>Your workspaces</h3></div>
-        <div className="quick-actions">
+        <div className="kpi-grid--tiles">
           {spaces.map((s) => (
-            <button key={s.id} className="btn" onClick={() => navigate(s.href)}>{s.label}</button>
+            <button key={s.id} className="kpi-tile" onClick={() => navigate(s.href)}>
+              <span className="kpi-tile-icon">{SPACE_ICONS[s.id] ?? '\u2192'}</span>
+              <span className="kpi-tile-body">
+                <span className="kpi-tile-label">{s.label}</span>
+                <span className="kpi-tile-sub">{s.hint}</span>
+              </span>
+            </button>
           ))}
-          <button className="btn" onClick={() => navigate('/reports')}>Analytics</button>
+          <button className="kpi-tile" onClick={() => navigate('/reports')}>
+            <span className="kpi-tile-icon">{'\u{1F4CA}'}</span>
+            <span className="kpi-tile-body">
+              <span className="kpi-tile-label">Analytics</span>
+              <span className="kpi-tile-sub">Reports and dashboards</span>
+            </span>
+          </button>
         </div>
       </section>
     </div>

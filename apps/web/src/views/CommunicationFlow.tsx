@@ -86,21 +86,22 @@ function ComTabs({ active }: { active: string }) {
     { id: 'rules', label: 'Notification Rules', href: '/communication/rules', perm: 'communication.notifications.manage' },
     { id: 'cron', label: 'Cron Jobs', href: '/communication/cron', perm: 'system.cron.view' },
   ].filter((t) => can(user, t.perm));
-  const row = (t: { id: string; label: string; href: string }) => (
-    <button key={t.id} className={'tab' + (t.id === active ? ' active' : '')} onClick={() => navigate(t.href)}>
+  const row = (t: { id: string; label: string; href: string }, sub = false) => (
+    <button
+      key={t.id}
+      type="button"
+      role="tab"
+      aria-selected={t.id === active}
+      className={'tab' + (sub ? ' is-sub' : '') + (t.id === active ? ' active' : '')}
+      onClick={() => navigate(t.href)}
+    >
       {t.label}
     </button>
   );
   return (
-    <div className="com-tabs-wrap">
-      <div className="com-tabs" role="tablist" aria-label="Communication">
-        {daily.map(row)}
-      </div>
-      {admin.length > 0 ? (
-        <div className="com-tabs com-tabs-admin" role="tablist" aria-label="Communication administration">
-          {admin.map(row)}
-        </div>
-      ) : null}
+    <div className="tabs" role="tablist" aria-label="Communication">
+      {daily.map((t) => row(t))}
+      {admin.map((t) => row(t, true))}
     </div>
   );
 }
@@ -216,7 +217,7 @@ function CommandCenter() {
         subtitle="HOPE DESIGN communication center — emails, messages, notifications and approvals in one place."
       />
       <ComTabs active="center" />
-      <div className="kpi-grid">
+      <div className="kpi-grid kpi-grid--5">
         {cards.map((k) => (
           <button key={k.label} className="kpi-card" onClick={() => navigate(k.href)}>
             <span className="kpi-label">{k.label}</span>
@@ -225,7 +226,7 @@ function CommandCenter() {
           </button>
         ))}
       </div>
-      <div className="grid-2">
+      <div className="grid-2 grid-2--split">
         <section className="card card-pad">
           <div className="card-head">
             <h3>Priority alerts</h3>
