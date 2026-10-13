@@ -129,9 +129,9 @@ async function recordFailure(row: ClaimedFiscalTransaction, err: unknown): Promi
     await client.query(
       `UPDATE efris_transactions
           SET status = $2, claimed_at = NULL, last_error = $3, error_code = $4,
-              next_attempt_at = $5, updated_at = now()
+              next_attempt_at = $5::timestamptz, updated_at = now()
         WHERE id = $1`,
-      [row.id, targetStatus, message, code, terminal ? null : new Date(Date.now() + backoffSeconds * 1000)]
+      [row.id, targetStatus, message, code, terminal ? 'infinity' : new Date(Date.now() + backoffSeconds * 1000)]
     );
     await client.query(
       `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, request_payload, response_payload, error)

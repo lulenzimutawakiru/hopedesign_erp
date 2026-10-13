@@ -63,3 +63,4 @@ deploy/failover.env
 # Cloudflare tunnel ingress route settings + API token - read only by
 # deploy/tunnel-ingress.sh. Never commit.
 deploy/tunnel-ingress.env
+.aider*
