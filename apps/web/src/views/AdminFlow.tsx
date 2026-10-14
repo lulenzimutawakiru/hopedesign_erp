@@ -312,7 +312,7 @@ function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
 
   useEffect(() => {
     api<{ data: Rec[] }>('/api/ops/hr/departments').then((r) => setDepts(r.data ?? [])).catch(() => undefined);
-    api<{ data: { data: Rec[] } }>('/api/admin/roles?pageSize=100').then((r) => setRoles(r.data?.data ?? [])).catch(() => undefined);
+    api<{ data: { data: Rec[] } }>('/api/admin/roles?pageSize=500').then((r) => setRoles(r.data?.data ?? [])).catch(() => undefined);
   }, []);
 
   const toggleRole = (id: string) => {
@@ -588,7 +588,7 @@ function UserDrawer({ id, onClose, onChanged }: { id: number; onClose: () => voi
   };
   useEffect(() => {
     load();
-    api<{ data: { data: Rec[] } }>('/api/admin/roles?pageSize=100').then((r) => setRoleOptions(r.data?.data ?? [])).catch(() => undefined);
+    api<{ data: { data: Rec[] } }>('/api/admin/roles?pageSize=500').then((r) => setRoleOptions(r.data?.data ?? [])).catch(() => undefined);
   }, [id]);
 
   const u = (data?.user ?? {}) as Rec;

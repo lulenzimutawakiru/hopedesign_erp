@@ -484,12 +484,13 @@ export async function decideTask(
 export type ApprovalBlockedReason = 'EARLIER_STEP_PENDING' | 'ALREADY_DECIDED_EARLIER_STEP';
 
 /**
- * One row of the approval queue: the `v_approvals_pending` columns joined in by
- * the query below, plus the actionability annotation.
+ * One row of the approval queue. The query below selects the same columns as
+ * `v_approvals_pending`, and it also includes ESCALATED tasks, which that view
+ * omits. The actionability annotation is added in process.
  *
- * The pg index signature is kept deliberately. The view's column list lives in
- * SQL, and a bare object spread drops that signature, which would silently
- * narrow every consumer down to just the two annotated fields.
+ * The pg index signature is kept deliberately. The column list lives in SQL,
+ * and a bare object spread drops that signature, which would silently narrow
+ * every consumer down to just the two annotated fields.
  */
 export interface ApprovalQueueRow extends pg.QueryResultRow {
   actionable: boolean;
@@ -515,7 +516,13 @@ export interface ApprovalQueueRow extends pg.QueryResultRow {
 export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<ApprovalQueueRow[]> {
   const { query } = await import('../db.js');
   const res = await query(
-    `SELECT v.*, t.approver_user_id,
+    `SELECT t.id AS task_id,
+            i.id AS instance_id,
+            i.entity_type, i.entity_id, i.entity_code, i.workflow_id,
+            w.name AS workflow_name,
+            t.step_seq, t.step_name, t.status, t.due_at,
+            i.company_id, i.tenant_id, i.created_by, i.submitted_at,
+            t.approver_user_id,
             NOT EXISTS (
               SELECT 1 FROM approval_tasks e
                WHERE e.instance_id = t.instance_id
@@ -529,15 +536,18 @@ export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<Appro
                  AND p.step_seq < t.step_seq
                  AND p.status IN ('APPROVED', 'REJECTED', 'RETURNED')
             ) AS prior_decided_by_me
-     FROM v_approvals_pending v
-     JOIN approval_tasks t ON t.id = v.task_id
-     WHERE t.approver_user_id = $1
+     FROM approval_tasks t
+     JOIN workflow_instances i ON i.id = t.instance_id
+     JOIN workflows w ON w.id = i.workflow_id
+     WHERE t.status IN ('PENDING','ESCALATED')
+       AND (t.approver_user_id = $1
         OR EXISTS (
            SELECT 1 FROM user_roles ur
            JOIN roles r ON r.id = ur.role_id
            WHERE ur.user_id = $1 AND r.id = t.approver_role_id
         )
-     ORDER BY v.submitted_at`,
+     )
+     ORDER BY i.submitted_at`,
     [userId],
     { tenantId: ctx.tenantId, userId }
   );
