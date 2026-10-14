@@ -23,7 +23,7 @@ export interface NavChild {
   label: string;
   href: string;
   perm?: string;
-  /** Optional section heading. When any sibling sets it, ModuleNav renders grouped. */
+  /** Optional section heading. When any sibling sets it, the sidebar and module dashboards render grouped. */
   group?: string;
   /** Extra search terms for the command palette. */
   keywords?: string;
@@ -603,6 +603,51 @@ export function activeItem(path: string, user: MeUser | null): NavItem | undefin
 export function moduleChildrenFor(path: string, user: MeUser | null): NavChild[] {
   const item = activeItem(path, user);
   return (item?.children ?? []).filter((c) => itemVisible(user, { ...c, module: item?.module }));
+}
+
+/** Longest child href that is the current page, so a parent path does not stay highlighted beside its section. */
+export function bestChildHref(children: readonly { href: string }[], path: string): string | undefined {
+  let best: string | undefined;
+  for (const child of children) {
+    if (!child.href || child.href === '/') continue;
+    if (path === child.href || path.startsWith(`${child.href}/`)) {
+      if (!best || child.href.length > best.length) best = child.href;
+    }
+  }
+  return best;
+}
+
+/** Preserve nav order and only emit a heading for groups that were actually set. */
+export function groupNavChildren<T extends { group?: string }>(children: readonly T[]): { group: string; items: T[] }[] {
+  const order: string[] = [];
+  const map = new Map<string, T[]>();
+  for (const child of children) {
+    const group = child.group ?? '';
+    let bucket = map.get(group);
+    if (!bucket) {
+      bucket = [];
+      map.set(group, bucket);
+      order.push(group);
+    }
+    bucket.push(child);
+  }
+  return order.map((group) => ({ group, items: map.get(group)! }));
+}
+
+const LANDING_SECTION = /dashboard|command|board|overview|hub/i;
+
+/**
+ * Module whose section list belongs on this screen: the module home, or a
+ * child that is itself a dashboard / command center / board.
+ */
+export function landingModule(path: string, user: MeUser | null): NavItem | undefined {
+  const items = visibleGroups(user).flatMap((g) => g.items);
+  const item = items.find((i) => moduleActive(i.href, path) && i.id !== 'warehouses')
+    ?? items.find((i) => moduleActive(i.href, path));
+  if (!item?.children?.length) return undefined;
+  if (path === item.href) return item;
+  const onLanding = item.children.some((c) => c.href === path && LANDING_SECTION.test(`${c.id} ${c.label}`));
+  return onLanding ? item : undefined;
 }
 
 export function childActive(href: string, path: string): boolean {

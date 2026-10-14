@@ -6,10 +6,13 @@ import {
   type BadgeKind,
   type Breakpoint,
   type Crumb,
+  type NavChild,
   type NavGroup,
   type NavItem,
+  bestChildHref,
   breakpointOf,
   crumbsFor,
+  groupNavChildren,
   moduleActive,
   recordTabs,
   track,
@@ -138,6 +141,26 @@ function badgeCount(kind: BadgeKind | undefined, counts: Record<string, number>)
   return counts[kind] ?? 0;
 }
 
+function useOpenBranches(path: string) {
+  const [override, setOverride] = useState<Record<string, boolean>>({});
+  const isOpen = (item: NavItem) => {
+    if (Object.prototype.hasOwnProperty.call(override, item.id)) return override[item.id];
+    return moduleActive(item.href, path) && (item.children?.length ?? 0) > 0;
+  };
+  const setOpen = (item: NavItem, open: boolean) => {
+    setOverride((prev) => ({ ...prev, [item.id]: open }));
+  };
+  const toggle = (item: NavItem) => {
+    setOverride((prev) => {
+      const current = Object.prototype.hasOwnProperty.call(prev, item.id)
+        ? prev[item.id]
+        : moduleActive(item.href, path) && (item.children?.length ?? 0) > 0;
+      return { ...prev, [item.id]: !current };
+    });
+  };
+  return { isOpen, toggle, setOpen };
+}
+
 export function Sidebar({
   path,
   user,
@@ -205,9 +228,7 @@ export function Sidebar({
             })}
           </>
         )}
-        {groups.map((g) => (
-          <NavGroupBlock key={g.id} group={g} path={path} expanded={expanded} counts={counts} onClick={go} />
-        ))}
+        <NavTree groups={groups} path={path} expanded={expanded} counts={counts} onNavigate={go} />
         {expanded && recents.length > 0 && (
           <>
             <div className="nav-group-label">Recent</div>
@@ -226,31 +247,101 @@ export function Sidebar({
   );
 }
 
-function NavGroupBlock({
-  group,
+function NavTree({
+  groups,
   path,
   expanded,
   counts,
-  onClick,
+  onNavigate,
 }: {
-  group: NavGroup;
+  groups: NavGroup[];
   path: string;
   expanded: boolean;
   counts: Record<string, number>;
-  onClick: (href: string) => void;
+  onNavigate: (href: string) => void;
 }) {
+  const { isOpen, toggle, setOpen } = useOpenBranches(path);
   return (
-    <div className="nav-group">
-      {expanded && <div className="nav-group-label">{group.label}</div>}
-      {group.items.map((item) => (
-        <NavButton
-          key={item.id}
-          item={item}
-          path={path}
-          expanded={expanded}
-          count={badgeCount(item.badge, counts)}
-          onClick={() => onClick(item.href)}
-        />
+    <>
+      {groups.map((group) => (
+        <div key={group.id} className="nav-group">
+          {expanded && <div className="nav-group-label">{group.label}</div>}
+          {group.items.map((item) => {
+            const children = item.children ?? [];
+            const open = isOpen(item);
+            const best = bestChildHref(children, path);
+            const moduleOn = moduleActive(item.href, path);
+            const parentCurrent = moduleOn && !best;
+            return (
+              <div key={item.id} className="nav-branch">
+                <div className={`nav-row${parentCurrent ? ' nav-active' : ''}${moduleOn && children.length > 0 ? ' is-open' : ''}`}>
+                  <NavButton
+                    item={item}
+                    path={path}
+                    expanded={expanded}
+                    count={badgeCount(item.badge, counts)}
+                    current={parentCurrent}
+                    onClick={() => {
+                      if (children.length > 0 && !open) setOpen(item, true);
+                      onNavigate(item.href);
+                    }}
+                  />
+                  {children.length > 0 && expanded && (
+                    <button
+                      type="button"
+                      className="nav-caret"
+                      aria-expanded={open}
+                      aria-label={`${open ? 'Hide' : 'Show'} ${item.label} sections`}
+                      onClick={() => toggle(item)}
+                    >
+                      <span aria-hidden>{open ? '\u25BE' : '\u25B8'}</span>
+                    </button>
+                  )}
+                </div>
+                {children.length > 0 && expanded && open && (
+                  <NavSub children={children} best={best} onNavigate={onNavigate} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function NavSub({
+  children,
+  best,
+  onNavigate,
+}: {
+  children: NavChild[];
+  best: string | undefined;
+  onNavigate: (href: string) => void;
+}) {
+  const groups = groupNavChildren(children);
+  const labeled = groups.some((g) => g.group);
+  return (
+    <div className="nav-sub">
+      {groups.map((g) => (
+        <div key={g.group || 'all'}>
+          {labeled && g.group ? <div className="nav-sub-label">{g.group}</div> : null}
+          {g.items.map((child) => {
+            const current = best === child.href;
+            return (
+              <button
+                key={`${child.id}-${child.href}`}
+                type="button"
+                className={`nav-item nav-child${current ? ' nav-active' : ''}`}
+                title={child.label}
+                aria-current={current ? 'page' : undefined}
+                onClick={() => onNavigate(child.href)}
+              >
+                <span className="nav-label">{child.label}</span>
+              </button>
+            );
+          })}
+        </div>
       ))}
     </div>
   );
@@ -262,16 +353,19 @@ function NavButton({
   expanded,
   count,
   onClick,
+  current,
 }: {
   item: NavItem;
   path: string;
   expanded: boolean;
   count: number;
   onClick: () => void;
+  current?: boolean;
 }) {
-  const active = moduleActive(item.href, path);
+  const active = current ?? moduleActive(item.href, path);
   return (
     <button
+      type="button"
       data-mod={item.id}
       title={item.label}
       aria-current={active ? 'page' : undefined}
@@ -279,7 +373,7 @@ function NavButton({
       onClick={onClick}
     >
       <span className="nav-dot" aria-hidden />
-      {expanded ? item.label : item.label.slice(0, 1)}
+      {expanded ? <span className="nav-label">{item.label}</span> : item.label.slice(0, 1)}
       {expanded && count > 0 && <span className="count-badge">{count}</span>}
       {!expanded && count > 0 && <span className="count-badge nav-dot-badge">{count > 9 ? '9+' : count}</span>}
     </button>
@@ -320,23 +414,13 @@ export function MoreDrawer({
         </div>
         <div className="drawer-body">
           <button className="handheld-scan" onClick={() => { onClose(); onScan(); }}>◉ Scan QR</button>
-          {groups.map((g) => (
-            <div key={g.id} className="nav-group">
-              <div className="nav-group-label">{g.label}</div>
-              {g.items.map((item) => (
-                <button
-                  key={item.id}
-                  data-mod={item.id}
-                  className={`nav-item more-item ${moduleActive(item.href, path) ? 'nav-active' : ''}`}
-                  onClick={() => { onNavigate(item.href); onClose(); }}
-                >
-                  <span className="nav-dot" aria-hidden />
-                  {item.label}
-                  {badgeCount(item.badge, counts) > 0 && <span className="count-badge">{badgeCount(item.badge, counts)}</span>}
-                </button>
-              ))}
-            </div>
-          ))}
+          <NavTree
+            groups={groups}
+            path={path}
+            expanded
+            counts={counts}
+            onNavigate={(href) => { onNavigate(href); onClose(); }}
+          />
         </div>
       </aside>
     </div>

@@ -55,7 +55,8 @@ import {
   useBreakpoint,
 } from '../components/nav';
 import TopHeader from '../components/TopHeader';
-import { isFocusPath, itemVisible, normalizePath, requiredPermForPath, track } from '../nav';
+import { isFocusPath, itemVisible, landingModule, normalizePath, requiredPermForPath, track } from '../nav';
+import { ModuleSections } from '../components/ModuleSections';
 import { useCompanyProfile } from '../company';
 
 /** Badge counts keyed by dashboard exception code (low_stock, ncr, secure, ...). */
@@ -226,6 +227,8 @@ export default function Shell() {
   else if (listMatch) body = <EntityList route={listMatch} />;
   else body = <AccessDenied path={path} />;
 
+  const landing = landingModule(path, user);
+
   const counts = {
     approvals: approvalCount,
     inventory: moduleCounts.low_stock ?? 0,
@@ -284,6 +287,11 @@ export default function Shell() {
         />
 
         <main id="main-content" className="content" tabIndex={-1}>
+          {landing && (
+            <div className="page module-sections-page">
+              <ModuleSections item={landing} />
+            </div>
+          )}
           <Suspense fallback={<PageLoader variant="page" />}>{body}</Suspense>
         </main>
 
