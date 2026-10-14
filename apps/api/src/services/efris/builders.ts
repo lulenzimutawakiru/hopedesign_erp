@@ -8,7 +8,7 @@
  * fixed/renamed wrapper the current URA specification requires.
  */
 import type { EfrisConfigurationRow, EfrisTaxpayerRow } from './config.js';
-
+import { buildT109Content, resolveDeviceNo, type UraLine, type UraParty } from './protocol.js';
 
 /** Seller fields the payload builder actually reads from the taxpayer row. */
 export type EfrisTaxpayerLite = Pick<
@@ -22,7 +22,26 @@ export type EfrisTaxpayerLite = Pick<
   | 'taxpayer_type'
   | 'place_of_business'
   | 'branch_id'
->;
+> & Partial<Pick<EfrisTaxpayerRow, 'address' | 'contact_email' | 'contact_phone'>>;
+
+export interface FiscalParty {
+  legalName: string | null;
+  businessName?: string | null;
+  tin: string | null;
+  address?: string | null;
+  email?: string | null;
+  phone?: string | null;
+}
+
+export interface FiscalLine {
+  itemCode?: string | null;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  taxPercent: number;
+  lineGross: number;
+}
+
 export interface FiscalBuildContext {
   docType: string;
   docRefType: string;
@@ -35,10 +54,17 @@ export interface FiscalBuildContext {
   requestRef: string | null;
   taxpayer: EfrisTaxpayerLite | null;
   config: EfrisConfigurationRow | null;
+  buyer?: FiscalParty | null;
+  lines?: FiscalLine[];
+  oriInvoiceNo?: string | null;
+  remarks?: string | null;
 }
 
 export interface BuiltFiscalPayload {
+  /** Canonical body for an OAuth gateway. */
   payload: Record<string, unknown>;
+  /** Inner URA T109 content for the system-to-system gateway. */
+  ura: Record<string, unknown>;
 }
 
 const compact = (v: string | null | undefined): string | null => {
@@ -66,9 +92,36 @@ function deepMerge(base: Record<string, unknown>, overlay: unknown): Record<stri
   return out;
 }
 
-/** Resolve the effective request payload for a claimed transaction. */
+function asParty(party: FiscalParty | null | undefined): UraParty | null {
+  if (!party) return null;
+  return {
+    legalName: party.legalName,
+    businessName: party.businessName ?? party.legalName,
+    tin: party.tin,
+    address: party.address ?? null,
+    email: party.email ?? null,
+    phone: party.phone ?? null,
+  };
+}
+
+function asLines(lines: FiscalLine[] | undefined): UraLine[] {
+  if (!lines) return [];
+  return lines.map((line) => ({
+    itemCode: line.itemCode ?? null,
+    description: line.description,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    taxPercent: line.taxPercent,
+    lineGross: line.lineGross,
+  }));
+}
+
+/** Resolve the OAuth body and the URA T109 body for a claimed transaction. */
 export function buildSubmitPayload(ctx: FiscalBuildContext): BuiltFiscalPayload {
   const taxpayer = ctx.taxpayer;
+  const flags = ctx.config?.security_flags && typeof ctx.config.security_flags === 'object'
+    ? ctx.config.security_flags
+    : {};
   const seller: Record<string, unknown> = {
     legalName: compact(taxpayer?.legal_name ?? null),
     tradingName: compact(taxpayer?.trading_name ?? null),
@@ -91,22 +144,43 @@ export function buildSubmitPayload(ctx: FiscalBuildContext): BuiltFiscalPayload 
     taxAmount: ctx.taxAmount,
     netAmount,
     requestRef: compact(ctx.requestRef),
+    oriInvoiceNo: compact(ctx.oriInvoiceNo ?? null),
   };
-  const base: Record<string, unknown> = {
-    seller,
-    invoice,
+  const base: Record<string, unknown> = { seller, invoice };
+  const sellerParty: UraParty = {
+    legalName: taxpayer?.legal_name ?? null,
+    businessName: taxpayer?.trading_name ?? taxpayer?.legal_name ?? null,
+    tin: taxpayer?.tin ?? null,
+    address: taxpayer?.address ?? null,
+    email: taxpayer?.contact_email ?? null,
+    phone: taxpayer?.contact_phone ?? null,
+    placeOfBusiness: taxpayer?.place_of_business ?? null,
   };
+  let ura = buildT109Content({
+    docType: ctx.docType,
+    docRefCode: ctx.docRefCode,
+    txnDate: ctx.txnDate,
+    currency: ctx.currency || 'UGX',
+    grossAmount: ctx.grossAmount,
+    taxAmount: ctx.taxAmount,
+    seller: sellerParty,
+    buyer: asParty(ctx.buyer),
+    lines: asLines(ctx.lines),
+    oriInvoiceNo: ctx.oriInvoiceNo ?? null,
+    deviceNo: resolveDeviceNo(flags, undefined),
+    remarks: ctx.remarks ?? ctx.requestRef,
+  });
   const mapping = ctx.config?.payload_mapping;
   let payload = base;
   if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)) {
     const m = mapping as Record<string, unknown>;
     if (m.fixed && typeof m.fixed === 'object' && !Array.isArray(m.fixed)) {
       payload = deepMerge(base, m.fixed);
+      ura = deepMerge(ura, m.fixed);
     }
     if (m.envelope && typeof m.envelope === 'string') {
-      const env = m.envelope as string;
-      payload = { [env]: payload };
+      payload = { [m.envelope]: payload };
     }
   }
-  return { payload };
+  return { payload, ura };
 }

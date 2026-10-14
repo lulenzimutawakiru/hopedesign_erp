@@ -114,6 +114,8 @@ salesOpsRouter.post('/credit-notes', ...run('sales.credit_notes.create', (c, ctx
   amount: Number(b.amount),
   reason: String(b.reason ?? ''),
   reasonCode: b.reasonCode != null ? String(b.reasonCode) : null,
+  currency: b.currency != null ? String(b.currency) : null,
+  taxAmount: b.taxAmount != null ? Number(b.taxAmount) : null,
 })));
 salesOpsRouter.get('/debit-notes/:id', ...runGet('sales.debit_notes.view', (c, ctx, _q, p) => sales.getDebitNote(c, ctx, Number(p.id))));
 salesOpsRouter.post('/debit-notes/:id/post', ...run('sales.debit_notes.post', (c, ctx, _b, p) => sales.postDebitNote(c, ctx, Number(p.id))));
@@ -124,6 +126,8 @@ salesOpsRouter.post('/debit-notes', ...run('sales.debit_notes.create', (c, ctx, 
   amount: Number(b.amount),
   reason: String(b.reason ?? ''),
   reasonCode: b.reasonCode != null ? String(b.reasonCode) : null,
+  currency: b.currency != null ? String(b.currency) : null,
+  taxAmount: b.taxAmount != null ? Number(b.taxAmount) : null,
 })));
 
 salesOpsRouter.post('/returns', ...run('sales.returns.create', (c, ctx, b) => sales.createSalesReturn(c, ctx, b)));

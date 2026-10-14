@@ -416,6 +416,7 @@ financeOpsRouter.patch('/efris/taxpayers/:id', ...run('efris.configuration.manag
 financeOpsRouter.get('/efris/configurations', ...runGet('efris.configuration.view', (c, ctx) => efrisDir.listEfrisConfigurations(c, ctx)));
 financeOpsRouter.post('/efris/configurations', ...run('efris.configuration.manage', (c, ctx, b) => efrisDir.createEfrisConfiguration(c, ctx, b)));
 financeOpsRouter.patch('/efris/configurations/:id', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisDir.updateEfrisConfiguration(c, ctx, Number(p.id), b)));
+financeOpsRouter.post('/efris/configurations/:id/probe', ...run('efris.configuration.manage', (c, ctx, _b, p) => efrisDir.probeEfrisConfiguration(c, ctx, Number(p.id))));
 
 // Error centre + controlled retry engine (spec 91-92).
 financeOpsRouter.get('/efris/errors', ...runGet('efris.errors.view', (c, ctx, q) => efrisDir.listEfrisErrors(c, ctx, {

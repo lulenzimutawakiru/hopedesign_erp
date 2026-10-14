@@ -542,12 +542,16 @@ export async function postCreditNote(client: pg.PoolClient, ctx: Ctx, creditNote
   const arId = await getAccountId(client, ctx, COA.AR);
   const revId = await getAccountId(client, ctx, COA.REVENUE);
   const amount = Number(cn.amount);
+  const tax = Math.max(0, Number(cn.tax_amount) || 0);
+  const net = Math.max(amount - tax, 0);
+  const vatId = tax > 0 ? await getAccountId(client, ctx, COA.VAT) : null;
   const entryId = await postJournalLines(client, ctx, {
     entryDate: cn.credit_date,
     journalType: 'CREDIT_NOTE',
     description: `Credit note ${cn.credit_no}`,
     lines: [
-      { account_id: revId, debit: amount, description: `Credit note ${cn.credit_no}` },
+      { account_id: revId, debit: net, description: `Credit note ${cn.credit_no}` },
+      ...(tax > 0 && vatId != null ? [{ account_id: vatId, debit: tax, description: `VAT credit note ${cn.credit_no}` } as JournalLine] : []),
       { account_id: arId, credit: amount, description: `Credit note ${cn.credit_no}` },
     ],
     refType: 'credit_notes',
@@ -587,13 +591,17 @@ export async function postDebitNote(client: pg.PoolClient, ctx: Ctx, debitNoteId
   const arId = await getAccountId(client, ctx, COA.AR);
   const revId = await getAccountId(client, ctx, COA.REVENUE);
   const amount = Number(dn.amount);
+  const tax = Math.max(0, Number(dn.tax_amount) || 0);
+  const net = Math.max(amount - tax, 0);
+  const vatId = tax > 0 ? await getAccountId(client, ctx, COA.VAT) : null;
   const entryId = await postJournalLines(client, ctx, {
     entryDate: isoDate(dn.debit_date),
     journalType: 'DEBIT_NOTE',
     description: `Debit note ${dn.debit_no}`,
     lines: [
       { account_id: arId, debit: amount, description: `Debit note ${dn.debit_no}` },
-      { account_id: revId, credit: amount, description: `Debit note ${dn.debit_no}` },
+      { account_id: revId, credit: net, description: `Debit note ${dn.debit_no}` },
+      ...(tax > 0 && vatId != null ? [{ account_id: vatId, credit: tax, description: `VAT debit note ${dn.debit_no}` } as JournalLine] : []),
     ],
     refType: 'debit_notes',
     refId: debitNoteId,

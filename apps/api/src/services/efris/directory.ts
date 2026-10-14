@@ -8,15 +8,17 @@
 //   * Secrets are never accepted, stored or returned. Only the
 //     env-backed pointer keys client_id_ref / credentials_ref are
 //     persisted; the values are resolved server-side at submit time.
-//   * A configuration may only leave DISABLED when those pointer
-//     keys actually resolve to real server-side environment secrets.
+//   * TEST may be saved before the environment is loaded. A pointer
+//     that is set must resolve (400 naming the key, never a 500).
+//     ACTIVE also needs a resolvable credentials pointer and a TEST
+//     connection this company has already proven.
 //   * FISCALIZED is never written by this module. Only the EFRIS
 //     background worker writes it, after a confirmed URA FDN and
 //     verification code.
 // ============================================================
 import pg from 'pg';
 import { Ctx } from '../../db.js';
-import { badRequest, conflict, notFound, toCamelRow, toCamelRows } from '../../utils.js';
+import { ApiError, badRequest, conflict, notFound, toCamelRow, toCamelRows } from '../../utils.js';
 import { logAudit } from '../audit.js';
 import { emitEvent } from '../events.js';
 import {
@@ -27,6 +29,8 @@ import {
   type EfrisConfigurationRow,
   type FiscalTarget,
 } from './config.js';
+import { EfrisClientError, probeEfrisGateway } from './client.js';
+import { assertUrlMatchesMode, defaultEndpoint, EfrisProtocolError, looksLikePrivateKey } from './protocol.js';
 
 /** efris_taxpayers.efris_status - mirrors the CHECK constraint in 0142. */
 export const EFRIS_TAXPAYER_STATUSES: readonly string[] = [
@@ -97,6 +101,82 @@ function assertModeResolvable(
 ): void {
   if (mode === 'DISABLED') return;
   assertCredentialsResolvable(pointers as EfrisConfigurationRow);
+}
+
+/** Written only by a successful connection proof. Client payloads cannot set them. */
+const SERVER_FLAG_KEYS = [
+  'sandboxProven', 'sandboxProvenAt', 'lastProbeAt', 'lastProbeOk',
+  'lastProbeMode', 'lastProbeMessage', 'lastProbeInterface',
+] as const;
+
+function readFlagObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return { ...(value as Record<string, unknown>) };
+}
+
+function rejectEmbeddedSecrets(value: unknown): void {
+  const raw = typeof value === 'string' ? value : JSON.stringify(value ?? {});
+  if (/BEGIN [A-Z ]*PRIVATE KEY/.test(raw)) {
+    throw badRequest(
+      'EFRIS secrets are never accepted by the API. Store the private key in the server environment and reference it by key.'
+    );
+  }
+}
+
+/** Drop proof flags from the request and keep the ones already stored. */
+function flagsForStorage(value: unknown, current: Record<string, unknown>): Record<string, unknown> {
+  rejectEmbeddedSecrets(value);
+  const parsed = JSON.parse(jsonOr(value, {})) as Record<string, unknown>;
+  for (const key of SERVER_FLAG_KEYS) delete parsed[key];
+  const kept: Record<string, unknown> = {};
+  for (const key of SERVER_FLAG_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(current, key)) kept[key] = current[key];
+  }
+  return { ...parsed, ...kept };
+}
+
+function assertSavedUrl(mode: string, url: string | null, flags: Record<string, unknown>): void {
+  if (!url || mode === 'DISABLED') return;
+  try {
+    assertUrlMatchesMode(mode as 'TEST' | 'ACTIVE', url, flags);
+  } catch (err) {
+    if (err instanceof EfrisProtocolError) throw new ApiError(400, err.code, err.message);
+    throw err;
+  }
+}
+
+/**
+ * Production stays off until some configuration for this company has proven
+ * the sandbox, and until a credentials pointer actually resolves.
+ */
+async function assertActiveReady(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  mode: string,
+  credentialsRef: string | null
+): Promise<void> {
+  if (mode !== 'ACTIVE') return;
+  if (!credentialsRef || !resolveCredentialValue(credentialsRef)) {
+    throw new ApiError(
+      400,
+      'EFRIS_CREDENTIALS_MISSING',
+      'Production mode needs a server-side credentials key. For the URA gateway that value is the device private key.'
+    );
+  }
+  const proven = await client.query(
+    `SELECT 1 FROM efris_configurations
+      WHERE tenant_id = $1 AND company_id = $2
+        AND COALESCE(security_flags->>'sandboxProven', '') = 'true'
+      LIMIT 1`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  if (!proven.rows.length) {
+    throw new ApiError(
+      400,
+      'EFRIS_SANDBOX_NOT_PROVEN',
+      'Production mode stays off until a TEST configuration has proven the URA sandbox connection.'
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -340,16 +420,56 @@ export interface EfrisConfigurationInput {
   isActive?: unknown;
 }
 
+function sandboxProvenFlag(flags: unknown): boolean {
+  return readFlagObject(flags).sandboxProven === true;
+}
+
+/** OAuth needs both secrets. The URA gateway needs a device private key and a device number. */
+function credentialsReady(row: {
+  token_url?: string | null;
+  client_id_ref?: string | null;
+  credentials_ref?: string | null;
+  security_flags?: unknown;
+}): boolean {
+  const clientValue = resolveCredentialValue(row.client_id_ref ?? null);
+  const secret = resolveCredentialValue(row.credentials_ref ?? null);
+  if (row.token_url) return Boolean(clientValue) && Boolean(secret);
+  const flags = readFlagObject(row.security_flags);
+  const deviceFromFlags = Boolean(flags.deviceNo || flags.device_no || flags.deviceNumber);
+  const deviceFromEnv = Boolean(
+    clientValue && /^[A-Za-z0-9_-]{4,40}$/.test(clientValue) && !looksLikePrivateKey(clientValue)
+  );
+  return looksLikePrivateKey(secret) && (deviceFromFlags || deviceFromEnv);
+}
+
+function gatewayHostFor(row: Record<string, unknown>): string | null {
+  const mode = String(row.mode ?? '');
+  if (mode !== 'TEST' && mode !== 'ACTIVE') return null;
+  const base = typeof row.base_url === 'string' ? row.base_url.trim() : '';
+  const url = base || defaultEndpoint(mode);
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 /** Public projection: raw env pointer keys are internal plumbing, not UI data. */
 function publicConfiguration(row: Record<string, unknown>) {
   const out: Record<string, unknown> = { ...row };
+  const flags = readFlagObject(row.security_flags);
   out.clientIdRefSet = Boolean(row.client_id_ref);
   out.credentialsRefSet = Boolean(row.credentials_ref);
-  out.secretsResolvable =
-    Boolean(row.client_id_ref) &&
-    Boolean(row.credentials_ref) &&
-    Boolean(resolveCredentialValue(row.client_id_ref as string | null)) &&
-    Boolean(resolveCredentialValue(row.credentials_ref as string | null));
+  out.secretsResolvable = credentialsReady({
+    token_url: typeof row.token_url === 'string' ? row.token_url : null,
+    client_id_ref: (row.client_id_ref as string | null) ?? null,
+    credentials_ref: (row.credentials_ref as string | null) ?? null,
+    security_flags: row.security_flags,
+  });
+  out.sandboxProven = sandboxProvenFlag(flags);
+  out.protocol = row.token_url ? 'OAUTH' : 'URA_S2S';
+  out.gatewayHost = gatewayHostFor(row);
+  out.deviceNoSet = Boolean(flags.deviceNo || flags.device_no || flags.deviceNumber);
   delete out.client_id_ref;
   delete out.credentials_ref;
   return toCamelRow(out);
@@ -395,6 +515,7 @@ export async function createEfrisConfiguration(
   input: EfrisConfigurationInput
 ) {
   rejectSecretFields(input as Record<string, unknown>);
+  rejectEmbeddedSecrets(input.payloadMapping);
   const code = str(input.code).toUpperCase();
   const name = str(input.name);
   if (!code) throw badRequest('Configuration code is required');
@@ -403,6 +524,12 @@ export async function createEfrisConfiguration(
   const clientIdRef = nullable(input.clientIdRef);
   const credentialsRef = nullable(input.credentialsRef);
   assertModeResolvable(mode, { client_id_ref: clientIdRef, credentials_ref: credentialsRef });
+  const storedFlags = flagsForStorage(input.securityFlags, {});
+  const baseUrl = urlOrNull(input.baseUrl, 'baseUrl');
+  const tokenUrl = urlOrNull(input.tokenUrl, 'tokenUrl');
+  assertSavedUrl(mode, baseUrl, storedFlags);
+  assertSavedUrl(mode, tokenUrl, storedFlags);
+  await assertActiveReady(client, ctx, mode, credentialsRef);
 
   let taxpayerId: number | null = input.taxpayerId == null ? null : Number(input.taxpayerId);
   if (taxpayerId == null) {
@@ -427,7 +554,7 @@ export async function createEfrisConfiguration(
        RETURNING *`,
       [
         ctx.companyId, ctx.tenantId, taxpayerId, code, name, mode,
-        urlOrNull(input.baseUrl, 'baseUrl'), urlOrNull(input.tokenUrl, 'tokenUrl'),
+        baseUrl, tokenUrl,
         input.authGrantType == null ? 'client_credentials' : str(input.authGrantType),
         clientIdRef, credentialsRef,
         intOr(input.timeoutSeconds, 20), intOr(input.maxAttempts, 5),
@@ -438,7 +565,7 @@ export async function createEfrisConfiguration(
           'cfo', 'finance_manager', 'chief_accountant', 'financial_controller', 'tax_officer',
         ]),
         intOr(input.duplicateWindowSeconds, 300),
-        jsonOr(input.payloadMapping, {}), jsonOr(input.securityFlags, {}),
+        jsonOr(input.payloadMapping, {}), JSON.stringify(storedFlags),
         boolOr(input.isActive, true), ctx.userId ?? null,
       ]
     );
@@ -471,6 +598,7 @@ export async function updateEfrisConfiguration(
   input: EfrisConfigurationInput
 ) {
   rejectSecretFields(input as Record<string, unknown>);
+  rejectEmbeddedSecrets(input.payloadMapping);
   const found = await client.query(
     `SELECT * FROM efris_configurations WHERE id = $1 AND tenant_id = $2 AND company_id = $3 FOR UPDATE`,
     [id, ctx.tenantId, ctx.companyId]
@@ -488,14 +616,23 @@ export async function updateEfrisConfiguration(
   let nextMode: string = cur.mode;
   let nextClientRef: string | null = cur.client_id_ref;
   let nextCredRef: string | null = cur.credentials_ref;
+  let nextBase: string | null = cur.base_url;
+  let nextToken: string | null = cur.token_url;
+  let nextFlags = readFlagObject(cur.security_flags);
 
   if (input.code !== undefined) push('code', str(input.code).toUpperCase() || cur.code);
   if (input.name !== undefined) push('name', str(input.name) || cur.name);
   if (input.taxpayerId !== undefined) {
     push('taxpayer_id', input.taxpayerId == null ? null : Number(input.taxpayerId));
   }
-  if (input.baseUrl !== undefined) push('base_url', urlOrNull(input.baseUrl, 'baseUrl'));
-  if (input.tokenUrl !== undefined) push('token_url', urlOrNull(input.tokenUrl, 'tokenUrl'));
+  if (input.baseUrl !== undefined) {
+    nextBase = urlOrNull(input.baseUrl, 'baseUrl');
+    push('base_url', nextBase);
+  }
+  if (input.tokenUrl !== undefined) {
+    nextToken = urlOrNull(input.tokenUrl, 'tokenUrl');
+    push('token_url', nextToken);
+  }
   if (input.authGrantType !== undefined) push('auth_grant_type', str(input.authGrantType));
   if (input.clientIdRef !== undefined) {
     nextClientRef = nullable(input.clientIdRef);
@@ -527,14 +664,22 @@ export async function updateEfrisConfiguration(
     push('duplicate_window_seconds', intOr(input.duplicateWindowSeconds, cur.duplicate_window_seconds));
   }
   if (input.payloadMapping !== undefined) push('payload_mapping', jsonOr(input.payloadMapping, {}));
-  if (input.securityFlags !== undefined) push('security_flags', jsonOr(input.securityFlags, {}));
+  if (input.securityFlags !== undefined) {
+    nextFlags = flagsForStorage(input.securityFlags, readFlagObject(cur.security_flags));
+    push('security_flags', JSON.stringify(nextFlags));
+  }
   if (input.isActive !== undefined) push('is_active', boolOr(input.isActive, cur.is_active));
   if (input.mode !== undefined) {
     nextMode = modeOrDefault(input.mode, 'DISABLED');
-    assertModeResolvable(nextMode, { client_id_ref: nextClientRef, credentials_ref: nextCredRef });
     push('mode', nextMode);
-  } else if (nextClientRef !== cur.client_id_ref || nextCredRef !== cur.credentials_ref) {
-    assertModeResolvable(cur.mode, { client_id_ref: nextClientRef, credentials_ref: nextCredRef });
+  }
+  assertModeResolvable(nextMode, { client_id_ref: nextClientRef, credentials_ref: nextCredRef });
+  assertSavedUrl(nextMode, nextBase, nextFlags);
+  assertSavedUrl(nextMode, nextToken, nextFlags);
+  if (nextMode === 'ACTIVE' && cur.mode !== 'ACTIVE') {
+    await assertActiveReady(client, ctx, nextMode, nextCredRef);
+  } else if (nextMode === 'ACTIVE' && (nextCredRef !== cur.credentials_ref || nextBase !== cur.base_url || nextToken !== cur.token_url)) {
+    await assertActiveReady(client, ctx, nextMode, nextCredRef);
   }
 
   if (!sets.length) throw badRequest('No configuration fields were supplied');
@@ -572,12 +717,100 @@ export async function updateEfrisConfiguration(
   }
 }
 
+function asClientError(err: unknown): ApiError {
+  if (err instanceof EfrisClientError) {
+    const status = err.stage === 'config' ? 400 : 502;
+    return new ApiError(status, err.code, err.message);
+  }
+  if (err instanceof EfrisProtocolError) return new ApiError(400, err.code, err.message);
+  throw err;
+}
+
+/**
+ * Prove the configured gateway without fiscalizing a document.
+ * A successful TEST proof is what allows this company to switch to ACTIVE.
+ */
+export async function probeEfrisConfiguration(client: pg.PoolClient, ctx: Ctx, id: number) {
+  if (!Number.isFinite(id) || id <= 0) throw badRequest('A valid EFRIS configuration id is required');
+  const found = await client.query(
+    `SELECT * FROM efris_configurations WHERE id = $1 AND tenant_id = $2 AND company_id = $3`,
+    [id, ctx.tenantId, ctx.companyId]
+  );
+  if (!found.rows.length) throw notFound('EFRIS configuration not found');
+  const config = found.rows[0] as EfrisConfigurationRow;
+  if (config.mode === 'DISABLED') {
+    throw new ApiError(400, 'EFRIS_MODE_DISABLED', 'Switch the configuration to TEST or ACTIVE before proving the connection');
+  }
+  let tin: string | null = null;
+  if (config.taxpayer_id != null) {
+    const tp = await client.query(
+      `SELECT tin FROM efris_taxpayers WHERE id = $1 AND tenant_id = $2`,
+      [config.taxpayer_id, ctx.tenantId]
+    );
+    tin = tp.rows[0] ? String(tp.rows[0].tin) : null;
+  }
+  const credsClient = resolveCredentialValue(config.client_id_ref);
+  const credsSecret = resolveCredentialValue(config.credentials_ref);
+  let probe;
+  try {
+    probe = await probeEfrisGateway({
+      mode: config.mode,
+      baseUrl: config.base_url ?? '',
+      tokenUrl: config.token_url,
+      grantType: config.auth_grant_type || 'client_credentials',
+      clientId: credsClient,
+      clientSecret: credsSecret,
+      timeoutSeconds: Math.min(Number(config.timeout_seconds) || 20, 20),
+      payload: {},
+      tin,
+      securityFlags: readFlagObject(config.security_flags),
+    });
+  } catch (err) {
+    throw asClientError(err);
+  }
+  const now = new Date().toISOString();
+  const patch: Record<string, unknown> = {
+    lastProbeAt: now,
+    lastProbeOk: true,
+    lastProbeMode: config.mode,
+    lastProbeMessage: probe.message,
+    lastProbeInterface: probe.interfaceCode,
+  };
+  if (config.mode === 'TEST') {
+    patch.sandboxProven = true;
+    patch.sandboxProvenAt = now;
+  }
+  const updated = await client.query(
+    `UPDATE efris_configurations
+        SET security_flags = COALESCE(security_flags, '{}'::jsonb) || $4::jsonb,
+            updated_by = $5,
+            updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND company_id = $3
+      RETURNING *`,
+    [id, ctx.tenantId, ctx.companyId, JSON.stringify(patch), ctx.userId ?? null]
+  );
+  await logAudit(client, ctx, {
+    action: 'EFRIS_CONFIGURATION_PROBED',
+    resource: 'efris_configuration',
+    recordId: id,
+    recordCode: String(config.code),
+    newValues: { mode: config.mode, host: probe.host, interfaceCode: probe.interfaceCode, sandboxProven: config.mode === 'TEST' },
+  });
+  return {
+    probe,
+    configuration: publicConfiguration(updated.rows[0] as Record<string, unknown>),
+  };
+}
+
 export interface EfrisIntegrationStatus {
   configured: boolean;
   mode: string;
   active: boolean;
   fiscalizationEnabled: boolean;
   secretsResolvable: boolean;
+  sandboxProven: boolean;
+  protocol: string;
+  gatewayHost: string | null;
   taxpayerStatus: string | null;
   environment: string | null;
   companyTinConfigured: boolean;
@@ -609,7 +842,9 @@ export async function efrisIntegrationStatus(
        LEFT JOIN efris_taxpayers t ON t.id = c.taxpayer_id
        LEFT JOIN branches b ON b.id = t.branch_id
       WHERE c.tenant_id = $1 AND c.company_id = $2
-      ORDER BY c.is_active DESC, c.mode DESC, c.id DESC
+      ORDER BY c.is_active DESC,
+               CASE c.mode WHEN 'ACTIVE' THEN 0 WHEN 'TEST' THEN 1 ELSE 2 END,
+               c.id DESC
       LIMIT 1`,
     [ctx.tenantId, ctx.companyId]
   );
@@ -640,27 +875,44 @@ export async function efrisIntegrationStatus(
 
   const mode = config?.mode ?? 'DISABLED';
   const active = Boolean(config?.is_active) && mode !== 'DISABLED';
-  const secretsResolvable =
-    Boolean(config?.client_id_ref) &&
-    Boolean(config?.credentials_ref) &&
-    Boolean(resolveCredentialValue(config?.client_id_ref)) &&
-    Boolean(resolveCredentialValue(config?.credentials_ref));
-  const fiscalizationEnabled = active && secretsResolvable;
+  const provenRes = await client.query(
+    `SELECT bool_or(COALESCE(security_flags->>'sandboxProven', '') = 'true') AS sandbox_proven
+       FROM efris_configurations
+      WHERE tenant_id = $1 AND company_id = $2`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  const sandboxProven = provenRes.rows[0]?.sandbox_proven === true;
+  const protocol = !config ? 'NONE' : config.token_url ? 'OAUTH' : 'URA_S2S';
+  const gatewayHost = config ? gatewayHostFor(config as unknown as Record<string, unknown>) : null;
+  const secretsResolvable = config ? credentialsReady(config) : false;
+  const fiscalizationEnabled = active && secretsResolvable && (mode !== 'ACTIVE' || sandboxProven);
+  const pending = String(txn.pending_transactions ?? 0);
+  const hostBit = gatewayHost ? ` (${gatewayHost})` : '';
 
   let message: string;
   if (!config) {
     message =
       'No EFRIS configuration exists for this company. Fiscalization is inert until a taxpayer and configuration are registered.';
   } else if (mode === 'DISABLED') {
-    message = 'EFRIS configuration is present but switched off. No document will be submitted to URA.';
-  } else if (!secretsResolvable) {
+    message = sandboxProven
+      ? 'EFRIS configuration is present but switched off. A TEST connection was proven earlier. No document will be submitted to URA.'
+      : 'EFRIS configuration is present but switched off. No document will be submitted to URA.';
+  } else if (mode === 'ACTIVE' && !sandboxProven) {
     message =
-      'EFRIS is set to ' + mode + ' but the referenced server-side credentials are not present in the environment. Submission is blocked to avoid unsigned requests.';
+      'Production (ACTIVE) stays off until a TEST configuration has proven the URA sandbox connection.';
+  } else if (!secretsResolvable) {
+    message = mode === 'TEST'
+      ? 'TEST mode uses the URA sandbox' + hostBit + '. The device private key or OAuth credentials are not present in the server environment, so submission is blocked.'
+      : 'Production (ACTIVE) is selected but the server-side credentials are not present in the environment. Submission is blocked.';
   } else if (!Boolean(config.is_active)) {
     message = 'EFRIS configuration is inactive. Fiscalization is paused until it is re-activated.';
+  } else if (mode === 'TEST') {
+    message = sandboxProven
+      ? 'URA sandbox (TEST) is proven' + hostBit + '. ' + pending + ' transaction(s) awaiting a URA response. Switch to ACTIVE only when live fiscal documents should be issued.'
+      : 'EFRIS is in TEST mode against the URA sandbox' + hostBit + '. Prove the connection before switching to production. ' + pending + ' transaction(s) awaiting a URA response.';
   } else {
     message =
-      'EFRIS is connected in ' + mode + ' mode. ' + String(txn.pending_transactions ?? 0) + ' transaction(s) awaiting a URA response.';
+      'EFRIS is connected in production (ACTIVE) mode' + hostBit + '. ' + pending + ' transaction(s) awaiting a URA response.';
   }
 
   return {
@@ -669,6 +921,9 @@ export async function efrisIntegrationStatus(
     active,
     fiscalizationEnabled,
     secretsResolvable,
+    sandboxProven,
+    protocol,
+    gatewayHost,
     taxpayerStatus: (config as unknown as { taxpayer_status?: string | null } | null)?.taxpayer_status ?? null,
     environment: (config as unknown as { taxpayer_environment?: string | null } | null)?.taxpayer_environment ?? null,
     companyTinConfigured: Boolean((config as unknown as { taxpayer_tin?: string | null } | null)?.taxpayer_tin),

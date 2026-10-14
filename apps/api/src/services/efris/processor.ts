@@ -15,7 +15,7 @@ import { logAudit } from '../audit.js';
 import { emitEvent } from '../events.js';
 import { notifyRoleAdvanced } from '../communication.js';
 import { resolveCredentials, notificationRoleCodes, type EfrisConfigurationRow } from './config.js';
-import { buildSubmitPayload, type EfrisTaxpayerLite } from './builders.js';
+import { buildSubmitPayload, type EfrisTaxpayerLite, type FiscalLine, type FiscalParty } from './builders.js';
 import { submitFiscalDocument, extractFiscalIdentifiers, EfrisClientError } from './client.js';
 
 /** Row returned by efris_claim_fiscal_batch(). */
@@ -184,6 +184,105 @@ async function recordFailure(row: ClaimedFiscalTransaction, err: unknown): Promi
   }
 }
 
+interface FiscalSource {
+  buyer: FiscalParty | null;
+  lines: FiscalLine[];
+  oriInvoiceNo: string | null;
+  remarks: string | null;
+}
+
+async function originalInvoiceFdn(client: pg.PoolClient, tenantId: number, invoiceId: number): Promise<string | null> {
+  if (!Number.isFinite(invoiceId) || invoiceId <= 0) return null;
+  const res = await client.query(
+    `SELECT d.fdn
+       FROM efris_documents d
+       JOIN efris_transactions t ON t.id = d.efris_transaction_id
+      WHERE t.tenant_id = $1
+        AND t.doc_ref_type = 'customer_invoices'
+        AND t.doc_ref_id = $2
+        AND t.status = 'FISCALIZED'
+        AND d.fdn IS NOT NULL
+      ORDER BY d.id DESC
+      LIMIT 1`,
+    [tenantId, invoiceId]
+  );
+  const fdn = res.rows[0]?.fdn;
+  return typeof fdn === 'string' && fdn.trim() ? fdn.trim() : null;
+}
+
+/** Buyer, lines and the original FDN for a credit or debit note. Missing rows fall back to the transaction totals. */
+async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransaction): Promise<FiscalSource> {
+  const empty: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, remarks: null };
+  try {
+    if (row.doc_ref_type === 'customer_invoices') {
+      const inv = await client.query(
+        `SELECT c.name AS customer_name, c.tin AS customer_tin, c.address AS customer_address,
+                c.email AS customer_email, c.phone AS customer_phone, i.notes
+           FROM customer_invoices i
+           JOIN customers c ON c.id = i.customer_id
+          WHERE i.id = $1 AND i.tenant_id = $2`,
+        [row.doc_ref_id, row.tenant_id]
+      );
+      const items = await client.query(
+        `SELECT ii.description, ii.quantity, ii.unit_price, ii.tax_percent, ii.line_total, p.code AS product_code
+           FROM invoice_items ii
+           LEFT JOIN products p ON p.id = ii.product_id
+          WHERE ii.invoice_id = $1
+          ORDER BY ii.id`,
+        [row.doc_ref_id]
+      );
+      const party = inv.rows[0] as Record<string, unknown> | undefined;
+      return {
+        buyer: party ? {
+          legalName: party.customer_name != null ? String(party.customer_name) : null,
+          tin: party.customer_tin != null ? String(party.customer_tin) : null,
+          address: party.customer_address != null ? String(party.customer_address) : null,
+          email: party.customer_email != null ? String(party.customer_email) : null,
+          phone: party.customer_phone != null ? String(party.customer_phone) : null,
+        } : null,
+        lines: (items.rows as Array<Record<string, unknown>>).map((item) => ({
+          itemCode: item.product_code != null ? String(item.product_code) : null,
+          description: String(item.description ?? ''),
+          quantity: Number(item.quantity ?? 0),
+          unitPrice: Number(item.unit_price ?? 0),
+          taxPercent: Number(item.tax_percent ?? 0),
+          lineGross: Number(item.line_total ?? 0),
+        })),
+        oriInvoiceNo: null,
+        remarks: party?.notes != null ? String(party.notes) : null,
+      };
+    }
+    if (row.doc_ref_type === 'credit_notes' || row.doc_ref_type === 'debit_notes') {
+      const table = row.doc_ref_type === 'credit_notes' ? 'credit_notes' : 'debit_notes';
+      const note = await client.query(
+        `SELECT n.invoice_id, n.reason, c.name AS customer_name, c.tin AS customer_tin,
+                c.address AS customer_address, c.email AS customer_email, c.phone AS customer_phone
+           FROM ${table} n
+           JOIN customers c ON c.id = n.customer_id
+          WHERE n.id = $1 AND n.tenant_id = $2`,
+        [row.doc_ref_id, row.tenant_id]
+      );
+      const party = note.rows[0] as Record<string, unknown> | undefined;
+      const invoiceId = party ? Number(party.invoice_id) : NaN;
+      return {
+        buyer: party ? {
+          legalName: party.customer_name != null ? String(party.customer_name) : null,
+          tin: party.customer_tin != null ? String(party.customer_tin) : null,
+          address: party.customer_address != null ? String(party.customer_address) : null,
+          email: party.customer_email != null ? String(party.customer_email) : null,
+          phone: party.customer_phone != null ? String(party.customer_phone) : null,
+        } : null,
+        lines: [],
+        oriInvoiceNo: await originalInvoiceFdn(client, row.tenant_id, invoiceId),
+        remarks: party?.reason != null ? String(party.reason) : null,
+      };
+    }
+  } catch (err) {
+    console.error('[efris][worker] source document lookup failed', err instanceof Error ? err.message : err);
+  }
+  return empty;
+}
+
 /** Run one claimed transaction through submission inside its own transaction. */
 async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean> {
   const client = await pool.connect();
@@ -210,29 +309,33 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
     if (row.taxpayer_id != null) {
       const tp = await client.query(
         `SELECT id, legal_name, trading_name, tin, vat_registered, vat_number, taxpayer_type,
-                business_sector, place_of_business, branch_id
+                business_sector, place_of_business, branch_id, address, contact_email, contact_phone
            FROM efris_taxpayers WHERE id = $1 AND tenant_id = $2`,
         [row.taxpayer_id, row.tenant_id]
       );
       taxpayer = tp.rows[0] ?? null;
     }
 
-    const built =
-      row.request_payload && Object.keys(row.request_payload).length > 0
-        ? { payload: row.request_payload }
-        : buildSubmitPayload({
-            docType: row.doc_type,
-            docRefType: row.doc_ref_type,
-            docRefCode: row.doc_ref_code,
-            docRefId: row.doc_ref_id,
-            txnDate: String(row.txn_date).slice(0, 10),
-            currency: row.currency,
-            grossAmount: Number(row.gross_amount),
-            taxAmount: Number(row.tax_amount),
-            requestRef: row.request_ref,
-            taxpayer,
-            config,
-          });
+    const source = await loadFiscalSource(client, row);
+    const built = buildSubmitPayload({
+      docType: row.doc_type,
+      docRefType: row.doc_ref_type,
+      docRefCode: row.doc_ref_code,
+      docRefId: row.doc_ref_id,
+      txnDate: String(row.txn_date).slice(0, 10),
+      currency: row.currency,
+      grossAmount: Number(row.gross_amount),
+      taxAmount: Number(row.tax_amount),
+      requestRef: row.request_ref,
+      taxpayer,
+      config,
+      buyer: source.buyer,
+      lines: source.lines,
+      oriInvoiceNo: source.oriInvoiceNo,
+      remarks: source.remarks,
+    });
+    const stored = row.request_payload && Object.keys(row.request_payload).length > 0 ? row.request_payload : null;
+    const storedIsUra = Boolean(stored && (stored.goodsDetails || stored.sellerDetails));
 
     const raw = await submitFiscalDocument({
       mode: config.mode,
@@ -242,7 +345,11 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
       clientId: creds.clientId,
       clientSecret: creds.clientSecret,
       timeoutSeconds: Number(config.timeout_seconds || 20),
-      payload: built.payload,
+      payload: stored && !storedIsUra ? stored : built.payload,
+      uraPayload: storedIsUra && stored ? stored : built.ura,
+      docType: row.doc_type,
+      tin: taxpayer?.tin ?? null,
+      securityFlags: config.security_flags,
     });
 
     const identifiers = extractFiscalIdentifiers(raw);

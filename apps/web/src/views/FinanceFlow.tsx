@@ -5292,7 +5292,8 @@ function ApplyRuleModal({ busy, onClose, onSave }: { busy: boolean; onClose: () 
 }
 type EfrisStatus = {
   configured: boolean; mode: string; active: boolean; fiscalizationEnabled: boolean;
-  secretsResolvable: boolean; taxpayerStatus: string | null; environment: string | null;
+  secretsResolvable: boolean; sandboxProven: boolean; protocol: string; gatewayHost: string | null;
+  taxpayerStatus: string | null; environment: string | null;
   companyTinConfigured: boolean; openErrors: number; pendingTransactions: number;
   fiscalizedTransactions: number; failedTransactions: number;
   lastSuccessfulTransactionAt: string | null; message: string;
@@ -5339,8 +5340,12 @@ const EFRIS_TAXPAYER_TYPES = [
   'COMPANY', 'INDIVIDUAL', 'PARTNERSHIP', 'SOLE_PROPRIETOR', 'NGO', 'GOVERNMENT', 'OTHER',
 ] as const;
 
-/** Name of the two server-side env keys the backend resolves pointer references against. */
-const EFRIS_ENV_HINT = 'EFRIS_CLIENT_ID / EFRIS_CLIENT_SECRET';
+/** Official URA endpoints. A blank base URL on a configuration uses the one for its mode. */
+const EFRIS_TEST_ENDPOINT = 'https://efristest.ura.go.ug/efrisws/ws/taapp/getInformation';
+const EFRIS_PRODUCTION_ENDPOINT = 'https://efrisws.ura.go.ug/ws/taapp/getInformation';
+
+/** Shown on the credential card. The values themselves never leave the server environment. */
+const EFRIS_ENV_HINT = 'Device private key or OAuth secret, in the server environment';
 
 function EfrisDesk() {
   type EfrisTabKey = 'txn' | 'docs' | 'errors' | 'recon' | 'logs' | 'taxpayers' | 'setup';
@@ -5446,6 +5451,13 @@ function EfrisDesk() {
       setConfigOpen(false); setConfigRow(null);
       load();
     } catch (e) { setFormErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+  const probeConfiguration = async (id: number) => {
+    setBusy(true); setError('');
+    try {
+      await api(`/api/ops/finance/efris/configurations/${id}/probe`, { method: 'POST', body: JSON.stringify({}) });
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
   const live = status?.fiscalizationEnabled === true;
@@ -5688,6 +5700,11 @@ function EfrisDesk() {
               <span className="kpi-label">URA credentials</span>
               <span className={`kpi-value${status.secretsResolvable ? ' kpi-ok' : ' kpi-warn'}`} style={{ fontSize: 18 }}>{status.secretsResolvable ? 'Resolvable' : 'Missing'}</span>
               <span className="kpi-sub">{EFRIS_ENV_HINT}</span>
+            </div>
+            <div className={`kpi-card${status.sandboxProven ? '' : ' card-warn'}`}>
+              <span className="kpi-label">Sandbox</span>
+              <span className={`kpi-value${status.sandboxProven ? ' kpi-ok' : ' kpi-warn'}`} style={{ fontSize: 18 }}>{status.sandboxProven ? 'Proven' : 'Unproven'}</span>
+              <span className="kpi-sub">{status.protocol === 'OAUTH' ? 'OAuth gateway' : status.protocol === 'URA_S2S' ? 'URA system-to-system' : 'No gateway'}{status.gatewayHost ? ` · ${status.gatewayHost}` : ''}</span>
             </div>
             <div className="kpi-card">
               <span className="kpi-label">Pending</span>
@@ -6184,16 +6201,22 @@ function EfrisDesk() {
             <h3>Where URA credentials live</h3>
             <p className="muted">
               The ERP never stores URA secrets. This screen records only the <strong>names</strong> of server environment
-              variables - the values stay in the server environment and are read by the backend at submission time. Anything
-              that looks like a secret (client secret, password, token, api key) is rejected by the API on sight.
+              variables. The values stay on the server and are read when a document is submitted. A client secret, password,
+              token, API key, or pasted private key is rejected.
             </p>
             <div className="form-grid">
-              <div className="field"><label>Client ID env key</label><div className="cell-mono">EFRIS_CLIENT_ID</div></div>
-              <div className="field"><label>Client secret env key</label><div className="cell-mono">EFRIS_CLIENT_SECRET</div></div>
+              <div className="field"><label>Device number or OAuth client id</label><div className="cell-mono">EFRIS_CLIENT_ID</div></div>
+              <div className="field"><label>Device private key (PEM) or OAuth secret</label><div className="cell-mono">EFRIS_CLIENT_SECRET</div></div>
             </div>
+            <p className="muted">
+              Leave the base URL blank to use the official endpoint for the mode. TEST calls the sandbox
+              ({EFRIS_TEST_ENDPOINT}). ACTIVE calls the live gateway ({EFRIS_PRODUCTION_ENDPOINT}). Leave the token URL
+              blank for the URA system-to-system gateway, and put the device number in security flags as deviceNo.
+              Fill the token URL only when the gateway is OAuth.
+            </p>
             <p className="muted" style={{ marginBottom: 0 }}>
-              A configuration can only be set to TEST or ACTIVE once both keys resolve on the server. Leave it DISABLED
-              until the URA sandbox values have been loaded and verified there.
+              TEST can be saved before those values are loaded. Submission stays blocked until the private key or OAuth
+              secret is actually present. ACTIVE is refused until Prove connection has succeeded against the sandbox.
             </p>
           </div>
           {filterCard}
@@ -6226,20 +6249,23 @@ function EfrisDesk() {
                       <div className="record-card-top">
                         <strong className="cell-mono">{String(r.code)}</strong>
                         <Badge value={r.mode} />
+                        <Badge value={r.sandboxProven ? 'PROVEN' : 'UNPROVEN'} />
                       </div>
                       <div>{String(r.name)}</div>
                       <div className="muted" style={{ fontSize: 12 }}>
                         {r.taxpayerLegalName ? `${String(r.taxpayerLegalName)} (${String(r.taxpayerTin ?? '')})` : 'default taxpayer'}
+                        {r.gatewayHost ? ` · ${String(r.gatewayHost)}` : ''}
                       </div>
                       <div className="record-card-meta">
+                        <span>{r.protocol === 'OAUTH' ? 'OAuth' : 'URA S2S'}</span>
                         <span>Active {r.isActive ? 'yes' : 'no'}</span>
                         <span>Auto submit {r.autoSubmit ? 'yes' : 'no'}</span>
-                        <span>Duplicates {String(r.duplicateWindowSeconds ?? 0)}s</span>
-                        <span>{r.secretsResolvable ? 'credentials resolved' : r.clientIdRefSet && r.credentialsRefSet ? 'missing in env' : 'not set'}</span>
+                        <span>{r.secretsResolvable ? 'credentials resolved' : r.clientIdRefSet || r.credentialsRefSet ? 'missing in env' : 'not set'}</span>
                       </div>
                       {canManageConfig && (
                         <div className="row-actions" style={{ marginTop: 8 }}>
                           <button className="btn btn-sm" disabled={busy} onClick={() => { setConfigRow(r); setFormErr(''); setConfigOpen(true); }}>Edit</button>
+                          {String(r.mode) !== 'DISABLED' && <button className="btn btn-sm" disabled={busy} onClick={() => probeConfiguration(Number(r.id))}>Prove connection</button>}
                         </div>
                       )}
                     </div>
@@ -6253,6 +6279,8 @@ function EfrisDesk() {
                         <th aria-sort={ariaSort('name')}><button className="th-btn" title="Sort by name" onClick={() => setSort('name')}>Name{sortMark('name')}</button></th>
                         <th>Taxpayer</th>
                         <th aria-sort={ariaSort('mode')}><button className="th-btn" title="Sort by mode" onClick={() => setSort('mode')}>Mode{sortMark('mode')}</button></th>
+                        <th>Sandbox</th>
+                        <th>Gateway</th>
                         <th aria-sort={ariaSort('active')}><button className="th-btn" title="Sort by active state" onClick={() => setSort('active')}>Active{sortMark('active')}</button></th>
                         <th>Auto submit</th>
                         <th>Fiscalize on post</th>
@@ -6268,18 +6296,21 @@ function EfrisDesk() {
                           <td>{String(r.name)}</td>
                           <td>{r.taxpayerLegalName ? `${String(r.taxpayerLegalName)} (${String(r.taxpayerTin ?? '')})` : <span className="muted">default taxpayer</span>}</td>
                           <td><Badge value={r.mode} /></td>
+                          <td><Badge value={r.sandboxProven ? 'PROVEN' : 'UNPROVEN'} /></td>
+                          <td>{r.protocol === 'OAUTH' ? 'OAuth' : 'URA S2S'}{r.gatewayHost ? <div className="muted">{String(r.gatewayHost)}</div> : null}</td>
                           <td>{r.isActive ? 'Yes' : 'No'}</td>
                           <td>{r.autoSubmit ? 'Yes' : 'No'}</td>
                           <td>{r.fiscalizeSalesOnPost ? 'Yes' : 'No'}</td>
                           <td>
                             {r.secretsResolvable
                               ? <Badge value="RESOLVED" />
-                              : <Badge value={r.clientIdRefSet && r.credentialsRefSet ? 'MISSING IN ENV' : 'NOT SET'} />}
+                              : <Badge value={r.clientIdRefSet || r.credentialsRefSet ? 'MISSING IN ENV' : 'NOT SET'} />}
                           </td>
                           <td>{String(r.duplicateWindowSeconds ?? 0)}s</td>
                           <td>
                             <div className="row-actions">
                               {canManageConfig && <button className="btn btn-sm" disabled={busy} onClick={() => { setConfigRow(r); setFormErr(''); setConfigOpen(true); }}>Edit</button>}
+                              {canManageConfig && String(r.mode) !== 'DISABLED' && <button className="btn btn-sm" disabled={busy} onClick={() => probeConfiguration(Number(r.id))}>Prove connection</button>}
                             </div>
                           </td>
                         </tr>
@@ -6531,12 +6562,19 @@ function EfrisConfigModal({ row, taxpayers, busy, error, onClose, onSave }: { ro
       }
     >
       <p className="muted">
-        TEST and ACTIVE only work once the referenced environment keys exist on the server ({EFRIS_ENV_HINT}).
-        Keep the mode DISABLED until the URA sandbox connection has been proven.
+        A blank base URL uses the official URA endpoint for the mode. Leave the token URL blank for the URA
+        system-to-system gateway and store the device private key in the credentials environment value. Fill the
+        token URL only for OAuth. Put the device number in security flags. ACTIVE is refused until a TEST
+        connection has been proven with Prove connection.
       </p>
-      {mode !== 'DISABLED' && (
+      {mode === 'TEST' && (
         <p className="muted">
-          {row ? (row.secretsResolvable ? 'Environment pointers currently resolve on the server.' : 'Environment pointers do not resolve on the server yet - the change will be refused.') : 'A new configuration is refused unless its environment pointers resolve on the server.'}
+          TEST can be saved before the server environment is loaded. URA calls stay blocked until the private key or OAuth secret is present.
+        </p>
+      )}
+      {mode === 'ACTIVE' && (
+        <p className="muted">
+          Production stays off until this company has a proven sandbox connection and a resolvable credentials key.
         </p>
       )}
       {error || localErr ? <ErrorBanner error={localErr || error} /> : null}
@@ -6554,13 +6592,13 @@ function EfrisConfigModal({ row, taxpayers, busy, error, onClose, onSave }: { ro
             {EFRIS_MODES.map((x) => <option key={x} value={x}>{x}</option>)}
           </select>
         </label>
-        <label style={{ gridColumn: '1 / -1' }}>Base URL <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://efris.ura.go.ug/..." /></label>
-        <label style={{ gridColumn: '1 / -1' }}>OAuth token URL <input value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)} placeholder="https://efris.ura.go.ug/..." /></label>
+        <label style={{ gridColumn: '1 / -1' }}>Base URL <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={mode === 'ACTIVE' ? EFRIS_PRODUCTION_ENDPOINT : EFRIS_TEST_ENDPOINT} /></label>
+        <label style={{ gridColumn: '1 / -1' }}>OAuth token URL <input value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)} placeholder="Leave blank for the URA system-to-system gateway" /></label>
         <label>Grant type <input value={authGrantType} onChange={(e) => setAuthGrantType(e.target.value)} /></label>
-        <label>Client ID env key {row ? '(leave blank to keep)' : ''}
+        <label>Device number or client ID env key {row ? '(leave blank to keep)' : ''}
           <input value={clientIdRef} onChange={(e) => setClientIdRef(e.target.value)} placeholder={row && row.clientIdRefSet ? 'stored - type to replace' : 'EFRIS_CLIENT_ID'} />
         </label>
-        <label>Client secret env key {row ? '(leave blank to keep)' : ''}
+        <label>Private key or client secret env key {row ? '(leave blank to keep)' : ''}
           <input value={credentialsRef} onChange={(e) => setCredentialsRef(e.target.value)} placeholder={row && row.credentialsRefSet ? 'stored - type to replace' : 'EFRIS_CLIENT_SECRET'} />
         </label>
         <label>Timeout (seconds) <input type="number" value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} /></label>
@@ -6573,7 +6611,7 @@ function EfrisConfigModal({ row, taxpayers, busy, error, onClose, onSave }: { ro
           <textarea rows={4} value={payloadMapping} onChange={(e) => setPayloadMapping(e.target.value)} placeholder="{}" />
         </label>
         <label style={{ gridColumn: '1 / -1' }}>Security flags (JSON object)
-          <textarea rows={3} value={securityFlags} onChange={(e) => setSecurityFlags(e.target.value)} placeholder="{}" />
+          <textarea rows={3} value={securityFlags} onChange={(e) => setSecurityFlags(e.target.value)} placeholder='{ "deviceNo": "TCS000000000" }' />
         </label>
       </div>
       <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>

@@ -12,9 +12,12 @@
 //     leaves no fiscal document behind,
 //   * configuration reads never leak secret material.
 // ============================================================
+import { createServer, type Server } from 'node:http';
+import { generateKeyPairSync } from 'node:crypto';
 import { describe, it, expect, afterAll } from 'vitest';
 import { api, auth, loginAs, pool } from './helpers.js';
 import { drainEfrisQueue } from '../src/services/efris/processor.js';
+import { encryptAesEcb } from '../src/services/efris/protocol.js';
 
 const TENANT_ID = 2;
 const COMPANY_ID = 2;
@@ -50,10 +53,123 @@ async function parkConfig(id: number) {
   await asTenant(`UPDATE efris_configurations SET is_active = false, mode = 'DISABLED' WHERE id = $1`, [id]);
 }
 
+const URA_AES_KEY = '0123456789abcdef';
+
+/** Local stand-in for the URA getInformation endpoint. Speaks T101, T104 and T109. */
+function startUraMock(fdn = 'FDN-TEST-001'): Promise<{ server: Server; url: string }> {
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk) => chunks.push(chunk as Buffer));
+    req.on('end', () => {
+      let code = '';
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { globalInfo?: { interfaceCode?: string } };
+        code = String(body.globalInfo?.interfaceCode ?? '');
+      } catch {
+        code = '';
+      }
+      const send = (content: unknown, encrypted: boolean) => {
+        const text = JSON.stringify(content);
+        const payload = encrypted ? encryptAesEcb(text, URA_AES_KEY) : Buffer.from(text, 'utf8').toString('base64');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          data: {
+            content: payload,
+            signature: '',
+            dataDescription: encrypted
+              ? { codeType: '1', encryptCode: '2', zipCode: '0' }
+              : { codeType: '0', encryptCode: '1', zipCode: '0' },
+          },
+          returnStateInfo: { returnCode: '00', returnMessage: 'SUCCESS' },
+        }));
+      };
+      if (code === 'T101') {
+        send({ serverTime: '2026-10-14 12:00:00' }, false);
+        return;
+      }
+      if (code === 'T104') {
+        send({ passowrdDes: URA_AES_KEY }, false);
+        return;
+      }
+      if (code === 'T109' || code === 'T110') {
+        send({
+          basicInformation: { invoiceNo: fdn, antifakeCode: 'VRC-TEST-001' },
+          summary: { qrCode: `https://efristest.ura.go.ug/qr/${fdn}` },
+        }, true);
+        return;
+      }
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ returnStateInfo: { returnCode: '99', returnMessage: `unexpected ${code}` } }));
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      const port = addr && typeof addr === 'object' ? addr.port : 0;
+      resolve({ server, url: `http://127.0.0.1:${port}/efrisws/ws/taapp/getInformation` });
+    });
+  });
+}
+
+function deviceCredentials(): { keyRef: string; deviceRef: string; cleanup: () => void } {
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const keyRef = `EFRIS_IT_KEY_${tag()}`;
+  const deviceRef = `EFRIS_IT_DEV_${tag()}`;
+  process.env[keyRef] = privateKey;
+  process.env[deviceRef] = 'TCS000000001';
+  return {
+    keyRef,
+    deviceRef,
+    cleanup: () => {
+      delete process.env[keyRef];
+      delete process.env[deviceRef];
+    },
+  };
+}
+
+async function queueTxn(taxpayerId: number, mode: 'TEST' | 'ACTIVE' = 'TEST') {
+  const key = `MANUAL:${mode}:${tag()}`;
+  const ins = await asTenant(
+    `INSERT INTO efris_transactions
+       (company_id, tenant_id, taxpayer_id, fiscal_mode, doc_type, doc_ref_type, doc_ref_id,
+        doc_ref_code, txn_date, currency, gross_amount, tax_amount, idempotency_key, status, created_at)
+     VALUES ($1,$2,$3,$4,'SALES_INVOICE','customer_invoices',999996,$5,CURRENT_DATE,'UGX',118000,18000,$6,'QUEUED','1970-01-02')
+     RETURNING id`,
+    [COMPANY_ID, TENANT_ID, taxpayerId, mode, `TS-${key}`, key]
+  );
+  const txnId = Number(ins.rows[0].id);
+  txnIds.push(txnId);
+  return txnId;
+}
+
+async function drainOwn(txnId: number) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const cur = await asTenant('SELECT status FROM efris_transactions WHERE id = $1', [txnId]);
+    const status = String(cur.rows[0]?.status ?? '');
+    if (status === 'FISCALIZED' || status === 'FAILED' || status === 'REJECTED') return status;
+    await drainEfrisQueue(25);
+  }
+  const cur = await asTenant('SELECT status FROM efris_transactions WHERE id = $1', [txnId]);
+  return String(cur.rows[0]?.status ?? '');
+}
+
 /** Create a TEST taxpayer + TEST configuration through the real API. */
 async function createTestTarget(
   token: string,
-  opts: { baseUrl?: string; tokenUrl?: string; fiscalizeSalesOnPost?: boolean } = {}
+  opts: {
+    baseUrl?: string;
+    tokenUrl?: string;
+    fiscalizeSalesOnPost?: boolean;
+    mode?: string;
+    clientIdRef?: string;
+    credentialsRef?: string;
+    securityFlags?: Record<string, unknown>;
+    name?: string;
+  } = {}
 ) {
   const tCode = `TT${tag()}`;
   const tp = await api.post('/api/ops/finance/efris/taxpayers').set(auth(token)).send({
@@ -73,12 +189,15 @@ async function createTestTarget(
   const cCode = `TC${tag()}`;
   const cfg = await api.post('/api/ops/finance/efris/configurations').set(auth(token)).send({
     code: cCode,
-    name: 'URA EFRIS TEST',
-    mode: 'TEST',
+    name: opts.name ?? 'URA EFRIS TEST',
+    mode: opts.mode ?? 'TEST',
     taxpayerId: Number(tp.body.data.id),
     fiscalizeSalesOnPost: opts.fiscalizeSalesOnPost === true,
     ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
     ...(opts.tokenUrl ? { tokenUrl: opts.tokenUrl } : {}),
+    ...(opts.clientIdRef ? { clientIdRef: opts.clientIdRef } : {}),
+    ...(opts.credentialsRef ? { credentialsRef: opts.credentialsRef } : {}),
+    ...(opts.securityFlags ? { securityFlags: opts.securityFlags } : {}),
   });
   expect(cfg.status).toBe(200);
   configCodes.push(cCode);
@@ -360,4 +479,153 @@ describe('URA EFRIS fiscalization', () => {
 
     await parkConfig(configId);
   });
+
+  it('fiscalizes a TEST document against the URA sandbox protocol and refuses the live host', async () => {
+    const { token } = await loginAs('admin');
+    const creds = deviceCredentials();
+    const mock = await startUraMock('FDN-TEST-001');
+    try {
+      const refusedHost = await api.post('/api/ops/finance/efris/configurations').set(auth(token)).send({
+        code: `TH${tag()}`,
+        name: 'TEST pointed at production',
+        mode: 'TEST',
+        baseUrl: 'https://efrisws.ura.go.ug/ws/taapp/getInformation',
+        credentialsRef: creds.keyRef,
+        securityFlags: { deviceNo: 'TCS000000001' },
+      });
+      expect(refusedHost.status).toBe(400);
+      expect(refusedHost.body.error.code).toBe('EFRIS_MODE_HOST_MISMATCH');
+
+      const target = await createTestTarget(token, {
+        baseUrl: mock.url,
+        credentialsRef: creds.keyRef,
+        clientIdRef: creds.deviceRef,
+        securityFlags: { deviceNo: 'TCS000000001' },
+      });
+      const txnId = await queueTxn(target.taxpayerId, 'TEST');
+      expect(await drainOwn(txnId)).toBe('FISCALIZED');
+
+      const row = await asTenant(
+        'SELECT status, error_code, fiscalized_at FROM efris_transactions WHERE id = $1',
+        [txnId]
+      );
+      expect(row.rows[0].status).toBe('FISCALIZED');
+      expect(row.rows[0].fiscalized_at).toBeTruthy();
+      const docs = await asTenant(
+        'SELECT fdn, verification_code, qr_ref FROM efris_documents WHERE efris_transaction_id = $1',
+        [txnId]
+      );
+      expect(docs.rows).toHaveLength(1);
+      expect(docs.rows[0].fdn).toBe('FDN-TEST-001');
+      expect(docs.rows[0].verification_code).toBe('VRC-TEST-001');
+      expect(String(docs.rows[0].qr_ref)).toContain('FDN-TEST-001');
+
+      await asTenant(
+        `UPDATE efris_configurations SET base_url = $2 WHERE id = $1`,
+        [target.configId, 'https://efrisws.ura.go.ug/ws/taapp/getInformation']
+      );
+      const blockedId = await queueTxn(target.taxpayerId, 'TEST');
+      expect(await drainOwn(blockedId)).toBe('FAILED');
+      const blocked = await asTenant(
+        'SELECT status, error_code FROM efris_transactions WHERE id = $1',
+        [blockedId]
+      );
+      expect(blocked.rows[0].status).toBe('FAILED');
+      expect(blocked.rows[0].error_code).toBe('EFRIS_MODE_HOST_MISMATCH');
+      const blockedDocs = await asTenant(
+        'SELECT count(*)::int AS n FROM efris_documents WHERE efris_transaction_id = $1',
+        [blockedId]
+      );
+      expect(blockedDocs.rows[0].n).toBe(0);
+      await parkConfig(target.configId);
+    } finally {
+      creds.cleanup();
+      await new Promise<void>((resolve) => mock.server.close(() => resolve()));
+    }
+  }, 60_000);
+
+  it('refuses production until a TEST connection is proven, then fiscalizes ACTIVE on an allowed host', async () => {
+    const { token } = await loginAs('admin');
+    const creds = deviceCredentials();
+    const prior = await asTenant(
+      `SELECT id, security_flags
+         FROM efris_configurations
+        WHERE tenant_id = $1 AND company_id = $2
+          AND COALESCE(security_flags->>'sandboxProven', '') = 'true'`,
+      [TENANT_ID, COMPANY_ID]
+    );
+    if (prior.rows.length) {
+      await asTenant(
+        `UPDATE efris_configurations
+            SET security_flags = security_flags - 'sandboxProven' - 'sandboxProvenAt'
+          WHERE tenant_id = $1 AND company_id = $2`,
+        [TENANT_ID, COMPANY_ID]
+      );
+    }
+    const mock = await startUraMock('FDN-LIVE-001');
+    try {
+      const refused = await api.post('/api/ops/finance/efris/configurations').set(auth(token)).send({
+        code: `TA${tag()}`,
+        name: 'Production before proof',
+        mode: 'ACTIVE',
+        clientIdRef: creds.deviceRef,
+        credentialsRef: creds.keyRef,
+        securityFlags: { deviceNo: 'TCS000000001' },
+      });
+      expect(refused.status).toBe(400);
+      expect(refused.body.error.code).toBe('EFRIS_SANDBOX_NOT_PROVEN');
+
+      const sandbox = await createTestTarget(token, {
+        baseUrl: mock.url,
+        credentialsRef: creds.keyRef,
+        clientIdRef: creds.deviceRef,
+        securityFlags: { deviceNo: 'TCS000000001' },
+      });
+      const probe = await api
+        .post(`/api/ops/finance/efris/configurations/${sandbox.configId}/probe`)
+        .set(auth(token))
+        .send({});
+      expect(probe.status).toBe(200);
+      expect(probe.body.data.probe.interfaceCode).toBe('T101');
+      expect(probe.body.data.configuration.sandboxProven).toBe(true);
+      expect(JSON.stringify(probe.body)).not.toMatch(/clientSecret|client_secret|password|PRIVATE KEY/i);
+      expect(probe.body.data.configuration).not.toHaveProperty('clientIdRef');
+      expect(probe.body.data.configuration).not.toHaveProperty('credentialsRef');
+
+      const listed = await api.get('/api/ops/finance/efris/configurations').set(auth(token));
+      const listedRow = (listed.body.data as Array<Record<string, unknown>>).find((row) => String(row.id) === String(sandbox.configId));
+      expect(listedRow?.sandboxProven).toBe(true);
+      expect(JSON.stringify(listed.body)).not.toMatch(/clientSecret|client_secret|password/i);
+
+      const live = await createTestTarget(token, {
+        mode: 'ACTIVE',
+        name: 'URA EFRIS production',
+        baseUrl: mock.url,
+        credentialsRef: creds.keyRef,
+        clientIdRef: creds.deviceRef,
+        securityFlags: { deviceNo: 'TCS000000001', extraProductionHosts: ['127.0.0.1'] },
+      });
+      await parkConfig(sandbox.configId);
+      const txnId = await queueTxn(live.taxpayerId, 'ACTIVE');
+      expect(await drainOwn(txnId)).toBe('FISCALIZED');
+      const doc = await asTenant(
+        'SELECT fdn, verification_code FROM efris_documents WHERE efris_transaction_id = $1',
+        [txnId]
+      );
+      expect(doc.rows[0].fdn).toBe('FDN-LIVE-001');
+      expect(doc.rows[0].verification_code).toBe('VRC-TEST-001');
+      const mode = await asTenant('SELECT mode FROM efris_configurations WHERE id = $1', [live.configId]);
+      expect(mode.rows[0].mode).toBe('ACTIVE');
+      await parkConfig(live.configId);
+    } finally {
+      for (const row of prior.rows) {
+        await asTenant(
+          'UPDATE efris_configurations SET security_flags = $2::jsonb WHERE id = $1',
+          [row.id, JSON.stringify(row.security_flags)]
+        );
+      }
+      creds.cleanup();
+      await new Promise<void>((resolve) => mock.server.close(() => resolve()));
+    }
+  }, 60_000);
 });

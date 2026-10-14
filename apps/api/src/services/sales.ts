@@ -948,20 +948,26 @@ export async function createReceipt(
 export async function createCreditNote(
   client: pg.PoolClient,
   ctx: Ctx,
-  input: { invoiceId?: number | null; customerId: number; creditDate?: string; amount: number; reason: string; reasonCode?: string | null }
+  input: {
+    invoiceId?: number | null; customerId: number; creditDate?: string; amount: number;
+    reason: string; reasonCode?: string | null; currency?: string | null; taxAmount?: number | null;
+  }
 ) {
   const amount = round2(Number(input.amount));
   if (amount <= 0) throw badRequest('Credit note amount must be positive');
   if (!String(input.reason ?? '').trim()) throw badRequest('Reason is required');
+  const taxAmount = round2(Number(input.taxAmount ?? 0));
+  if (taxAmount < 0 || taxAmount > amount) throw badRequest('Credit note tax must be between zero and the note amount');
+  const currency = String(input.currency ?? 'UGX').trim().toUpperCase() || 'UGX';
   const creditNo = await nextDoc(client, ctx, 'CN');
   const ins = await client.query(
     `INSERT INTO credit_notes
-       (company_id, tenant_id, credit_no, invoice_id, customer_id, credit_date, amount, reason, reason_code)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+       (company_id, tenant_id, credit_no, invoice_id, customer_id, credit_date, amount, reason, reason_code, currency, tax_amount)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, creditNo, input.invoiceId ?? null, input.customerId,
       input.creditDate ?? new Date().toISOString().slice(0, 10), amount, String(input.reason).trim(),
-      input.reasonCode ?? null,
+      input.reasonCode ?? null, currency, taxAmount,
     ]
   );
   const creditNoteId = Number(ins.rows[0].id);
@@ -975,11 +981,17 @@ export async function createCreditNote(
 export async function createDebitNote(
   client: pg.PoolClient,
   ctx: Ctx,
-  input: { invoiceId?: number | null; customerId: number; debitDate?: string; amount: number; reason: string; reasonCode?: string | null }
+  input: {
+    invoiceId?: number | null; customerId: number; debitDate?: string; amount: number;
+    reason: string; reasonCode?: string | null; currency?: string | null; taxAmount?: number | null;
+  }
 ) {
   const amount = round2(Number(input.amount));
   if (amount <= 0) throw badRequest('Debit note amount must be positive');
   if (!String(input.reason ?? '').trim()) throw badRequest('Reason is required');
+  const taxAmount = round2(Number(input.taxAmount ?? 0));
+  if (taxAmount < 0 || taxAmount > amount) throw badRequest('Debit note tax must be between zero and the note amount');
+  const currency = String(input.currency ?? 'UGX').trim().toUpperCase() || 'UGX';
   const reasonCode = String(input.reasonCode ?? 'OTHER').toUpperCase();
   if (!['UNDERBILLING', 'ADDITIONAL_CHARGES', 'PRICE_CORRECTION', 'FREIGHT', 'TAX', 'OTHER'].includes(reasonCode)) {
     throw badRequest('Unsupported debit note reason');
@@ -987,11 +999,12 @@ export async function createDebitNote(
   const debitNo = await nextDoc(client, ctx, 'DNM');
   const ins = await client.query(
     `INSERT INTO debit_notes
-       (company_id, tenant_id, debit_no, invoice_id, customer_id, debit_date, amount, reason, reason_code)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+       (company_id, tenant_id, debit_no, invoice_id, customer_id, debit_date, amount, reason, reason_code, currency, tax_amount)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, debitNo, input.invoiceId ?? null, Number(input.customerId),
       input.debitDate ?? new Date().toISOString().slice(0, 10), amount, String(input.reason).trim(), reasonCode,
+      currency, taxAmount,
     ]
   );
   const debitNoteId = Number(ins.rows[0].id);
