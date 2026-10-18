@@ -275,7 +275,7 @@ dashboardRouter.get(
        FROM approval_tasks t JOIN workflow_instances i ON i.id = t.instance_id
        WHERE t.status = 'PENDING' AND i.tenant_id = $1
          AND (t.approver_user_id = $2 OR EXISTS (
-           SELECT 1 FROM user_roles ur WHERE ur.user_id = $2 AND ur.role_id = t.approver_role_id
+           SELECT 1 FROM user_roles ur WHERE ur.user_id = $2 AND (ur.role_id = t.approver_role_id OR ur.role_id = t.alternative_role_id)
          ))
        ORDER BY t.id DESC LIMIT 20`,
       [tenant, userId]
