@@ -22,11 +22,12 @@
 #   down, rejecting every write - exactly the failure being escaped. The
 #   promoted redis is left running and is never recreated here.
 #
-#   `worker` is not listed either. It is profile-gated in
-#   docker-compose.peer.yml so scheduled work runs exactly once cluster-wide.
-#   The agent opts in separately with
+#   `worker` stays profile-gated in docker-compose.peer.yml so scheduled work
+#   runs exactly once cluster-wide. The agent opts in separately with
 #   `--profile data-primary-only up -d worker`, and only once promotion has
-#   succeeded and the primary's own worker is known to be gone.
+#   succeeded and the primary's own worker is known to be gone. When it IS
+#   opted in here it must point at data-dr too - the base compose defaults it
+#   to `postgres` (the stale pre-standby dataset), so it is re-pointed below.
 #
 # Portable: on the data primary this file is not used at all.
 services:
@@ -42,4 +43,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.production}@redis:6379/0
 
   api-b:
+    environment: *failover-db-env
+
+  worker:
     environment: *failover-db-env

@@ -5,7 +5,9 @@ APP_DIR="/opt/hopedesign_erp"
 BACKUP_DIR="$APP_DIR/backups"
 LOG_DIR="$APP_DIR/logs"
 ENV_FILE="$APP_DIR/.env.production"
-DB_CONTAINER="hopedesign-erp-postgres-1"
+# DB_CONTAINER is resolved below once DB_USER/DB_NAME are known: a node
+# promoted after a failover runs its primary as the `data-dr` container, not
+# the stale `postgres` service.
 
 # Resolve the live role/database from .env.production exactly like docker
 # compose interpolation (${POSTGRES_USER:-hopedesign} / ${POSTGRES_DB:-hopedesign}),
@@ -22,6 +24,26 @@ env_value() {
 }
 DB_USER="$(env_value POSTGRES_USER hopedesign)"
 DB_NAME="$(env_value POSTGRES_DB hopedesign)"
+
+# Pick the WRITABLE source of truth. A node promoted after failover runs its
+# primary as `hopedesign-erp-data-dr` and keeps `hopedesign-erp-postgres-1`
+# only as a stale pre-standby leftover; backing the latter up would silently
+# archive months-old rows. Prefer data-dr when it exists and is not a replica
+# (pg_is_in_recovery() = 'f'), else the standard postgres container.
+DB_CONTAINER=""
+for _candidate in hopedesign-erp-data-dr hopedesign-erp-postgres-1; do
+  if docker ps --format '{{.Names}}' | grep -qx "$_candidate"; then
+    _recovery="$(docker exec "$_candidate" psql -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT pg_is_in_recovery()' 2>/dev/null || true)"
+    if [[ "$_recovery" == "f" ]]; then
+      DB_CONTAINER="$_candidate"
+      break
+    fi
+  fi
+done
+if [[ -z "$DB_CONTAINER" ]]; then
+  echo "[$(date)] ERROR: no writable postgres primary found (data-dr / postgres-1); refusing to back up." >&2
+  exit 1
+fi
 
 DATE=$(date +"%Y-%m-%d_%H-%M-%S")
 BACKUP_FILE="$BACKUP_DIR/cron_db_$DATE.sql.gz"
