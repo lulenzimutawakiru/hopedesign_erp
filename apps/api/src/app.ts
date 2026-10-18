@@ -49,6 +49,7 @@ import { hikvisionEventsRouter, hikvisionWebhookErrorFilter } from './routes/hik
 import { kcbEventsRouter, kcbWebhookErrorFilter } from './routes/kcbEvents.js';
 import { equityEventsRouter, equityWebhookErrorFilter } from './routes/equityEvents.js';
 import { resendEventsRouter, resendWebhookErrorFilter } from './routes/resendEvents.js';
+import { whatsappEventsRouter, whatsappWebhookErrorFilter } from './routes/whatsappEvents.js';
 import { hikvisionOpsRouter, hikvisionAttendanceOpsRouter } from './routes/ops/hikvision.js';
 import { runHikvisionWorkerTick } from './services/hikvision/processor.js';
 import { isQueueEnabled } from './services/queue/connection.js';
@@ -178,6 +179,11 @@ app.use('/api/integrations/equity', equityEventsRouter, equityWebhookErrorFilter
 // body is what authenticates the delivery, and the destination address is what
 // resolves it to a mailbox before a single row is written) ----
 app.use('/api/integrations/email/resend', resendEventsRouter, resendWebhookErrorFilter);
+
+// ---- Meta WhatsApp webhook (public; the X-Hub-Signature-256 over the raw body
+// is what authenticates the delivery, and the business phone number is what
+// resolves it to a tenant before a single row is written) ----
+app.use('/api/integrations/whatsapp', whatsappEventsRouter, whatsappWebhookErrorFilter);
 
 // ---- Authenticated API ----
 app.use(authenticate);

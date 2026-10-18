@@ -27,6 +27,10 @@ export interface MfaFormProps {
   error: string;
   notice: string;
   maskedEmail: string;
+  /** MFA-004: true when the backend can send a code over WhatsApp. */
+  whatsappAvailable: boolean;
+  /** Masked phone of the active WhatsApp challenge, once one has been sent. */
+  maskedPhone: string;
   /** Seconds before the resend control unlocks. */
   resendIn: number;
   /** Label for the submit control, which differs per shape. */
@@ -37,6 +41,7 @@ export interface MfaFormProps {
   onNewEmailChange: (value: string) => void;
   onCopySecret: () => void;
   onResend: () => void;
+  onUseWhatsApp: () => void;
   onUseDifferentEmail: () => void;
   onBack: () => void;
 }
@@ -53,6 +58,8 @@ export function MfaForm({
   error,
   notice,
   maskedEmail,
+  whatsappAvailable,
+  maskedPhone,
   resendIn,
   primaryLabel,
   submitDisabled,
@@ -60,6 +67,7 @@ export function MfaForm({
   onNewEmailChange,
   onCopySecret,
   onResend,
+  onUseWhatsApp,
   onUseDifferentEmail,
   onBack,
 }: MfaFormProps) {
@@ -128,9 +136,15 @@ export function MfaForm({
         {primaryLabel}
       </AuthButton>
 
-      {codeFieldVisible && maskedEmail ? (
+      {codeFieldVisible && (maskedEmail || maskedPhone) ? (
         <AuthButton block disabled={busy || resendIn > 0} onClick={onResend}>
           {resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend code'}
+        </AuthButton>
+      ) : null}
+
+      {codeFieldVisible && whatsappAvailable && !maskedPhone ? (
+        <AuthButton block disabled={busy} onClick={onUseWhatsApp}>
+          Send code via WhatsApp
         </AuthButton>
       ) : null}
 
@@ -148,12 +162,21 @@ export function MfaForm({
 }
 
 /** Copy shown under the panel title, which is the only per-shape prose the page cannot infer. */
-export function mfaSubtitle(mode: MfaMode, emailEntry: boolean, maskedEmail: string): string {
+export function mfaSubtitle(
+  mode: MfaMode,
+  emailEntry: boolean,
+  maskedEmail: string,
+  whatsappMode = false,
+  maskedPhone = ''
+): string {
   if (mode === 'totp-enroll') {
     return 'Scan this with Google Authenticator, Authy, or 1Password, then enter the 6-digit code.';
   }
   if (mode === 'email-enroll' && emailEntry) {
     return 'Add the personal email address your sign-in codes should go to. We will mail a 6-digit code there to confirm it.';
+  }
+  if (whatsappMode) {
+    return `We sent a 6-digit code to ${maskedPhone || 'your phone'} over WhatsApp. It expires in 10 minutes.`;
   }
   return `We emailed a 6-digit code to ${maskedEmail || 'your personal email address'}. It expires in 10 minutes.`;
 }

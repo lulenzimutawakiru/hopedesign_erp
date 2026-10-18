@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { config } from '../config.js';
 import { query, tx } from '../db.js';
 import {
   isAfricasTalkingConfigured,
@@ -6,6 +7,7 @@ import {
   sendWhatsAppViaAfricastalking,
 } from './africastalking.js';
 import { isResendConfigured, sendEmailViaResend } from './resend.js';
+import { isMetaWhatsappConfigured, sendWhatsAppViaMetaCloud } from './metaWhatsapp.js';
 import { loadCompanyProfile } from './branding.js';
 import {
   brandEmailContent,
@@ -25,11 +27,11 @@ export interface BirdSendResult {
 }
 
 /**
- * Delivery provider override. Africa's Talking is the only SMS/WhatsApp
- * provider and Resend is the only email provider. 'auto' routes each channel
- * to its single configured provider.
+ * Delivery provider override. Africa's Talking carries SMS, Meta Cloud and
+ * Africa's Talking both carry WhatsApp, and Resend carries email. 'auto' routes
+ * each channel to its configured provider (Meta Cloud preferred for WhatsApp).
  */
-export type ProviderOverride = 'auto' | 'africastalking' | 'resend';
+export type ProviderOverride = 'auto' | 'africastalking' | 'resend' | 'meta';
 
 export interface EmailAttachmentInput {
   /** File name shown to the recipient (extension included). */
@@ -171,19 +173,43 @@ export async function sendSms(
 }
 
 /**
- * Send a WhatsApp message through the Africa's Talking Chat API - the only
- * supported WhatsApp provider. Requires AT_WHATSAPP_NUMBER.
+ * Send a WhatsApp message, preferring the Meta WhatsApp Business Cloud API and
+ * falling back to the Africa's Talking Chat API when Meta is not configured.
+ * providerOverride 'resend' is rejected: Resend does not carry WhatsApp
+ * traffic. providerOverride 'meta' or 'africastalking' forces that provider.
  */
 export async function sendWhatsApp(
   params: WhatsappParams,
   providerOverride?: ProviderOverride
 ): Promise<BirdSendResult> {
   if (providerOverride === 'resend') {
-    return { ok: false, error: "WhatsApp is delivered through Africa's Talking only" };
+    return { ok: false, error: "WhatsApp is delivered through Meta Cloud or Africa's Talking, not Resend" };
   }
   const body = params.text?.body ?? '';
   if (!body.trim()) return { ok: false, error: 'WhatsApp message body is empty' };
-  return sendWhatsAppViaAfricastalking(params.to, body);
+
+  if (providerOverride === 'meta') {
+    if (!isMetaWhatsappConfigured()) {
+      return { ok: false, error: 'Meta WhatsApp not configured (WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID missing)' };
+    }
+    return sendWhatsAppViaMetaCloud({ to: params.to, text: body });
+  }
+  if (providerOverride === 'africastalking') {
+    return sendWhatsAppViaAfricastalking(params.to, body);
+  }
+
+  // 'auto': prefer Meta Cloud, then fall back to the legacy Africa's Talking
+  // Chat API so a tenant that has only migrated half-way keeps sending.
+  if (isMetaWhatsappConfigured()) {
+    return sendWhatsAppViaMetaCloud({ to: params.to, text: body });
+  }
+  if (isAfricasTalkingConfigured() && config.africastalking.whatsappNumber.trim()) {
+    return sendWhatsAppViaAfricastalking(params.to, body);
+  }
+  return {
+    ok: false,
+    error: 'WhatsApp not configured (WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID or AT_WHATSAPP_NUMBER missing)',
+  };
 }
 
 /**
