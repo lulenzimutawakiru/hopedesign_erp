@@ -132,7 +132,7 @@ The API runtime role is `hopedesign_app` (no superuser, no BYPASSRLS). The owner
 ## Production checklist
 
 - `.env.production` is generated, not copied from `.env.example`
-- `SEED_ON_BOOT=true` only on an empty database, then set `false` and change `admin` / `ChangeMe!2026`
+- `SEED_ON_BOOT=true` only on an empty database, then set `false` and change the admin password after first login (production seeding uses the generated `SEED_ADMIN_PASSWORD`, never the documented dev default)
 - First login forces a password of 12+ letters and numbers
 - Postgres is not published; only 80/443 are
 - `WEB_PUBLIC_URL` and `API_PUBLIC_URL` match the public HTTPS origin (`https://hopedesign.jorlentech.com`)

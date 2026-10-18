@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { query } from '../db.js';
 import { forbidden, unauthorized } from '../utils.js';
+import { attrMatches } from '../abac.js';
 
 /** Pure permission check (RBAC wildcards included). Deny by default. */
 export function can(
@@ -86,7 +87,7 @@ export function requirePermission(permission: string | string[]) {
       const environmentSource: Record<string, unknown> = {
         time_of_day: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
         ip: req.ctx.ip ?? null,
-        mfa_verified: !!user.mfa_enabled,
+        mfa_verified: !!user.mfa_verified_at,
       };
       const sources = {
         subject: subjectSource,
@@ -104,53 +105,6 @@ export function requirePermission(permission: string | string[]) {
         }
         return sources.resource[ref] ?? sources.subject[ref] ?? sources.environment[ref];
       };
-      const condMatch = (cond: unknown, val: unknown): boolean => {
-        if (cond !== null && typeof cond === 'object' && !Array.isArray(cond)) {
-          const ops = cond as Record<string, unknown>;
-          for (const [op, operand] of Object.entries(ops)) {
-            switch (op) {
-              case '$in':
-                return Array.isArray(operand) ? operand.includes(val) : false;
-              case '$outside':
-              case '$not_in':
-                return Array.isArray(operand) ? !operand.includes(val) : false;
-              case '$eq':
-                return val === operand;
-              case '$ne':
-                return val !== operand;
-              case '$gt':
-                return typeof val === 'number' && typeof operand === 'number' && val > operand;
-              case '$gte':
-                return typeof val === 'number' && typeof operand === 'number' && val >= operand;
-              case '$lt':
-                return typeof val === 'number' && typeof operand === 'number' && val < operand;
-              case '$lte':
-                return typeof val === 'number' && typeof operand === 'number' && val <= operand;
-              case '$between':
-                return Array.isArray(operand) && operand.length === 2 && typeof val === 'number'
-                  ? val >= Number(operand[0]) && val <= Number(operand[1])
-                  : false;
-              case '$exists':
-                return operand === true ? val !== undefined && val !== null : val === undefined || val === null;
-              case '$missing':
-                return operand === true ? val === undefined || val === null : val !== undefined && val !== null;
-              case '$ref':
-                return val === refValue(String(operand));
-              default:
-                return false;
-            }
-          }
-          return true; // empty operator object imposes no constraint
-        }
-        if (Array.isArray(cond)) return cond.includes(val); // legacy membership
-        return cond === val;
-      };
-      const attrMatches = (attr: Record<string, unknown>, source: Record<string, unknown>): boolean => {
-        for (const [k, cond] of Object.entries(attr)) {
-          if (!condMatch(cond, source[k])) return false;
-        }
-        return true;
-      };
       for (const row of policies.rows) {
         const subj = (row.subject_attributes ?? {}) as Record<string, unknown>;
         const resA = (row.resource_attributes ?? {}) as Record<string, unknown>;
@@ -162,9 +116,9 @@ export function requirePermission(permission: string | string[]) {
         // brick the system.
         if (isUnconditional && row.effect === 'deny') continue;
         if (
-          attrMatches(subj, subjectSource) &&
-          attrMatches(resA, resourceSource) &&
-          attrMatches(env, environmentSource)
+          attrMatches(subj, subjectSource, refValue) &&
+          attrMatches(resA, resourceSource, refValue) &&
+          attrMatches(env, environmentSource, refValue)
         ) {
           if (row.effect === 'deny') return next(forbidden(`Policy ${row.code} denies this action`));
           break; // first matching allow policy wins
@@ -190,14 +144,28 @@ export function requirePermission(permission: string | string[]) {
   };
 }
 
-/** Restrict list queries to the user's company/branch scope. */
+/** Restrict list queries to the user's company/branch scope (deny by default). */
 export function scopeFilter(tableAlias = 't') {
-  return (req: Request) => {
+  return (req: Request): { clause: string; params: unknown[] } => {
     const user = req.auth;
-    if (!user) return '1=0';
+    if (!user) return { clause: '1=0', params: [] };
+    // SEC-005: only tenant-wide administrators may act without an explicit
+    // company/branch scope. Every other caller is denied by default (`1=0`)
+    // rather than silently receiving an unrestricted `1=1` query. The scope
+    // values are bound as parameters instead of being interpolated.
+    const isAdmin =
+      user.permissions.includes('system.admin.all') || user.permissions.includes('*');
     const conds: string[] = [];
-    if (user.company_id) conds.push(`${tableAlias}.company_id = ${user.company_id}`);
-    if (user.branch_id) conds.push(`${tableAlias}.branch_id = ${user.branch_id}`);
-    return conds.length ? conds.join(' AND ') : '1=1';
+    const params: unknown[] = [];
+    if (user.company_id) {
+      params.push(user.company_id);
+      conds.push(`${tableAlias}.company_id = $${params.length}`);
+    }
+    if (user.branch_id) {
+      params.push(user.branch_id);
+      conds.push(`${tableAlias}.branch_id = $${params.length}`);
+    }
+    if (conds.length) return { clause: conds.join(' AND '), params };
+    return { clause: isAdmin ? 'TRUE' : '1=0', params };
   };
 }

@@ -35,4 +35,23 @@ describe('submenu visibility', () => {
     expect(landingModule('/service-desk/dashboard', admin)?.id).toBe('service_desk');
     expect(landingModule('/dashboard', admin)).toBeUndefined();
   });
+
+  it('keeps every administration section on child screens', () => {
+    const labels = [
+      'Dashboard', 'Database', 'Users', 'Roles', 'Policies', 'SoD', 'Security', 'Sessions',
+      'Audit', 'Settings', 'Features', 'Health', 'Backups', 'Delegations', 'Signatures',
+      'Organisation Settings',
+    ];
+    for (const path of ['/admin', '/admin/users', '/admin/organisation-settings/tax', '/admin/delegations/4']) {
+      const item = landingModule(path, admin);
+      expect(item?.id).toBe('adminhome');
+      expect(item?.children?.map((c) => c.label)).toEqual(labels);
+    }
+  });
+
+  it('hides administration sections the user cannot open', () => {
+    const usersOnly = { permissions: ['admin.users.view'], roles: [] } as unknown as MeUser;
+    const item = landingModule('/admin/users', usersOnly);
+    expect(item?.children?.map((c) => c.label)).toEqual(['Dashboard', 'Users']);
+  });
 });

@@ -10,10 +10,10 @@ export const pool = new Pool({
   user: config.postgres.appUser,
   password: config.postgres.appPassword,
   database: config.postgres.database,
-  // Supabase/Neon require TLS. rejectUnauthorized is relaxed so hostname/CA
-  // mismatches on managed endpoints do not take the API down; tighten to true
-  // when the provider's cert chain verifies against the configured host.
-  ssl: config.postgres.ssl ? { rejectUnauthorized: false } : undefined,
+  // SEC-007: verify the server certificate by default. The previous
+  // `rejectUnauthorized: false` disabled TLS authentication entirely on
+  // managed endpoints; now verification only relaxes on an explicit opt-out.
+  ssl: config.postgres.ssl ? { rejectUnauthorized: config.postgres.rejectUnauthorized } : undefined,
   max: 10,
   idleTimeoutMillis: 30_000,
 });

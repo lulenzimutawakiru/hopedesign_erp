@@ -5,6 +5,7 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const { buildPermissions, ROLES } = require("./catalogue");
+const { resolveSeedPassword } = require("./seed-password");
 
 // ---------- helpers ----------
 function json(v) {
@@ -3313,7 +3314,7 @@ async function seedAll(pool) {
       { key: "percy.proc", username: "percy.proc", first: "Percy", last: "Kato", email: "percy.proc@hopedesign.co.ug", job: "Procurement Manager", dept: "PROC", roles: ["procurement_manager"] },
       { key: "anna.pur", username: "anna.pur", first: "Anna", last: "Nakimera", email: "anna.pur@hopedesign.co.ug", job: "Procurement Officer", dept: "PROC", roles: ["procurement_officer"] },
     ];
-    const passwordHash = bcrypt.hashSync("ChangeMe!2026", 10);
+    const passwordHash = bcrypt.hashSync(resolveSeedPassword(), 10);
     const userIdByKey = {};
     const userRoleRows = [];
     let phoneSeq = 700000000;

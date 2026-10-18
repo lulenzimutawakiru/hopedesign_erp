@@ -156,12 +156,15 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     // Enforce session lifecycle: revoked or expired sessions must not authenticate.
     if (!payload.sid) return next(unauthorized('Missing session'));
     const sess = await query(
-      `SELECT 1 FROM sessions WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > now()`,
+      `SELECT mfa_verified_at FROM sessions WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > now()`,
       [payload.sid, payload.sub],
       { tenantId: payload.tid, userId: payload.sub }
     );
     if (sess.rows.length === 0) return next(unauthorized('Session has been revoked or expired'));
     const user = await loadAuthUser(payload.sub, payload.tid);
+    // SEC-001: session-level MFA state, not the account-level mfa_enabled flag,
+    // is what authorizes the `mfa_verified` ABAC attribute.
+    user.mfa_verified_at = sess.rows[0].mfa_verified_at ? String(sess.rows[0].mfa_verified_at) : null;
     req.ctx.companyId = user.company_id;
     req.ctx.branchId = user.branch_id;
     req.auth = user;

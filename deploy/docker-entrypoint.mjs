@@ -19,6 +19,7 @@ const {
   POSTGRES_APP_USER = 'hopedesign_app',
   POSTGRES_APP_PASSWORD = '',
   POSTGRES_SSL,
+  POSTGRES_SSL_REJECT_UNAUTHORIZED,
   SEED_ON_BOOT,
 } = process.env;
 
@@ -26,9 +27,17 @@ const ownerUrl =
   DATABASE_URL ||
   `postgres://${encodeURIComponent(POSTGRES_USER)}:${encodeURIComponent(POSTGRES_PASSWORD)}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}`;
 
+// SEC-007: verify the server certificate by default; only an explicit
+// POSTGRES_SSL_REJECT_UNAUTHORIZED=false relaxes verification (private hosts).
+const rejectUnauthorized =
+  POSTGRES_SSL_REJECT_UNAUTHORIZED &&
+  ['0', 'false', 'disable'].includes(POSTGRES_SSL_REJECT_UNAUTHORIZED.toLowerCase())
+    ? false
+    : true;
+
 const ssl =
   POSTGRES_SSL && !['0', 'false', 'disable'].includes(POSTGRES_SSL.toLowerCase())
-    ? { rejectUnauthorized: false }
+    ? { rejectUnauthorized }
     : undefined;
 
 function run(cmd, args, extraEnv = {}) {

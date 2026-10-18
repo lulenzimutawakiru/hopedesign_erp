@@ -581,6 +581,49 @@ describe('Second-factor readiness', () => {
     return res;
   }
 
+  // SEC-001: the session row records whether a second factor was actually
+  // verified for *this* session. Password-only sign-in must leave it NULL;
+  // satisfying a factor must stamp it. ABAC's `mfa_verified` is derived from
+  // this column, never from the account-level `users.mfa_enabled` flag.
+  it('records no MFA verification for a password-only session', async () => {
+    const { userId, username } = await createMfaUser();
+    try {
+      const res = await api.post('/api/auth/login').send({ identifier: username, password: PASSWORD });
+      expect(res.status).toBe(200);
+      expect(typeof res.body.accessToken).toBe('string');
+      const row = await db(`SELECT mfa_verified_at FROM sessions WHERE user_id=$1`, [userId]);
+      expect(row.rows.length).toBe(1);
+      expect(row.rows[0].mfa_verified_at).toBeNull();
+    } finally {
+      await dropMfaUser(userId);
+    }
+  });
+
+  it('records MFA verification once a second factor is satisfied', async () => {
+    const { userId, username } = await createMfaUser();
+    try {
+      const { generateTotpSecret } = await import('../src/auth.js');
+      await db(`UPDATE users SET mfa_enabled=true, mfa_method='TOTP', mfa_secret=$1 WHERE id=$2`, [
+        generateTotpSecret(),
+        userId,
+      ]);
+      const blocked = await api.post('/api/auth/login').send({ identifier: username, password: PASSWORD });
+      expect(blocked.body.enrollmentRequired).toBe(true);
+      const start = await api.post('/api/auth/mfa/enroll-start').send({ loginToken: blocked.body.loginToken });
+      const secret = String(start.body.secret ?? '');
+      const paired = await api
+        .post('/api/auth/mfa/enroll-verify')
+        .send({ loginToken: blocked.body.loginToken, code: authenticator.generate(secret), secret });
+      expect(paired.status).toBe(200);
+      expect(typeof paired.body.accessToken).toBe('string');
+      const row = await db(`SELECT mfa_verified_at FROM sessions WHERE user_id=$1`, [userId]);
+      expect(row.rows.length).toBe(1);
+      expect(row.rows[0].mfa_verified_at).not.toBeNull();
+    } finally {
+      await dropMfaUser(userId);
+    }
+  });
+
   it('offers enrolment instead of an unanswerable challenge, and accepts the account once paired', async () => {
     const { userId, username } = await createMfaUser();
     try {

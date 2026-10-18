@@ -1337,23 +1337,37 @@ export async function recallEngine(client: pg.PoolClient, ctx: Ctx, productId?: 
 
 export async function createRecall(
   client: pg.PoolClient, ctx: Ctx,
-  input: { productId?: number | null; batchId?: number | null; reason: string; severity?: string; title?: string; quarantineAll?: boolean }
+  input: { productId?: number | null; batchId?: number | null; qrId?: number | null; reason: string; severity?: string; title?: string; quarantineAll?: boolean }
 ) {
   const companyId = ctx.companyId ?? null;
   if (!companyId) throw badRequest('Company context required');
   if (!input.reason?.trim()) throw badRequest('Recall reason is required');
+  let productId = input.productId ?? null;
+  let batchId = input.batchId ?? null;
+  if (input.qrId != null) {
+    // A QR-level recall links the recall to a specific code so the public
+    // verify helper can report RECALLED; derive product/batch from it so the
+    // recall engine still enumerates the affected batches.
+    const qr = await client.query(
+      `SELECT product_id, batch_id FROM qr_codes WHERE id = $1 AND tenant_id = $2`,
+      [input.qrId, ctx.tenantId]
+    );
+    if (qr.rows.length === 0) throw notFound('QR code not found');
+    if (productId == null) productId = qr.rows[0].product_id ?? null;
+    if (batchId == null) batchId = qr.rows[0].batch_id ?? null;
+  }
   const noRes = await client.query('SELECT next_doc_no($1,$2,8) AS code', [ctx.tenantId, 'RECALL']);
   const recallNo = String(noRes.rows[0].code);
   const ins = await client.query(
-    `INSERT INTO recalls (company_id, tenant_id, branch_id, recall_no, product_id, batch_id, reason,
+    `INSERT INTO recalls (company_id, tenant_id, branch_id, recall_no, product_id, batch_id, qr_id, reason,
                           severity, status, title, quarantine_all, issued_by, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ACTIVE',$9,$10,$11,$11)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'ACTIVE',$10,$11,$12,$12)
      RETURNING id`,
-    [companyId, ctx.tenantId, ctx.branchId ?? null, recallNo, input.productId ?? null, input.batchId ?? null,
+    [companyId, ctx.tenantId, ctx.branchId ?? null, recallNo, productId, batchId, input.qrId ?? null,
      input.reason, input.severity ?? 'MAJOR', input.title ?? null, input.quarantineAll ?? false, ctx.userId ?? null]
   );
   const recallId = Number(ins.rows[0].id);
-  const engine = await recallEngine(client, ctx, input.productId ?? null, input.batchId ?? null);
+  const engine = await recallEngine(client, ctx, productId, batchId);
   let linked = 0;
   for (const b of engine.batches) {
     await client.query(

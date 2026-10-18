@@ -1306,7 +1306,7 @@ export async function efrisReconciliation(
        FROM customer_invoices i
        JOIN efris_transactions t
          ON t.doc_ref_id = i.id
-        AND t.doc_ref_type IN ('CUSTOMER_INVOICE', 'SALES_INVOICE')
+        AND t.doc_ref_type = 'customer_invoices'
         AND t.tenant_id = i.tenant_id
         AND t.status = 'FISCALIZED'
       WHERE i.tenant_id = $1 AND i.company_id = $2

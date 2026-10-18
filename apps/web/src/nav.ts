@@ -639,12 +639,18 @@ const LANDING_SECTION = /dashboard|command|board|overview|hub/i;
 /**
  * Module whose section list belongs on this screen: the module home, or a
  * child that is itself a dashboard / command center / board.
+ *
+ * Administration stays listed on every screen in the module. Work and the
+ * control plane open Users, Organisation Settings, and the other sections
+ * directly, so a directory that exists only on `/admin` leaves those sections
+ * off the page.
  */
 export function landingModule(path: string, user: MeUser | null): NavItem | undefined {
   const items = visibleGroups(user).flatMap((g) => g.items);
   const item = items.find((i) => moduleActive(i.href, path) && i.id !== 'warehouses')
     ?? items.find((i) => moduleActive(i.href, path));
   if (!item?.children?.length) return undefined;
+  if (item.href === '/admin') return item;
   if (path === item.href) return item;
   const onLanding = item.children.some((c) => c.href === path && LANDING_SECTION.test(`${c.id} ${c.label}`));
   return onLanding ? item : undefined;

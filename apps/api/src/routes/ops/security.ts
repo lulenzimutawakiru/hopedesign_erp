@@ -24,8 +24,8 @@ securityOpsRouter.get('/jobs', requirePermission('security_printing.jobs.view'),
     `SELECT t.*, c.name AS customer_name
        FROM security_jobs t
        LEFT JOIN customers c ON c.id = t.customer_id
-      WHERE ${scope} ORDER BY t.id DESC LIMIT 500`,
-    [],
+      WHERE ${scope.clause} ORDER BY t.id DESC LIMIT 500`,
+    scope.params,
     req.ctx
   );
   res.json({ data: toCamelRows(out.rows as Record<string, unknown>[]) });

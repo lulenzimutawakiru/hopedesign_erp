@@ -1521,6 +1521,10 @@ export async function approvePurchaseOrder(client: pg.PoolClient, ctx: Ctx, orde
   if (!['DRAFT', 'SUBMITTED'].includes(String(po.status))) {
     throw badRequest(`Purchase order cannot be approved from ${po.status}`);
   }
+  // Segregation of duties: the creator may not approve their own purchase order.
+  if (po.created_by != null && Number(po.created_by) === Number(ctx.userId)) {
+    throw forbidden('Segregation of duties: you cannot approve your own purchase order');
+  }
   await client.query(
     `UPDATE purchase_orders SET status = 'APPROVED', approved_by = $2, approved_at = now() WHERE id = $1`,
     [orderId, ctx.userId ?? null]

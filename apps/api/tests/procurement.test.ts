@@ -140,6 +140,37 @@ describe('Procurement source-to-pay', () => {
     expect(invoice.body.data.threeWayMatched).toBe(false);
   });
 
+  it('blocks posting a supplier invoice that fails three-way match', async () => {
+    const { token } = await loginAs('admin');
+    const { product, supplier } = await productAndSupplier(token);
+    const po = await api.post('/api/ops/procurement/orders').set(auth(token)).send({
+      supplierId: supplier.id,
+      items: [{ productId: product.id, quantity: 2, unitPrice: 10000 }],
+    });
+    expect(po.status).toBe(200);
+    const orderId = Number(po.body.data.orderId);
+    await db(`UPDATE purchase_orders SET status = 'APPROVED' WHERE id = $1`, [orderId]);
+    const detail = await api.get(`/api/ops/procurement/orders/${orderId}`).set(auth(token));
+    const line = detail.body.data.items[0];
+
+    // No goods receipt: the invoice cannot three-way match.
+    const invoice = await api.post('/api/ops/procurement/supplier-invoices').set(auth(token)).send({
+      poId: orderId,
+      supplierId: supplier.id,
+      items: [{ poItemId: line.id, productId: product.id, quantity: 2, unitPrice: 10000 }],
+    });
+    expect(invoice.status).toBe(200);
+    expect(invoice.body.data.threeWayMatched).toBe(false);
+    const invoiceId = Number(invoice.body.data.invoiceId);
+
+    // Three-way match is required by default, so posting is denied.
+    const posted = await api.post(`/api/ops/procurement/supplier-invoices/${invoiceId}/submit`).set(auth(token)).send({});
+    expect(posted.status).toBe(400);
+
+    const inv = await api.get(`/api/ops/procurement/supplier-invoices/${invoiceId}`).set(auth(token));
+    expect(inv.body.data.invoice.glPosted).toBe(false);
+  });
+
   it('prints payment voucher, supplier return, inspection report and bid analysis', async () => {
     const { token } = await loginAs('admin');
     const { product, supplier } = await productAndSupplier(token);

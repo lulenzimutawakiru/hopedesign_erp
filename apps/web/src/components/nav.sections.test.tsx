@@ -56,4 +56,15 @@ describe('sidebar sections', () => {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
   });
+
+  it('lists every administration section on a child screen', () => {
+    window.location.hash = '#/admin/users';
+    const item = landingModule('/admin/users', admin);
+    expect(item).toBeTruthy();
+    render(<ModuleSections item={item!} />);
+    expect(screen.getByRole('navigation', { name: 'Administration sections' })).toBeInTheDocument();
+    for (const label of ['Database', 'Organisation Settings', 'Features', 'Backups', 'Delegations', 'Signatures', 'Audit', 'Settings']) {
+      expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
+    }
+  });
 });

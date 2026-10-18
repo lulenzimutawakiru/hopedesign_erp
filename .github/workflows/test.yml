@@ -16,6 +16,35 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    env:
+      DATABASE_URL: postgres://hopedesign:hopedesign_dev@localhost:5432/hopedesign_erp
+
+    services:
+
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hopedesign
+          POSTGRES_PASSWORD: hopedesign_dev
+          POSTGRES_DB: hopedesign_erp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hopedesign -d hopedesign_erp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     steps:
 
       - name: Checkout source
@@ -35,6 +64,14 @@ jobs:
 
       - name: Build database package
         run: npm run build -w packages/db
+
+
+      - name: Run database migrations
+        run: npm run db:migrate
+
+
+      - name: Seed database
+        run: npm run db:seed
 
 
       - name: Run API tests

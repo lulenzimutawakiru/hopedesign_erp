@@ -66,6 +66,15 @@ const postgresSsl = postgresSslRaw
   ? !['0', 'false', 'disable'].includes(postgresSslRaw.toLowerCase())
   : !isLoopbackHost(postgresHost);
 
+// SEC-007: TLS without certificate verification is equivalent to no TLS.
+// Verify the server certificate by default; allow an explicit opt-out only for
+// private hosts whose self-signed chain cannot be distributed to the runtime
+// (POSTGRES_SSL_REJECT_UNAUTHORIZED=false).
+const postgresSslRejectRaw = envStr('POSTGRES_SSL_REJECT_UNAUTHORIZED');
+const postgresSslRejectUnauthorized = postgresSslRejectRaw
+  ? !['0', 'false', 'disable'].includes(postgresSslRejectRaw.toLowerCase())
+  : true;
+
 export const config = {
   // Vitest injects VITEST into the worker process; treat that as the test
   // environment so the rate-limit ceiling below is lifted for the suite even
@@ -87,6 +96,7 @@ export const config = {
     appUser: envStr('POSTGRES_APP_USER') ?? postgresUser,
     appPassword: envStr('POSTGRES_APP_PASSWORD') ?? postgresPassword,
     ssl: postgresSsl,
+    rejectUnauthorized: postgresSslRejectUnauthorized,
   },
   jwtSecret: process.env.JWT_SECRET ?? 'change-me-in-production',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '8h',

@@ -19,6 +19,8 @@ export interface AuthUser {
   must_change_password: boolean;
   mfa_enabled: boolean;
   mfa_method?: string | null;
+  /** Set when the current session actually passed a second-factor challenge. */
+  mfa_verified_at?: string | null;
   personal_email?: string | null;
   personal_email_verified_at?: string | null;
   attributes: Record<string, unknown>;

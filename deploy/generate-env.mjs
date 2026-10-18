@@ -34,6 +34,7 @@ const secret = (bytes = 48) => crypto.randomBytes(bytes).toString('base64url');
 const ownerPass = secret(24);
 const appPass = secret(24);
 const redisPass = secret(24);
+const seedAdminPassword = secret(24);
 const scheme = httpOnly || domain === ':80' ? 'http' : 'https';
 const publicHost = domain === ':80' ? 'localhost' : domain;
 const publicUrl = `${scheme}://${publicHost}`;
@@ -78,6 +79,11 @@ RATE_LIMIT_MAX=300
 
 SEED_ON_BOOT=${seed ? 'true' : 'false'}
 
+# Bootstrap password for seeded accounts. SEC-004: production seeding refuses
+# the documented dev default, so a strong random value is generated here and
+# every seeded account must change it on first login.
+SEED_ADMIN_PASSWORD=${seedAdminPassword}
+
 RESEND_API_KEY=
 RESEND_FROM_EMAIL=notifications@hopedesign.jorlentech.com
 RESEND_FROM_NAME=HOPE DESIGN
@@ -91,7 +97,7 @@ NIIMBOT_ENABLED=false
 fs.writeFileSync(dest, body, { encoding: 'utf8', mode: 0o600 });
 console.log('Wrote', dest);
 console.log('Public URL:', publicUrl);
-console.log('SEED_ON_BOOT:', seed ? 'true (change admin password after first login)' : 'false');
+console.log('SEED_ON_BOOT:', seed ? 'true (a strong SEED_ADMIN_PASSWORD was generated; change it after first login)' : 'false');
 if (!httpOnly && domain === ':80') {
   console.log('HTTP-only bind. Re-run with --domain your.hostname for Lets Encrypt.');
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api, auth, loginAs } from './helpers.js';
+import { api, auth, loginAs, db } from './helpers.js';
 
 interface QrRow {
   id: number;
@@ -80,5 +80,45 @@ describe('QR lifecycle, anti-counterfeit verification and traceability', () => {
     const res = await api.get('/api/qr/traceability/HDG-FG-2099-99999999').set(auth(token));
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('does not persist the QR secret in the public scan log', async () => {
+    const { token } = await loginAs('admin');
+    const gen = await api.post('/api/qr/generate').set(auth(token)).send({ entityType: 'PRODUCT', productId: 3, count: 1 });
+    expect(gen.status).toBe(200);
+    const qr: QrRow = gen.body.data[0];
+    const code = String(qr.code);
+    const secret = String(qr.payload).split('|')[1] ?? '';
+
+    await api.post('/api/public/verify').send({ payload: qr.payload });
+
+    const rows = await db(
+      `SELECT payload FROM qr_scans WHERE qr_id = $1 AND scan_type = 'PUBLIC' ORDER BY id DESC LIMIT 1`,
+      [qr.id]
+    );
+    expect(rows.length).toBe(1);
+    const stored = String(rows[0].payload);
+    // Only the non-secret code is recorded; the unforgeable secret must never land in the scan log.
+    expect(stored).toBe(code);
+    expect(stored).not.toContain('|');
+    expect(stored).not.toContain(secret);
+  });
+
+  it('links a recall to its QR so public verification reports RECALLED', async () => {
+    const { token } = await loginAs('admin');
+    const gen = await api.post('/api/qr/generate').set(auth(token)).send({ entityType: 'PRODUCT', productId: 3, count: 1 });
+    expect(gen.status).toBe(200);
+    const qr: QrRow = gen.body.data[0];
+
+    const recall = await api.post('/api/ops/inventory-intel/recalls').set(auth(token)).send({
+      qrId: qr.id,
+      reason: 'test QR recall',
+    });
+    expect(recall.status).toBe(200);
+    const recallId = Number(recall.body.data.recallId);
+
+    const rows = await db(`SELECT qr_id FROM recalls WHERE id = $1`, [recallId]);
+    expect(rows.length).toBe(1);
+    expect(Number(rows[0].qr_id)).toBe(qr.id);
   });
 });

@@ -285,7 +285,7 @@ authRouter.post(
       });
     }
 
-    const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, true);
+    const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, false);
     const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
     await tx(async (client) => {
       await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, { action: 'login', resource: 'auth', recordId: userId });
@@ -338,7 +338,7 @@ authRouter.post(
     const fresh = (
       await query('SELECT * FROM users WHERE id = $1 AND tenant_id = $2', [userId, tenantId], { tenantId, userId })
     ).rows[0] as Record<string, unknown>;
-    const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, true);
+    const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, false);
     const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
     await tx(async (client) => {
       await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, { action: 'accept_invite', resource: 'users', recordId: userId });
@@ -567,7 +567,7 @@ authRouter.post(
       ipOf(req),
       req.ctx.userAgent,
       req.ctx.device,
-      true
+      false
     );
     const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
     await tx(async (client) => {

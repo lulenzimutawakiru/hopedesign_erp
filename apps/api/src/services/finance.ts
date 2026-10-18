@@ -633,6 +633,31 @@ export async function postDebitNote(client: pg.PoolClient, ctx: Ctx, debitNoteId
   return entryId;
 }
 
+/**
+ * Three-way match is required by default (deny-by-default for posting). A
+ * company can disable the control via Procurement Settings
+ * (`organisation.procurement.three_way_match_required`), which is the only
+ * sanctioned escape hatch for legitimately un-matched invoices (e.g. services
+ * that never pass through a goods receipt).
+ */
+async function threeWayMatchRequired(client: pg.PoolClient, ctx: Ctx): Promise<boolean> {
+  const res = await client.query(
+    `SELECT value FROM app_settings
+      WHERE tenant_id = $1 AND category = 'organisation.procurement' AND key = 'three_way_match_required'
+        AND (company_id = $2 OR company_id IS NULL)
+      ORDER BY (company_id IS NOT NULL) DESC
+      LIMIT 1`,
+    [ctx.tenantId ?? null, ctx.companyId ?? null]
+  );
+  if (res.rows.length === 0) return true;
+  const v = res.rows[0].value;
+  if (v === null || v === undefined) return true;
+  if (typeof v === 'boolean') return v;
+  const s = String(v).trim().toLowerCase();
+  if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+  return true;
+}
+
 /** Supplier invoice: Dr Expense/Inventory, Dr VAT, Cr AP. */
 export async function postSupplierInvoice(client: pg.PoolClient, ctx: Ctx, siId: number) {
   const res = await client.query(
@@ -644,6 +669,11 @@ export async function postSupplierInvoice(client: pg.PoolClient, ctx: Ctx, siId:
   if (si.gl_posted) return Number(si.gl_journal_id);
   if (si.status !== 'APPROVED' && si.status !== 'MATCHED') {
     throw badRequest(`Supplier invoice must be APPROVED before posting (current: ${si.status})`);
+  }
+  if (si.three_way_matched !== true && (await threeWayMatchRequired(client, ctx))) {
+    throw badRequest(
+      'Supplier invoice fails three-way match: quantity/price do not match the purchase order and goods receipt. Resolve the mismatch on the match desk or disable the control in Procurement Settings.'
+    );
   }
   const items = await client.query(
     `SELECT sii.*, p.type AS product_type FROM supplier_invoice_items sii
@@ -1409,6 +1439,17 @@ export async function listPeriods(client: pg.PoolClient, ctx: Ctx) {
 }
 
 export async function setPeriodStatus(client: pg.PoolClient, ctx: Ctx, id: number, status: 'OPEN' | 'LOCKED' | 'CLOSED') {
+  const cur = await client.query(
+    `SELECT status FROM financial_periods WHERE id = $1 AND tenant_id = $2`,
+    [id, ctx.tenantId]
+  );
+  if (!cur.rows.length) throw notFound('Period not found');
+  // A CLOSED period is terminal: it has been reconciled and reported, so it
+  // must never be silently re-opened. OPEN <-> LOCKED stays reversible for
+  // legitimate end-of-period adjustments (each transition is audited below).
+  if (String(cur.rows[0].status) === 'CLOSED' && status !== 'CLOSED') {
+    throw badRequest('A CLOSED period cannot be re-opened');
+  }
   const res = await client.query(
     `UPDATE financial_periods SET status = $3,
        closed_by = CASE WHEN $3 = 'CLOSED' THEN $4 ELSE closed_by END,
