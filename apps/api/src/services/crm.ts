@@ -5,6 +5,11 @@ import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import * as sales from './sales.js';
 
+/** Normalise a TIN to its digits (URA TINs are 10 digits). */
+function normalizeTin(raw: unknown): string {
+  return String(raw ?? '').replace(/\D/g, '');
+}
+
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const PIPELINE_STAGES = [
@@ -28,6 +33,26 @@ const STAGE_PROB: Record<string, number> = {
 };
 
 const CUSTOMER_STATUSES = ['ACTIVE', 'INACTIVE', 'BLOCKED', 'PROSPECT'] as const;
+
+const CUSTOMER_TYPES = ['INDIVIDUAL', 'COMPANY', 'GOVERNMENT', 'NGO'] as const;
+const VERIFICATION_STATUSES = ['VERIFIED', 'NOT_VERIFIED', 'LOOKUP_FAILED'] as const;
+type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
+
+interface VerificationInput {
+  status: VerificationStatus;
+  ref?: string | null;
+}
+
+/** Validate a client-supplied EFRIS verification outcome; fail closed on a bad value. */
+function coerceVerification(v: unknown): VerificationInput | null {
+  if (v == null) return null;
+  const o = (typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  const status = String(o.status ?? '');
+  if (!VERIFICATION_STATUSES.includes(status as VerificationStatus)) {
+    throw badRequest('Invalid EFRIS verification status');
+  }
+  return { status: status as VerificationStatus, ref: o.ref != null ? String(o.ref) : null };
+}
 
 function scoreLead(input: {
   source?: string | null;
@@ -131,40 +156,167 @@ export async function createCustomer(
     vrn?: string | null;
     phone?: string | null;
     email?: string | null;
+    website?: string | null;
     address?: string | null;
+    billingAddress?: string | null;
+    shippingAddress?: string | null;
+    currency?: string;
     creditLimit?: number;
     paymentTermsDays?: number;
     status?: string;
     notes?: string | null;
+    verification?: VerificationInput | null;
   }
 ) {
   const companyId = await requireCompany(ctx);
   if (!input.name?.trim()) throw badRequest('Customer name is required');
+  if (input.customerType && !CUSTOMER_TYPES.includes(input.customerType as (typeof CUSTOMER_TYPES)[number])) {
+    throw badRequest('Invalid customer type');
+  }
+  const verification = coerceVerification(input.verification);
   const code = await nextDoc(client, ctx, 'CUST');
   const status = input.status && ['ACTIVE', 'PROSPECT'].includes(input.status) ? input.status : 'ACTIVE';
+  const tin = input.tin ? normalizeTin(input.tin) || null : null;
   const ins = await client.query(
     `INSERT INTO customers
-       (company_id, tenant_id, branch_id, code, name, customer_type, tin, nin, vrn, phone, email, address,
-        credit_limit, payment_terms_days, status, owner_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+       (company_id, tenant_id, branch_id, code, name, customer_type, tin, nin, vrn, phone, email, website, address,
+        billing_address, shipping_address, currency, credit_limit, payment_terms_days, status, owner_user_id,
+        efris_verification, efris_verified_at, efris_ref)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+             $21, ${verification ? 'now()' : 'NULL'}, $22) RETURNING id`,
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, code, input.name.trim(),
-      input.customerType ?? 'COMPANY', input.tin ?? null, input.nin ?? null, input.vrn ?? null,
-      input.phone ?? null, input.email ?? null, input.address ?? null,
-      Number(input.creditLimit ?? 0), Number(input.paymentTermsDays ?? 30),
+      input.customerType ?? 'COMPANY', tin, input.nin?.trim() || null, input.vrn?.trim() || null,
+      input.phone?.trim() || null, input.email?.trim() || null, input.website?.trim() || null,
+      input.address ?? null, input.billingAddress ?? null, input.shippingAddress ?? null,
+      input.currency ?? 'UGX', Number(input.creditLimit ?? 0), Number(input.paymentTermsDays ?? 30),
       status, ctx.userId ?? null,
+      verification?.status ?? null, verification?.ref ?? null,
     ]
   );
   const customerId = Number(ins.rows[0].id);
   await emitEvent(client, ctx, { eventType: 'crm.customer_created', entityType: 'customers', entityId: customerId, entityCode: code });
-  await logAudit(client, ctx, { action: 'create', resource: 'customers', recordId: customerId, recordCode: code, newValues: { name: input.name } });
+  await logAudit(client, ctx, { action: 'create', resource: 'customers', recordId: customerId, recordCode: code, newValues: { name: input.name, tin, verification: verification?.status ?? null } });
   const duplicates = await findDuplicates(client, ctx, {
     name: input.name,
     email: input.email,
     phone: input.phone,
+    tin: input.tin,
     excludeCustomerId: customerId,
   });
   return { customerId, code, duplicates };
+}
+
+/**
+ * Update the editable master-data fields of a customer account. Status and
+ * ownership are deliberately excluded (use the dedicated status/assign
+ * endpoints so those privileged transitions stay separately permissioned and
+ * audited). Only whitelisted columns are written, so request-body fields that
+ * name other columns are ignored.
+ */
+export async function updateCustomer(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  customerId: number,
+  input: {
+    name?: string;
+    customerType?: string;
+    tin?: string | null;
+    nin?: string | null;
+    vrn?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    website?: string | null;
+    address?: string | null;
+    billingAddress?: string | null;
+    shippingAddress?: string | null;
+    currency?: string;
+    creditLimit?: number;
+    paymentTermsDays?: number;
+    verification?: VerificationInput | null;
+  }
+) {
+  if (!Number.isInteger(customerId) || customerId <= 0) throw badRequest('Invalid customer id');
+  const cur = await client.query(
+    `SELECT * FROM customers WHERE id = $1 AND tenant_id = $2 AND ($3::bigint IS NULL OR company_id = $3) FOR UPDATE`,
+    [customerId, ctx.tenantId, ctx.companyId ?? null]
+  );
+  if (cur.rows.length === 0) throw notFound('Customer not found');
+  const prev = cur.rows[0];
+
+  if (input.customerType !== undefined && !CUSTOMER_TYPES.includes(input.customerType as (typeof CUSTOMER_TYPES)[number])) {
+    throw badRequest('Invalid customer type');
+  }
+  const verification = coerceVerification(input.verification);
+
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  const setRaw = (sql: string) => { sets.push(sql); };
+  const setCol = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+
+  if (input.name !== undefined) {
+    const name = String(input.name).trim();
+    if (!name) throw badRequest('Customer name is required');
+    setCol('name', name);
+  }
+  if (input.customerType !== undefined) setCol('customer_type', input.customerType);
+  if (input.tin !== undefined) setCol('tin', input.tin ? normalizeTin(input.tin) || null : null);
+  if (input.nin !== undefined) setCol('nin', input.nin?.trim() || null);
+  if (input.vrn !== undefined) setCol('vrn', input.vrn?.trim() || null);
+  if (input.phone !== undefined) setCol('phone', input.phone?.trim() || null);
+  if (input.email !== undefined) setCol('email', input.email?.trim() || null);
+  if (input.website !== undefined) setCol('website', input.website?.trim() || null);
+  if (input.address !== undefined) setCol('address', input.address ?? null);
+  if (input.billingAddress !== undefined) setCol('billing_address', input.billingAddress ?? null);
+  if (input.shippingAddress !== undefined) setCol('shipping_address', input.shippingAddress ?? null);
+  if (input.currency !== undefined) setCol('currency', input.currency || 'UGX');
+  if (input.creditLimit !== undefined) {
+    const v = Number(input.creditLimit);
+    if (!Number.isFinite(v) || v < 0) throw badRequest('Credit limit must be a non-negative number');
+    setCol('credit_limit', v);
+  }
+  if (input.paymentTermsDays !== undefined) {
+    const v = Number(input.paymentTermsDays);
+    if (!Number.isFinite(v) || v < 0) throw badRequest('Payment terms must be a non-negative number');
+    setCol('payment_terms_days', v);
+  }
+  if (verification) {
+    setCol('efris_verification', verification.status);
+    setRaw('efris_verified_at = now()');
+    setCol('efris_ref', verification.ref ?? null);
+  }
+
+  if (sets.length === 0) return { customerId, code: String(prev.code), unchanged: true };
+
+  setRaw('updated_at = now()');
+  params.push(customerId);
+  const whereIdx = params.length;
+  await client.query(
+    `UPDATE customers SET ${sets.join(', ')} WHERE id = $${whereIdx}`,
+    params
+  );
+  await logAudit(client, ctx, {
+    action: 'update',
+    resource: 'customers',
+    recordId: customerId,
+    recordCode: String(prev.code),
+    oldValues: { name: prev.name, tin: prev.tin, email: prev.email, phone: prev.phone },
+    newValues: {
+      name: input.name !== undefined ? String(input.name).trim() : prev.name,
+      tin: input.tin !== undefined ? (input.tin ? normalizeTin(input.tin) || null : null) : prev.tin,
+      verification: verification?.status ?? prev.efris_verification ?? null,
+    },
+  });
+  await emitEvent(client, ctx, { eventType: 'crm.customer_updated', entityType: 'customers', entityId: customerId, entityCode: String(prev.code) });
+
+  const duplicates = await findDuplicates(client, ctx, {
+    name: input.name ?? prev.name,
+    email: input.email ?? prev.email,
+    phone: input.phone ?? prev.phone,
+    tin: input.tin !== undefined ? (input.tin ? normalizeTin(input.tin) || null : null) : prev.tin,
+    excludeCustomerId: customerId,
+  });
+  return { customerId, code: String(prev.code), duplicates };
 }
 
 export async function createContact(
@@ -955,6 +1107,7 @@ export async function findDuplicates(
     name?: string | null;
     email?: string | null;
     phone?: string | null;
+    tin?: string | null;
     excludeCustomerId?: number;
     excludeLeadId?: number;
   }
@@ -962,7 +1115,8 @@ export async function findDuplicates(
   const name = (input.name ?? '').trim().toLowerCase();
   const email = (input.email ?? '').trim().toLowerCase();
   const phone = (input.phone ?? '').replace(/\D/g, '');
-  if (!name && !email && phone.length < 7) return { customers: [], leads: [] };
+  const tin = (input.tin ?? '').replace(/\D/g, '');
+  if (!name && !email && phone.length < 7 && tin.length < 10) return { customers: [], leads: [] };
 
   const custParams: unknown[] = [ctx.tenantId, ctx.companyId];
   const custOr: string[] = [];
@@ -977,6 +1131,10 @@ export async function findDuplicates(
   if (phone.length >= 7) {
     custParams.push(`%${phone.slice(-9)}%`);
     custOr.push(`regexp_replace(COALESCE(c.phone,''), '\\D', '', 'g') LIKE $${custParams.length}`);
+  }
+  if (tin.length >= 10) {
+    custParams.push(tin);
+    custOr.push(`regexp_replace(COALESCE(c.tin,''), '\\D', '', 'g') = $${custParams.length}`);
   }
   const custWhere = ['c.tenant_id = $1', 'c.company_id = $2'];
   if (input.excludeCustomerId) {

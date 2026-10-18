@@ -39,6 +39,7 @@ crmOpsRouter.get('/duplicates', ...runGet('crm.customers.view', (c, ctx, q) => c
   name: q.name != null ? String(q.name) : undefined,
   email: q.email != null ? String(q.email) : undefined,
   phone: q.phone != null ? String(q.phone) : undefined,
+  tin: q.tin != null ? String(q.tin) : undefined,
 })));
 crmOpsRouter.get('/contacts', ...runGet('crm.contacts.view', (c, ctx, q) => crm.listContacts(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
@@ -54,6 +55,7 @@ crmOpsRouter.get('/customers', ...runGet('crm.customers.view', (c, ctx, q) => cr
 crmOpsRouter.get('/customers/:id', ...runGet('crm.customers.view', (c, ctx, _q, p) => crm.getCustomer360(c, ctx, Number(p.id))));
 crmOpsRouter.get('/customers/:id/credit', ...runGet('crm.customers.view', (c, ctx, q, p) => crm.creditCheck(c, ctx, Number(p.id), q.amount != null ? Number(q.amount) : 0)));
 crmOpsRouter.post('/customers', ...run('crm.customers.create', (c, ctx, b) => crm.createCustomer(c, ctx, b)));
+crmOpsRouter.post('/customers/:id', ...run('crm.customers.update', (c, ctx, b, p) => crm.updateCustomer(c, ctx, Number(p.id), b)));
 crmOpsRouter.post('/customers/:id/status', ...run(['crm.customers.update', 'crm.customers.block'], (c, ctx, b, p, reqAuth) => crm.setCustomerStatus(
   c, ctx, Number(p.id), String(b.status ?? ''), b.reason != null ? String(b.reason) : null,
   { canBlock: can(reqAuth, 'crm.customers.block') },

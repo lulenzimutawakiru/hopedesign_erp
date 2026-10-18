@@ -99,12 +99,12 @@ secrets are introduced.
 
 ## Verification status
 
-The CRM currently distinguishes the lookup outcome in the UI (match, no match,
-or failure) rather than persisting a verification timestamp on the customer.
-Persisting a `VERIFIED` / `NOT_VERIFIED` / `LOOKUP_FAILED` /
-`NOT_CONFIGURED` status (with a `verified_at` timestamp and integration
-reference) is the documented next step and must be driven by an actual gateway
-response — never by HTTP success alone.
+The CRM now persists the lookup outcome on the customer at save time
+(review-then-save) via `efris_verification` (`VERIFIED` / `NOT_VERIFIED` /
+`LOOKUP_FAILED`), `efris_verified_at`, and `efris_ref` — see
+`docs/crm-customer-master-data.md` and migration
+`0196_crm_customer_verification.sql`. The status is driven by an actual gateway
+response, never by HTTP success alone.
 
 ## Tests
 

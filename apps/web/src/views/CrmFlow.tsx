@@ -402,6 +402,11 @@ function CustomerDesk({ id }: { id: number }) {
   const [ownerId, setOwnerId] = useState('');
   const [blockReason, setBlockReason] = useState('');
   const [tab, setTab] = useState('Summary');
+  const [editing, setEditing] = useState(false);
+  const [edit, setEdit] = useState<Rec>({});
+  const [lookup, setLookup] = useState<TinLookup | null>(null);
+  const [lookingUp, setLookingUp] = useState(false);
+  const [lookupError, setLookupError] = useState('');
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/crm/customers/${id}`)
       .then((r) => setDoc(r.data))
@@ -429,12 +434,88 @@ function CustomerDesk({ id }: { id: number }) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
+  const setEditField = (k: string, v: unknown) => setEdit((p) => ({ ...p, [k]: v }));
+  const editDigits = String(edit.tin ?? '').replace(/\D/g, '');
+  const canEditLookup = /^\d{10}$/.test(editDigits);
+  const beginEdit = () => {
+    setEdit({
+      name: c.name ?? '',
+      customerType: c.customerType ?? 'COMPANY',
+      tin: c.tin ?? '',
+      nin: c.nin ?? '',
+      vrn: c.vrn ?? '',
+      phone: c.phone ?? '',
+      email: c.email ?? '',
+      website: c.website ?? '',
+      address: c.address ?? '',
+      billingAddress: c.billingAddress ?? '',
+      shippingAddress: c.shippingAddress ?? '',
+      currency: c.currency ?? 'UGX',
+      creditLimit: c.creditLimit ?? 0,
+      paymentTermsDays: c.paymentTermsDays ?? 30,
+    });
+    setLookup(null); setLookupError(''); setError(''); setNotice('');
+    setEditing(true);
+  };
+  const runEditLookup = async () => {
+    const d = String(edit.tin ?? '').replace(/\D/g, '');
+    if (!/^\d{10}$/.test(d)) return;
+    setLookingUp(true); setLookupError(''); setLookup(null);
+    try {
+      const r = await api<{ data: TinLookup }>('/api/ops/finance/efris/customer-lookup', {
+        method: 'POST',
+        body: JSON.stringify({ tin: d }),
+      });
+      setLookup(r.data);
+      const t = r.data.taxpayer;
+      if (r.data.found && t) {
+        // Review-then-save: only prefill empty fields, never overwrite input.
+        setEdit((prev) => ({
+          ...prev,
+          name: String(prev.name ?? '').trim() ? prev.name : (t.businessName || t.legalName || prev.name),
+          email: String(prev.email ?? '').trim() ? prev.email : (t.contactEmail || prev.email),
+          phone: String(prev.phone ?? '').trim() ? prev.phone : (t.contactNumber || prev.phone),
+        }));
+      }
+    } catch (e) {
+      setLookupError(e instanceof Error ? e.message : String(e));
+    } finally { setLookingUp(false); }
+  };
+  const cancelEdit = () => { setEditing(false); setLookup(null); setLookupError(''); setError(''); };
+  const saveEdit = async () => {
+    if (!String(edit.name ?? '').trim()) { setError('Name is required'); return; }
+    setBusy(true); setError(''); setNotice('');
+    const d = String(edit.tin ?? '').replace(/\D/g, '');
+    const verification = lookup
+      ? { status: lookup.found ? 'VERIFIED' : 'NOT_VERIFIED', ref: d }
+      : lookupError
+        ? { status: 'LOOKUP_FAILED', ref: d || '' }
+        : null;
+    try {
+      await api(`/api/ops/crm/customers/${id}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...edit,
+          tin: d || null,
+          creditLimit: Number(edit.creditLimit) || 0,
+          paymentTermsDays: Number(edit.paymentTermsDays) || 0,
+          verification,
+        }),
+      });
+      setNotice('Account updated');
+      setEditing(false);
+      setLookup(null); setLookupError('');
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
   return (
     <div className="page">
       <CrmCommandBar
         entity="Account"
         actions={[
-          { label: 'Save', onClick: () => setNotice('No pending edits'), disabled: busy },
+          ...(can(user, 'crm.customers.update') && !editing ? [{ label: 'Edit account', onClick: beginEdit, disabled: busy }] : []),
           ...(can(user, 'crm.opportunities.create') && String(c.status) !== 'BLOCKED' ? [{ label: 'New opportunity', onClick: () => navigate(`/crm/opportunities/new?customer=${id}`), primary: true }] : []),
           ...(Boolean(credit.ok) ? [{ label: 'New quote', onClick: () => navigate(`/sales/quotations/new?customer=${id}`) }] : []),
           { label: 'AR ledger', onClick: () => navigate('/finance/ar') },
@@ -464,6 +545,8 @@ function CustomerDesk({ id }: { id: number }) {
         <CrmHighlights items={[
           { label: 'Owner', value: String(c.ownerName || 'Unassigned') },
           { label: 'Status', value: String(c.status) },
+          { label: 'TIN', value: <span className="cell-mono">{String(c.tin || '—')}</span> },
+          { label: 'EFRIS', value: c.efrisVerification ? <Badge value={c.efrisVerification} /> : <span className="muted">Unchecked</span> },
           { label: 'Credit', value: credit.ok ? 'OK' : String(credit.reason ?? 'Hold') },
           { label: 'Open AR', value: fmtMoney(credit.openAr) },
           { label: 'Payment terms', value: `${fmtNum(c.paymentTermsDays)} days` },
@@ -473,6 +556,71 @@ function CustomerDesk({ id }: { id: number }) {
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <ErrorBanner error={error} />}
       {!credit.ok && <div className="alert alert-error">Credit hold: {String(credit.reason)}. Quoting and new orders are blocked.</div>}
+      {editing && (
+        <section className="card card-pad" style={{ marginBottom: 16 }}>
+          <div className="card-head"><h3>Edit account</h3></div>
+          <div className="form-grid">
+            <div className="field field-required" style={{ gridColumn: '1 / -1' }}><label>Account name</label><input value={String(edit.name ?? '')} onChange={(e) => setEditField('name', e.target.value)} /></div>
+            <div className="field">
+              <label>Type</label>
+              <select value={String(edit.customerType ?? 'COMPANY')} onChange={(e) => setEditField('customerType', e.target.value)}>
+                {['INDIVIDUAL', 'COMPANY', 'GOVERNMENT', 'NGO'].map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Currency</label><input value={String(edit.currency ?? 'UGX')} onChange={(e) => setEditField('currency', e.target.value)} /></div>
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
+              <label>TIN <span className="muted">(verified against URA EFRIS)</span></label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input inputMode="numeric" value={String(edit.tin ?? '')} onChange={(e) => setEditField('tin', e.target.value)} placeholder="10-digit URA TIN" style={{ flex: 1 }} />
+                <button type="button" className="btn btn-sm" disabled={lookingUp || !canEditLookup} onClick={runEditLookup}>
+                  {lookingUp ? 'Searching…' : 'Search EFRIS'}
+                </button>
+              </div>
+            </div>
+            <div className="field"><label>NIN</label><input value={String(edit.nin ?? '')} onChange={(e) => setEditField('nin', e.target.value)} /></div>
+            <div className="field"><label>VRN</label><input value={String(edit.vrn ?? '')} onChange={(e) => setEditField('vrn', e.target.value)} /></div>
+            <div className="field"><label>Phone</label><input value={String(edit.phone ?? '')} onChange={(e) => setEditField('phone', e.target.value)} /></div>
+            <div className="field"><label>Email</label><input value={String(edit.email ?? '')} onChange={(e) => setEditField('email', e.target.value)} /></div>
+            <div className="field"><label>Website</label><input value={String(edit.website ?? '')} onChange={(e) => setEditField('website', e.target.value)} /></div>
+            <div className="field"><label>Credit limit</label><input inputMode="decimal" value={String(edit.creditLimit ?? 0)} onChange={(e) => setEditField('creditLimit', e.target.value)} /></div>
+            <div className="field"><label>Payment terms (days)</label><input inputMode="numeric" value={String(edit.paymentTermsDays ?? 30)} onChange={(e) => setEditField('paymentTermsDays', e.target.value)} /></div>
+            <div className="field" style={{ gridColumn: '1 / -1' }}><label>Address</label><input value={String(edit.address ?? '')} onChange={(e) => setEditField('address', e.target.value)} /></div>
+            <div className="field" style={{ gridColumn: '1 / -1' }}><label>Billing address</label><input value={String(edit.billingAddress ?? '')} onChange={(e) => setEditField('billingAddress', e.target.value)} /></div>
+            <div className="field" style={{ gridColumn: '1 / -1' }}><label>Shipping address</label><input value={String(edit.shippingAddress ?? '')} onChange={(e) => setEditField('shippingAddress', e.target.value)} /></div>
+          </div>
+
+          {lookupError && <div className="alert alert-error" style={{ marginTop: 12 }}>EFRIS lookup failed: {lookupError}</div>}
+          {lookup && !lookup.found && (
+            <div className="alert alert-warn" style={{ marginTop: 12 }}>
+              URA has no taxpayer registered under TIN {lookup.tin}. Check the number and try again.
+            </div>
+          )}
+          {lookup?.found && lookup.taxpayer && (
+            <div className="alert alert-success" style={{ marginTop: 12 }}>
+              <strong>URA match — review before saving.</strong>
+              <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '2px 12px', marginTop: 8 }}>
+                <span className="muted">Legal name</span><span>{lookup.taxpayer.legalName || '—'}</span>
+                <span className="muted">Business name</span><span>{lookup.taxpayer.businessName || '—'}</span>
+                <span className="muted">Taxpayer type</span><span>{lookup.taxpayer.taxpayerType || '—'}</span>
+                <span className="muted">Address</span><span>{lookup.taxpayer.address || '—'}</span>
+                <span className="muted">Email</span><span>{lookup.taxpayer.contactEmail || '—'}</span>
+                <span className="muted">Phone</span><span>{lookup.taxpayer.contactNumber || '—'}</span>
+                <span className="muted">Gateway</span><span>{lookup.mode === 'TEST' ? 'Sandbox' : 'Production'}</span>
+              </div>
+              {lookup.duplicates.length > 0 && (
+                <div className="alert alert-warn" style={{ marginTop: 8 }}>
+                  {lookup.duplicates.length} existing account{lookup.duplicates.length === 1 ? '' : 's'} already carry this TIN: {lookup.duplicates.map((d) => d.name).join(', ')}.
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+            <button className="btn btn-primary" disabled={busy} onClick={saveEdit}>{busy ? 'Saving…' : 'Save changes'}</button>
+            <button className="btn btn-sm" disabled={busy} onClick={cancelEdit}>Cancel</button>
+          </div>
+        </section>
+      )}
       <CrmTabs tabs={['Summary', 'Contacts', 'Sales', 'Timeline']} active={tab} onChange={setTab} />
       {tab === 'Summary' && (
         <div className="crm-split">
@@ -733,10 +881,17 @@ function CustomerComposer() {
   const save = async () => {
     if (!name.trim()) { setError('Name is required'); return; }
     setBusy(true); setError('');
+    // Review-then-save: persist the EFRIS lookup outcome alongside the account so
+    // the verification state survives a page reload and feeds downstream checks.
+    const verification = lookup
+      ? { status: lookup.found ? 'VERIFIED' : 'NOT_VERIFIED', ref: lookup.tin }
+      : lookupError
+        ? { status: 'LOOKUP_FAILED', ref: digits || '' }
+        : null;
     try {
       const r = await api<{ data: { customerId: number } }>('/api/ops/crm/customers', {
         method: 'POST',
-        body: JSON.stringify({ name, phone, email, tin: digits || null, creditLimit: Number(limit) || 0 }),
+        body: JSON.stringify({ name, phone, email, tin: digits || null, creditLimit: Number(limit) || 0, verification }),
       });
       navigate(`/crm/customers/${r.data.customerId}`);
     } catch (e) {
