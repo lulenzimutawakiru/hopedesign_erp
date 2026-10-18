@@ -17,6 +17,7 @@ import {
   buildUnencryptedEnvelope,
   canonicalizeEndpoint,
   digFirst,
+  digObject,
   EfrisProtocolError,
   extractAesKey,
   interfaceCodeFor,
@@ -480,4 +481,109 @@ export async function submitFiscalDocument(opts: SubmitFiscalOptions): Promise<u
     throw err;
   }
   return submitUra(opts, endpoint);
+}
+
+export interface TaxpayerLookupOptions {
+  mode: EfrisMode;
+  baseUrl: string;
+  tokenUrl?: string | null;
+  clientId?: string;
+  clientSecret?: string;
+  timeoutSeconds: number;
+  securityFlags?: Record<string, unknown> | null;
+  /** The company's own EFRIS taxpayer TIN, used for the signed globalInfo. */
+  tin?: string | null;
+  /** The customer TIN being queried. */
+  lookupTin: string;
+}
+
+/** Only the taxpayer fields URA's T119 response is documented to return. */
+export interface UraTaxpayer {
+  tin: string | null;
+  governmentTin: string | null;
+  legalName: string | null;
+  businessName: string | null;
+  address: string | null;
+  contactEmail: string | null;
+  contactNumber: string | null;
+  taxpayerType: string | null;
+}
+
+export interface TaxpayerLookupResult {
+  found: boolean;
+  taxpayer: UraTaxpayer | null;
+  raw: unknown;
+}
+
+/**
+ * Pull the `taxpayer` object out of an unwrapped T119 response and keep only the
+ * fields the URA gateway is documented to return. Unknown/extra fields are
+ * dropped, never invented.
+ */
+export function extractTaxpayer(raw: unknown): UraTaxpayer | null {
+  const obj = digObject(raw, ['taxpayer']);
+  if (!obj) return null;
+  const str = (keys: string[]): string | null => {
+    const value = digFirst(obj, keys);
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  };
+  return {
+    tin: str(['tin', 'taxpayerTin']),
+    governmentTin: str(['governmentTIN', 'government_tin']),
+    legalName: str(['legalName', 'legal_name']),
+    businessName: str(['businessName', 'business_name']),
+    address: str(['address']),
+    contactEmail: str(['contactEmail', 'contact_email']),
+    contactNumber: str(['contactNumber', 'contact_number', 'mobilePhone']),
+    taxpayerType: str(['taxpayerType', 'taxpayer_type']),
+  };
+}
+
+/**
+ * Query URA for a taxpayer by TIN (interface code T119). This is a native URA
+ * system-to-system call: the signed globalInfo carries `interfaceCode: T119`,
+ * and the (unencrypted) content is `{ tin, ninBrn: '' }`. It never fiscalizes a
+ * document, so TEST-mode success is a valid signal, exactly like the T101 probe.
+ */
+export async function queryTaxpayerByTin(opts: TaxpayerLookupOptions): Promise<TaxpayerLookupResult> {
+  assertLiveMode(opts.mode);
+  const flags = flagsOf({ securityFlags: opts.securityFlags ?? null } as SubmitFiscalOptions);
+  if (usesOauthGateway({ tokenUrl: opts.tokenUrl ?? null, securityFlags: opts.securityFlags ?? null })) {
+    throw new EfrisClientError({
+      code: 'EFRIS_LOOKUP_TRANSPORT',
+      stage: 'config',
+      message: 'Customer TIN lookup (T119) is only available on the URA system-to-system gateway',
+      retryable: false,
+    });
+  }
+  let endpoint: string;
+  try {
+    endpoint = resolveModeEndpoint(opts.mode, opts.baseUrl, flags);
+  } catch (err) {
+    const wrapped = protocolError(err, 'config');
+    if (wrapped) throw wrapped;
+    throw err;
+  }
+  // Reuse the same identity resolution as fiscal submission (seller TIN, device
+  // number, private key). T119 signs the envelope with the company device key.
+  const identity = s2sIdentity(opts as unknown as SubmitFiscalOptions);
+  const global: UraGlobalOptions = {
+    interfaceCode: 'T119',
+    tin: identity.tin,
+    deviceNo: identity.deviceNo,
+    flags: identity.flags,
+  };
+  const envelope = buildUnencryptedEnvelope({ tin: opts.lookupTin, ninBrn: '' }, global, identity.privateKey);
+  const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
+  let unwrapped: unknown = raw;
+  try {
+    unwrapped = unwrapResponse(raw);
+  } catch (err) {
+    const wrapped = protocolError(err, 'response');
+    if (wrapped) throw wrapped;
+    throw err;
+  }
+  rejectBusinessFailure(unwrapped);
+  const taxpayer = extractTaxpayer(unwrapped);
+  return { found: taxpayer != null, taxpayer, raw: unwrapped };
 }

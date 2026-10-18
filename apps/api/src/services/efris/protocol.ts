@@ -393,6 +393,31 @@ export function digFirst(value: unknown, keys: string[], depth = 0): unknown {
   return undefined;
 }
 
+/** First object under one of the normalised keys, at most six levels down. */
+export function digObject(value: unknown, keys: string[], depth = 0): Record<string, unknown> | null {
+  if (value === null || value === undefined || typeof value !== 'object' || depth > 6) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = digObject(item, keys, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const obj = value as Record<string, unknown>;
+  const wanted = new Set(keys.map((key) => key.replace(/[^a-z0-9]/gi, '').toLowerCase()));
+  for (const key of Object.keys(obj)) {
+    const norm = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    if (!wanted.has(norm)) continue;
+    const found = obj[key];
+    if (found && typeof found === 'object' && !Array.isArray(found)) return found as Record<string, unknown>;
+  }
+  for (const key of Object.keys(obj)) {
+    const hit = digObject(obj[key], keys, depth + 1);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export function extractAesKey(raw: unknown): string | null {
   const found = digFirst(raw, ['passowrdDes', 'passwordDes', 'aesKey', 'symmetricKey', 'desKey']);
   return typeof found === 'string' && found.trim() ? found.trim() : null;

@@ -117,3 +117,10 @@ export const messagingLimiter = makeRateLimiter({
   limit: 20,
   message: 'Message rate limit exceeded. Please slow down.',
 });
+
+/** URA EFRIS customer TIN lookup (external gateway call, per user + IP). */
+export const customerLookupLimiter = makeRateLimiter({
+  windowMs: 60_000,
+  limit: 30,
+  message: 'Customer TIN lookup rate limit exceeded. Please slow down.',
+});

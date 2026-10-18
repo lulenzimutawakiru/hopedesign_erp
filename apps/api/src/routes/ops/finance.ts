@@ -2,10 +2,12 @@ import { Router } from 'express';
 import pg from 'pg';
 import { tx, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
+import { customerLookupLimiter } from '../../middleware/rateLimits.js';
 import { asyncHandler } from '../../utils.js';
 import * as fin from '../../services/finance.js';
 import * as finAdv from '../../services/finance-advanced.js';
 import * as efrisDir from '../../services/efris/directory.js';
+import * as efrisTaxpayer from '../../services/efris/taxpayer.js';
 import * as finAppr from '../../services/financeApprovals.js';
 import * as kcbOps from '../../services/kcb/ops.js';
 import * as equityOps from '../../services/equity/ops.js';
@@ -388,6 +390,7 @@ financeOpsRouter.get('/efris', ...runGet(['efris.transactions.view', 'finance.ef
   to: q.to != null ? String(q.to) : undefined,
 })));
 financeOpsRouter.get('/efris/status', ...runGet('efris.configuration.view', (c, ctx) => efrisDir.efrisIntegrationStatus(c, ctx)));
+financeOpsRouter.post('/efris/customer-lookup', customerLookupLimiter, ...run(['crm.customers.create', 'crm.customers.update'], (c, ctx, b) => efrisTaxpayer.lookupCustomerTin(c, ctx, { tin: b.tin })));
 financeOpsRouter.post('/efris', ...run(['efris.transactions.submit', 'finance.efris.create'], (c, ctx, b) => finAdv.registerEfrisDocument(c, ctx, {
   docType: String(b.docType),
   docRefType: String(b.docRefType),

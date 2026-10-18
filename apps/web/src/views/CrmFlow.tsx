@@ -669,26 +669,83 @@ function CustomerDesk({ id }: { id: number }) {
   );
 }
 
+type TinLookup = {
+  tin: string;
+  found: boolean;
+  taxpayer: {
+    tin: string | null;
+    governmentTin: string | null;
+    legalName: string | null;
+    businessName: string | null;
+    address: string | null;
+    contactEmail: string | null;
+    contactNumber: string | null;
+    taxpayerType: string | null;
+  } | null;
+  duplicates: { id: number; code: string; name: string; status: string }[];
+  mode: 'TEST' | 'ACTIVE';
+};
+
 function CustomerComposer() {
   const [name, setName] = useState('');
+  const [tin, setTin] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [limit, setLimit] = useState('0');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [lookup, setLookup] = useState<TinLookup | null>(null);
+  const [lookingUp, setLookingUp] = useState(false);
+  const [lookupError, setLookupError] = useState('');
+
+  const digits = tin.replace(/\D/g, '');
+  const canLookup = /^\d{10}$/.test(digits);
+
+  const runLookup = useCallback(async (value: string) => {
+    const d = value.replace(/\D/g, '');
+    if (!/^\d{10}$/.test(d)) return;
+    setLookingUp(true); setLookupError(''); setLookup(null);
+    try {
+      const r = await api<{ data: TinLookup }>('/api/ops/finance/efris/customer-lookup', {
+        method: 'POST',
+        body: JSON.stringify({ tin: d }),
+      });
+      setLookup(r.data);
+      const t = r.data.taxpayer;
+      if (r.data.found && t) {
+        // Review-then-save: only prefill empty fields, never overwrite input.
+        setName((prev) => (prev.trim() ? prev : (t.businessName || t.legalName || '')));
+        setEmail((prev) => (prev.trim() ? prev : (t.contactEmail || '')));
+        setPhone((prev) => (prev.trim() ? prev : (t.contactNumber || '')));
+      }
+    } catch (e) {
+      setLookupError(e instanceof Error ? e.message : String(e));
+    } finally { setLookingUp(false); }
+  }, []);
+
+  // Debounced auto-lookup once the TIN looks complete (10 digits).
+  useEffect(() => {
+    if (!/^\d{10}$/.test(tin.replace(/\D/g, ''))) return;
+    const t = setTimeout(() => runLookup(tin), 600);
+    return () => clearTimeout(t);
+  }, [tin, runLookup]);
+
   const save = async () => {
     if (!name.trim()) { setError('Name is required'); return; }
     setBusy(true); setError('');
     try {
       const r = await api<{ data: { customerId: number } }>('/api/ops/crm/customers', {
         method: 'POST',
-        body: JSON.stringify({ name, phone, email, creditLimit: Number(limit) || 0 }),
+        body: JSON.stringify({ name, phone, email, tin: digits || null, creditLimit: Number(limit) || 0 }),
       });
       navigate(`/crm/customers/${r.data.customerId}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
   };
+
+  const t = lookup?.taxpayer ?? null;
+
   return (
     <div className="page">
       <CrmComposerHead entity="Account" title="New account" onCancel={() => navigate('/crm/customers')} onSave={save} busy={busy} saveLabel="Save & close" />
@@ -696,10 +753,47 @@ function CustomerComposer() {
       <section className="crm-quick-create">
         <div className="form-grid">
           <div className="field field-required" style={{ gridColumn: '1 / -1' }}><label>Account name</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>TIN <span className="muted">(optional — verified against URA EFRIS)</span></label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input inputMode="numeric" value={tin} onChange={(e) => setTin(e.target.value)} placeholder="10-digit URA TIN" style={{ flex: 1 }} />
+              <button type="button" className="btn btn-sm" disabled={lookingUp || !canLookup} onClick={() => runLookup(tin)}>
+                {lookingUp ? 'Searching…' : 'Search EFRIS'}
+              </button>
+            </div>
+          </div>
           <div className="field"><label>Phone</label><input value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
           <div className="field"><label>Email</label><input value={email} onChange={(e) => setEmail(e.target.value)} /></div>
           <div className="field"><label>Credit limit</label><input inputMode="decimal" value={limit} onChange={(e) => setLimit(e.target.value)} /></div>
         </div>
+
+        {lookupError && <div className="alert alert-error" style={{ marginTop: 12 }}>EFRIS lookup failed: {lookupError}</div>}
+
+        {lookup && !lookup.found && (
+          <div className="alert alert-warn" style={{ marginTop: 12 }}>
+            URA has no taxpayer registered under TIN {lookup.tin}. Check the number and try again.
+          </div>
+        )}
+
+        {lookup?.found && t && (
+          <div className="alert alert-success" style={{ marginTop: 12 }}>
+            <strong>URA match — review before saving.</strong>
+            <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '2px 12px', marginTop: 8 }}>
+              <span className="muted">Legal name</span><span>{t.legalName || '—'}</span>
+              <span className="muted">Business name</span><span>{t.businessName || '—'}</span>
+              <span className="muted">Taxpayer type</span><span>{t.taxpayerType || '—'}</span>
+              <span className="muted">Address</span><span>{t.address || '—'}</span>
+              <span className="muted">Email</span><span>{t.contactEmail || '—'}</span>
+              <span className="muted">Phone</span><span>{t.contactNumber || '—'}</span>
+              <span className="muted">Gateway</span><span>{lookup.mode === 'TEST' ? 'Sandbox' : 'Production'}</span>
+            </div>
+            {lookup.duplicates.length > 0 && (
+              <div className="alert alert-warn" style={{ marginTop: 8 }}>
+                {lookup.duplicates.length} existing account{lookup.duplicates.length === 1 ? '' : 's'} already carry this TIN: {lookup.duplicates.map((d) => d.name).join(', ')}.
+              </div>
+            )}
+          </div>
+        )}
       </section>
     </div>
   );
