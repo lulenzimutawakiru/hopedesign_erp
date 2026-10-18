@@ -130,12 +130,18 @@ export async function startWorkflow(client: pg.PoolClient, ctx: Ctx, input: Star
 
   const slaHours = applicable[0].sla_hours ?? 48;
   for (const step of applicable) {
-    const approverRoleId = step.approver_role ? (roleIds.get(step.approver_role) ?? null) : null;
+    const roleCodes = step.approver_roles?.length
+      ? step.approver_roles
+      : step.approver_role
+        ? [step.approver_role]
+        : [];
+    const approverRoleId = roleCodes[0] ? (roleIds.get(roleCodes[0]) ?? null) : null;
+    const alternativeRoleId = roleCodes[1] ? (roleIds.get(roleCodes[1]) ?? null) : null;
     await client.query(
       `INSERT INTO approval_tasks
-         (instance_id, step_seq, step_name, approver_role_id, approver_user_id, status, due_at)
-       VALUES ($1,$2,$3,$4,$5,'PENDING', now() + ($6 || ' hours')::interval)`,
-      [instanceId, step.seq, step.name, approverRoleId, step.approver_user ?? null, slaHours]
+         (instance_id, step_seq, step_name, approver_role_id, alternative_role_id, approver_user_id, status, due_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'PENDING', now() + ($7 || ' hours')::interval)`,
+      [instanceId, step.seq, step.name, approverRoleId, alternativeRoleId, step.approver_user ?? null, slaHours]
     );
   }
 
@@ -147,7 +153,9 @@ export async function startWorkflow(client: pg.PoolClient, ctx: Ctx, input: Star
     payload: { instanceId, workflow: wf.code, steps: applicable.map((s) => s.name) },
   });
 
-  const approverRoles = applicable.map((s) => s.approver_role).filter(Boolean) as string[];
+  const approverRoles = applicable
+    .flatMap((s) => (s.approver_roles?.length ? s.approver_roles : s.approver_role ? [s.approver_role] : []))
+    .filter(Boolean) as string[];
   if (approverRoles.length) {
     await notifyRoleAdvanced(client, ctx, approverRoles, {
       type: 'APPROVAL_REQUEST',
@@ -299,10 +307,11 @@ export async function decideTask(
   if (!user) throw forbidden();
   const taskRes = await client.query(
     `SELECT t.*, i.entity_type, i.entity_id, i.entity_code, i.current_step, i.workflow_id,
-            r.code AS role_code
+            r.code AS role_code, ar.code AS alternative_role_code
      FROM approval_tasks t
      JOIN workflow_instances i ON i.id = t.instance_id
      LEFT JOIN roles r ON r.id = t.approver_role_id
+     LEFT JOIN roles ar ON ar.id = t.alternative_role_id
      WHERE t.id = $1 AND i.tenant_id = $2 AND ($3::bigint IS NULL OR i.company_id = $3)
      FOR UPDATE OF t`,
     [taskId, ctx.tenantId, ctx.companyId ?? null]
@@ -313,14 +322,17 @@ export async function decideTask(
 
   // Verify the deciding user is an authorized approver (role or direct assignee)
   if (task.approver_user_id && Number(task.approver_user_id) !== user) throw forbidden('Not your approval task');
-  if (task.approver_role_id && !task.role_code) throw forbidden('Approver role not found');
-  if (task.role_code) {
+  const roleCodes = [task.role_code, task.alternative_role_code].filter(
+    (c: unknown): c is string => typeof c === 'string' && c.length > 0
+  );
+  if ((task.approver_role_id || task.alternative_role_id) && roleCodes.length === 0) throw forbidden('Approver role not found');
+  if (roleCodes.length) {
     const roleCheck = await client.query(
       `SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-       WHERE ur.user_id = $1 AND r.code = $2 LIMIT 1`,
-      [user, task.role_code]
+       WHERE ur.user_id = $1 AND r.code = ANY($2::text[]) LIMIT 1`,
+      [user, roleCodes]
     );
-    if (roleCheck.rows.length === 0) throw forbidden(`Requires role ${task.role_code}`);
+    if (roleCheck.rows.length === 0) throw forbidden(`Requires role ${roleCodes.join(' or ')}`);
   }
 
   // Segregation of duties: the creator/requester of an entity may not decide on
@@ -452,9 +464,10 @@ export async function decideTask(
     [task.instance_id]
   );
   const next = await client.query(
-    `SELECT t.approver_user_id, r.code AS role_code, t.step_name
+    `SELECT t.approver_user_id, r.code AS role_code, ar.code AS alternative_role_code, t.step_name
        FROM approval_tasks t
        LEFT JOIN roles r ON r.id = t.approver_role_id
+       LEFT JOIN roles ar ON ar.id = t.alternative_role_id
       WHERE t.instance_id = $1 AND t.status = 'PENDING'
       ORDER BY t.step_seq
       LIMIT 1`,
@@ -473,8 +486,11 @@ export async function decideTask(
     };
     if (n.approver_user_id) {
       await notifyUserAdvanced(client, ctx, Number(n.approver_user_id), payload);
-    } else if (n.role_code) {
-      await notifyRoleAdvanced(client, ctx, [String(n.role_code)], payload);
+    } else {
+      const codes = [n.role_code, n.alternative_role_code].filter(
+        (c: unknown): c is string => typeof c === 'string' && c.length > 0
+      );
+      if (codes.length) await notifyRoleAdvanced(client, ctx, codes, payload);
     }
   }
   return { status: 'APPROVED', completed: false };
@@ -544,7 +560,7 @@ export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<Appro
         OR EXISTS (
            SELECT 1 FROM user_roles ur
            JOIN roles r ON r.id = ur.role_id
-           WHERE ur.user_id = $1 AND r.id = t.approver_role_id
+           WHERE ur.user_id = $1 AND (r.id = t.approver_role_id OR r.id = t.alternative_role_id)
         )
      )
      ORDER BY i.submitted_at`,

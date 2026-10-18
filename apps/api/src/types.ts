@@ -113,6 +113,8 @@ export interface ApprovalStep {
   seq: number;
   name: string;
   approver_role?: string;
+  /** Any-of role set: a holder of any listed role may decide the step. */
+  approver_roles?: string[];
   approver_user?: number;
   amount_min?: number;
   amount_max?: number;
