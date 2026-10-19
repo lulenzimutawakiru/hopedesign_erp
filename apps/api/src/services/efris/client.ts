@@ -27,6 +27,7 @@ import {
   readReturnState,
   resolveDeviceNo,
   resolveModeEndpoint,
+  rsaDecryptBase64,
   unwrapResponse,
   type UraGlobalOptions,
 } from './protocol.js';
@@ -128,6 +129,19 @@ export function usesOauthGateway(opts: Pick<SubmitFiscalOptions, 'tokenUrl' | 's
   if (protocol === 'ura_s2s' || protocol === 'URA_S2S') return false;
   if (protocol === 'oauth' || protocol === 'OAUTH') return true;
   return Boolean(opts.tokenUrl && opts.tokenUrl.trim());
+}
+
+/**
+ * Offline-enabler transport. Hope Design's EFRIS device is registered as an
+ * "Offline enabler" (the Aisino Tax Control Service), not a direct S2S device.
+ * The ERP posts the plaintext `{data, globalInfo, returnStateInfo}` envelope to
+ * the local TCS (`POST /efristcs/ws/tcsapp/getInformation`); the TCS holds the
+ * AES key and the private key, overrides `appId` (AP02) and `deviceNo`, and
+ * forwards to URA. The ERP therefore never calls T104.
+ */
+export function usesOfflineEnabler(opts: Pick<SubmitFiscalOptions, 'tokenUrl' | 'securityFlags'>): boolean {
+  const protocol = flagsOf(opts as SubmitFiscalOptions).protocol;
+  return protocol === 'offline_enabler' || protocol === 'OFFLINE_ENABLER' || protocol === 'enabler' || protocol === 'ENABLER';
 }
 
 function checkHost(mode: 'TEST' | 'ACTIVE', url: string, flags: Record<string, unknown>): void {
@@ -243,7 +257,7 @@ function rejectBusinessFailure(raw: unknown): void {
   const state = readReturnState(raw);
   if (!state || isSuccessCode(state.code)) return;
   const failure = state.message.length > 0 ? `${state.code}: ${state.message}` : `URA return code ${state.code}`;
-  const retryable = !/invalid|reject|unauthor|forbidden|not.?found|duplicate|already.?exist|no.?right/i.test(failure);
+  const retryable = !/invalid|reject|unauthor|forbidden|not.?found|duplicate|already.?exist|already.*issued|no.?right/i.test(failure);
   throw new EfrisClientError({
     code: 'EFRIS_BIZ_REJECT',
     stage: 'response',
@@ -307,8 +321,13 @@ async function postUraEnvelope(
   return res.data;
 }
 
-async function fetchAesKey(opts: SubmitFiscalOptions, endpoint: string, global: UraGlobalOptions): Promise<string> {
-  const envelope = buildUnencryptedEnvelope(null, { ...global, interfaceCode: 'T104' }, opts.clientSecret);
+async function fetchAesKey(
+  opts: SubmitFiscalOptions,
+  endpoint: string,
+  global: UraGlobalOptions,
+  privateKeyPem: string
+): Promise<string> {
+  const envelope = buildUnencryptedEnvelope(null, { ...global, interfaceCode: 'T104' }, privateKeyPem);
   const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
   let unwrapped: unknown;
   try {
@@ -319,8 +338,8 @@ async function fetchAesKey(opts: SubmitFiscalOptions, endpoint: string, global: 
     throw err;
   }
   rejectBusinessFailure(unwrapped);
-  const key = extractAesKey(unwrapped);
-  if (!key) {
+  const encryptedKey = extractAesKey(unwrapped);
+  if (!encryptedKey) {
     throw new EfrisClientError({
       code: 'EFRIS_AES_KEY_MISSING',
       stage: 'auth',
@@ -329,7 +348,25 @@ async function fetchAesKey(opts: SubmitFiscalOptions, endpoint: string, global: 
       retryable: true,
     });
   }
-  return key;
+  // `passowrdDes` is the AES key RSA-encrypted with the taxpayer's public key;
+  // it must be decrypted with the private key before use (see protocol.ts).
+  let aesKey: string;
+  try {
+    aesKey = rsaDecryptBase64(encryptedKey, privateKeyPem).toString('hex');
+  } catch (err) {
+    const wrapped = protocolError(err, 'auth');
+    if (wrapped) throw wrapped;
+    throw err;
+  }
+  if (![32, 48, 64].includes(aesKey.length)) {
+    throw new EfrisClientError({
+      code: 'EFRIS_AES_KEY_INVALID',
+      stage: 'auth',
+      message: `URA returned a symmetric key of ${aesKey.length / 2} bytes after decryption; expected 16, 24 or 32`,
+      retryable: false,
+    });
+  }
+  return aesKey;
 }
 
 async function submitUra(opts: SubmitFiscalOptions, endpoint: string): Promise<unknown> {
@@ -341,7 +378,7 @@ async function submitUra(opts: SubmitFiscalOptions, endpoint: string): Promise<u
     deviceNo: identity.deviceNo,
     flags: identity.flags,
   };
-  const aesKey = await fetchAesKey(opts, endpoint, global);
+  const aesKey = await fetchAesKey(opts, endpoint, global, identity.privateKey);
   let envelope: Record<string, unknown>;
   try {
     envelope = buildEncryptedEnvelope(opts.uraPayload ?? opts.payload, aesKey, global, identity.privateKey);
@@ -353,6 +390,54 @@ async function submitUra(opts: SubmitFiscalOptions, endpoint: string): Promise<u
   const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
   try {
     const unwrapped = unwrapResponse(raw, aesKey);
+    rejectBusinessFailure(unwrapped);
+    return unwrapped;
+  } catch (err) {
+    if (err instanceof EfrisClientError) throw err;
+    const wrapped = protocolError(err, 'response');
+    if (wrapped) throw wrapped;
+    throw err;
+  }
+}
+
+/**
+ * Submit a fiscal document through the local offline enabler (Aisino TCS).
+ *
+ * Offline-mode format: the content is base64-encoded plaintext, the signature is
+ * empty, and no T104 key exchange happens. The TCS encrypts, signs and forwards
+ * to URA, and returns the fiscalised response (FDN / verification code). This is
+ * TEST-only until the TCS has been initialised against the sandbox and the round
+ * trip has been verified live.
+ */
+async function submitViaOfflineEnabler(opts: SubmitFiscalOptions, endpoint: string): Promise<unknown> {
+  // The TCS owns the private key and the device number, so the ERP only needs the
+  // TIN. (s2sIdentity would demand a device key that the enabler transport never
+  // uses.)
+  const flags = flagsOf(opts);
+  const tin = (opts.tin ?? '').trim();
+  if (!tin) {
+    throw new EfrisClientError({
+      code: 'EFRIS_TIN_MISSING',
+      stage: 'config',
+      message: 'EFRIS taxpayer TIN is required before a document can be sent to URA',
+      retryable: false,
+    });
+  }
+  const interfaceCode = interfaceCodeFor(opts.docType ?? 'SALES_INVOICE', flags);
+  const global: UraGlobalOptions = {
+    interfaceCode,
+    tin,
+    deviceNo: resolveDeviceNo(flags, opts.clientId) ?? '',
+    flags,
+  };
+  // No private key is passed: buildUnencryptedEnvelope leaves the signature empty
+  // and the content plaintext, exactly the offline-mode request the TCS expects.
+  // offlineEnabler pre-encodes non-ASCII so the TCS's single-byte re-encode
+  // round-trips UTF-8 correctly (see preEncodeForOfflineEnabler).
+  const envelope = buildUnencryptedEnvelope(opts.uraPayload ?? opts.payload, global, undefined, { offlineEnabler: true });
+  const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
+  try {
+    const unwrapped = unwrapResponse(raw);
     rejectBusinessFailure(unwrapped);
     return unwrapped;
   } catch (err) {
@@ -479,6 +564,9 @@ export async function submitFiscalDocument(opts: SubmitFiscalOptions): Promise<u
     const wrapped = protocolError(err, 'config');
     if (wrapped) throw wrapped;
     throw err;
+  }
+  if (usesOfflineEnabler(opts)) {
+    return submitViaOfflineEnabler(opts, endpoint);
   }
   return submitUra(opts, endpoint);
 }

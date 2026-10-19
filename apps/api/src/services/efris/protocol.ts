@@ -21,6 +21,16 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 const AES_BLOCK = 16;
 
+/**
+ * `globalInfo.version` is the "client software version" URA's gateway checks on
+ * every request (rejected with return code 2889 when below the current minimum).
+ * The historical value `1.1.20191201` is stale — URA now rejects it — but the
+ * current minimum is not published anywhere and must come from URA. This lets an
+ * operator supply the authoritative value via env or security flags without a
+ * code change; it is deliberately NOT guessed here.
+ */
+const DEFAULT_CLIENT_VERSION = process.env.EFRIS_CLIENT_VERSION?.trim() || '1.1.20191201';
+
 export class EfrisProtocolError extends Error {
   readonly code: string;
   constructor(code: string, message: string) {
@@ -197,6 +207,36 @@ export function normalizePrivateKey(raw: string): string {
   return value;
 }
 
+/**
+ * Decrypt URA's T104 `passowrdDes` value into the raw symmetric-key bytes.
+ *
+ * The S2S guide is explicit: "The value in passowrdDes is RSA encrypted using
+ * your public key, so you have to decrypt it using your private key. The value
+ * obtained after decryption is the AES key." The value is base64-encoded RSA
+ * ciphertext under PKCS#1 v1.5 padding (Java's default `Cipher.getInstance("RSA")`).
+ *
+ * Returns the raw decrypted bytes so the caller can hex-encode them for the AES
+ * helpers without lossy string round-trips. Never returns the encrypted value.
+ */
+export function rsaDecryptBase64(encryptedBase64: string, privateKeyPem: string): Buffer {
+  try {
+    const ciphertext = Buffer.from(encryptedBase64.trim(), 'base64');
+    return crypto.privateDecrypt(
+      {
+        key: normalizePrivateKey(privateKeyPem),
+        padding: crypto.constants.RSA_PKCS1_PADDING,
+      },
+      ciphertext
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new EfrisProtocolError(
+      'EFRIS_AES_KEY_DECRYPT_FAILED',
+      `URA symmetric key could not be decrypted with the device private key: ${message}`
+    );
+  }
+}
+
 export function looksLikePrivateKey(value: string | undefined): boolean {
   if (!value) return false;
   const normalized = normalizePrivateKey(value);
@@ -250,7 +290,7 @@ export function buildGlobalInfo(opts: UraGlobalOptions, now = new Date()): Recor
   const user = flagString(flags, 'userName', 'username') || 'admin';
   return {
     appId: flagString(flags, 'appId', 'app_id') || 'AP04',
-    version: '1.1.20191201',
+    version: flagString(flags, 'clientVersion', 'client_version', 'version') || DEFAULT_CLIENT_VERSION,
     dataExchangeId: crypto.randomBytes(16).toString('hex').toUpperCase(),
     interfaceCode: opts.interfaceCode,
     requestCode: 'TP',
@@ -275,11 +315,33 @@ export function buildGlobalInfo(opts: UraGlobalOptions, now = new Date()): Recor
   };
 }
 
-export function buildUnencryptedEnvelope(content: Record<string, unknown> | null, global: UraGlobalOptions, privateKeyPem?: string): Record<string, unknown> {
+/**
+ * Re-encodes a string so that a single-byte round trip through the Aisino TCS
+ * offline enabler reproduces the original UTF-8 bytes.
+ *
+ * The TCS decodes our base64 `content` as UTF-8 and then re-encodes it with a
+ * single-byte charset (Windows-1252) before forwarding to URA, which corrupts
+ * every non-ASCII character ("²" U+00B2 arrives as U+FFFD). Pre-encoding each
+ * UTF-8 code point as Latin-1 mojibake inverts that round trip: the TCS's
+ * single-byte re-encode emits the original UTF-8 bytes, so URA decodes the
+ * correct character. ASCII is unchanged.
+ */
+export function preEncodeForOfflineEnabler(text: string): string {
+  return Buffer.from(text, 'utf8').toString('latin1');
+}
+
+export function buildUnencryptedEnvelope(
+  content: Record<string, unknown> | null,
+  global: UraGlobalOptions,
+  privateKeyPem?: string,
+  opts?: { offlineEnabler?: boolean }
+): Record<string, unknown> {
   let contentB64 = '';
   let signature = '';
   if (content && Object.keys(content).length > 0) {
-    contentB64 = Buffer.from(JSON.stringify(content), 'utf8').toString('base64');
+    const json = JSON.stringify(content);
+    const text = opts?.offlineEnabler ? preEncodeForOfflineEnabler(json) : json;
+    contentB64 = Buffer.from(text, 'utf8').toString('base64');
     if (privateKeyPem) signature = signRsaSha1(contentB64, privateKeyPem);
   }
   return {
@@ -468,6 +530,13 @@ export interface UraLine {
   taxPercent: number;
   /** Line gross (tax inclusive), as stored on invoice_items.line_total. */
   lineGross: number;
+  /** URA unit-of-measure code as registered on the goods (e.g. "CT"), not a generic default. */
+  unitOfMeasure?: string | null;
+  /** URA goods-category id/name the goods is registered under (T130). */
+  goodsCategoryId?: string | null;
+  goodsCategoryName?: string | null;
+  /** 1 when the line is VAT-applicable, 0 otherwise. */
+  vatApplicableFlag?: string | null;
 }
 
 export interface UraParty {
@@ -504,6 +573,10 @@ interface PreparedLine {
   tax: number;
   gross: number;
   rate: number;
+  unitOfMeasure: string;
+  goodsCategoryId: string;
+  goodsCategoryName: string;
+  vatApplicableFlag: string;
 }
 
 function prepareLines(input: UraInvoiceInput): PreparedLine[] {
@@ -530,6 +603,10 @@ function prepareLines(input: UraInvoiceInput): PreparedLine[] {
       tax,
       gross: net + tax,
       rate,
+      unitOfMeasure: compact(line.unitOfMeasure) || '101',
+      goodsCategoryId: compact(line.goodsCategoryId) || '',
+      goodsCategoryName: compact(line.goodsCategoryName) || '',
+      vatApplicableFlag: compact(line.vatApplicableFlag) || '',
     };
   });
   const netTarget = Math.max(input.grossAmount - input.taxAmount, 0);
@@ -562,9 +639,12 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
     item: line.description,
     itemCode: line.itemCode,
     qty: qty(line.quantity),
-    unitOfMeasure: '101',
-    unitPrice: money(line.quantity > 0 ? line.net / line.quantity : line.net),
-    total: money(line.net),
+    unitOfMeasure: line.unitOfMeasure,
+    // URA treats goodsDetails.unitPrice/total as TAX-INCLUSIVE (gross) and derives
+    // the VAT with tax = total * taxRate / (1 + taxRate). Sending the net amount
+    // here is rejected with 2776 "Tax calculation error".
+    unitPrice: money(line.quantity > 0 ? line.gross / line.quantity : line.gross),
+    total: money(line.gross),
     taxRate: line.rate > 0 ? line.rate.toFixed(2) : '0',
     tax: money(line.tax),
     discountTotal: '',
@@ -575,8 +655,8 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
     exciseFlag: '2',
     categoryId: '',
     categoryName: '',
-    goodsCategoryId: '',
-    goodsCategoryName: '',
+    goodsCategoryId: line.goodsCategoryId,
+    goodsCategoryName: line.goodsCategoryName,
     exciseRate: '',
     exciseRule: '',
     exciseTax: '',
@@ -585,6 +665,7 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
     exciseUnit: '',
     exciseCurrency: input.currency || 'UGX',
     exciseRateName: '',
+    vatApplicableFlag: line.vatApplicableFlag,
   }));
   const byCategory = new Map<string, { code: string; name: string; net: number; tax: number; gross: number; rate: number }>();
   for (const line of lines) {

@@ -11,6 +11,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "niimbot:bridge": "tsx scripts/niimbot-bridge.ts",
+    "efris:onboard": "tsx scripts/efris-onboard.ts",
     "dev:login": "node dev-login.mjs",
     "dev:login:super": "node dev-login.mjs --user superadmin"
   },

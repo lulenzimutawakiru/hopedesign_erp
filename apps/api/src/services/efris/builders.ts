@@ -40,6 +40,13 @@ export interface FiscalLine {
   unitPrice: number;
   taxPercent: number;
   lineGross: number;
+  /** URA unit-of-measure code as registered on the goods (e.g. "CT"). */
+  unitOfMeasure?: string | null;
+  /** URA goods-category id/name the goods is registered under (T130). */
+  goodsCategoryId?: string | null;
+  goodsCategoryName?: string | null;
+  /** 1 when the line is VAT-applicable, 0 otherwise. */
+  vatApplicableFlag?: string | null;
 }
 
 export interface FiscalBuildContext {
@@ -113,6 +120,10 @@ function asLines(lines: FiscalLine[] | undefined): UraLine[] {
     unitPrice: line.unitPrice,
     taxPercent: line.taxPercent,
     lineGross: line.lineGross,
+    unitOfMeasure: line.unitOfMeasure ?? null,
+    goodsCategoryId: line.goodsCategoryId ?? null,
+    goodsCategoryName: line.goodsCategoryName ?? null,
+    vatApplicableFlag: line.vatApplicableFlag ?? null,
   }));
 }
 
