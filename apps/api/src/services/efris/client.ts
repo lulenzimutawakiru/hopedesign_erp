@@ -571,6 +571,101 @@ export async function submitFiscalDocument(opts: SubmitFiscalOptions): Promise<u
   return submitUra(opts, endpoint);
 }
 
+/**
+ * Post an arbitrary URA S2S / offline-enabler content under a specific interface
+ * code and return the unwrapped body. Used for the credit-note follow-ups (T111
+ * application query, T108 document fetch), which query URA but do not fiscalize.
+ */
+async function postUraContent(
+  opts: SubmitFiscalOptions,
+  interfaceCode: string,
+  content: Record<string, unknown>,
+  endpoint: string
+): Promise<unknown> {
+  const flags = flagsOf(opts);
+  const tin = (opts.tin ?? '').trim();
+  if (!tin) {
+    throw new EfrisClientError({
+      code: 'EFRIS_TIN_MISSING',
+      stage: 'config',
+      message: 'EFRIS taxpayer TIN is required before a document can be sent to URA',
+      retryable: false,
+    });
+  }
+
+  if (usesOfflineEnabler(opts)) {
+    const global: UraGlobalOptions = {
+      interfaceCode,
+      tin,
+      deviceNo: resolveDeviceNo(flags, opts.clientId) ?? '',
+      flags,
+    };
+    const envelope = buildUnencryptedEnvelope(content, global, undefined, { offlineEnabler: true });
+    const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
+    try {
+      const unwrapped = unwrapResponse(raw);
+      rejectBusinessFailure(unwrapped);
+      return unwrapped;
+    } catch (err) {
+      if (err instanceof EfrisClientError) throw err;
+      const wrapped = protocolError(err, 'response');
+      if (wrapped) throw wrapped;
+      throw err;
+    }
+  }
+
+  const identity = s2sIdentity(opts);
+  const global: UraGlobalOptions = { interfaceCode, tin: identity.tin, deviceNo: identity.deviceNo, flags };
+  const aesKey = await fetchAesKey(opts, endpoint, global, identity.privateKey);
+  const envelope = buildEncryptedEnvelope(content, aesKey, global, identity.privateKey);
+  const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
+  try {
+    const unwrapped = unwrapResponse(raw, aesKey);
+    rejectBusinessFailure(unwrapped);
+    return unwrapped;
+  } catch (err) {
+    if (err instanceof EfrisClientError) throw err;
+    const wrapped = protocolError(err, 'response');
+    if (wrapped) throw wrapped;
+    throw err;
+  }
+}
+
+function queryEndpoint(opts: SubmitFiscalOptions): string {
+  assertLiveMode(opts.mode);
+  const flags = flagsOf(opts);
+  if (usesOauthGateway(opts)) {
+    throw new EfrisClientError({
+      code: 'EFRIS_LOOKUP_TRANSPORT',
+      stage: 'config',
+      message: 'Credit-note queries (T111/T108) are only available on the URA system-to-system gateway',
+      retryable: false,
+    });
+  }
+  return resolveModeEndpoint(opts.mode, opts.baseUrl, flags);
+}
+
+/** Query a submitted T110 application by referenceNo (interface code T111). */
+export async function queryCreditNoteApplication(
+  opts: SubmitFiscalOptions,
+  referenceNo: string
+): Promise<unknown> {
+  return postUraContent(
+    opts,
+    'T111',
+    { referenceNo, queryType: '1', pageNo: '1', pageSize: '10' },
+    queryEndpoint(opts)
+  );
+}
+
+/** Fetch the approved credit-note document by its invoiceNo (interface code T108). */
+export async function fetchCreditNoteDocument(
+  opts: SubmitFiscalOptions,
+  invoiceNo: string
+): Promise<unknown> {
+  return postUraContent(opts, 'T108', { invoiceNo }, queryEndpoint(opts));
+}
+
 export interface TaxpayerLookupOptions {
   mode: EfrisMode;
   baseUrl: string;

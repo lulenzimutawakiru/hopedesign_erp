@@ -8,7 +8,7 @@
  * fixed/renamed wrapper the current URA specification requires.
  */
 import type { EfrisConfigurationRow, EfrisTaxpayerRow } from './config.js';
-import { buildT109Content, resolveDeviceNo, type UraLine, type UraParty } from './protocol.js';
+import { buildT109Content, buildT110Content, resolveDeviceNo, type UraLine, type UraParty } from './protocol.js';
 
 /** Seller fields the payload builder actually reads from the taxpayer row. */
 export type EfrisTaxpayerLite = Pick<
@@ -64,7 +64,13 @@ export interface FiscalBuildContext {
   buyer?: FiscalParty | null;
   lines?: FiscalLine[];
   oriInvoiceNo?: string | null;
+  oriInvoiceId?: string | null;
   remarks?: string | null;
+  /** T110 credit note application fields. */
+  reasonCode?: string | null;
+  reason?: string | null;
+  applicationTime?: string | null;
+  sellersReferenceNo?: string | null;
 }
 
 export interface BuiltFiscalPayload {
@@ -178,9 +184,34 @@ export function buildSubmitPayload(ctx: FiscalBuildContext): BuiltFiscalPayload 
     buyer: asParty(ctx.buyer),
     lines: asLines(ctx.lines),
     oriInvoiceNo: ctx.oriInvoiceNo ?? null,
+    oriInvoiceId: ctx.oriInvoiceId ?? null,
     deviceNo: resolveDeviceNo(flags, undefined),
     remarks: ctx.remarks ?? ctx.requestRef,
   });
+  // Credit notes are applied through T110, whose content structure differs from
+  // T109 (top-level oriInvoiceId/oriInvoiceNo, minimal basicInformation, no
+  // sellerDetails, and a reasonCode/applicationTime). Building them with the T109
+  // shape is rejected with 2825 "without original invoice".
+  if (ctx.docType.toUpperCase() === 'CREDIT_NOTE' || ctx.docType.toUpperCase() === 'CREDIT') {
+    ura = buildT110Content({
+      docType: ctx.docType,
+      docRefCode: ctx.docRefCode,
+      txnDate: ctx.txnDate,
+      currency: ctx.currency || 'UGX',
+      grossAmount: ctx.grossAmount,
+      taxAmount: ctx.taxAmount,
+      seller: sellerParty,
+      buyer: asParty(ctx.buyer),
+      lines: asLines(ctx.lines),
+      oriInvoiceNo: ctx.oriInvoiceNo ?? null,
+      oriInvoiceId: ctx.oriInvoiceId ?? null,
+      reasonCode: ctx.reasonCode ?? null,
+      reason: ctx.reason ?? null,
+      applicationTime: ctx.applicationTime ?? null,
+      sellersReferenceNo: ctx.sellersReferenceNo ?? null,
+      remarks: ctx.remarks ?? ctx.requestRef,
+    });
+  }
   const mapping = ctx.config?.payload_mapping;
   let payload = base;
   if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)) {

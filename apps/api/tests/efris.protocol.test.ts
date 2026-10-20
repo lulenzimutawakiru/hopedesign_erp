@@ -7,6 +7,7 @@ import {
   assertUrlMatchesMode,
   buildEncryptedEnvelope,
   buildT109Content,
+  buildT110Content,
   canonicalizeEndpoint,
   decryptAesEcb,
   encryptAesEcb,
@@ -188,18 +189,77 @@ describe('URA EFRIS protocol', () => {
       buyer: null,
       lines: [],
       oriInvoiceNo: 'FDN-ORIG-1',
+      oriInvoiceId: '444586912409100060',
     });
     expect((credit.basicInformation as Record<string, string>).invoiceType).toBe('2');
-    expect((credit.basicInformation as Record<string, string>).oriInvoiceId).toBe('FDN-ORIG-1');
+    expect((credit.basicInformation as Record<string, string>).oriInvoiceNo).toBe('FDN-ORIG-1');
+    expect((credit.basicInformation as Record<string, string>).oriInvoiceId).toBe('444586912409100060');
     expect((credit.buyerDetails as Record<string, string>).buyerType).toBe('1');
-    expect(invoiceTypeFor('DEBIT_NOTE')).toBe('3');
-    expect(interfaceCodeFor('CREDIT_NOTE', null)).toBe('T109');
+    expect(invoiceTypeFor('DEBIT_NOTE')).toBe('1');
+    expect(interfaceCodeFor('CREDIT_NOTE', null)).toBe('T110');
     expect(interfaceCodeFor('CREDIT_NOTE', { creditInterface: 'T110' })).toBe('T110');
     expect(interfaceCodeFor('SALES_INVOICE', { interfaceCode: 'T109' })).toBe('T109');
   });
 
-  it('carries the URA goods registration through the T109 goodsDetails', () => {
-    const invoice = buildT109Content({
+  it('builds a T110 credit note application with top-level oriInvoiceId/oriInvoiceNo', () => {
+    const credit = buildT110Content({
+      docType: 'CREDIT_NOTE',
+      docRefCode: 'CN-9',
+      txnDate: '2026-10-19',
+      currency: 'UGX',
+      grossAmount: 66080,
+      taxAmount: 10080,
+      seller,
+      buyer: null,
+      lines: [{
+        itemCode: 'Natex A4 superior white Paper 80g/m²',
+        description: 'Bond 80 Natex Paper',
+        quantity: 1,
+        unitPrice: 56000,
+        taxPercent: 18,
+        lineGross: 66080,
+        unitOfMeasure: 'CT',
+        goodsCategoryId: '14111507',
+        vatApplicableFlag: '1',
+      }],
+      oriInvoiceNo: '326044299862',
+      oriInvoiceId: '444586912409100060',
+      reasonCode: '102',
+      reason: 'Cancellation of the purchase',
+    });
+    // Top-level original-invoice reference (URA 2825 rejects it inside basicInformation).
+    expect(credit.oriInvoiceNo).toBe('326044299862');
+    expect(credit.oriInvoiceId).toBe('444586912409100060');
+    expect(credit.reasonCode).toBe('102');
+    expect(credit.invoiceApplyCategoryCode).toBe('101');
+    expect(credit.source).toBe('103');
+    expect(credit.currency).toBe('UGX');
+    // No sellerDetails on a T110 application, and a minimal basicInformation.
+    expect(credit.sellerDetails).toBeUndefined();
+    const basic = credit.basicInformation as Record<string, string>;
+    expect(basic.operator).toBe('admin');
+    expect(basic.invoiceKind).toBe('1');
+    expect(basic.invoiceIndustryCode).toBe('102');
+    expect(basic.invoiceType).toBeUndefined();
+    expect(basic.deviceNo).toBeUndefined();
+    expect(basic.oriInvoiceNo).toBeUndefined();
+    const goods = credit.goodsDetails as Array<Record<string, string>>;
+    expect(goods).toHaveLength(1);
+    expect(goods[0].itemCode).toBe('Natex A4 superior white Paper 80g/m²');
+    // A T110 credit note is a red invoice: qty/total/tax are negated, unitPrice stays positive.
+    expect(goods[0].qty).toBe('-1');
+    expect(goods[0].total).toBe('-66080.00');
+    expect(goods[0].tax).toBe('-10080.00');
+    const summary = credit.summary as Record<string, string>;
+    expect(summary.modeCode).toBe('0');
+    expect(summary.grossAmount).toBe('-66080.00');
+    expect(summary.taxAmount).toBe('-10080.00');
+    const payWay = credit.payWay as Array<Record<string, string>>;
+    expect(payWay[0].paymentMode).toBe('101');
+    expect(payWay[0].paymentAmount).toBe('-66080.00');
+  });
+
+  it('carries the URA goods registration through the T109 goodsDetails', () => {    const invoice = buildT109Content({
       docType: 'SALES_INVOICE',
       docRefCode: 'INV-URA-1',
       txnDate: '2026-10-19',

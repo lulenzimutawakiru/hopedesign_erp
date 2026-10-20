@@ -53,7 +53,7 @@ import { whatsappEventsRouter, whatsappWebhookErrorFilter } from './routes/whats
 import { hikvisionOpsRouter, hikvisionAttendanceOpsRouter } from './routes/ops/hikvision.js';
 import { runHikvisionWorkerTick } from './services/hikvision/processor.js';
 import { isQueueEnabled } from './services/queue/connection.js';
-import { runEfrisWorkerTick } from './services/efris/processor.js';
+import { runEfrisWorkerTick, runEfrisCreditNotePollTick } from './services/efris/processor.js';
 import { requisitionsOpsRouter } from './routes/ops/requisitions.js';
 import { expenditureOpsRouter } from './routes/ops/expenditure.js';
 import { communicationOpsRouter } from './routes/ops/communication.js';
@@ -298,6 +298,14 @@ if (isQueueEnabled()) {
       console.error('[efrisWorker]', err instanceof Error ? err.message : err);
     });
   }, 20_000);
+
+  // EFRIS credit-note poller: a T110 application is approved asynchronously by
+  // URA, so poll submitted applications for their red-invoice FDN every 60s.
+  setInterval(() => {
+    singleFlight(WORKER_LOCKS.EFRIS_CREDIT_NOTE_POLL, runEfrisCreditNotePollTick).catch((err: unknown) => {
+      console.error('[efrisCreditNotePoll]', err instanceof Error ? err.message : err);
+    });
+  }, 60_000);
 
   // Service Desk SLA worker: re-evaluate response/resolution timers and raise
   // escalations every minute. Single-flight so a breach is never escalated by

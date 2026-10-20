@@ -16,7 +16,8 @@ import { emitEvent } from '../events.js';
 import { notifyRoleAdvanced } from '../communication.js';
 import { resolveCredentials, notificationRoleCodes, type EfrisConfigurationRow } from './config.js';
 import { buildSubmitPayload, type EfrisTaxpayerLite, type FiscalLine, type FiscalParty } from './builders.js';
-import { submitFiscalDocument, extractFiscalIdentifiers, EfrisClientError } from './client.js';
+import { submitFiscalDocument, extractFiscalIdentifiers, EfrisClientError, queryCreditNoteApplication, fetchCreditNoteDocument } from './client.js';
+import { digFirst } from './protocol.js';
 
 /** Row returned by efris_claim_fiscal_batch(). */
 export interface ClaimedFiscalTransaction {
@@ -82,6 +83,12 @@ function errCode(err: unknown): string {
 
 function errPayload(err: unknown): unknown {
   return err instanceof EfrisClientError ? err.payload ?? null : null;
+}
+
+/** T110 credit notes are applied via a two-step application workflow. */
+function isCreditNoteDocType(docType: string): boolean {
+  const kind = (docType ?? '').trim().toUpperCase();
+  return kind === 'CREDIT_NOTE' || kind === 'CREDIT';
 }
 
 /** Persist a failure outside the rolled-back processing transaction. */
@@ -188,13 +195,21 @@ interface FiscalSource {
   buyer: FiscalParty | null;
   lines: FiscalLine[];
   oriInvoiceNo: string | null;
+  oriInvoiceId: string | null;
   remarks: string | null;
+  reasonCode: string | null;
+  reason: string | null;
 }
 
-async function originalInvoiceFdn(client: pg.PoolClient, tenantId: number, invoiceId: number): Promise<string | null> {
-  if (!Number.isFinite(invoiceId) || invoiceId <= 0) return null;
+/** Original invoice's FDN (invoiceNo) and internal invoiceId, for a T110 credit note. */
+async function originalInvoiceRef(
+  client: pg.PoolClient,
+  tenantId: number,
+  invoiceId: number
+): Promise<{ oriInvoiceNo: string | null; oriInvoiceId: string | null }> {
+  if (!Number.isFinite(invoiceId) || invoiceId <= 0) return { oriInvoiceNo: null, oriInvoiceId: null };
   const res = await client.query(
-    `SELECT d.fdn
+    `SELECT d.fdn, d.response_payload
        FROM efris_documents d
        JOIN efris_transactions t ON t.id = d.efris_transaction_id
       WHERE t.tenant_id = $1
@@ -206,13 +221,42 @@ async function originalInvoiceFdn(client: pg.PoolClient, tenantId: number, invoi
       LIMIT 1`,
     [tenantId, invoiceId]
   );
-  const fdn = res.rows[0]?.fdn;
-  return typeof fdn === 'string' && fdn.trim() ? fdn.trim() : null;
+  const row = res.rows[0];
+  const fdn = row?.fdn != null ? String(row.fdn).trim() : null;
+  const invoiceIdRaw = digFirst(row?.response_payload ?? null, ['invoiceId']);
+  const invoiceIdVal = typeof invoiceIdRaw === 'string' && invoiceIdRaw.trim() ? invoiceIdRaw.trim() : null;
+  return { oriInvoiceNo: fdn || null, oriInvoiceId: invoiceIdVal };
+}
+
+/**
+ * Map the ERP's credit-note reason_code to a URA T110 reason code. URA's option
+ * list is fixed (101 return of products, 102 cancellation of the purchase, 103
+ * wrongly-stated amount, 104 waive off, 105 others); the ERP enum maps onto it
+ * without inventing any URA code.
+ */
+function uraCreditNoteReason(
+  code: string | null | undefined,
+  reason: string | null | undefined
+): { reasonCode: string; reason: string } {
+  const map: Record<string, string> = {
+    RETURNED_GOODS: '101',
+    DAMAGED_GOODS: '101',
+    CANCELLATION: '102',
+    PRICING_CORRECTION: '103',
+    OVERBILLING: '103',
+    QUANTITY_CORRECTION: '103',
+    TAX_CORRECTION: '103',
+    DISCOUNT: '104',
+    OTHER: '105',
+  };
+  const reasonCode = map[(code ?? '').trim().toUpperCase()] ?? '102';
+  const reasonText = reason && reason.trim() ? reason.trim() : '';
+  return { reasonCode, reason: reasonText };
 }
 
 /** Buyer, lines and the original FDN for a credit or debit note. Missing rows fall back to the transaction totals. */
 async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransaction): Promise<FiscalSource> {
-  const empty: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, remarks: null };
+  const empty: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, oriInvoiceId: null, remarks: null, reasonCode: null, reason: null };
   try {
     if (row.doc_ref_type === 'customer_invoices') {
       const inv = await client.query(
@@ -262,13 +306,16 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
           };
         }),
         oriInvoiceNo: null,
+        oriInvoiceId: null,
         remarks: party?.notes != null ? String(party.notes) : null,
+        reasonCode: null,
+        reason: null,
       };
     }
     if (row.doc_ref_type === 'credit_notes' || row.doc_ref_type === 'debit_notes') {
       const table = row.doc_ref_type === 'credit_notes' ? 'credit_notes' : 'debit_notes';
       const note = await client.query(
-        `SELECT n.invoice_id, n.reason, c.name AS customer_name, c.tin AS customer_tin,
+        `SELECT n.invoice_id, n.reason, n.reason_code, c.name AS customer_name, c.tin AS customer_tin,
                 c.address AS customer_address, c.email AS customer_email, c.phone AS customer_phone
            FROM ${table} n
            JOIN customers c ON c.id = n.customer_id
@@ -277,6 +324,50 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
       );
       const party = note.rows[0] as Record<string, unknown> | undefined;
       const invoiceId = party ? Number(party.invoice_id) : NaN;
+
+      // A note carries the original invoice's registered good, not a synthetic
+      // 'ITEM1' line (URA rejects a bare itemCode with 2122 "not configured with
+      // URA"). Notes store only a single amount + tax, so map that total onto the
+      // first original line's goods identity.
+      const items = await client.query(
+        `SELECT ii.description, ii.tax_percent,
+                p.code AS product_code,
+                p.efris_goods_code, p.efris_unit_of_measure,
+                p.efris_goods_category_id, p.efris_goods_category_name
+           FROM invoice_items ii
+           LEFT JOIN products p ON p.id = ii.product_id
+          WHERE ii.invoice_id = $1
+          ORDER BY ii.id
+          LIMIT 1`,
+        [invoiceId]
+      );
+      const item = items.rows[0] as Record<string, unknown> | undefined;
+      const taxPercent = item != null ? Number(item.tax_percent ?? 0)
+        : (Number(row.tax_amount) > 0 ? 18 : 0);
+      const lines: FiscalLine[] = item != null ? [{
+        itemCode: item.efris_goods_code != null ? String(item.efris_goods_code)
+          : (item.product_code != null ? String(item.product_code) : null),
+        description: String(item.description ?? ''),
+        quantity: 1,
+        unitPrice: Number(row.gross_amount) || 0,
+        taxPercent,
+        lineGross: Number(row.gross_amount) || 0,
+        unitOfMeasure: item.efris_unit_of_measure != null ? String(item.efris_unit_of_measure) : null,
+        goodsCategoryId: item.efris_goods_category_id != null ? String(item.efris_goods_category_id) : null,
+        goodsCategoryName: item.efris_goods_category_name != null ? String(item.efris_goods_category_name) : null,
+        vatApplicableFlag: taxPercent > 0 ? '1' : '0',
+      }] : [];
+
+      // Only a credit note (T110 red invoice) references the original invoice via
+      // oriInvoiceNo + oriInvoiceId. A debit note is a standalone positive invoice
+      // and must not carry an original reference (URA would treat it as a reversal).
+      const ref = row.doc_ref_type === 'credit_notes'
+        ? await originalInvoiceRef(client, row.tenant_id, invoiceId)
+        : { oriInvoiceNo: null, oriInvoiceId: null };
+      const reason = row.doc_ref_type === 'credit_notes'
+        ? uraCreditNoteReason(party?.reason_code != null ? String(party.reason_code) : null, party?.reason != null ? String(party.reason) : null)
+        : { reasonCode: null, reason: null };
+
       return {
         buyer: party ? {
           legalName: party.customer_name != null ? String(party.customer_name) : null,
@@ -285,9 +376,12 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
           email: party.customer_email != null ? String(party.customer_email) : null,
           phone: party.customer_phone != null ? String(party.customer_phone) : null,
         } : null,
-        lines: [],
-        oriInvoiceNo: await originalInvoiceFdn(client, row.tenant_id, invoiceId),
+        lines,
+        oriInvoiceNo: ref.oriInvoiceNo,
+        oriInvoiceId: ref.oriInvoiceId,
         remarks: party?.reason != null ? String(party.reason) : null,
+        reasonCode: reason.reasonCode,
+        reason: reason.reason,
       };
     }
   } catch (err) {
@@ -345,7 +439,10 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
       buyer: source.buyer,
       lines: source.lines,
       oriInvoiceNo: source.oriInvoiceNo,
+      oriInvoiceId: source.oriInvoiceId,
       remarks: source.remarks,
+      reasonCode: source.reasonCode,
+      reason: source.reason,
     });
     const stored = row.request_payload && Object.keys(row.request_payload).length > 0 ? row.request_payload : null;
     const storedIsUra = Boolean(stored && (stored.goodsDetails || stored.sellerDetails));
@@ -364,6 +461,46 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
       tin: taxpayer?.tin ?? null,
       securityFlags: config.security_flags,
     });
+
+    // A T110 credit note is an application: URA returns a referenceNo, not an FDN.
+    // Record it as TRANSMITTED (awaiting URA approval) and let the polling worker
+    // apply the red-invoice FDN once URA approves it.
+    if (isCreditNoteDocType(row.doc_type)) {
+      const referenceNoRaw = digFirst(raw, ['referenceNo', 'reference_no', 'applicationReferenceNo', 'applicationRefNo']);
+      const referenceNo = typeof referenceNoRaw === 'string' && referenceNoRaw.trim() ? referenceNoRaw.trim() : null;
+      if (!referenceNo) {
+        throw new EfrisClientError({
+          code: 'EFRIS_RESPONSE_INVALID',
+          stage: 'response',
+          message: 'URA accepted the credit note application but returned no referenceNo',
+          payload: raw,
+          retryable: false,
+        });
+      }
+      await client.query(
+        `UPDATE efris_transactions
+            SET status = 'TRANSMITTED', claimed_at = NULL, next_attempt_at = NULL,
+                transmitted_at = now(), last_error = NULL, error_code = NULL,
+                request_payload = $2::jsonb, last_response = $3::jsonb,
+                application_ref_no = $4, application_status = '102', updated_at = now()
+          WHERE id = $1`,
+        [row.id, JSON.stringify(built.payload ?? {}), JSON.stringify(raw ?? {}), referenceNo]
+      );
+      await client.query(
+        `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, request_payload, response_payload)
+         VALUES ($1,$2,'TRANSMITTED',$3::jsonb,$4::jsonb)`,
+        [row.tenant_id, row.id, JSON.stringify(built.payload ?? {}), JSON.stringify(raw ?? {})]
+      );
+      await logAudit(client, { tenantId: row.tenant_id, companyId: row.company_id, branchId: row.branch_id }, {
+        action: 'efris.fiscalization.submitted',
+        resource: 'efris_transactions',
+        recordId: row.id,
+        recordCode: row.doc_ref_code,
+        metadata: { referenceNo, docType: row.doc_type },
+      });
+      await client.query('COMMIT');
+      return true;
+    }
 
     const identifiers = extractFiscalIdentifiers(raw);
     if (!identifiers) {
@@ -469,5 +606,157 @@ export async function runEfrisWorkerTick(): Promise<void> {
     await drainEfrisQueue(10);
   } catch (err) {
     console.error('[efris][worker]', err instanceof Error ? err.message : err);
+  }
+}
+
+interface PendingCreditNoteApp {
+  id: number;
+  tenant_id: number;
+  company_id: number;
+  branch_id: number | null;
+  taxpayer_id: number | null;
+  config_id: number;
+  doc_ref_code: string;
+  application_ref_no: string;
+}
+
+/**
+ * Poll submitted (TRANSMITTED) T110 credit-note applications for URA approval
+ * and apply the red-invoice FDN when URA approves them. Pending applications
+ * stay TRANSMITTED; rejected ones are marked REJECTED. Never throws.
+ */
+export async function pollCreditNoteApplications(batch = 10): Promise<{ polled: number; approved: number; pending: number; rejected: number }> {
+  const res = await pool.query(
+    `SELECT t.id, t.tenant_id, t.company_id, t.branch_id, t.taxpayer_id, c.id AS config_id,
+            t.doc_ref_code, t.application_ref_no
+       FROM efris_transactions t
+       JOIN efris_configurations c
+         ON c.id = (
+              SELECT c2.id FROM efris_configurations c2
+               WHERE c2.taxpayer_id = t.taxpayer_id
+                 AND c2.is_active = true
+                 AND c2.mode IN ('TEST','ACTIVE')
+               ORDER BY c2.id DESC
+               LIMIT 1
+            )
+      WHERE t.status = 'TRANSMITTED'
+        AND t.doc_type IN ('CREDIT_NOTE','CREDIT')
+        AND t.application_ref_no IS NOT NULL
+      ORDER BY t.id
+      LIMIT $1`,
+    [batch]
+  );
+  const rows = res.rows as unknown as PendingCreditNoteApp[];
+  let approved = 0;
+  let pending = 0;
+  let rejected = 0;
+  for (const row of rows) {
+    const client = await pool.connect();
+    try {
+      await applyWorkerContext(client, { id: row.id, tenant_id: row.tenant_id, company_id: row.company_id, branch_id: row.branch_id });
+      const configRes = await client.query(
+        `SELECT * FROM efris_configurations WHERE id = $1 AND tenant_id = $2 AND is_active = true`,
+        [row.config_id, row.tenant_id]
+      );
+      const config = configRes.rows[0] as EfrisConfigurationRow | undefined;
+      if (!config) continue;
+      const creds = resolveCredentials(config);
+      let tin: string | null = null;
+      if (row.taxpayer_id != null) {
+        const tp = await client.query(`SELECT tin FROM efris_taxpayers WHERE id = $1 AND tenant_id = $2`, [row.taxpayer_id, row.tenant_id]);
+        tin = tp.rows[0]?.tin != null ? String(tp.rows[0].tin) : null;
+      }
+      const opts = {
+        mode: config.mode,
+        baseUrl: config.base_url ?? '',
+        tokenUrl: config.token_url,
+        grantType: config.auth_grant_type || 'client_credentials',
+        clientId: creds.clientId,
+        clientSecret: creds.clientSecret,
+        timeoutSeconds: Number(config.timeout_seconds || 20),
+        payload: {} as Record<string, unknown>,
+        docType: 'CREDIT_NOTE',
+        tin,
+        securityFlags: config.security_flags,
+      };
+      const q = await queryCreditNoteApplication(opts, row.application_ref_no);
+      const approveStatus = String(digFirst(q, ['approveStatus']) ?? '102');
+      if (approveStatus === '103') {
+        await client.query(
+          `UPDATE efris_transactions
+              SET status = 'REJECTED', application_status = '103', claimed_at = NULL, next_attempt_at = NULL, updated_at = now()
+            WHERE id = $1`,
+          [row.id]
+        );
+        await client.query(
+          `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, response_payload)
+           VALUES ($1,$2,'REJECTED',$3::jsonb)`,
+          [row.tenant_id, row.id, JSON.stringify(q ?? {})]
+        );
+        rejected += 1;
+        continue;
+      }
+      if (approveStatus !== '101') {
+        pending += 1;
+        continue;
+      }
+      const invoiceNoRaw = digFirst(q, ['invoiceNo']);
+      const invoiceNo = typeof invoiceNoRaw === 'string' && invoiceNoRaw.trim() ? invoiceNoRaw.trim() : null;
+      if (!invoiceNo) {
+        pending += 1;
+        continue;
+      }
+      const doc = await fetchCreditNoteDocument(opts, invoiceNo);
+      const identifiers = extractFiscalIdentifiers(doc);
+      if (!identifiers) {
+        pending += 1;
+        continue;
+      }
+      await client.query(
+        `INSERT INTO efris_documents
+           (tenant_id, efris_transaction_id, erp_doc_no, fdn, verification_code, qr_ref, response_payload, transmitted_at, fiscalized_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,now(),now())
+         ON CONFLICT (efris_transaction_id) DO UPDATE
+           SET fdn = EXCLUDED.fdn, verification_code = EXCLUDED.verification_code,
+               qr_ref = EXCLUDED.qr_ref, response_payload = EXCLUDED.response_payload,
+               fiscalized_at = now()`,
+        [row.tenant_id, row.id, row.doc_ref_code, identifiers.fdn, identifiers.vrc, identifiers.qrRef ?? null, JSON.stringify(doc ?? {})]
+      );
+      await client.query(
+        `UPDATE efris_transactions
+            SET status = 'FISCALIZED', application_status = '101', claimed_at = NULL,
+                next_attempt_at = NULL, fiscalized_at = now(), last_error = NULL,
+                error_code = NULL, last_response = $2::jsonb, updated_at = now()
+          WHERE id = $1`,
+        [row.id, JSON.stringify(doc ?? {})]
+      );
+      await client.query(
+        `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, response_payload)
+         VALUES ($1,$2,'FISCALIZED',$3::jsonb)`,
+        [row.tenant_id, row.id, JSON.stringify(doc ?? {})]
+      );
+      await logAudit(client, { tenantId: row.tenant_id, companyId: row.company_id, branchId: row.branch_id }, {
+        action: 'efris.fiscalization.fiscalized',
+        resource: 'efris_transactions',
+        recordId: row.id,
+        recordCode: row.doc_ref_code,
+        metadata: { fdn: identifiers.fdn, verificationCode: identifiers.vrc, qrRef: identifiers.qrRef ?? null },
+      });
+      approved += 1;
+    } catch (err) {
+      console.error('[efris][credit-note-poll]', err instanceof Error ? err.message : err);
+    } finally {
+      client.release();
+    }
+  }
+  return { polled: rows.length, approved, pending, rejected };
+}
+
+/** Single tick for the credit-note approval poller (idempotent, never throws). */
+export async function runEfrisCreditNotePollTick(): Promise<void> {
+  try {
+    await pollCreditNoteApplications(10);
+  } catch (err) {
+    console.error('[efris][credit-note-poll]', err instanceof Error ? err.message : err);
   }
 }

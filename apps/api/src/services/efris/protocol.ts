@@ -501,13 +501,16 @@ function compact(value: string | null | undefined): string {
 }
 
 /**
- * URA invoiceType on T109. 1 invoice, 2 credit note, 3 debit note.
+ * URA invoiceType. 1 normal (positive) invoice, 2 credit note (red/negative).
+ *
+ * A debit note is a supplementary POSITIVE invoice in URA's model — there is no
+ * dedicated invoiceType for it, so it fiscalises as a normal invoice (`1`).
+ * URA rejects `3` with `1135 basicInformation-->invoiceType:Invalid field value`.
  * payload_mapping.fixed can override the value when a gateway build differs.
  */
 export function invoiceTypeFor(docType: string): string {
   const kind = docType.trim().toUpperCase();
   if (kind === 'CREDIT_NOTE' || kind === 'CREDIT') return '2';
-  if (kind === 'DEBIT_NOTE' || kind === 'DEBIT') return '3';
   return '1';
 }
 
@@ -518,6 +521,9 @@ export function interfaceCodeFor(docType: string, flags: Record<string, unknown>
   if (kind === 'CREDIT_NOTE' || kind === 'CREDIT') {
     const credit = flagString(flags, 'creditInterface', 'credit_interface');
     if (/^T\d{3}$/.test(credit)) return credit;
+    // URA applies credit notes via T110 ("Please use interface api-T110 to apply
+    // credit note"), not T109. Debit notes stay on T109 as positive invoices.
+    return 'T110';
   }
   return 'T109';
 }
@@ -561,8 +567,17 @@ export interface UraInvoiceInput {
   buyer: UraParty | null;
   lines: UraLine[];
   oriInvoiceNo?: string | null;
+  oriInvoiceId?: string | null;
   deviceNo?: string | null;
   remarks?: string | null;
+  /** T110 credit note application: URA reason code (101-105). */
+  reasonCode?: string | null;
+  /** T110 credit note application: free-text reason. */
+  reason?: string | null;
+  /** T110 credit note application: application timestamp (defaults to now). */
+  applicationTime?: string | null;
+  /** T110 credit note application: seller's reference for the original sale. */
+  sellersReferenceNo?: string | null;
 }
 
 interface PreparedLine {
@@ -709,7 +724,11 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
       issuedDate: issued,
       operator: 'admin',
       currency: input.currency || 'UGX',
-      oriInvoiceId: compact(input.oriInvoiceNo),
+      // T110 credit note references the original invoice by BOTH identifiers:
+      // oriInvoiceNo = original FDN, oriInvoiceId = original internal invoice id.
+      // URA rejects 2825 "without original invoice" when either is missing.
+      oriInvoiceNo: compact(input.oriInvoiceNo),
+      oriInvoiceId: compact(input.oriInvoiceId),
       invoiceType: invoiceTypeFor(input.docType),
       invoiceKind: '1',
       dataSource: '103',
@@ -747,5 +766,161 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
       paymentAmount: money(grossAmount),
       orderNumber: 'a',
     }],
+  };
+}
+
+/** URA credit-note reason codes (from the gateway's own T110 option list). */
+export const URA_CREDIT_NOTE_REASONS: Record<string, string> = {
+  '101': 'Return of products due to expiry or damage, etc.',
+  '102': 'Cancellation of the purchase',
+  '103': 'Invoice amount wrongly Stated due to miscalculation of price, tax, or discounts,etc.',
+  '104': 'Partial or complete waive off of the product sale after the invoice is generated and sent to customer.',
+  '105': 'Others (Please specify)',
+};
+
+/**
+ * Inner T110 credit-note application content.
+ *
+ * A credit note is a two-step workflow: the ERP first posts a T110 APPLICATION
+ * (this body) referencing the original invoice, and URA returns an application
+ * `referenceNo`. After URA approves it, a follow-up query (T111/T108) returns
+ * the actual red-invoice FDN. The structure differs from T109 in three ways
+ * that URA rejects if missed (return code 2825 "without original invoice"):
+ *
+ *   * `oriInvoiceId`/`oriInvoiceNo` sit at the TOP LEVEL, not in basicInformation;
+ *   * `basicInformation` is minimal (operator, invoiceKind, invoiceIndustryCode,
+ *     branchId) — no invoiceType, deviceNo, issuedDate, or dataSource;
+ *   * there is no sellerDetails block, and the body carries
+ *     invoiceApplyCategoryCode, reasonCode/reason and applicationTime.
+ *
+ * Amounts are the POSITIVE "what is being credited" values; URA negates them
+ * when it issues the red invoice on approval.
+ */
+export function buildT110Content(input: UraInvoiceInput): Record<string, unknown> {
+  const lines = prepareLines(input);
+  const seller = input.seller;
+  const buyer = input.buyer;
+  const buyerTin = compact(buyer?.tin);
+  const issued = compact(input.applicationTime) || ugandaTimestamp();
+  // A T110 credit note is a red invoice: URA rejects positive goodsDetails qty
+  // (1431 "Cannot be positive"), so qty/total/tax and the summary/payWay totals
+  // are negated while unitPrice stays positive.
+  const neg = (value: number): string => money(-Math.abs(value));
+  const goodsDetails = lines.map((line, index) => ({
+    item: line.description,
+    itemCode: line.itemCode,
+    qty: qty(-Math.abs(line.quantity)),
+    unitOfMeasure: line.unitOfMeasure,
+    // Same tax-inclusive (gross) model as T109, proven live on this sandbox.
+    unitPrice: money(line.quantity > 0 ? line.gross / line.quantity : line.gross),
+    total: neg(line.gross),
+    taxRate: line.rate > 0 ? line.rate.toFixed(2) : '0',
+    tax: neg(line.tax),
+    discountTotal: '',
+    discountTaxRate: '0',
+    orderNumber: String(index),
+    discountFlag: '2',
+    deemedFlag: '2',
+    exciseFlag: '2',
+    categoryId: '',
+    categoryName: '',
+    goodsCategoryId: line.goodsCategoryId,
+    goodsCategoryName: line.goodsCategoryName,
+    exciseRate: '',
+    exciseRule: '',
+    exciseTax: '',
+    pack: '',
+    stick: '',
+    exciseUnit: '',
+    // URA stores the original invoice's goodsDetails without exciseCurrency
+    // (only taxDetails keeps it), so the credit note must mirror that exactly —
+    // sending 'UGX' here is rejected 1476 "must be the same as the original invoice".
+    exciseCurrency: '',
+    exciseRateName: '',
+    vatApplicableFlag: line.vatApplicableFlag,
+  }));
+  const byCategory = new Map<string, { code: string; name: string; net: number; tax: number; gross: number; rate: number }>();
+  for (const line of lines) {
+    const category = taxCategory(line.rate);
+    const current = byCategory.get(category.code) ?? { ...category, net: 0, tax: 0, gross: 0, rate: line.rate };
+    current.net += line.net;
+    current.tax += line.tax;
+    current.gross += line.gross;
+    byCategory.set(category.code, current);
+  }
+  const taxDetails = [...byCategory.values()].map((row) => ({
+    taxCategoryCode: row.code,
+    netAmount: neg(row.net),
+    taxRate: row.rate > 0 ? row.rate.toFixed(2) : '0',
+    taxAmount: neg(row.tax),
+    grossAmount: neg(row.gross),
+    exciseUnit: '',
+    exciseCurrency: input.currency || 'UGX',
+    taxRateName: row.name,
+  }));
+  const netAmount = lines.reduce((sum, line) => sum + line.net, 0);
+  const taxAmount = lines.reduce((sum, line) => sum + line.tax, 0);
+  const grossAmount = netAmount + taxAmount;
+  return {
+    oriInvoiceId: compact(input.oriInvoiceId),
+    oriInvoiceNo: compact(input.oriInvoiceNo),
+    reasonCode: compact(input.reasonCode) || '102',
+    reason: compact(input.reason) || '',
+    applicationTime: issued,
+    invoiceApplyCategoryCode: '101',
+    currency: input.currency || 'UGX',
+    contactName: '',
+    contactMobileNum: '',
+    contactEmail: '',
+    source: '103',
+    remarks: compact(input.remarks).slice(0, 200),
+    sellersReferenceNo: compact(input.sellersReferenceNo ?? input.docRefCode).slice(0, 50),
+    goodsDetails,
+    taxDetails,
+    summary: {
+      netAmount: neg(netAmount),
+      taxAmount: neg(taxAmount),
+      grossAmount: neg(grossAmount),
+      itemCount: String(lines.length),
+      modeCode: '0',
+      remarks: compact(input.remarks).slice(0, 200),
+      qrCode: '',
+    },
+    buyerDetails: {
+      buyerTin,
+      buyerNinBrn: '',
+      buyerPassportNum: '',
+      buyerLegalName: compact(buyer?.legalName) || 'Cash customer',
+      buyerBusinessName: compact(buyer?.businessName) || compact(buyer?.legalName),
+      buyerAddress: compact(buyer?.address),
+      buyerEmail: compact(buyer?.email),
+      buyerMobilePhone: compact(buyer?.phone),
+      buyerLinePhone: '',
+      buyerPlaceOfBusi: '',
+      buyerType: buyerTin ? '0' : '1',
+      buyerCitizenship: '1',
+      buyerSector: '1',
+      buyerReferenceNo: '',
+    },
+    payWay: [{
+      paymentMode: '101',
+      paymentAmount: neg(grossAmount),
+      orderNumber: 'a',
+    }],
+    importServicesSeller: {
+      importBusinessName: '',
+      importEmailAddress: '',
+      importContactNumber: '',
+      importAddress: '',
+      importInvoiceDate: '',
+      importAttachmentName: '',
+      importAttachmentContent: '',
+    },
+    basicInformation: {
+      operator: 'admin',
+      invoiceKind: '1',
+      invoiceIndustryCode: '102',
+      branchId: '',
+    },
   };
 }
