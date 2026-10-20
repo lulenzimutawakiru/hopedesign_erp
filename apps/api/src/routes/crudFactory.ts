@@ -4,7 +4,7 @@ import { query, tx, Ctx } from '../db.js';
 import { requirePermission } from '../middleware/authorize.js';
 import { asyncHandler, badRequest, notFound, parsePagination, toCamelRows, toCamelRow, camelToSnake } from '../utils.js';
 import { logAudit } from '../services/audit.js';
-import { startWorkflow, decideTask } from '../services/workflow.js';
+import { startWorkflow, decideTask, computeMaterialHash, invalidateStaleApproval } from '../services/workflow.js';
 
 export const BASE_EXCLUDED = new Set([
   'id', 'created_at', 'updated_at', 'created_by', 'updated_by',
@@ -262,8 +262,10 @@ export function crudRouter(cfg: CrudConfig): Router {
       const id = Number(req.params.id);
       const cols = await columnsOf(cfg.table);
       const writable = writableOf(cfg, cols);
+      const where = await scope(req);
+      const whereUpdate = await scope(req, '');
       const before = await query(
-        `SELECT t.* FROM ${cfg.table} t WHERE t.${idCol}=$1 AND ${await scope(req)}`,
+        `SELECT t.* FROM ${cfg.table} t WHERE t.${idCol}=$1 AND ${where}`,
         [id], req.ctx
       );
       if (!before.rows.length) throw notFound(`${cfg.label} not found`);
@@ -274,17 +276,25 @@ export function crudRouter(cfg: CrudConfig): Router {
       if (!entries.length) throw badRequest('No writable fields provided');
       const sets = entries.map(([k], i) => `${k} = $${i + 1}`);
       const params: unknown[] = [...entries.map(([, v]) => v), id];
-      await query(
-        `UPDATE ${cfg.table} SET ${sets.join(', ')} WHERE ${idCol}=$${params.length} AND ${await scope(req, '')}`,
-        params, req.ctx
-      );
       await tx(async (client) => {
+        await client.query(
+          `UPDATE ${cfg.table} SET ${sets.join(', ')} WHERE ${idCol}=$${params.length} AND ${whereUpdate}`,
+          params
+        );
         await logAudit(client, req.ctx, {
           action: 'update', resource: cfg.table, recordId: id,
           recordCode: cfg.codeColumn ? String(before.rows[0][cfg.codeColumn] ?? '') : null,
           oldValues: Object.fromEntries(entries),
           newValues: body,
         });
+        // A material edit after submission invalidates any standing approval:
+        // the approver signed a snapshot that no longer matches this document.
+        // Runs in the same transaction as the UPDATE so the edit and the
+        // invalidation commit atomically.
+        if (cfg.entityType) {
+          const hash = await computeMaterialHash(client, req.ctx, cfg.entityType, id);
+          await invalidateStaleApproval(client, req.ctx, cfg.entityType, id, hash);
+        }
       }, req.ctx);
       const after = await query(`SELECT t.* FROM ${cfg.table} t WHERE t.${idCol}=$1`, [id], req.ctx);
       res.json({ data: toCamelRow(after.rows[0] as Record<string, unknown>) });

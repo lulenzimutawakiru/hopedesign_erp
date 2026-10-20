@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { createHash } from 'node:crypto';
 import { Ctx } from '../db.js';
 import { ApprovalStep } from '../types.js';
 import { badRequest, forbidden, notFound } from '../utils.js';
@@ -20,7 +21,27 @@ interface StartWorkflowInput {
 const WORKFLOW_SQL = `
   SELECT id, code, name, entity_type, config FROM workflows
   WHERE company_id = $1 AND tenant_id = $2 AND entity_type = $3 AND is_active = true
+    AND status = 'PUBLISHED'
+    AND (effective_from IS NULL OR effective_from <= CURRENT_DATE)
 `;
+
+/**
+ * Columns that never participate in the material snapshot: identity, tenancy,
+ * audit timestamps and every lifecycle/posting field the workflow engine itself
+ * owns. Anything else (amounts, parties, dates, quantities, line metadata) is
+ * treated as material and invalidates a standing approval when it changes.
+ */
+const MATERIAL_EXCLUDED = new Set([
+  'id', 'created_at', 'updated_at', 'created_by', 'updated_by',
+  'company_id', 'tenant_id', 'branch_id',
+  'status',
+  'approved_by', 'approved_at', 'rejected_by', 'rejected_at',
+  'submitted_by', 'submitted_at', 'cancelled_by', 'cancelled_at',
+  'voided_by', 'voided_at', 'posted_by', 'posted_at',
+  'closed_by', 'closed_at', 'completed_by', 'completed_at',
+  'released_by', 'released_at',
+  'gl_posted', 'gl_journal_id', 'amount_paid', 'three_way_matched',
+]);
 
 /**
  * Run the post-approval side effect configured for an entity type.
@@ -75,30 +96,139 @@ async function runApprovalSideEffect(client: pg.PoolClient, ctx: Ctx, entityType
   }
 }
 
+/**
+ * A stable hash of the fields an approver actually signs off on. Two documents
+ * that differ only in identity/tenancy/audit/posting fields hash identically;
+ * any material edit changes the hash, which invalidates a standing approval.
+ */
+export async function computeMaterialHash(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  entityType: string,
+  entityId: number
+): Promise<string | null> {
+  const entity = ENTITIES[entityType];
+  if (!entity) return null;
+  const res = await client.query(`SELECT * FROM ${entity.table} WHERE id = $1`, [entityId]);
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0] as Record<string, unknown>;
+  const material: Record<string, unknown> = {};
+  for (const key of Object.keys(row).sort()) {
+    if (!MATERIAL_EXCLUDED.has(key)) material[key] = row[key];
+  }
+  return createHash('sha256').update(JSON.stringify(material)).digest('hex');
+}
+
+/**
+ * Cancel every open instance of an entity whose stored material snapshot no
+ * longer matches `newHash`, and return the document to its pre-submit status so
+ * it can be corrected and resubmitted. Call this after any material edit.
+ */
+export async function invalidateStaleApproval(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  entityType: string,
+  entityId: number,
+  newHash: string | null
+): Promise<boolean> {
+  if (newHash === null) return false;
+  const open = await client.query(
+    `SELECT id FROM workflow_instances
+     WHERE entity_type = $1 AND entity_id = $2
+       AND status IN ('RUNNING', 'ESCALATED', 'EXECUTION_PENDING')
+       AND material_hash IS DISTINCT FROM $3
+     FOR UPDATE`,
+    [entityType, entityId, newHash]
+  );
+  if (open.rows.length === 0) return false;
+  for (const row of open.rows) {
+    await client.query(
+      `UPDATE workflow_instances SET status = 'CANCELLED', completed_at = now() WHERE id = $1`,
+      [row.id]
+    );
+  }
+  const entity = ENTITIES[entityType];
+  const draftStatus = entity?.draftStatus ?? 'DRAFT';
+  await client.query(
+    `UPDATE ${entity.table} SET ${entity.statusColumn} = $2 WHERE id = $1`,
+    [entityId, draftStatus]
+  );
+  await emitEvent(client, ctx, {
+    eventType: `${entityType.replace('.', '_')}.approval_invalidated`,
+    entityType,
+    entityId,
+    payload: { reason: 'Document changed after submission' },
+  });
+  return true;
+}
+
+/**
+ * A delegate may approve only inside their delegation's authority: an active
+ * window, an amount ceiling, and (when the delegation enumerates transaction
+ * authorities) a matching can_approve authority for the document type.
+ */
+async function enforceDelegationLimits(
+  client: pg.PoolClient,
+  delegation: { id: number; approval_limit: number | null },
+  entityType: string,
+  amount: number | null
+) {
+  if (amount != null && delegation.approval_limit != null && amount > Number(delegation.approval_limit)) {
+    throw forbidden(`Delegation approval limit ${delegation.approval_limit} is below the document amount ${amount}`);
+  }
+  const hasAuthorities = await client.query(
+    `SELECT 1 FROM delegation_authorities WHERE delegation_id = $1 LIMIT 1`,
+    [delegation.id]
+  );
+  if (hasAuthorities.rows.length === 0) return;
+  const covered = await client.query(
+    `SELECT 1 FROM delegation_authorities
+     WHERE delegation_id = $1 AND can_approve = true
+       AND (transaction_type = $2 OR transaction_type = '*')
+       AND (max_amount IS NULL OR $3::numeric IS NULL OR $3::numeric <= max_amount)
+     LIMIT 1`,
+    [delegation.id, entityType, amount]
+  );
+  if (covered.rows.length === 0) {
+    throw forbidden('This delegation does not authorise approving this transaction type or amount');
+  }
+}
+
 /** Start the configured workflow for an entity and create the first approval task. */
 export async function startWorkflow(client: pg.PoolClient, ctx: Ctx, input: StartWorkflowInput) {
   const companyId = input.companyId ?? ctx.companyId ?? null;
   if (!companyId) throw badRequest('Company is required to start a workflow');
-  const wfRes = await client.query(WORKFLOW_SQL, [companyId, ctx.tenantId, input.entityType]);
-  const wf = wfRes.rows[0];
-  if (!wf) {
-    // No workflow configured ? auto-approve
-    const entity = ENTITIES[input.entityType];
-    if (entity) {
-      await client.query(
-        `UPDATE ${entity.table} SET ${entity.statusColumn} = $1 WHERE id = $2`,
-        [entity.approvedStatus, input.entityId]
-      );
-      await runApprovalSideEffect(client, ctx, input.entityType, input.entityId);
-    }
+
+  // Approval-free by explicit policy: skip the workflow engine entirely. This is
+  // a deliberate per-entity configuration, not the accidental outcome of a
+  // missing workflow row.
+  const policyEntity = ENTITIES[input.entityType];
+  if (policyEntity && policyEntity.requiresApproval === false) {
+    await client.query(
+      `UPDATE ${policyEntity.table} SET ${policyEntity.statusColumn} = $1 WHERE id = $2`,
+      [policyEntity.approvedStatus, input.entityId]
+    );
+    await runApprovalSideEffect(client, ctx, input.entityType, input.entityId);
     await emitEvent(client, ctx, {
       eventType: `${input.entityType.replace('.', '_')}.auto_approved`,
       entityType: input.entityType,
       entityId: input.entityId,
       entityCode: input.entityCode,
-      payload: { reason: 'No workflow configured' },
+      payload: { reason: 'Approval-free by policy' },
     });
     return null;
+  }
+
+  const wfRes = await client.query(WORKFLOW_SQL, [companyId, ctx.tenantId, input.entityType]);
+  const wf = wfRes.rows[0];
+  if (!wf) {
+    // Fail closed: a missing workflow is a configuration error, not an
+    // auto-approval. The only sanctioned exemption — requiresApproval === false —
+    // is handled above, so reaching here always means the administrator must
+    // configure a workflow before this document can be submitted.
+    throw badRequest(
+      `No approval workflow is configured for ${input.entityType}; an administrator must configure one before this document can be submitted`
+    );
   }
 
   const steps: ApprovalStep[] = (wf.config as unknown as ApprovalStep[]) ?? [];
@@ -116,11 +246,12 @@ export async function startWorkflow(client: pg.PoolClient, ctx: Ctx, input: Star
     );
   }
 
+  const materialHash = await computeMaterialHash(client, ctx, input.entityType, input.entityId);
   const instanceRes = await client.query(
     `INSERT INTO workflow_instances
-       (company_id, tenant_id, workflow_id, entity_type, entity_id, entity_code, current_step, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,1,$7) RETURNING id`,
-    [companyId, ctx.tenantId, wf.id, input.entityType, input.entityId, input.entityCode ?? null, ctx.userId ?? null]
+       (company_id, tenant_id, workflow_id, entity_type, entity_id, entity_code, current_step, created_by, amount, material_hash)
+     VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9) RETURNING id`,
+    [companyId, ctx.tenantId, wf.id, input.entityType, input.entityId, input.entityCode ?? null, ctx.userId ?? null, input.amount ?? null, materialHash]
   );
   const instanceId = Number(instanceRes.rows[0].id);
 
@@ -137,6 +268,14 @@ export async function startWorkflow(client: pg.PoolClient, ctx: Ctx, input: Star
         : [];
     const approverRoleId = roleCodes[0] ? (roleIds.get(roleCodes[0]) ?? null) : null;
     const alternativeRoleId = roleCodes[1] ? (roleIds.get(roleCodes[1]) ?? null) : null;
+    // Fail closed: a step that names a role which does not exist for this
+    // company would otherwise create an unassigned task that any approver could
+    // decide. Surface the misconfiguration instead.
+    if (roleCodes.length && approverRoleId === null && alternativeRoleId === null) {
+      throw badRequest(
+        `Approval step "${step.name}" references role(s) ${roleCodes.join(', ')} that do not exist for this company`
+      );
+    }
     await client.query(
       `INSERT INTO approval_tasks
          (instance_id, step_seq, step_name, approver_role_id, alternative_role_id, approver_user_id, status, due_at)
@@ -176,34 +315,53 @@ export async function startWorkflow(client: pg.PoolClient, ctx: Ctx, input: Star
 export async function completeWorkflow(client: pg.PoolClient, ctx: Ctx, instanceId: number) {
   const instRes = await client.query(
     `SELECT i.*, w.code AS workflow_code FROM workflow_instances i
-     JOIN workflows w ON w.id = i.workflow_id WHERE i.id = $1`,
+     JOIN workflows w ON w.id = i.workflow_id WHERE i.id = $1 FOR UPDATE OF i`,
     [instanceId]
   );
   const inst = instRes.rows[0];
   if (!inst) throw notFound('Workflow instance not found');
-  await client.query(
-    `UPDATE workflow_instances SET status = 'APPROVED', current_step = current_step, completed_at = now() WHERE id = $1`,
-    [instanceId]
-  );
   const entity = ENTITIES[String(inst.entity_type)];
-  // Security jobs drive their own stepwise status transitions inside the
-  // securityPrinting service (approval vs materials authorization), so the
-  // generic status update + side effect must be skipped for them.
-  if (entity && String(inst.entity_type) !== 'security_printing.jobs') {
-    if (String(inst.entity_type) === 'hr.payrolls') {
-      // Payroll approvals carry the full lifecycle evidence (status history,
-      // decision, lock, audit) through the payroll lifecycle service instead of
-      // the bare status update used by document-style entities.
-      await payrollLifecycle.recordWorkflowDecision(client, ctx, {
-        payrollId: Number(inst.entity_id),
-        approved: true,
-      });
-    } else {
-      await client.query(
-        `UPDATE ${entity.table} SET ${entity.statusColumn} = $1 WHERE id = $2`,
-        [entity.approvedStatus, Number(inst.entity_id)]
-      );
-      await runApprovalSideEffect(client, ctx, String(inst.entity_type), Number(inst.entity_id));
+  const isSecurity = String(inst.entity_type) === 'security_printing.jobs';
+  const isPayroll = String(inst.entity_type) === 'hr.payrolls';
+  // Approval is separated from execution for documents whose approval side
+  // effect moves money or stock. Those are left EXECUTION_PENDING after every
+  // step signs, and a separate permissioned execute step posts/releases them.
+  const needsExecution =
+    !!entity && (entity.onApprove === 'post' || entity.onApprove === 'release') && !isSecurity && !isPayroll;
+
+  if (needsExecution) {
+    await client.query(
+      `UPDATE workflow_instances SET status = 'EXECUTION_PENDING' WHERE id = $1`,
+      [instanceId]
+    );
+    await client.query(
+      `UPDATE ${entity!.table} SET ${entity!.statusColumn} = $1 WHERE id = $2`,
+      [entity!.approvedStatus, Number(inst.entity_id)]
+    );
+  } else {
+    await client.query(
+      `UPDATE workflow_instances SET status = 'APPROVED', completed_at = now() WHERE id = $1`,
+      [instanceId]
+    );
+    // Security jobs drive their own stepwise status transitions inside the
+    // securityPrinting service (approval vs materials authorization), so the
+    // generic status update + side effect must be skipped for them.
+    if (entity && !isSecurity) {
+      if (isPayroll) {
+        // Payroll approvals carry the full lifecycle evidence (status history,
+        // decision, lock, audit) through the payroll lifecycle service instead of
+        // the bare status update used by document-style entities.
+        await payrollLifecycle.recordWorkflowDecision(client, ctx, {
+          payrollId: Number(inst.entity_id),
+          approved: true,
+        });
+      } else {
+        await client.query(
+          `UPDATE ${entity.table} SET ${entity.statusColumn} = $1 WHERE id = $2`,
+          [entity.approvedStatus, Number(inst.entity_id)]
+        );
+        await runApprovalSideEffect(client, ctx, String(inst.entity_type), Number(inst.entity_id));
+      }
     }
   }
   await emitEvent(client, ctx, {
@@ -211,7 +369,7 @@ export async function completeWorkflow(client: pg.PoolClient, ctx: Ctx, instance
     entityType: inst.entity_type,
     entityId: inst.entity_id,
     entityCode: inst.entity_code,
-    payload: { instanceId, workflow: inst.workflow_code },
+    payload: { instanceId, workflow: inst.workflow_code, executionPending: needsExecution },
   });
   await notifyRoleAdvanced(client, ctx, ['system_administrator'], {
     type: 'APPROVAL_RESULT',
@@ -233,6 +391,62 @@ export async function completeWorkflow(client: pg.PoolClient, ctx: Ctx, instance
       severity: 'SUCCESS',
     });
   }
+}
+
+/**
+ * Execute a fully approved workflow: run the post/release side effect that
+ * approval deliberately deferred, and mark the instance EXECUTED. Segregation
+ * of duties is enforced here - whoever approved the document may not execute it.
+ */
+export async function executeWorkflow(client: pg.PoolClient, ctx: Ctx, instanceId: number) {
+  const user = ctx.userId;
+  if (!user) throw forbidden();
+  const instRes = await client.query(
+    `SELECT i.*, w.code AS workflow_code FROM workflow_instances i
+     JOIN workflows w ON w.id = i.workflow_id WHERE i.id = $1 FOR UPDATE OF i`,
+    [instanceId]
+  );
+  const inst = instRes.rows[0];
+  if (!inst) throw notFound('Workflow instance not found');
+  if (inst.status !== 'EXECUTION_PENDING') {
+    throw badRequest(`Workflow is ${inst.status}, not awaiting execution`);
+  }
+  const entity = ENTITIES[String(inst.entity_type)];
+  if (!entity || (entity.onApprove !== 'post' && entity.onApprove !== 'release')) {
+    throw badRequest('This workflow has no execution side effect');
+  }
+  const decided = await client.query(
+    `SELECT 1 FROM approval_tasks WHERE instance_id = $1 AND decided_by = $2 LIMIT 1`,
+    [instanceId, user]
+  );
+  if (decided.rows.length > 0) {
+    throw forbidden('Segregation of duties: you approved this document and may not execute it');
+  }
+  await runApprovalSideEffect(client, ctx, String(inst.entity_type), Number(inst.entity_id));
+  await client.query(
+    `UPDATE workflow_instances SET status = 'EXECUTED', completed_at = now(), executed_by = $2, executed_at = now()
+     WHERE id = $1`,
+    [instanceId, user]
+  );
+  await emitEvent(client, ctx, {
+    eventType: `${String(inst.entity_type).replace('.', '_')}.executed`,
+    entityType: inst.entity_type,
+    entityId: inst.entity_id,
+    entityCode: inst.entity_code,
+    payload: { instanceId, workflow: inst.workflow_code },
+  });
+  const submitterId = Number(inst.created_by);
+  if (submitterId > 0) {
+    await notifyUserAdvanced(client, ctx, submitterId, {
+      type: 'APPROVAL_RESULT',
+      title: 'Your request was executed',
+      body: `${inst.entity_code ?? `#${inst.entity_id}`} was executed`,
+      entityType: inst.entity_type,
+      entityId: inst.entity_id,
+      severity: 'SUCCESS',
+    });
+  }
+  return { status: 'EXECUTED' };
 }
 
 export async function rejectWorkflow(client: pg.PoolClient, ctx: Ctx, instanceId: number, comment?: string) {
@@ -305,15 +519,21 @@ export async function decideTask(
 ) {
   const user = ctx.userId;
   if (!user) throw forbidden();
+  if ((decision === 'REJECTED' || decision === 'RETURNED') && !comment?.trim()) {
+    throw badRequest('A reason is required when rejecting or returning a request');
+  }
+  // Lock the task AND its instance: the completion check ("no PENDING left") and
+  // the status flip must be atomic with the decision, otherwise two concurrent
+  // decisions can each see the other task still PENDING and neither completes.
   const taskRes = await client.query(
-    `SELECT t.*, i.entity_type, i.entity_id, i.entity_code, i.current_step, i.workflow_id,
+    `SELECT t.*, i.entity_type, i.entity_id, i.entity_code, i.current_step, i.workflow_id, i.amount,
             r.code AS role_code, ar.code AS alternative_role_code
      FROM approval_tasks t
      JOIN workflow_instances i ON i.id = t.instance_id
      LEFT JOIN roles r ON r.id = t.approver_role_id
      LEFT JOIN roles ar ON ar.id = t.alternative_role_id
      WHERE t.id = $1 AND i.tenant_id = $2 AND ($3::bigint IS NULL OR i.company_id = $3)
-     FOR UPDATE OF t`,
+     FOR UPDATE OF t, i`,
     [taskId, ctx.tenantId, ctx.companyId ?? null]
   );
   const task = taskRes.rows[0];
@@ -325,14 +545,40 @@ export async function decideTask(
   const roleCodes = [task.role_code, task.alternative_role_code].filter(
     (c: unknown): c is string => typeof c === 'string' && c.length > 0
   );
-  if ((task.approver_role_id || task.alternative_role_id) && roleCodes.length === 0) throw forbidden('Approver role not found');
+  // Fail closed on a dangling task: no direct assignee and no resolvable role
+  // would otherwise be decidable by any holder of the generic approve permission.
+  if (task.approver_user_id == null && task.approver_role_id == null && task.alternative_role_id == null) {
+    throw forbidden('Approval task has no assignee; an administrator must fix the workflow configuration');
+  }
+  let delegationId: number | null = null;
   if (roleCodes.length) {
     const roleCheck = await client.query(
       `SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
        WHERE ur.user_id = $1 AND r.code = ANY($2::text[]) LIMIT 1`,
       [user, roleCodes]
     );
-    if (roleCheck.rows.length === 0) throw forbidden(`Requires role ${roleCodes.join(' or ')}`);
+    if (roleCheck.rows.length === 0) {
+      // Not a permanent holder of the approver role: the user may be acting
+      // under an active delegation. Resolve it here (re-checking ACTIVE + window
+      // at decision time) and enforce that delegation's amount/type authority.
+      const del = await client.query(
+        `SELECT d.id, d.approval_limit FROM delegations d
+         JOIN roles r ON r.id = d.temporary_role_id
+         WHERE d.delegate_user_id = $1 AND d.tenant_id = $2 AND d.status = 'ACTIVE'
+           AND d.starts_at <= now() AND d.expires_at > now()
+           AND r.code = ANY($3::text[])
+         LIMIT 1`,
+        [user, ctx.tenantId, roleCodes]
+      );
+      if (del.rows.length === 0) throw forbidden(`Requires role ${roleCodes.join(' or ')}`);
+      delegationId = Number(del.rows[0].id);
+      await enforceDelegationLimits(
+        client,
+        { id: delegationId, approval_limit: del.rows[0].approval_limit as number | null },
+        String(task.entity_type),
+        task.amount == null ? null : Number(task.amount)
+      );
+    }
   }
 
   // Segregation of duties: the creator/requester of an entity may not decide on
@@ -378,9 +624,9 @@ export async function decideTask(
   }
 
   await client.query(
-    `UPDATE approval_tasks SET status = $2, comment = $3, decided_by = $4, decided_at = now()
+    `UPDATE approval_tasks SET status = $2, comment = $3, decided_by = $4, decided_at = now(), delegation_id = $5
      WHERE id = $1`,
-    [taskId, decision, comment ?? null, user]
+    [taskId, decision, comment ?? null, user, delegationId]
   );
   await logAudit(client, ctx, {
     action: decision.toLowerCase(),

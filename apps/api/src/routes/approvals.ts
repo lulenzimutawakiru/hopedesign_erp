@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { query, tx } from '../db.js';
 import { requirePermission } from '../middleware/authorize.js';
 import { ENTITIES } from '../services/entities.js';
-import { decideTask, getApprovalsQueue } from '../services/workflow.js';
+import { decideTask, executeWorkflow, getApprovalsQueue } from '../services/workflow.js';
 import { asyncHandler, badRequest } from '../utils.js';
 
 export const approvalsRouter = Router();
@@ -79,6 +79,28 @@ approvalsRouter.post(
       (client) => decideTask(client, req.ctx, taskId, decision as 'APPROVED' | 'REJECTED' | 'RETURNED' | 'DELEGATED', comment, delegateToUserId),
       req.ctx
     );
+    res.json({ data: out });
+  })
+);
+
+// Execute a fully approved workflow (post/release the side effect approval
+// deliberately deferred). Separate from approval by design: the executor must
+// not be one of the document's approvers, enforced inside executeWorkflow.
+approvalsRouter.post(
+  '/:instanceId/execute',
+  requirePermission('workflows.instances.execute'),
+  asyncHandler(async (req, res) => {
+    const instanceId = Number(req.params.instanceId);
+    // Resolve the instance scoped to the caller's tenant + company; never trust
+    // a bare id.
+    const instRes = await query(
+      `SELECT id, entity_type, entity_id FROM workflow_instances
+       WHERE id = $1 AND tenant_id = $2 AND company_id = $3`,
+      [instanceId, req.ctx.tenantId, req.ctx.companyId],
+      req.ctx
+    );
+    if (instRes.rows.length === 0) throw badRequest('Workflow instance not found in your workspace');
+    const out = await tx((client) => executeWorkflow(client, req.ctx, instanceId), req.ctx);
     res.json({ data: out });
   })
 );

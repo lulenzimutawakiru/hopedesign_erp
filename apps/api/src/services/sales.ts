@@ -998,12 +998,12 @@ export async function createCreditNote(
   const creditNo = await nextDoc(client, ctx, 'CN');
   const ins = await client.query(
     `INSERT INTO credit_notes
-       (company_id, tenant_id, credit_no, invoice_id, customer_id, credit_date, amount, reason, reason_code, currency, tax_amount)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+       (company_id, tenant_id, credit_no, invoice_id, customer_id, credit_date, amount, reason, reason_code, currency, tax_amount, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, creditNo, input.invoiceId ?? null, input.customerId,
       input.creditDate ?? new Date().toISOString().slice(0, 10), amount, String(input.reason).trim(),
-      input.reasonCode ?? null, currency, taxAmount,
+      input.reasonCode ?? null, currency, taxAmount, ctx.userId ?? null,
     ]
   );
   const creditNoteId = Number(ins.rows[0].id);
@@ -1035,12 +1035,12 @@ export async function createDebitNote(
   const debitNo = await nextDoc(client, ctx, 'DNM');
   const ins = await client.query(
     `INSERT INTO debit_notes
-       (company_id, tenant_id, debit_no, invoice_id, customer_id, debit_date, amount, reason, reason_code, currency, tax_amount)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+       (company_id, tenant_id, debit_no, invoice_id, customer_id, debit_date, amount, reason, reason_code, currency, tax_amount, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, debitNo, input.invoiceId ?? null, Number(input.customerId),
       input.debitDate ?? new Date().toISOString().slice(0, 10), amount, String(input.reason).trim(), reasonCode,
-      currency, taxAmount,
+      currency, taxAmount, ctx.userId ?? null,
     ]
   );
   const debitNoteId = Number(ins.rows[0].id);
