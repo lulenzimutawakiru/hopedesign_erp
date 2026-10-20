@@ -11,6 +11,7 @@ import { healthRouter } from './routes/health.js';
 import { authRouter } from './routes/auth.js';
 import { publicVerificationRouter } from './routes/publicVerification.js';
 import { approvalsRouter } from './routes/approvals.js';
+import { approvalExceptionsRouter } from './routes/approvalExceptions.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { searchRouter } from './routes/search.js';
@@ -188,6 +189,7 @@ app.use('/api/integrations/whatsapp', whatsappEventsRouter, whatsappWebhookError
 // ---- Authenticated API ----
 app.use(authenticate);
 app.use('/api/approvals', approvalsRouter);
+app.use('/api/approval-exceptions', approvalExceptionsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/search', searchRouter);
