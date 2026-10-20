@@ -54,9 +54,9 @@ export const ENTITIES: (CrudConfig & Handlers)[] = [
   { table: 'warehouse_racks', module: 'inventory', resource: 'bins', label: 'Rack', searchable: ['code'], defaultOrder: 't.id ASC' },
   { table: 'warehouse_shelves', module: 'inventory', resource: 'bins', label: 'Shelf', searchable: ['code'], defaultOrder: 't.id ASC' },
   { table: 'warehouse_bins', module: 'inventory', resource: 'bins', label: 'Bin', codeColumn: 'code', searchable: ['code'], defaultOrder: 't.id ASC', qrEntityType: 'BIN' },
-  { table: 'inventory', module: 'inventory', resource: 'stock', label: 'Stock', searchable: [], defaultOrder: 't.id DESC' },
-  { table: 'inventory_movements', module: 'inventory', resource: 'movements', label: 'Stock Movement', searchable: [], defaultOrder: 't.id DESC' },
-  { table: 'inventory_reservations', module: 'inventory', resource: 'reservations', label: 'Reservation', statusColumn: 'status', searchable: [], defaultOrder: 't.id DESC' },
+  { table: 'inventory', module: 'inventory', resource: 'stock', label: 'Stock', searchable: [], defaultOrder: 't.id DESC', readOnly: true },
+  { table: 'inventory_movements', module: 'inventory', resource: 'movements', label: 'Stock Movement', searchable: [], defaultOrder: 't.id DESC', readOnly: true },
+  { table: 'inventory_reservations', module: 'inventory', resource: 'reservations', label: 'Reservation', statusColumn: 'status', searchable: [], defaultOrder: 't.id DESC', readOnly: true },
   { table: 'inventory_adjustments', module: 'inventory', resource: 'adjustments', label: 'Stock Adjustment', entityType: 'inventory.adjustments', codeColumn: 'adjustment_no', statusColumn: 'status', searchable: ['adjustment_no'], defaultOrder: 't.id DESC' },
   { table: 'inventory_transfers', module: 'inventory', resource: 'transfers', label: 'Stock Transfer', entityType: 'inventory.transfers', codeColumn: 'transfer_no', statusColumn: 'status', searchable: ['transfer_no'], defaultOrder: 't.id DESC' },
 

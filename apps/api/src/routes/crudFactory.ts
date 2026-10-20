@@ -41,6 +41,8 @@ export interface CrudConfig {
   searchable?: string[];
   writable?: string[];
   excluded?: string[];
+  /** Read-only entity: list/get/audit/print still work, but every write route is refused. */
+  readOnly?: boolean;
   listSelect?: string;
   defaultOrder?: string;
   sortable?: string[];
@@ -79,6 +81,7 @@ export async function columnsOf(table: string): Promise<string[]> {
 }
 
 export function writableOf(cfg: CrudConfig, cols: string[]): string[] {
+  if (cfg.readOnly) return [];
   const excluded = new Set([
     ...BASE_EXCLUDED,
     ...PROCESS_EXCLUDED,
@@ -293,6 +296,7 @@ export function crudRouter(cfg: CrudConfig): Router {
     '/:id/submit',
     requirePermission(perm('submit')),
     asyncHandler(async (req, res) => {
+      if (cfg.readOnly) throw badRequest('This entity is read-only');
       const id = Number(req.params.id);
       const out = await tx(async (client) => {
         if (cfg.submit) return cfg.submit(client, req.ctx, id);

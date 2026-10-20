@@ -84,13 +84,22 @@ export async function db(sql: string, params: unknown[] = []) {
   return pool.query(sql, params);
 }
 
-/** Tables whose FK to employees has no ON DELETE action. Cleared before the
- * employee row is removed so cleanup never trips a constraint â€” this matters
+/** Tables that reference employees via `employee_id` and are not cleared
+ * automatically (RESTRICT / NO ACTION, never SET NULL). Cleared before the
+ * employee row is removed so cleanup never trips a constraint — this matters
  * when test files share one database (parallel root-level vitest runs, where
- * a group-scoped payroll run's validation flags employees from other files). */
+ * a group-scoped payroll run's validation flags employees from other files).
+ *
+ * 0202 converted every `employee_id -> employees` ON DELETE CASCADE to
+ * RESTRICT, so the formerly-cascaded payroll/attendance/contract tables are
+ * listed explicitly here too. */
 const EMPLOYEE_CHILD_TABLES = [
   'asset_assignments',
   'attendance',
+  'attendance_adjustments',
+  'attendance_exceptions',
+  'attendance_punch_events',
+  'attendance_records',
   'benefit_claims',
   'benefit_enrollments',
   'bonus_records',
@@ -98,23 +107,33 @@ const EMPLOYEE_CHILD_TABLES = [
   'disciplinary_actions',
   'disciplinary_cases',
   'employee_benefits',
+  'employee_certifications',
   'employee_competencies',
   'employee_deductions',
+  'employee_dependants',
   'employee_earnings',
+  'employee_emergency_contacts',
   'employee_identities',
   'employee_loans',
   'employee_movements',
   'employee_payroll_components',
+  'employee_payroll_profiles',
+  'employee_qualifications',
   'employee_requests',
   'employee_salaries',
+  'employee_skills',
+  'employee_tax_profiles',
+  'employee_work_history',
+  'employment_contracts',
   'final_settlements',
   'fraud_alerts',
   'grievances',
+  'hikvision_employee_links',
   'leave_balances',
   'leave_requests',
   'offboarding_instances',
-  'overtime_records',
   'onboarding_instances',
+  'overtime_records',
   'overtime_requests',
   'payment_batch_items',
   'payment_transactions',
@@ -133,6 +152,7 @@ const EMPLOYEE_CHILD_TABLES = [
   'performance_reviews',
   'position_assignments',
   'practitioners',
+  'salary_advances',
   'salary_histories',
   'shift_assignments',
   'statutory_calculations',

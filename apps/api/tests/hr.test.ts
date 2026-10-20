@@ -71,6 +71,7 @@ describe('HR and payroll', () => {
     expect(Math.round(Number(tb.body.data.totals.debit) * 100)).toBe(Math.round(Number(tb.body.data.totals.credit) * 100));
 
     // Self-clean so re-runs never collide with the single-day period overlap guard.
+    await db(`DELETE FROM journal_lines WHERE entry_id = $1`, [Number(posted.body.data.journalId)]);
     await db(`DELETE FROM journal_entries WHERE id = $1`, [Number(posted.body.data.journalId)]);
     await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
     await db(`DELETE FROM employee_loans WHERE employee_id IN ($1,$2)`, [seniorId, juniorId]);
@@ -167,6 +168,7 @@ describe('HR and payroll', () => {
     expect(Number(loanRow.rows[0].balance)).toBe(300000);
 
     // Self-clean so re-runs never collide.
+    await db(`DELETE FROM journal_lines WHERE entry_id = $1`, [Number(posted.body.data.journalId)]);
     await db(`DELETE FROM journal_entries WHERE id = $1`, [Number(posted.body.data.journalId)]);
     await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
     await db(`DELETE FROM employee_loans WHERE employee_id = $1`, [employeeId]);
@@ -289,6 +291,7 @@ describe('HR and payroll', () => {
     expect(rejectedRow.rows[0].payroll_id).toBeNull();
 
     // Self-clean so re-runs never collide.
+    await db(`DELETE FROM journal_lines WHERE entry_id = $1`, [Number(posted.body.data.journalId)]);
     await db(`DELETE FROM journal_entries WHERE id = $1`, [Number(posted.body.data.journalId)]);
     await db(`DELETE FROM payroll_arrears WHERE employee_id = $1`, [employeeId]);
     await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
