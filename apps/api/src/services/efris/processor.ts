@@ -11,6 +11,7 @@
  */
 import pg from 'pg';
 import { pool } from '../../db.js';
+import { toISODate } from '../../utils.js';
 import { logAudit } from '../audit.js';
 import { emitEvent } from '../events.js';
 import { notifyRoleAdvanced } from '../communication.js';
@@ -433,7 +434,7 @@ async function loadGoodsReceiptStockSource(client: pg.PoolClient, row: ClaimedFi
       unitPrice: Number(it.unit_cost ?? 0),
       remarks: null as string | null,
     }));
-  const received = head.received_at != null ? String(head.received_at) : String(row.txn_date);
+  const received = toISODate(head.received_at) ?? toISODate(row.txn_date) ?? new Date().toISOString().slice(0, 10);
   base.stock = {
     operationType: '101',
     stockInType: '102',
@@ -444,7 +445,7 @@ async function loadGoodsReceiptStockSource(client: pg.PoolClient, row: ClaimedFi
     // The reference client leaves invoiceNo empty on a purchase receipt; the
     // supplier's e-invoice number is not carried until it is matched.
     invoiceNo: null,
-    stockInDate: received.slice(0, 10),
+    stockInDate: received,
     remarks: null,
     lines,
   };
@@ -484,7 +485,7 @@ async function loadAdjustmentStockSource(client: pg.PoolClient, row: ClaimedFisc
       remarks: null,
     });
   }
-  const effective = head.posted_at ?? head.updated_at ?? row.txn_date;
+  const effective = toISODate(head.posted_at ?? head.updated_at ?? row.txn_date) ?? new Date().toISOString().slice(0, 10);
   base.stock = {
     operationType: '102',
     stockInType: '',
@@ -493,7 +494,7 @@ async function loadAdjustmentStockSource(client: pg.PoolClient, row: ClaimedFisc
     supplierName: null,
     branchId: head.branch_id != null ? String(head.branch_id) : null,
     invoiceNo: null,
-    stockInDate: String(effective).slice(0, 10),
+    stockInDate: effective,
     remarks: head.reason != null ? String(head.reason) : null,
     lines,
   };
@@ -592,7 +593,7 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
       docRefType: row.doc_ref_type,
       docRefCode: row.doc_ref_code,
       docRefId: row.doc_ref_id,
-      txnDate: String(row.txn_date).slice(0, 10),
+      txnDate: toISODate(row.txn_date) ?? new Date().toISOString().slice(0, 10),
       currency: row.currency,
       grossAmount: Number(row.gross_amount),
       taxAmount: Number(row.tax_amount),
