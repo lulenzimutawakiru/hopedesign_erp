@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { query, tx } from '../db.js';
 import { requirePermission } from '../middleware/authorize.js';
 import { ENTITIES } from '../services/entities.js';
-import { decideTask, executeWorkflow, getApprovalsQueue } from '../services/workflow.js';
+import { decideTask, executeWorkflow, getApprovalHistory, getApprovalsQueue } from '../services/workflow.js';
 import { asyncHandler, badRequest } from '../utils.js';
 
 export const approvalsRouter = Router();
@@ -38,6 +38,17 @@ approvalsRouter.get(
   asyncHandler(async (req, res) => {
     const rows = await getApprovalsQueue(req.ctx, req.auth!.id);
     res.json({ count: rows.length });
+  })
+);
+
+approvalsRouter.get(
+  '/history',
+  requirePermission('workflows.instances.view'),
+  asyncHandler(async (req, res) => {
+    const rows = await getApprovalHistory(req.ctx, req.auth!.id, {
+      status: req.query.status != null && String(req.query.status).length > 0 ? String(req.query.status) : null,
+    });
+    res.json({ data: rows, count: rows.length });
   })
 );
 

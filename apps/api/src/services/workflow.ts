@@ -783,7 +783,7 @@ export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<Appro
             i.entity_type, i.entity_id, i.entity_code, i.workflow_id,
             w.name AS workflow_name,
             t.step_seq, t.step_name, t.status, t.due_at,
-            i.company_id, i.tenant_id, i.created_by, i.submitted_at,
+            i.company_id, i.tenant_id, i.created_by, i.submitted_at, i.amount,
             t.approver_user_id,
             NOT EXISTS (
               SELECT 1 FROM approval_tasks e
@@ -822,4 +822,51 @@ export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<Appro
           : null;
     return { ...row, actionable: blockedReason === null, blocked_reason: blockedReason };
   });
+}
+
+/**
+ * Approval decisions the user has already recorded (the inbox's history tab),
+ * newest first. Read-only: every row is a past decision, so there is nothing to
+ * act on here. Filterable by decision status; the instance status is included
+ * so the reader can see what happened to the document afterwards (still in
+ * flight, executed, rejected, …).
+ */
+export async function getApprovalHistory(
+  ctx: Ctx,
+  userId: number,
+  opts: { status?: string | null } = {}
+): Promise<Record<string, unknown>[]> {
+  const { query } = await import('../db.js');
+  const params: unknown[] = [userId];
+  const conds = [
+    't.decided_by = $1',
+    "t.status IN ('APPROVED','REJECTED','RETURNED','DELEGATED')",
+  ];
+  let i = 2;
+  if (opts.status && opts.status !== 'ALL') {
+    conds.push('t.status = $' + i);
+    params.push(opts.status);
+    i += 1;
+  }
+  const res = await query(
+    `SELECT t.id AS task_id,
+            i.id AS instance_id,
+            i.entity_type, i.entity_id, i.entity_code, i.amount, i.status AS instance_status,
+            w.name AS workflow_name,
+            t.step_seq, t.step_name, t.status, t.comment, t.decided_at,
+            i.submitted_at, i.created_by AS submitted_by,
+            du.first_name || ' ' || du.last_name AS decided_by_name,
+            su.first_name || ' ' || su.last_name AS submitted_by_name
+     FROM approval_tasks t
+     JOIN workflow_instances i ON i.id = t.instance_id
+     JOIN workflows w ON w.id = i.workflow_id
+     LEFT JOIN users du ON du.id = t.decided_by
+     LEFT JOIN users su ON su.id = i.created_by
+     WHERE ${conds.join(' AND ')}
+     ORDER BY t.decided_at DESC
+     LIMIT 200`,
+    params,
+    { tenantId: ctx.tenantId, userId }
+  );
+  return res.rows as unknown as Record<string, unknown>[];
 }
