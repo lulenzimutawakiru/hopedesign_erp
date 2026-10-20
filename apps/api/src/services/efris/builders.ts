@@ -8,7 +8,16 @@
  * fixed/renamed wrapper the current URA specification requires.
  */
 import type { EfrisConfigurationRow, EfrisTaxpayerRow } from './config.js';
-import { buildT109Content, buildT110Content, resolveDeviceNo, type UraLine, type UraParty } from './protocol.js';
+import {
+  buildT109Content,
+  buildT110Content,
+  buildT131Content,
+  isStockDocType,
+  resolveDeviceNo,
+  type UraLine,
+  type UraParty,
+  type UraStockInput,
+} from './protocol.js';
 
 /** Seller fields the payload builder actually reads from the taxpayer row. */
 export type EfrisTaxpayerLite = Pick<
@@ -49,6 +58,29 @@ export interface FiscalLine {
   vatApplicableFlag?: string | null;
 }
 
+/** A T131 stock line: the registered goods identity + a quantity and unit value. */
+export interface StockFiscalLine {
+  goodsCode: string;
+  measureUnit: string;
+  quantity: number;
+  unitPrice: number;
+  remarks?: string | null;
+}
+
+/** The stock-movement context a T131 build needs (loaded off the ERP source). */
+export interface StockSource {
+  operationType: string;
+  stockInType: string;
+  adjustType: string;
+  supplierTin: string | null;
+  supplierName: string | null;
+  branchId: string | null;
+  invoiceNo: string | null;
+  stockInDate: string;
+  remarks: string | null;
+  lines: StockFiscalLine[];
+}
+
 export interface FiscalBuildContext {
   docType: string;
   docRefType: string;
@@ -71,6 +103,8 @@ export interface FiscalBuildContext {
   reason?: string | null;
   applicationTime?: string | null;
   sellersReferenceNo?: string | null;
+  /** T131 stock-movement source (present for stock doc types). */
+  stock?: StockSource | null;
 }
 
 export interface BuiltFiscalPayload {
@@ -131,6 +165,43 @@ function asLines(lines: FiscalLine[] | undefined): UraLine[] {
     goodsCategoryName: line.goodsCategoryName ?? null,
     vatApplicableFlag: line.vatApplicableFlag ?? null,
   }));
+}
+
+/** Build the T131 goodsStockIn/goodsStockInItem body for a stock doc type. */
+function buildStockContent(ctx: FiscalBuildContext): Record<string, unknown> {
+  const stock = ctx.stock ?? {
+    operationType: '101',
+    stockInType: '102',
+    adjustType: '',
+    supplierTin: null,
+    supplierName: null,
+    branchId: null,
+    invoiceNo: null,
+    stockInDate: ctx.txnDate,
+    remarks: null,
+    lines: [] as StockFiscalLine[],
+  };
+  const input: UraStockInput = {
+    docType: ctx.docType,
+    docRefCode: ctx.docRefCode,
+    stockInDate: stock.stockInDate || ctx.txnDate,
+    operationType: stock.operationType || '101',
+    stockInType: stock.stockInType ?? null,
+    adjustType: stock.adjustType ?? null,
+    supplierTin: stock.supplierTin,
+    supplierName: stock.supplierName,
+    branchId: stock.branchId,
+    invoiceNo: stock.invoiceNo,
+    remarks: stock.remarks ?? ctx.remarks ?? ctx.requestRef,
+    lines: stock.lines.map((line) => ({
+      goodsCode: line.goodsCode,
+      measureUnit: line.measureUnit,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      remarks: line.remarks ?? null,
+    })),
+  };
+  return buildT131Content(input);
 }
 
 /** Resolve the OAuth body and the URA T109 body for a claimed transaction. */
@@ -223,6 +294,15 @@ export function buildSubmitPayload(ctx: FiscalBuildContext): BuiltFiscalPayload 
     if (m.envelope && typeof m.envelope === 'string') {
       payload = { [m.envelope]: payload };
     }
+  }
+  // Stock movements are recorded through T131, whose body replaces the T109/T110
+  // tax-document shape; the OAuth and S2S transports must both carry it. Applied
+  // after any envelope/fixed mapping so a stock payload is never rebuilt from the
+  // T109 `base`.
+  if (isStockDocType(ctx.docType)) {
+    const stock = buildStockContent(ctx);
+    ura = stock;
+    payload = stock;
   }
   return { payload, ura };
 }

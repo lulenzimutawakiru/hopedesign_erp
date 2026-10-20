@@ -514,6 +514,23 @@ export function invoiceTypeFor(docType: string): string {
   return '1';
 }
 
+/**
+ * A stock movement is not a tax document: URA records it through the T131
+ * stock-in/reconciliation interface, which returns a stock acknowledgement
+ * rather than an FDN + verification code. These doc_type values are routed to
+ * T131 instead of T109.
+ */
+export function isStockDocType(docType: string): boolean {
+  const kind = docType.trim().toUpperCase();
+  return kind === 'PURCHASE_RECEIPT'
+    || kind === 'GOODS_RECEIPT'
+    || kind === 'STOCK_IN'
+    || kind === 'STOCK_MOVEMENT'
+    || kind === 'STOCK_RECONCILIATION'
+    || kind === 'STOCK_ADJUSTMENT'
+    || kind === 'STOCK_OUT';
+}
+
 export function interfaceCodeFor(docType: string, flags: Record<string, unknown> | null | undefined): string {
   const override = flagString(flags, 'interfaceCode', 'interface_code');
   if (/^T\d{3}$/.test(override)) return override;
@@ -525,6 +542,7 @@ export function interfaceCodeFor(docType: string, flags: Record<string, unknown>
     // credit note"), not T109. Debit notes stay on T109 as positive invoices.
     return 'T110';
   }
+  if (isStockDocType(kind)) return 'T131';
   return 'T109';
 }
 
@@ -922,5 +940,108 @@ export function buildT110Content(input: UraInvoiceInput): Record<string, unknown
       invoiceIndustryCode: '102',
       branchId: '',
     },
+  };
+}
+
+/**
+ * T131 stock-in `stockInType` options (from the gateway's own option list).
+ * `102` local purchase is the default; `101` is import.
+ */
+export const URA_STOCK_IN_TYPES: Record<string, string> = {
+  '101': 'Import',
+  '102': 'Local Purchase',
+};
+
+/**
+ * T131 stock-reconciliation `adjustType` options (from the gateway's own option
+ * list). Only these four exist; the ERP maps its adjustment types onto them.
+ */
+export const URA_ADJUSTMENT_TYPES: Record<string, string> = {
+  '101': 'Expired Goods',
+  '102': 'Damaged Goods',
+  '103': 'Personal Uses',
+  '104': 'Others. (Please specify)',
+};
+
+/**
+ * Map an ERP inventory-adjustment type onto a URA T131 adjustType code without
+ * inventing any URA code. URA only exposes four reasons (expired / damaged /
+ * personal use / others), so damage maps to 102 and every other ERP reason
+ * (stocktake, cycle count, correction, scrap, quarantine, release) maps to 104
+ * "Others".
+ */
+export function uraAdjustmentType(erpAdjustmentType: string | null | undefined): string {
+  const kind = (erpAdjustmentType ?? '').trim().toUpperCase();
+  if (kind === 'DAMAGE' || kind === 'DAMAGED') return '102';
+  return '104';
+}
+
+export interface UraStockLine {
+  /** URA goods code (products.efris_goods_code) — never a bare ERP SKU. */
+  goodsCode: string;
+  /** URA unit-of-measure code (products.efris_unit_of_measure, e.g. "CT"). */
+  measureUnit: string;
+  quantity: number;
+  /** Unit value URA records for the stock line (gross/unit cost). */
+  unitPrice: number;
+  remarks?: string | null;
+}
+
+export interface UraStockInput {
+  docType: string;
+  docRefCode: string;
+  /** YYYY-MM-DD the stock movement is effective. */
+  stockInDate: string;
+  /** '101' stock in, '102' adjustment/reconciliation. */
+  operationType: string;
+  /** stockInType: '101' import / '102' local purchase (stock in only). */
+  stockInType?: string | null;
+  /** adjustType: '101'-'104' (reconciliation only). */
+  adjustType?: string | null;
+  supplierTin?: string | null;
+  supplierName?: string | null;
+  branchId?: string | null;
+  /** Supplier invoice/receipt reference, when the movement references one. */
+  invoiceNo?: string | null;
+  remarks?: string | null;
+  lines: UraStockLine[];
+}
+
+/**
+ * Inner T131 stock-in / stock-reconciliation content. The structure is the
+ * gateway's `goodsStockIn` + `goodsStockInItem` shape; amounts are strings, and
+ * every empty optional field is sent as '' exactly as the reference client does.
+ * T131 never returns an FDN — success is a `returnCode` 00 stock acknowledgement.
+ */
+export function buildT131Content(input: UraStockInput): Record<string, unknown> {
+  const isReconciliation = input.operationType === '102';
+  return {
+    goodsStockIn: {
+      operationType: input.operationType,
+      supplierTin: compact(input.supplierTin),
+      supplierName: compact(input.supplierName),
+      adjustType: isReconciliation ? compact(input.adjustType) : '',
+      remarks: compact(input.remarks).slice(0, 200),
+      stockInDate: compact(input.stockInDate),
+      stockInType: isReconciliation ? '' : compact(input.stockInType) || '102',
+      productionBatchNo: '',
+      productionDate: '',
+      branchId: compact(input.branchId),
+      invoiceNo: compact(input.invoiceNo),
+      isCheckBatchNo: '',
+      rollBackIfError: '',
+      goodsTypeCode: '101',
+    },
+    goodsStockInItem: input.lines.map((line) => ({
+      commodityGoodsId: '',
+      goodsCode: compact(line.goodsCode),
+      measureUnit: compact(line.measureUnit),
+      quantity: qty(line.quantity),
+      unitPrice: money(line.unitPrice),
+      remarks: compact(line.remarks),
+      fuelTankId: '',
+      lossQuantity: '',
+      originalQuantity: '',
+    })),
   };
 }

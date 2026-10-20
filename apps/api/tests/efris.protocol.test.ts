@@ -8,6 +8,7 @@ import {
   buildEncryptedEnvelope,
   buildT109Content,
   buildT110Content,
+  buildT131Content,
   canonicalizeEndpoint,
   decryptAesEcb,
   encryptAesEcb,
@@ -15,10 +16,12 @@ import {
   extractAesKey,
   interfaceCodeFor,
   invoiceTypeFor,
+  isStockDocType,
   preEncodeForOfflineEnabler,
   rsaDecryptBase64,
   signRsaSha1,
   unwrapResponse,
+  uraAdjustmentType,
 } from '../src/services/efris/protocol.js';
 import { extractFiscalIdentifiers } from '../src/services/efris/client.js';
 
@@ -326,5 +329,70 @@ describe('URA EFRIS protocol', () => {
       vrc: 'VRC-9',
       qrRef: 'https://efristest.ura.go.ug/qr/FDN-TEST-001',
     });
+  });
+
+  it('routes stock movement to T131 and builds the goodsStockIn body', () => {
+    expect(isStockDocType('PURCHASE_RECEIPT')).toBe(true);
+    expect(isStockDocType('STOCK_ADJUSTMENT')).toBe(true);
+    expect(isStockDocType('SALES_INVOICE')).toBe(false);
+    expect(isStockDocType('RECEIPT')).toBe(false);
+    expect(interfaceCodeFor('PURCHASE_RECEIPT', null)).toBe('T131');
+    expect(interfaceCodeFor('STOCK_ADJUSTMENT', null)).toBe('T131');
+    expect(interfaceCodeFor('RECEIPT', null)).toBe('T109');
+
+    const stockIn = buildT131Content({
+      docType: 'PURCHASE_RECEIPT',
+      docRefCode: 'GRN-00000001',
+      stockInDate: '2026-10-20',
+      operationType: '101',
+      stockInType: '102',
+      adjustType: null,
+      supplierTin: '1000000002',
+      supplierName: 'Paper Supplies Ltd',
+      branchId: '1',
+      invoiceNo: null,
+      remarks: null,
+      lines: [{ goodsCode: 'Natex A4 superior white Paper 80g/m²', measureUnit: 'CT', quantity: 10, unitPrice: 56000 }],
+    });
+    const head = stockIn.goodsStockIn as Record<string, string>;
+    expect(head.operationType).toBe('101');
+    expect(head.stockInType).toBe('102');
+    expect(head.adjustType).toBe('');
+    expect(head.goodsTypeCode).toBe('101');
+    expect(head.supplierTin).toBe('1000000002');
+    expect(head.branchId).toBe('1');
+    const item = (stockIn.goodsStockInItem as Array<Record<string, string>>)[0];
+    expect(item.goodsCode).toBe('Natex A4 superior white Paper 80g/m²');
+    expect(item.measureUnit).toBe('CT');
+    expect(item.quantity).toBe('10');
+    expect(item.unitPrice).toBe('56000.00');
+    expect(item.commodityGoodsId).toBe('');
+  });
+
+  it('maps an ERP adjustment type onto a URA T131 adjustType', () => {
+    expect(uraAdjustmentType('DAMAGE')).toBe('102');
+    expect(uraAdjustmentType('DAMAGED')).toBe('102');
+    expect(uraAdjustmentType('STOCKTAKE')).toBe('104');
+    expect(uraAdjustmentType(null)).toBe('104');
+
+    const reconciliation = buildT131Content({
+      docType: 'STOCK_ADJUSTMENT',
+      docRefCode: 'ADJ-00000001',
+      stockInDate: '2026-10-20',
+      operationType: '102',
+      stockInType: null,
+      adjustType: uraAdjustmentType('DAMAGE'),
+      supplierTin: null,
+      supplierName: null,
+      branchId: null,
+      invoiceNo: null,
+      remarks: 'Stock loss',
+      lines: [{ goodsCode: 'Natex A4 superior white Paper 80g/m²', measureUnit: 'CT', quantity: 2, unitPrice: 56000 }],
+    });
+    const head = reconciliation.goodsStockIn as Record<string, string>;
+    expect(head.operationType).toBe('102');
+    expect(head.adjustType).toBe('102');
+    expect(head.stockInType).toBe('');
+    expect(head.supplierTin).toBe('');
   });
 });

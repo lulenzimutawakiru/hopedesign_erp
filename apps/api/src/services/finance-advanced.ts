@@ -599,6 +599,58 @@ export async function registerEfrisDocument(
   return toCamelRow(row);
 }
 
+/** Configuration gate flags that opt a document type into auto-registration. */
+export type EfrisAutoFiscalGate =
+  | 'fiscalize_sales_on_post'
+  | 'fiscalize_stock_on_post'
+  | 'fiscalize_purchases_on_post';
+
+/**
+ * Best-effort auto-registration for a non-invoice ERP document (goods receipt,
+ * inventory adjustment, B2C receipt). Mirrors finance.ts queueAutoFiscalization:
+ * runs under a SAVEPOINT, resolves the active configuration, checks the specific
+ * gate flag, and registers (never fiscalizes) the document. A registration
+ * failure never aborts the ERP posting that triggered it.
+ */
+export async function autoRegisterEfrisDocument(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  gate: EfrisAutoFiscalGate,
+  input: {
+    docType: string; docRefType: string; docRefId: number; docRefCode: string;
+    txnDate?: string | null; currency?: string | null; grossAmount: number; taxAmount?: number | null;
+  }
+): Promise<void> {
+  if (ctx.companyId == null || ctx.tenantId == null) return;
+  const docRefId = Number(input.docRefId);
+  if (!Number.isFinite(docRefId) || docRefId <= 0) return;
+  await client.query('SAVEPOINT efris_autofiscal');
+  try {
+    const target = await resolveFiscalTarget(client, ctx);
+    if (!target || target.config[gate] !== true) {
+      await client.query('RELEASE SAVEPOINT efris_autofiscal');
+      return;
+    }
+    await registerEfrisDocument(client, ctx, {
+      docType: input.docType,
+      docRefType: input.docRefType,
+      docRefId,
+      docRefCode: input.docRefCode,
+      txnDate: input.txnDate ? String(input.txnDate) : undefined,
+      currency: input.currency ? String(input.currency) : undefined,
+      grossAmount: Number(input.grossAmount) || 0,
+      taxAmount: Number(input.taxAmount) || 0,
+      idempotencyKey: `AUTO:${input.docType}:${docRefId}`,
+      requestRef: input.docRefCode,
+    });
+    await client.query('RELEASE SAVEPOINT efris_autofiscal');
+  } catch (err) {
+    await client.query('ROLLBACK TO SAVEPOINT efris_autofiscal');
+    await client.query('RELEASE SAVEPOINT efris_autofiscal');
+    console.error('[efris][auto-register]', err instanceof Error ? err.message : err);
+  }
+}
+
 /**
  * Queue a registered ERP document for the background fiscalization worker.
  *

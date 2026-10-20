@@ -15,9 +15,9 @@ import { logAudit } from '../audit.js';
 import { emitEvent } from '../events.js';
 import { notifyRoleAdvanced } from '../communication.js';
 import { resolveCredentials, notificationRoleCodes, type EfrisConfigurationRow } from './config.js';
-import { buildSubmitPayload, type EfrisTaxpayerLite, type FiscalLine, type FiscalParty } from './builders.js';
+import { buildSubmitPayload, type EfrisTaxpayerLite, type FiscalLine, type FiscalParty, type StockSource } from './builders.js';
 import { submitFiscalDocument, extractFiscalIdentifiers, EfrisClientError, queryCreditNoteApplication, fetchCreditNoteDocument } from './client.js';
-import { digFirst } from './protocol.js';
+import { digFirst, isStockDocType, uraAdjustmentType } from './protocol.js';
 
 /** Row returned by efris_claim_fiscal_batch(). */
 export interface ClaimedFiscalTransaction {
@@ -199,6 +199,8 @@ interface FiscalSource {
   remarks: string | null;
   reasonCode: string | null;
   reason: string | null;
+  /** Present for stock doc types (T131); null otherwise. */
+  stock: StockSource | null;
 }
 
 /** Original invoice's FDN (invoiceNo) and internal invoiceId, for a T110 credit note. */
@@ -256,7 +258,7 @@ function uraCreditNoteReason(
 
 /** Buyer, lines and the original FDN for a credit or debit note. Missing rows fall back to the transaction totals. */
 async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransaction): Promise<FiscalSource> {
-  const empty: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, oriInvoiceId: null, remarks: null, reasonCode: null, reason: null };
+  const empty: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, oriInvoiceId: null, remarks: null, reasonCode: null, reason: null, stock: null };
   try {
     if (row.doc_ref_type === 'customer_invoices') {
       const inv = await client.query(
@@ -310,6 +312,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
         remarks: party?.notes != null ? String(party.notes) : null,
         reasonCode: null,
         reason: null,
+        stock: null,
       };
     }
     if (row.doc_ref_type === 'credit_notes' || row.doc_ref_type === 'debit_notes') {
@@ -382,12 +385,172 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
         remarks: party?.reason != null ? String(party.reason) : null,
         reasonCode: reason.reasonCode,
         reason: reason.reason,
+        stock: null,
       };
+    }
+    if (row.doc_ref_type === 'goods_receipts') {
+      return await loadGoodsReceiptStockSource(client, row);
+    }
+    if (row.doc_ref_type === 'inventory_adjustments') {
+      return await loadAdjustmentStockSource(client, row);
+    }
+    if (row.doc_ref_type === 'receipts') {
+      return await loadReceiptFiscalSource(client, row);
     }
   } catch (err) {
     console.error('[efris][worker] source document lookup failed', err instanceof Error ? err.message : err);
   }
   return empty;
+}
+
+/** Stock-in source: a goods receipt (GRN) received from a supplier. */
+async function loadGoodsReceiptStockSource(client: pg.PoolClient, row: ClaimedFiscalTransaction): Promise<FiscalSource> {
+  const base: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, oriInvoiceId: null, remarks: null, reasonCode: null, reason: null, stock: null };
+  const grn = await client.query(
+    `SELECT g.grn_no, g.received_at, g.branch_id, s.name AS supplier_name, s.tin AS supplier_tin
+       FROM goods_receipts g
+       JOIN suppliers s ON s.id = g.supplier_id
+      WHERE g.id = $1 AND g.tenant_id = $2`,
+    [row.doc_ref_id, row.tenant_id]
+  );
+  const head = grn.rows[0] as Record<string, unknown> | undefined;
+  if (!head) return base;
+  const items = await client.query(
+    `SELECT gi.quantity_received, gi.unit_cost,
+            p.code AS product_code, p.efris_goods_code, p.efris_unit_of_measure
+       FROM goods_receipt_items gi
+       LEFT JOIN products p ON p.id = gi.product_id
+      WHERE gi.grn_id = $1
+      ORDER BY gi.id`,
+    [row.doc_ref_id]
+  );
+  const lines = (items.rows as Array<Record<string, unknown>>)
+    .filter((it) => String(it.efris_goods_code ?? it.product_code ?? '').trim())
+    .map((it) => ({
+      goodsCode: String(it.efris_goods_code ?? it.product_code),
+      measureUnit: String(it.efris_unit_of_measure ?? ''),
+      quantity: Number(it.quantity_received ?? 0),
+      unitPrice: Number(it.unit_cost ?? 0),
+      remarks: null as string | null,
+    }));
+  const received = head.received_at != null ? String(head.received_at) : String(row.txn_date);
+  base.stock = {
+    operationType: '101',
+    stockInType: '102',
+    adjustType: '',
+    supplierTin: head.supplier_tin != null ? String(head.supplier_tin) : null,
+    supplierName: head.supplier_name != null ? String(head.supplier_name) : null,
+    branchId: head.branch_id != null ? String(head.branch_id) : null,
+    // The reference client leaves invoiceNo empty on a purchase receipt; the
+    // supplier's e-invoice number is not carried until it is matched.
+    invoiceNo: null,
+    stockInDate: received.slice(0, 10),
+    remarks: null,
+    lines,
+  };
+  return base;
+}
+
+/** Stock-reconciliation source: an inventory adjustment's negative (loss) variance. */
+async function loadAdjustmentStockSource(client: pg.PoolClient, row: ClaimedFiscalTransaction): Promise<FiscalSource> {
+  const base: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, oriInvoiceId: null, remarks: null, reasonCode: null, reason: null, stock: null };
+  const adj = await client.query(
+    `SELECT adjustment_no, adjustment_type, reason, branch_id, posted_at, updated_at
+       FROM inventory_adjustments WHERE id = $1 AND tenant_id = $2`,
+    [row.doc_ref_id, row.tenant_id]
+  );
+  const head = adj.rows[0] as Record<string, unknown> | undefined;
+  if (!head) return base;
+  const items = await client.query(
+    `SELECT ai.variance_qty, ai.unit_cost,
+            p.code AS product_code, p.efris_goods_code, p.efris_unit_of_measure
+       FROM inventory_adjustment_items ai
+       LEFT JOIN products p ON p.id = ai.product_id
+      WHERE ai.adjustment_id = $1
+      ORDER BY ai.id`,
+    [row.doc_ref_id]
+  );
+  const lines: Array<{ goodsCode: string; measureUnit: string; quantity: number; unitPrice: number; remarks: string | null }> = [];
+  for (const it of items.rows as Array<Record<string, unknown>>) {
+    const variance = Number(it.variance_qty ?? 0);
+    if (variance >= 0) continue; // URA only accepts negative (loss) adjustments via T131
+    const goodsCode = String(it.efris_goods_code ?? it.product_code ?? '').trim();
+    if (!goodsCode) continue;
+    lines.push({
+      goodsCode,
+      measureUnit: String(it.efris_unit_of_measure ?? ''),
+      quantity: Math.abs(Math.round(variance * 1000) / 1000),
+      unitPrice: Number(it.unit_cost ?? 0),
+      remarks: null,
+    });
+  }
+  const effective = head.posted_at ?? head.updated_at ?? row.txn_date;
+  base.stock = {
+    operationType: '102',
+    stockInType: '',
+    adjustType: uraAdjustmentType(head.adjustment_type != null ? String(head.adjustment_type) : null),
+    supplierTin: null,
+    supplierName: null,
+    branchId: head.branch_id != null ? String(head.branch_id) : null,
+    invoiceNo: null,
+    stockInDate: String(effective).slice(0, 10),
+    remarks: head.reason != null ? String(head.reason) : null,
+    lines,
+  };
+  return base;
+}
+
+/** B2C e-receipt source: fiscalise a consumer payment as a tax invoice (buyerType 1). */
+async function loadReceiptFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransaction): Promise<FiscalSource> {
+  const base: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, oriInvoiceId: null, remarks: null, reasonCode: null, reason: null, stock: null };
+  const rcpt = await client.query(
+    `SELECT r.invoice_id, c.name AS customer_name, c.tin AS customer_tin,
+            c.address AS customer_address, c.email AS customer_email, c.phone AS customer_phone
+       FROM receipts r
+       JOIN customers c ON c.id = r.customer_id
+      WHERE r.id = $1 AND r.tenant_id = $2`,
+    [row.doc_ref_id, row.tenant_id]
+  );
+  const party = rcpt.rows[0] as Record<string, unknown> | undefined;
+  if (!party) return base;
+  const buyer: FiscalParty = {
+    legalName: party.customer_name != null ? String(party.customer_name) : null,
+    tin: party.customer_tin != null ? String(party.customer_tin) : null,
+    address: party.customer_address != null ? String(party.customer_address) : null,
+    email: party.customer_email != null ? String(party.customer_email) : null,
+    phone: party.customer_phone != null ? String(party.customer_phone) : null,
+  };
+  let lines: FiscalLine[] = [];
+  const invoiceId = Number(party.invoice_id);
+  if (Number.isFinite(invoiceId) && invoiceId > 0) {
+    const items = await client.query(
+      `SELECT ii.description, ii.quantity, ii.unit_price, ii.tax_percent, ii.line_total,
+              p.code AS product_code, p.efris_goods_code, p.efris_unit_of_measure,
+              p.efris_goods_category_id, p.efris_goods_category_name
+         FROM invoice_items ii
+         LEFT JOIN products p ON p.id = ii.product_id
+        WHERE ii.invoice_id = $1
+        ORDER BY ii.id`,
+      [invoiceId]
+    );
+    lines = (items.rows as Array<Record<string, unknown>>).map((item) => {
+      const taxPercent = Number(item.tax_percent ?? 0);
+      return {
+        itemCode: item.efris_goods_code != null ? String(item.efris_goods_code)
+          : (item.product_code != null ? String(item.product_code) : null),
+        description: String(item.description ?? ''),
+        quantity: Number(item.quantity ?? 0),
+        unitPrice: Number(item.unit_price ?? 0),
+        taxPercent,
+        lineGross: Number(item.line_total ?? 0),
+        unitOfMeasure: item.efris_unit_of_measure != null ? String(item.efris_unit_of_measure) : null,
+        goodsCategoryId: item.efris_goods_category_id != null ? String(item.efris_goods_category_id) : null,
+        goodsCategoryName: item.efris_goods_category_name != null ? String(item.efris_goods_category_name) : null,
+        vatApplicableFlag: taxPercent > 0 ? '1' : '0',
+      };
+    });
+  }
+  return { ...base, buyer, lines };
 }
 
 /** Run one claimed transaction through submission inside its own transaction. */
@@ -443,9 +606,10 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
       remarks: source.remarks,
       reasonCode: source.reasonCode,
       reason: source.reason,
+      stock: source.stock,
     });
     const stored = row.request_payload && Object.keys(row.request_payload).length > 0 ? row.request_payload : null;
-    const storedIsUra = Boolean(stored && (stored.goodsDetails || stored.sellerDetails));
+    const storedIsUra = Boolean(stored && (stored.goodsDetails || stored.sellerDetails || stored.goodsStockIn));
 
     const raw = await submitFiscalDocument({
       mode: config.mode,
@@ -497,6 +661,35 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
         recordId: row.id,
         recordCode: row.doc_ref_code,
         metadata: { referenceNo, docType: row.doc_type },
+      });
+      await client.query('COMMIT');
+      return true;
+    }
+
+    // T131 stock movement returns a stock acknowledgement (returnCode 00), not a
+    // fiscal document (FDN). Record it ACCEPTED once URA acknowledges the stock —
+    // no efris_documents row, since there is no FDN to persist.
+    if (isStockDocType(row.doc_type)) {
+      await client.query(
+        `UPDATE efris_transactions
+            SET status = 'ACCEPTED', claimed_at = NULL, next_attempt_at = NULL,
+                transmitted_at = now(), accepted_at = now(), last_error = NULL,
+                error_code = NULL, request_payload = $2::jsonb, last_response = $3::jsonb,
+                updated_at = now()
+          WHERE id = $1`,
+        [row.id, JSON.stringify(built.payload ?? {}), JSON.stringify(raw ?? {})]
+      );
+      await client.query(
+        `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, request_payload, response_payload)
+         VALUES ($1,$2,'ACCEPTED',$3::jsonb,$4::jsonb)`,
+        [row.tenant_id, row.id, JSON.stringify(built.payload ?? {}), JSON.stringify(raw ?? {})]
+      );
+      await logAudit(client, { tenantId: row.tenant_id, companyId: row.company_id, branchId: row.branch_id }, {
+        action: 'efris.fiscalization.accepted',
+        resource: 'efris_transactions',
+        recordId: row.id,
+        recordCode: row.doc_ref_code,
+        metadata: { docType: row.doc_type, docRefType: row.doc_ref_type },
       });
       await client.query('COMMIT');
       return true;

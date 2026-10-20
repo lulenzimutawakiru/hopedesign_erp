@@ -1110,6 +1110,27 @@ export async function createGoodsReceipt(
   await client.query(`UPDATE purchase_orders SET status = $1 WHERE id = $2`, [poStatus, input.poId]);
   await emitEvent(client, ctx, { eventType: 'procurement.goods_received', entityType: 'goods_receipts', entityId: grnId, entityCode: grnNo });
   await logAudit(client, ctx, { action: 'receive', resource: 'goods_receipts', recordId: grnId, recordCode: grnNo, newValues: { poId: input.poId } });
+
+  // Purchase e-invoice reception: register the goods receipt as a T131 stock-in
+  // (operationType 101, stockInType 102). Gated on fiscalize_purchases_on_post so
+  // it is opt-in per configuration; the worker loads the supplier + line items and
+  // submits the stock movement. Registration never blocks the receipt posting.
+  try {
+    const { autoRegisterEfrisDocument } = await import('./finance-advanced.js');
+    await autoRegisterEfrisDocument(client, ctx, 'fiscalize_purchases_on_post', {
+      docType: 'PURCHASE_RECEIPT',
+      docRefType: 'goods_receipts',
+      docRefId: grnId,
+      docRefCode: grnNo,
+      txnDate: (input.receivedAt ?? new Date().toISOString()).slice(0, 10),
+      currency: 'UGX',
+      grossAmount: 0,
+      taxAmount: 0,
+    });
+  } catch (err) {
+    console.error('[efris][purchase-receipt]', err instanceof Error ? err.message : err);
+  }
+
   return { grnId, grnNo };
 }
 
