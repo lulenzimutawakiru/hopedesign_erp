@@ -28,16 +28,16 @@ export function statusMeta(status: string | null | undefined): {
   if (['APPROVED', 'COMPLETED', 'POSTED', 'ACTIVE', 'EXECUTED', 'SIGNED', 'RENEWED', 'VARIED', 'DISPATCHED', 'DELIVERED', 'DONE', 'AUTHENTIC', 'RECEIVED', 'PASSED', 'PASS', 'RELEASED', 'RESOLVED', 'VERIFIED', 'OK', 'MATCHED', 'GREEN', 'REGISTERED', 'AVAILABLE', 'IN_STORE', 'IN_STOCK', 'IN_USE', 'ASSIGNED', 'PAID', 'FULFILLED', 'SETTLED', 'RECONCILED'].includes(s)) {
     return { kind: 'ok', tone: 'badge-green', icon: '✓', label };
   }
-  if (['IN_PROGRESS', 'IN_REVIEW', 'REVIEW', 'PARTIALLY_DISPATCHED', 'PARTIAL', 'PARTIALLY_PAID', 'UNDER_REVIEW', 'VALIDATING', 'SENT_FOR_SIGNATURE', 'PARTIALLY_SIGNED', 'QUOTATION_SENT', 'SENT', 'ACKNOWLEDGED', 'IN_TRANSIT', 'SHIPPED'].includes(s)) {
+  if (['IN_PROGRESS', 'IN_REVIEW', 'REVIEW', 'RUNNING', 'PARTIALLY_DISPATCHED', 'PARTIAL', 'PARTIALLY_PAID', 'UNDER_REVIEW', 'VALIDATING', 'SENT_FOR_SIGNATURE', 'PARTIALLY_SIGNED', 'QUOTATION_SENT', 'SENT', 'ACKNOWLEDGED', 'IN_TRANSIT', 'SHIPPED'].includes(s)) {
     return { kind: 'progress', tone: 'badge-progress', icon: '●', label };
   }
-  if (['PENDING', 'SUBMITTED', 'PENDING_APPROVAL', 'HR_REVIEW', 'MANAGER_REVIEW', 'FINANCE_REVIEW', 'LEGAL_REVIEW', 'WAITING', 'OVERDUE', 'RETURNED', 'LOW', 'LOW_STOCK', 'PAUSED', 'NOT_RECEIVED', 'NOT_INVOICED', 'AMBER', 'WARN'].includes(s)) {
+  if (['PENDING', 'SUBMITTED', 'PENDING_APPROVAL', 'EXECUTION_PENDING', 'HR_REVIEW', 'MANAGER_REVIEW', 'FINANCE_REVIEW', 'LEGAL_REVIEW', 'WAITING', 'OVERDUE', 'RETURNED', 'LOW', 'LOW_STOCK', 'PAUSED', 'NOT_RECEIVED', 'NOT_INVOICED', 'AMBER', 'WARN'].includes(s)) {
     return { kind: 'pending', tone: 'badge-amber', icon: '⚠', label };
   }
   if (['REJECTED', 'TERMINATED', 'FAILED', 'FAIL', 'QUARANTINE', 'QUARANTINED', 'COMPROMISED', 'RECALLED', 'SPOILED', 'DAMAGED', 'LOST', 'MISSING', 'STOLEN', 'DIFFERENCE', 'OUT_OF_STOCK', 'SCRAP', 'SCRAPPED', 'VOID', 'VOIDED', 'CANCELLED', 'CANCELED', 'RED'].includes(s)) {
     return { kind: 'reject', tone: 'badge-red', icon: '✕', label };
   }
-  if (['CRITICAL', 'LOCKED'].includes(s)) {
+  if (['CRITICAL', 'LOCKED', 'ESCALATED'].includes(s)) {
     return { kind: 'critical', tone: 'badge-critical', icon: '✕', label };
   }
   if (['SUSPENDED', 'ON_HOLD', 'HOLD', 'MAINTENANCE', 'UNDER_MAINTENANCE', 'UNDER_INSPECTION', 'REWORK', 'SUSPICIOUS'].includes(s)) {

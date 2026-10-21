@@ -20,6 +20,8 @@ import {
 } from '../nav';
 import { personaLabel, personaOf } from '../work';
 import { StaffPhoto } from './ui';
+import { useDialogFocus } from './dialogFocus';
+import { useMenu, usePopover } from './popoverFocus';
 import { BrandMark } from './BrandMark';
 import { shortCompanyName } from '../company';
 
@@ -380,6 +382,49 @@ function NavButton({
   );
 }
 
+function MoreDrawerBody({
+  onClose,
+  path,
+  user,
+  counts,
+  onNavigate,
+  onScan,
+}: {
+  onClose: () => void;
+  path: string;
+  user: MeUser | null;
+  counts: Record<string, number>;
+  onNavigate: (href: string) => void;
+  onScan: () => void;
+}) {
+  const groups = visibleGroups(user);
+  const panelRef = useRef<HTMLElement>(null);
+  // Same focus contract as Modal/ConfirmDialog/Drawer (see dialogFocus.ts):
+  // trap Tab inside the drawer, restore focus to the trigger, and let Escape
+  // close it. The body mounts only while open so the trap engages on open.
+  useDialogFocus(panelRef, onClose);
+  return (
+    <div className="more-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <aside className="more-drawer" role="dialog" aria-label="All modules" ref={panelRef} tabIndex={-1}>
+        <div className="modal-head">
+          <h3>Modules</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="drawer-body">
+          <button className="handheld-scan" onClick={() => { onClose(); onScan(); }}>◉ Scan QR</button>
+          <NavTree
+            groups={groups}
+            path={path}
+            expanded
+            counts={counts}
+            onNavigate={(href) => { onNavigate(href); onClose(); }}
+          />
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 export function MoreDrawer({
   open,
   onClose,
@@ -397,33 +442,16 @@ export function MoreDrawer({
   onNavigate: (href: string) => void;
   onScan: () => void;
 }) {
-  const groups = visibleGroups(user);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="more-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className="more-drawer" role="dialog" aria-label="All modules">
-        <div className="modal-head">
-          <h3>Modules</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
-        </div>
-        <div className="drawer-body">
-          <button className="handheld-scan" onClick={() => { onClose(); onScan(); }}>◉ Scan QR</button>
-          <NavTree
-            groups={groups}
-            path={path}
-            expanded
-            counts={counts}
-            onNavigate={(href) => { onNavigate(href); onClose(); }}
-          />
-        </div>
-      </aside>
-    </div>
+    <MoreDrawerBody
+      onClose={onClose}
+      path={path}
+      user={user}
+      counts={counts}
+      onNavigate={onNavigate}
+      onScan={onScan}
+    />
   );
 }
 
@@ -472,28 +500,16 @@ function ScopeRow({ k, v }: { k: string; v: string }) {
 
 export function ScopeChip({ user }: { user: MeUser | null }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open]);
+  const { rootRef, triggerRef } = usePopover(open, () => setOpen(false));
   if (!user) return null;
   const company = user.company_name ?? user.tenant_name ?? user.company_code ?? 'Company';
   const branch = user.branch_name ?? user.branch_code ?? '';
   const dept = user.department_name ?? user.department_code ?? '';
   return (
-    <div className="scope-wrap" ref={ref}>
+    <div className="scope-wrap" ref={rootRef}>
       <button
         type="button"
+        ref={triggerRef}
         className="scope-chip"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -555,20 +571,7 @@ export function UserMenu({
 }) {
   const { photoRev } = useAuth();
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open]);
+  const { rootRef, triggerRef, panelRef } = useMenu(open, () => setOpen(false));
   const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Account';
   const photoSrc = '/api/auth/me/photo?r=' + photoRev;
   const go = (fn: () => void) => {
@@ -576,13 +579,13 @@ export function UserMenu({
     fn();
   };
   return (
-    <div className="topbar-item" ref={ref}>
-      <button className="account-trigger" onClick={() => setOpen((s) => !s)} aria-label="Account" aria-expanded={open}>
+    <div className="topbar-item" ref={rootRef}>
+      <button className="account-trigger" ref={triggerRef} onClick={() => setOpen((s) => !s)} aria-label="Account" aria-expanded={open}>
         <StaffPhoto path={photoSrc} hasPhoto={user?.has_photo} name={name} size={34} round />
       </button>
       {open && (
-        <div className="topbar-dropdown account-pop" role="menu">
-          <button type="button" className="account-id" onClick={() => go(() => navigate('/account'))}>
+        <div className="topbar-dropdown account-pop" role="menu" ref={panelRef}>
+          <button type="button" role="menuitem" className="account-id" onClick={() => go(() => navigate('/account'))}>
             <StaffPhoto path={photoSrc} hasPhoto={user?.has_photo} name={name} size={40} round />
             <span className="account-id-copy">
               <strong>{name}</strong>
@@ -591,35 +594,35 @@ export function UserMenu({
             </span>
           </button>
           <div className="account-sep" />
-          <button type="button" className="account-row" onClick={() => go(onPin)}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(onPin)}>
             <span>Pin this view</span>
           </button>
-          <button type="button" className="account-row" onClick={() => go(onFocus)}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(onFocus)}>
             <span>{focusMode ? 'Exit floor mode' : 'Floor mode'}</span>
             <span className="account-row-meta">{focusMode ? 'On' : 'Off'}</span>
           </button>
-          <button type="button" className="account-row" onClick={() => go(() => navigate('/work'))}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(() => navigate('/work'))}>
             <span>My activity</span>
           </button>
-          <button type="button" className="account-row" onClick={() => go(onHelp)}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(onHelp)}>
             <span>Keyboard shortcuts</span>
             <kbd>?</kbd>
           </button>
           <div className="account-sep" />
-          <button type="button" className="account-row" onClick={() => go(() => navigate('/account'))}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(() => navigate('/account'))}>
             <span>Preferences</span>
             <span className="account-row-meta">{prefsLabel}</span>
           </button>
-          <button type="button" className="account-row" onClick={() => go(() => navigate('/account/security'))}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(() => navigate('/account/security'))}>
             <span>Security & MFA</span>
           </button>
           {can(user, 'admin.settings.view') && (
-            <button type="button" className="account-row" onClick={() => go(() => navigate('/settings'))}>
+            <button type="button" role="menuitem" className="account-row" onClick={() => go(() => navigate('/settings'))}>
               <span>Organisation settings</span>
             </button>
           )}
           <div className="account-sep" />
-          <button type="button" className="account-row account-row-out" onClick={() => go(onLogout)}>
+          <button type="button" role="menuitem" className="account-row account-row-out" onClick={() => go(onLogout)}>
             <span>Sign out</span>
           </button>
         </div>

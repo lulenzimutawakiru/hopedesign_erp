@@ -9,12 +9,11 @@ import MyWork from './MyWork';
 import Reports from './Reports';
 import DataExports from './DataExports';
 import SecurityJobs from './SecurityJobs';
-import QrScanner from './QrScanner';
 import QrTrace from './QrTrace';
 import CommandPalette from './CommandPalette';
 import { Toaster } from '../components/toast';
 import { WarehouseRoom, OperatorFloor } from './Rooms';
-import { PageLoader } from '../components/ui';
+import { Modal, PageLoader } from '../components/ui';
 
 // Route-gated views load on demand so the initial shell stays lean.
 const EntityList = lazy(() => import('./EntityList'));
@@ -44,6 +43,7 @@ const ComplianceFlow = lazy(() => import('./CompliancePdpo'));
 const OrganisationSettings = lazy(() => import('./OrganisationSettings'));
 const Account = lazy(() => import('./Account'));
 const PayrollSettings = lazy(() => import('./PayrollSettings'));
+const QrScanner = lazy(() => import('./QrScanner'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
   AccessDenied,
@@ -109,11 +109,16 @@ export default function Shell() {
       const tag = (e.target as HTMLElement)?.tagName;
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement)?.isContentEditable;
       if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setCmdOpen(true); return; }
-      if (e.key === '/' && !typing) { e.preventDefault(); setCmdOpen(true); return; }
       if (e.key === 'Escape') {
         setScannerOpen(false); setCmdOpen(false); setHelpOpen(false); setMoreOpen(false); setSideOpen(false); setGMode(false);
         return;
       }
+      // While a blocking overlay owns the keyboard, suppress the shell's
+      // bare-letter and '/' shortcuts so they cannot fire underneath an open
+      // modal, drawer or palette (e.g. "a" would otherwise jump to Approvals
+      // mid-dialog). Ctrl/Cmd+K stays available as an explicit command chord.
+      if (document.querySelector('[aria-modal="true"], .modal-backdrop, .more-scrim, .drawer-scrim, .cmd-backdrop, .com-bell-backdrop, .topbar-dropdown')) return;
+      if (e.key === '/' && !typing) { e.preventDefault(); setCmdOpen(true); return; }
       if (typing) return;
       // A bare-letter shortcut must not answer a Ctrl/Cmd chord: Ctrl+S is the
       // save shortcut inside the settings console, Ctrl+A selects text, and so
@@ -184,48 +189,64 @@ export default function Shell() {
     return !itemVisible(user, { perm, module: perm.split('.')[0] });
   }, [path, user]);
 
+  type RouteEntry = {
+    /** Ordered predicate — the first entry whose predicate holds owns the path. */
+    match: () => boolean;
+    /** The view rendered for this route. */
+    render: () => React.ReactNode;
+  };
+
   let body: React.ReactNode;
-  if (denied) body = <AccessDenied path={path} />;
-  else if (path === '/dashboard' || path === '/' || path === '') body = <Dashboard />;
-  else if (path === '/work') body = <MyWork />;
-  else if (path === '/approvals') body = <Approvals />;
-  else if (path === '/inbox') body = <Inbox />;
-  else if (path === '/plant/new') body = <WorkOrderWizard />;
-  else if (path === '/plant' || path.startsWith('/plant/')) body = <ManufacturingFlow path={path} />;
-  else if (path === '/warehouse' || path === '/warehouse/floor') body = <WarehouseRoom handheld={path === '/warehouse/floor' || compact} />;
-  else if (path === '/finance' || path.startsWith('/finance/')) body = <FinanceFlow path={path} />;
-  else if (path === '/spend' || path.startsWith('/spend/')) body = <SpendFlow path={path} />;
-  else if (path === '/buy' || path.startsWith('/buy/')) body = <ProcurementFlow path={path} />;
-  else if (path === '/crm' || path.startsWith('/crm/')) body = <CrmFlow path={path} />;
-  else if (path === '/people/payroll-settings' || path === '/people/statutory-configs') body = <PayrollSettings path={path} />;
-  else if (path === '/people' || path.startsWith('/people/')) body = <HrFlow path={path} />;
-  else if (path === '/hikvision' || path.startsWith('/hikvision/')) body = <HikvisionFlow path={path} />;
-  else if (path === '/operator') body = <OperatorFloor />;
-  else if (opMatch) body = <OperatorFloor woId={Number(opMatch.segments[1])} />;
-  else if (path === '/reports') body = <Reports />;
-  else if (path === '/exports') body = <DataExports />;
-  else if (path === '/settings') body = <Settings />;
-  else if (path === '/account') body = <Account />;
-  else if (path === '/account/security') body = <SecuritySettings />;
-  else if (path === '/security-jobs') body = <SecurityJobs />;
-  else if (path === '/qr/scan') body = <QrScanner onClose={() => navigate('/dashboard')} />;
-  else if (qrTraceMatch && qrTraceMatch.segments[1] !== 'scan') body = <QrTrace code={decodeURIComponent(qrTraceMatch.segments[1])} />;
-  else if (path === '/packing') body = <ReamPacking />;
-  else if (path === '/labels') body = <LabelVarieties />;
-  else if (salesPath) body = <SalesFlow path={path} />;
-  else if (path === '/inventory-intel' || path.startsWith('/inventory-intel/')) body = <InventoryIntel path={path} />;
-  else if (inventoryPath) body = <InventoryFlow path={path} />;
-  else if (serviceDeskPath) body = <ServiceDeskFlow path={path} />;
-  else if (compliancePath) body = <ComplianceFlow path={path} />;
-  else if (assetsPath) body = <AssetsFlow path={path} />;
-  else if (path.startsWith('/admin/organisation-settings')) body = <OrganisationSettings path={path} />;
-  else if (path === '/admin' || path.startsWith('/admin/')) body = <AdminFlow path={path} />;
-  else if (path === '/communication/mail' || path.startsWith('/communication/mail/')) body = <MailWorkspace path={path} />;
-  else if (path === '/communication' || path.startsWith('/communication/')) body = <CommunicationFlow path={path} />;
-  else if (path === '/documents' || path.startsWith('/documents/')) body = <DocumentsFlow path={path} />;
-  else if (detailMatch) body = <EntityDetail route={detailMatch} />;
-  else if (listMatch) body = <EntityList route={listMatch} />;
-  else body = <AccessDenied path={path} />;
+  if (denied) {
+    body = <AccessDenied path={path} />;
+  } else {
+    // A single typed registry replaces the former ~40-branch if/else dispatch.
+    // Order is load-bearing: specific paths (e.g. /people/payroll-settings,
+    // /admin/organisation-settings, /communication/mail) must be tried before
+    // their parent prefix (/people, /admin, /communication).
+    const routes: RouteEntry[] = [
+      { match: () => path === '/dashboard' || path === '/' || path === '', render: () => <Dashboard /> },
+      { match: () => path === '/work', render: () => <MyWork /> },
+      { match: () => path === '/approvals', render: () => <Approvals /> },
+      { match: () => path === '/inbox', render: () => <Inbox /> },
+      { match: () => path === '/plant/new', render: () => <WorkOrderWizard /> },
+      { match: () => path === '/plant' || path.startsWith('/plant/'), render: () => <ManufacturingFlow path={path} /> },
+      { match: () => path === '/warehouse' || path === '/warehouse/floor', render: () => <WarehouseRoom handheld={path === '/warehouse/floor' || compact} /> },
+      { match: () => path === '/finance' || path.startsWith('/finance/'), render: () => <FinanceFlow path={path} /> },
+      { match: () => path === '/spend' || path.startsWith('/spend/'), render: () => <SpendFlow path={path} /> },
+      { match: () => path === '/buy' || path.startsWith('/buy/'), render: () => <ProcurementFlow path={path} /> },
+      { match: () => path === '/crm' || path.startsWith('/crm/'), render: () => <CrmFlow path={path} /> },
+      { match: () => path === '/people/payroll-settings' || path === '/people/statutory-configs', render: () => <PayrollSettings path={path} /> },
+      { match: () => path === '/people' || path.startsWith('/people/'), render: () => <HrFlow path={path} /> },
+      { match: () => path === '/hikvision' || path.startsWith('/hikvision/'), render: () => <HikvisionFlow path={path} /> },
+      { match: () => path === '/operator', render: () => <OperatorFloor /> },
+      { match: () => !!opMatch, render: () => <OperatorFloor woId={Number(opMatch!.segments[1])} /> },
+      { match: () => path === '/reports', render: () => <Reports /> },
+      { match: () => path === '/exports', render: () => <DataExports /> },
+      { match: () => path === '/settings', render: () => <Settings /> },
+      { match: () => path === '/account', render: () => <Account /> },
+      { match: () => path === '/account/security', render: () => <SecuritySettings /> },
+      { match: () => path === '/security-jobs', render: () => <SecurityJobs /> },
+      { match: () => path === '/qr/scan', render: () => <QrScanner onClose={() => navigate('/dashboard')} /> },
+      { match: () => !!qrTraceMatch && qrTraceMatch.segments[1] !== 'scan', render: () => <QrTrace code={decodeURIComponent(qrTraceMatch!.segments[1])} /> },
+      { match: () => path === '/packing', render: () => <ReamPacking /> },
+      { match: () => path === '/labels', render: () => <LabelVarieties /> },
+      { match: () => salesPath, render: () => <SalesFlow path={path} /> },
+      { match: () => path === '/inventory-intel' || path.startsWith('/inventory-intel/'), render: () => <InventoryIntel path={path} /> },
+      { match: () => inventoryPath, render: () => <InventoryFlow path={path} /> },
+      { match: () => serviceDeskPath, render: () => <ServiceDeskFlow path={path} /> },
+      { match: () => compliancePath, render: () => <ComplianceFlow path={path} /> },
+      { match: () => assetsPath, render: () => <AssetsFlow path={path} /> },
+      { match: () => path.startsWith('/admin/organisation-settings'), render: () => <OrganisationSettings path={path} /> },
+      { match: () => path === '/admin' || path.startsWith('/admin/'), render: () => <AdminFlow path={path} /> },
+      { match: () => path === '/communication/mail' || path.startsWith('/communication/mail/'), render: () => <MailWorkspace path={path} /> },
+      { match: () => path === '/communication' || path.startsWith('/communication/'), render: () => <CommunicationFlow path={path} /> },
+      { match: () => path === '/documents' || path.startsWith('/documents/'), render: () => <DocumentsFlow path={path} /> },
+      { match: () => !!detailMatch, render: () => <EntityDetail route={detailMatch!} /> },
+      { match: () => !!listMatch, render: () => <EntityList route={listMatch!} /> },
+    ];
+    body = routes.find((r) => r.match())?.render() ?? <AccessDenied path={path} />;
+  }
 
   const landing = landingModule(path, user);
 
@@ -315,20 +336,19 @@ export default function Shell() {
         onScan={() => setScannerOpen(true)}
       />
 
-      {scannerOpen && <QrScanner onClose={() => setScannerOpen(false)} sheet={compact} />}
+      {scannerOpen && (
+        <Suspense fallback={<PageLoader />}>
+          <QrScanner onClose={() => setScannerOpen(false)} sheet={compact} />
+        </Suspense>
+      )}
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
       <Toaster />
       {helpOpen && (
-        <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setHelpOpen(false)}>
-          <div className="modal" role="dialog" aria-labelledby="kbd-title">
-            <div className="modal-head"><h3 id="kbd-title">Keyboard</h3></div>
-            <div className="modal-body">
-              <p><kbd>Ctrl</kbd>+<kbd>K</kbd> command · <kbd>/</kbd> search · <kbd>S</kbd> scan · <kbd>A</kbd> tasks · <kbd>N</kbd> create</p>
-              <p><kbd>G</kbd> then <kbd>D</kbd> dashboard · <kbd>I</kbd> inventory · <kbd>P</kbd> plant · <kbd>H</kbd> warehouse · <kbd>W</kbd> work · <kbd>F</kbd> finance · <kbd>B</kbd> buy · <kbd>C</kbd> CRM · <kbd>E</kbd> people</p>
-              <p><kbd>Esc</kbd> closes overlays. <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> move focus.</p>
-            </div>
-          </div>
-        </div>
+        <Modal title="Keyboard" onClose={() => setHelpOpen(false)}>
+          <p><kbd>Ctrl</kbd>+<kbd>K</kbd> command · <kbd>/</kbd> search · <kbd>S</kbd> scan · <kbd>A</kbd> tasks · <kbd>N</kbd> create</p>
+          <p><kbd>G</kbd> then <kbd>D</kbd> dashboard · <kbd>I</kbd> inventory · <kbd>P</kbd> plant · <kbd>H</kbd> warehouse · <kbd>W</kbd> work · <kbd>F</kbd> finance · <kbd>B</kbd> buy · <kbd>C</kbd> CRM · <kbd>E</kbd> people</p>
+          <p><kbd>Esc</kbd> closes overlays. <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> move focus.</p>
+        </Modal>
       )}
     </div>
   );
