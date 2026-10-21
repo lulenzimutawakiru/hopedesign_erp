@@ -204,6 +204,7 @@ export default function Shell() {
     // Order is load-bearing: specific paths (e.g. /people/payroll-settings,
     // /admin/organisation-settings, /communication/mail) must be tried before
     // their parent prefix (/people, /admin, /communication).
+    // Keep this list in lock-step with routeMatches() in ../routeRegistry.
     const routes: RouteEntry[] = [
       { match: () => path === '/dashboard' || path === '/' || path === '', render: () => <Dashboard /> },
       { match: () => path === '/work', render: () => <MyWork /> },
