@@ -16,7 +16,10 @@ describe('My work queue', () => {
 });
 
 describe('Workflow engine (sales)', () => {
-  it('auto-approves quotations when no workflow is configured', async () => {
+  it('auto-approves approval-free entities (quotations) by policy', async () => {
+    // sales.quotations is marked requiresApproval === false in ENTITIES, so
+    // submitting it auto-approves without consulting a workflow. This is a
+    // deliberate policy, not the old fail-open behaviour on a missing workflow.
     const { token } = await loginAs('sarah.sales');
     const create = await api.post('/api/ops/sales/quotations').set(auth(token)).send({
       customerId: 1,
@@ -31,6 +34,37 @@ describe('Workflow engine (sales)', () => {
     const get = await api.get(`/api/sales/quotations/${quotationId}`).set(auth(token));
     expect(get.status).toBe(200);
     expect(get.body.data.status).toBe('APPROVED');
+  });
+
+  it('requires a reason to reject an approval task', async () => {
+    const { token } = await loginAs('sarah.sales');
+    const create = await api.post('/api/ops/sales/orders').set(auth(token)).send({
+      customerId: 1,
+      items: [{ productId: 3, quantity: 10, unitPrice: 12000 }],
+    });
+    expect(create.status).toBe(200);
+    const orderId = create.body.data.orderId;
+
+    const submit = await api.post(`/api/ops/sales/orders/${orderId}/submit`).set(auth(token)).send({});
+    expect(submit.status).toBe(200);
+
+    const taskId = await findPendingTask(token, 'sales.orders', orderId, 1);
+    expect(taskId).not.toBeNull();
+
+    // Rejection without a reason fails closed (APR-6).
+    const noReason = await api
+      .post(`/api/approvals/${taskId}/decide`)
+      .set(auth(token))
+      .send({ decision: 'REJECTED' });
+    expect(noReason.status).toBe(400);
+    expect(noReason.body.error.message).toMatch(/reason is required/i);
+
+    const withReason = await api
+      .post(`/api/approvals/${taskId}/decide`)
+      .set(auth(token))
+      .send({ decision: 'REJECTED', comment: 'rejected by integration test' });
+    expect(withReason.status).toBe(200);
+    expect(withReason.body.data.status).toBe('REJECTED');
   });
 
   it('approves a sales order through the workflow queue', async () => {

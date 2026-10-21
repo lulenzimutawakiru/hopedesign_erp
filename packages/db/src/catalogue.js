@@ -358,7 +358,8 @@ const MODULES = {
   },
   workflows: {
     workflows: ["view","create","update","delete","activate"],
-    instances: ["view","approve","reject","return","delegate","escalate","cancel"],
+    instances: ["view","approve","reject","return","delegate","escalate","cancel","execute"],
+    exceptions: ["view","create","approve","reject","resolve","expire"],
   },
   notifications: { notifications: ["view","read"], tasks: ["view","create","update","complete"] },
   reports: {

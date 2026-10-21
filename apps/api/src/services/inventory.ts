@@ -191,9 +191,11 @@ export async function postAdjustment(client: pg.PoolClient, ctx: Ctx, adjustment
     `SELECT * FROM inventory_adjustment_items WHERE adjustment_id = $1`,
     [adjustmentId]
   );
+  let hasNegativeVariance = false;
   for (const item of items.rows) {
     const qty = Number(item.variance_qty);
     if (qty === 0) continue;
+    if (qty < 0) hasNegativeVariance = true;
     await postMove(client, ctx, {
       movementType: qty > 0 ? 'ADJUSTMENT' : 'ISSUE',
       product: Number(item.product_id),
@@ -212,6 +214,29 @@ export async function postAdjustment(client: pg.PoolClient, ctx: Ctx, adjustment
     `UPDATE inventory_adjustments SET status = 'POSTED', posted_by = $2, posted_at = now() WHERE id = $1`,
     [adjustmentId, ctx.userId ?? null]
   );
+
+  // Stock reconciliation: a posted adjustment with a negative (loss) variance is
+  // reported to URA as a T131 reconciliation (operationType 102). URA only accepts
+  // loss adjustments, so a gain-only adjustment registers nothing. Gated on
+  // fiscalize_stock_on_post; registration never blocks the inventory posting.
+  if (hasNegativeVariance) {
+    try {
+      const { autoRegisterEfrisDocument } = await import('./finance-advanced.js');
+      await autoRegisterEfrisDocument(client, ctx, 'fiscalize_stock_on_post', {
+        docType: 'STOCK_ADJUSTMENT',
+        docRefType: 'inventory_adjustments',
+        docRefId: adjustmentId,
+        docRefCode: String(a.adjustment_no),
+        txnDate: new Date().toISOString().slice(0, 10),
+        currency: 'UGX',
+        grossAmount: 0,
+        taxAmount: 0,
+      });
+    } catch (err) {
+      console.error('[efris][stock-adjustment]', err instanceof Error ? err.message : err);
+    }
+  }
+
   return { adjustmentId, adjustmentNo: a.adjustment_no };
 }
 

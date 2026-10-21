@@ -844,6 +844,14 @@ export async function processNotificationDeliveries(): Promise<{
             rowCtx
           );
         }
+        if (channel === 'WHATSAPP') {
+          await query(
+            `INSERT INTO whatsapp_messages (tenant_id, user_id, recipient, body, provider, status, provider_message_id, sent_at, direction, message_type)
+             VALUES ($1,$2,$3,$4,$5,'SENT',$6,now(),'OUTBOUND','text')`,
+            [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.providerMessageId ?? null],
+            rowCtx
+          );
+        }
         ok += 1;
       } else {
         const attempts = Number(row.retry_count ?? 0) + 1;
@@ -871,6 +879,14 @@ export async function processNotificationDeliveries(): Promise<{
               rowCtx
             );
           }
+          if (channel === 'WHATSAPP') {
+            await query(
+              `INSERT INTO whatsapp_messages (tenant_id, user_id, recipient, body, provider, status, error, retry_count, direction, message_type)
+               VALUES ($1,$2,$3,$4,$5,'RETRYING',$6,$7,'OUTBOUND','text')`,
+              [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.error ?? 'unknown', attempts],
+              rowCtx
+            );
+          }
         } else {
           await query(
             `UPDATE notification_deliveries
@@ -883,6 +899,14 @@ export async function processNotificationDeliveries(): Promise<{
             await query(
               `INSERT INTO sms_messages (tenant_id, user_id, recipient, body, provider, status, error, retry_count)
                VALUES ($1,$2,$3,$4,$5,'FAILED',$6,$7)`,
+              [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.error ?? 'unknown', attempts],
+              rowCtx
+            );
+          }
+          if (channel === 'WHATSAPP') {
+            await query(
+              `INSERT INTO whatsapp_messages (tenant_id, user_id, recipient, body, provider, status, error, retry_count, direction, message_type)
+               VALUES ($1,$2,$3,$4,$5,'FAILED',$6,$7,'OUTBOUND','text')`,
               [row.tenant_id, row.user_id, to, body, result.provider ?? fallbackProvider, result.error ?? 'unknown', attempts],
               rowCtx
             );

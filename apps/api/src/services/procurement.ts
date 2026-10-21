@@ -1110,6 +1110,27 @@ export async function createGoodsReceipt(
   await client.query(`UPDATE purchase_orders SET status = $1 WHERE id = $2`, [poStatus, input.poId]);
   await emitEvent(client, ctx, { eventType: 'procurement.goods_received', entityType: 'goods_receipts', entityId: grnId, entityCode: grnNo });
   await logAudit(client, ctx, { action: 'receive', resource: 'goods_receipts', recordId: grnId, recordCode: grnNo, newValues: { poId: input.poId } });
+
+  // Purchase e-invoice reception: register the goods receipt as a T131 stock-in
+  // (operationType 101, stockInType 102). Gated on fiscalize_purchases_on_post so
+  // it is opt-in per configuration; the worker loads the supplier + line items and
+  // submits the stock movement. Registration never blocks the receipt posting.
+  try {
+    const { autoRegisterEfrisDocument } = await import('./finance-advanced.js');
+    await autoRegisterEfrisDocument(client, ctx, 'fiscalize_purchases_on_post', {
+      docType: 'PURCHASE_RECEIPT',
+      docRefType: 'goods_receipts',
+      docRefId: grnId,
+      docRefCode: grnNo,
+      txnDate: (input.receivedAt ?? new Date().toISOString()).slice(0, 10),
+      currency: 'UGX',
+      grossAmount: 0,
+      taxAmount: 0,
+    });
+  } catch (err) {
+    console.error('[efris][purchase-receipt]', err instanceof Error ? err.message : err);
+  }
+
   return { grnId, grnNo };
 }
 
@@ -1337,12 +1358,12 @@ export async function createSupplierInvoice(
   const ins = await client.query(
     `INSERT INTO supplier_invoices
        (company_id, tenant_id, branch_id, supplier_invoice_no, po_id, grn_id, supplier_id, invoice_date, due_date,
-        status, subtotal, tax_amount, total, three_way_matched, notes, supplier_document_no)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'DRAFT',$10,$11,$12,$13,$14,$15) RETURNING id`,
+        status, subtotal, tax_amount, total, three_way_matched, notes, supplier_document_no, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'DRAFT',$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, ctx.branchId ?? null, invoiceNo, input.poId, input.grnId ?? null, input.supplierId,
       invoiceDate, input.dueDate ?? null,
-      round2(subtotal), round2(tax), total, allMatch, input.notes ?? null, supplierDocumentNo,
+      round2(subtotal), round2(tax), total, allMatch, input.notes ?? null, supplierDocumentNo, ctx.userId ?? null,
     ]
   );
   const invoiceId = Number(ins.rows[0].id);
@@ -1398,12 +1419,12 @@ export async function createSupplierPayment(
   const paymentNo = await nextDoc(client, ctx, 'SP');
   const ins = await client.query(
     `INSERT INTO supplier_payments
-       (company_id, tenant_id, payment_no, supplier_invoice_id, supplier_id, payment_date, amount, method, reference, bank_account_id, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING') RETURNING id`,
+       (company_id, tenant_id, payment_no, supplier_invoice_id, supplier_id, payment_date, amount, method, reference, bank_account_id, status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING',$11) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, paymentNo, input.supplierInvoiceId ?? null,
       input.supplierId, paymentDate, amount,
-      input.method ?? 'BANK_TRANSFER', reference, input.bankAccountId ?? null,
+      input.method ?? 'BANK_TRANSFER', reference, input.bankAccountId ?? null, ctx.userId ?? null,
     ]
   );
   const paymentId = Number(ins.rows[0].id);

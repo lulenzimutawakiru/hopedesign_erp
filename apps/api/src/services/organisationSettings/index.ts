@@ -314,10 +314,7 @@ export async function saveCategory(
     }
 
     case 'approvals': {
-      const { createWorkflow, createLevel, createFallbackRule } = await import('./approvals.js');
-      const what = String(body.create ?? 'workflow');
-      if (what === 'level') return createLevel(client, ctx, body);
-      if (what === 'fallback') return createFallbackRule(client, ctx, body);
+      const { createWorkflow } = await import('./approvals.js');
       return createWorkflow(client, ctx, body);
     }
 

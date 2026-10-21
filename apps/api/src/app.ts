@@ -11,6 +11,7 @@ import { healthRouter } from './routes/health.js';
 import { authRouter } from './routes/auth.js';
 import { publicVerificationRouter } from './routes/publicVerification.js';
 import { approvalsRouter } from './routes/approvals.js';
+import { approvalExceptionsRouter } from './routes/approvalExceptions.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { searchRouter } from './routes/search.js';
@@ -49,10 +50,11 @@ import { hikvisionEventsRouter, hikvisionWebhookErrorFilter } from './routes/hik
 import { kcbEventsRouter, kcbWebhookErrorFilter } from './routes/kcbEvents.js';
 import { equityEventsRouter, equityWebhookErrorFilter } from './routes/equityEvents.js';
 import { resendEventsRouter, resendWebhookErrorFilter } from './routes/resendEvents.js';
+import { whatsappEventsRouter, whatsappWebhookErrorFilter } from './routes/whatsappEvents.js';
 import { hikvisionOpsRouter, hikvisionAttendanceOpsRouter } from './routes/ops/hikvision.js';
 import { runHikvisionWorkerTick } from './services/hikvision/processor.js';
 import { isQueueEnabled } from './services/queue/connection.js';
-import { runEfrisWorkerTick } from './services/efris/processor.js';
+import { runEfrisWorkerTick, runEfrisCreditNotePollTick } from './services/efris/processor.js';
 import { requisitionsOpsRouter } from './routes/ops/requisitions.js';
 import { expenditureOpsRouter } from './routes/ops/expenditure.js';
 import { communicationOpsRouter } from './routes/ops/communication.js';
@@ -179,9 +181,15 @@ app.use('/api/integrations/equity', equityEventsRouter, equityWebhookErrorFilter
 // resolves it to a mailbox before a single row is written) ----
 app.use('/api/integrations/email/resend', resendEventsRouter, resendWebhookErrorFilter);
 
+// ---- Meta WhatsApp webhook (public; the X-Hub-Signature-256 over the raw body
+// is what authenticates the delivery, and the business phone number is what
+// resolves it to a tenant before a single row is written) ----
+app.use('/api/integrations/whatsapp', whatsappEventsRouter, whatsappWebhookErrorFilter);
+
 // ---- Authenticated API ----
 app.use(authenticate);
 app.use('/api/approvals', approvalsRouter);
+app.use('/api/approval-exceptions', approvalExceptionsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/search', searchRouter);
@@ -292,6 +300,14 @@ if (isQueueEnabled()) {
       console.error('[efrisWorker]', err instanceof Error ? err.message : err);
     });
   }, 20_000);
+
+  // EFRIS credit-note poller: a T110 application is approved asynchronously by
+  // URA, so poll submitted applications for their red-invoice FDN every 60s.
+  setInterval(() => {
+    singleFlight(WORKER_LOCKS.EFRIS_CREDIT_NOTE_POLL, runEfrisCreditNotePollTick).catch((err: unknown) => {
+      console.error('[efrisCreditNotePoll]', err instanceof Error ? err.message : err);
+    });
+  }, 60_000);
 
   // Service Desk SLA worker: re-evaluate response/resolution timers and raise
   // escalations every minute. Single-flight so a breach is never escalated by

@@ -186,6 +186,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await asTenant('DELETE FROM equity_payment_notifications WHERE company_id = $1 AND (equity_transaction_id LIKE $2 OR transaction_reference LIKE $2)', [COMPANY_ID, PREFIX]);
   await pool.query("DELETE FROM bank_transactions WHERE statement_ref LIKE $1", [`EQUITY:EQUITYTEST-${RUN}%`]);
+  await asTenant('DELETE FROM invoice_items WHERE invoice_id IN (SELECT id FROM customer_invoices WHERE company_id = $1 AND invoice_no LIKE $2)', [COMPANY_ID, PREFIX]);
   await asTenant('DELETE FROM customer_invoices WHERE company_id = $1 AND invoice_no LIKE $2', [COMPANY_ID, PREFIX]);
   await asTenant('DELETE FROM company_integrations WHERE id = $1', [integrationId]);
 });

@@ -50,6 +50,7 @@ export function LoginPage() {
     completeEnrollment,
     startEmailCode,
     resendEmailCode,
+    startWhatsAppCode,
     completeEmailEnroll,
   } = useAuth();
   const company = useCompanyProfile();
@@ -70,6 +71,11 @@ export function LoginPage() {
   const [emailEntry, setEmailEntry] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
   const [resendIn, setResendIn] = useState(0);
+  // MFA-004: the WhatsApp fallback channel. `whatsappAvailable` gates the offer,
+  // `whatsappMode` tracks which channel the active challenge was sent over.
+  const [whatsappAvailable, setWhatsappAvailable] = useState(false);
+  const [whatsappMode, setWhatsappMode] = useState(false);
+  const [maskedPhone, setMaskedPhone] = useState('');
   /**
    * Set when the backend refuses a credential pair. It marks both controls so
    * the user can see the submission was rejected, without printing a message
@@ -177,6 +183,9 @@ export function LoginPage() {
           setMfaMode('code');
           setMaskedEmail(outcome.maskedEmail ?? '');
           setResendIn(outcome.resendAfterSeconds ?? 0);
+          setWhatsappAvailable(!!outcome.whatsappAvailable);
+          setWhatsappMode(false);
+          setMaskedPhone('');
         }
         return;
       }
@@ -217,6 +226,15 @@ export function LoginPage() {
     setNotice('');
     setBusy(true);
     try {
+      if (whatsappMode) {
+        const r = await startWhatsAppCode();
+        setMaskedPhone(r.maskedPhone);
+        setResendIn(r.resendAfterSeconds ?? 0);
+        setCodeSent(true);
+        setEmailEntry(false);
+        setNotice(r.alreadySent ? 'A code is already on its way — check WhatsApp.' : 'Re-sent. Check WhatsApp.');
+        return;
+      }
       const r = email ? await startEmailCode(email) : await resendEmailCode();
       setMaskedEmail(r.maskedEmail);
       setResendIn(r.resendAfterSeconds ?? 0);
@@ -225,6 +243,25 @@ export function LoginPage() {
       setNotice(r.alreadySent ? 'A code is already on its way — check your inbox.' : 'Re-sent. Check your inbox.');
     } catch (err) {
       setError(describeAuthError(err, 'send-code', 'Could not send the code'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const useWhatsApp = async () => {
+    setError('');
+    setNotice('');
+    setBusy(true);
+    try {
+      const r = await startWhatsAppCode();
+      setMaskedPhone(r.maskedPhone);
+      setResendIn(r.resendAfterSeconds ?? 0);
+      setWhatsappMode(true);
+      setCodeSent(true);
+      setEmailEntry(false);
+      setNotice(r.alreadySent ? 'A code is already on its way — check WhatsApp.' : 'Code sent. Check WhatsApp.');
+    } catch (err) {
+      setError(describeAuthError(err, 'send-code', 'Could not send the WhatsApp code'));
     } finally {
       setBusy(false);
     }
@@ -243,6 +280,9 @@ export function LoginPage() {
     setEmailEntry(false);
     setCodeSent(false);
     setResendIn(0);
+    setWhatsappAvailable(false);
+    setWhatsappMode(false);
+    setMaskedPhone('');
     setRefused(false);
   };
 
@@ -267,7 +307,7 @@ export function LoginPage() {
   const subtitle =
     stage === 'credentials'
       ? 'Sign in with your plant identity. Sessions are named, scoped and logged.'
-      : mfaSubtitle(mfaMode, emailEntry, maskedEmail);
+      : mfaSubtitle(mfaMode, emailEntry, maskedEmail, whatsappMode, maskedPhone);
 
   return (
     <div className="auth-shell">
@@ -374,6 +414,8 @@ export function LoginPage() {
                 error={error}
                 notice={notice}
                 maskedEmail={maskedEmail}
+                whatsappAvailable={whatsappAvailable}
+                maskedPhone={maskedPhone}
                 resendIn={resendIn}
                 primaryLabel={primaryLabel}
                 submitDisabled={submitDisabled}
@@ -381,6 +423,7 @@ export function LoginPage() {
                 onNewEmailChange={setNewEmail}
                 onCopySecret={() => void copySecret()}
                 onResend={() => void resend(mfaMode === 'email-enroll' ? newEmail.trim() : undefined)}
+                onUseWhatsApp={() => void useWhatsApp()}
                 onUseDifferentEmail={() => {
                   setMfaMode('email-enroll');
                   setEmailEntry(true);

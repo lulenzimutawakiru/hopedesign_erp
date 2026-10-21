@@ -107,6 +107,16 @@ export interface EmailCodeIssued {
   resendAfterSeconds: number;
 }
 
+/** Result of asking the server to send a one-time code over WhatsApp. */
+export interface WhatsAppCodeIssued {
+  ok: boolean;
+  method: 'whatsapp';
+  maskedPhone: string;
+  alreadySent: boolean;
+  expiresInMinutes: number;
+  resendAfterSeconds: number;
+}
+
 export interface MfaStatus {
   mfaEnabled: boolean;
   method: string | null;
@@ -126,6 +136,7 @@ export type LoginOutcome =
       method: MfaMethod;
       maskedEmail: string | null;
       resendAfterSeconds: number;
+      whatsappAvailable: boolean;
     };
 
 export interface PendingLogin {
@@ -135,6 +146,7 @@ export interface PendingLogin {
   method: MfaMethod;
   maskedEmail: string | null;
   resendAfterSeconds: number;
+  whatsappAvailable: boolean;
   enrollmentSecret?: string;
   enrollmentUrl?: string;
 }
@@ -149,6 +161,8 @@ interface AuthState {
   startEmailCode: (email?: string) => Promise<EmailCodeIssued>;
   /** Repeat the current email challenge. The server applies its own cooldown. */
   resendEmailCode: () => Promise<EmailCodeIssued>;
+  /** Send a fresh code over WhatsApp to the phone on file. */
+  startWhatsAppCode: () => Promise<WhatsAppCodeIssued>;
   /** Finish email enrollment; holding the code is what proves the address. */
   completeEmailEnroll: (code: string) => Promise<void>;
   mfaStatus: () => Promise<MfaStatus>;
@@ -202,6 +216,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           method?: string;
           maskedEmail?: string | null;
           resendAfterSeconds?: number;
+          whatsappAvailable?: boolean;
           loginToken: string;
           user: Partial<MeUser>;
         }
@@ -222,6 +237,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: r.method === 'totp' ? 'totp' : 'email',
         maskedEmail: r.maskedEmail ?? null,
         resendAfterSeconds: Number(r.resendAfterSeconds ?? 0) || 0,
+        whatsappAvailable: !!r.whatsappAvailable,
       };
       setPending(pl);
       return {
@@ -232,6 +248,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: pl.method,
         maskedEmail: pl.maskedEmail,
         resendAfterSeconds: pl.resendAfterSeconds,
+        whatsappAvailable: pl.whatsappAvailable,
       };
     }
     throw new Error('Unexpected login response');
@@ -264,6 +281,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const resendEmailCode = (): Promise<EmailCodeIssued> => startEmailCode();
+
+  const startWhatsAppCode = async (): Promise<WhatsAppCodeIssued> => {
+    if (!pending) throw new Error('No pending login');
+    const r = await api<WhatsAppCodeIssued>('/api/auth/mfa/whatsapp/start', {
+      method: 'POST',
+      body: JSON.stringify({ loginToken: pending.loginToken }),
+    });
+    setPending({
+      ...pending,
+      method: 'email',
+      resendAfterSeconds: Number(r.resendAfterSeconds ?? 0) || 0,
+    });
+    return r;
+  };
 
   const completeEmailEnroll = async (code: string) => {
     if (!pending) throw new Error('No pending login');
@@ -342,6 +373,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         completeMfa,
         startEmailCode,
         resendEmailCode,
+        startWhatsAppCode,
         completeEmailEnroll,
         mfaStatus,
         setPersonalEmail,

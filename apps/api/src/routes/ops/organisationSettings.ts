@@ -474,11 +474,21 @@ organisationSettingsOpsRouter.put('/tax/thresholds', requirePermission(manage('t
 }));
 
 // ===========================================================================
-// Approval workflows, levels and fallbacks
+// Approval workflows (live engine)
 // ===========================================================================
 
 organisationSettingsOpsRouter.get('/approvals/workflows', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
-  const out = await tx((client) => approvals.listWorkflows(client, req.ctx, { documentType: qs(req.query.documentType) }), req.ctx);
+  const out = await tx((client) => approvals.listWorkflows(client, req.ctx), req.ctx);
+  res.json({ data: out });
+}));
+
+organisationSettingsOpsRouter.get('/approvals/roles', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
+  const out = await tx((client) => approvals.listApproverRoles(client, req.ctx), req.ctx);
+  res.json({ data: out });
+}));
+
+organisationSettingsOpsRouter.get('/approvals/entities', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
+  const out = await tx((client) => approvals.listWorkflowEntities(client, req.ctx), req.ctx);
   res.json({ data: out });
 }));
 
@@ -498,55 +508,22 @@ organisationSettingsOpsRouter.patch('/approvals/workflows/:id', requirePermissio
 }));
 
 organisationSettingsOpsRouter.post('/approvals/workflows/:id/deactivate', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
-  const out = await tx((client) => approvals.deactivateWorkflow(client, req.ctx, Number(req.params.id)), req.ctx);
+  const out = await tx((client) => approvals.setWorkflowActive(client, req.ctx, Number(req.params.id), false), req.ctx);
   res.json({ data: out });
 }));
 
-organisationSettingsOpsRouter.post('/approvals/levels', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
-  const out = await tx((client) => approvals.createLevel(client, req.ctx, req.body ?? {}), req.ctx);
-  res.json({ data: out });
-}));
-
-organisationSettingsOpsRouter.patch('/approvals/levels/:id', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
-  const out = await tx((client) => approvals.updateLevel(client, req.ctx, Number(req.params.id), req.body ?? {}), req.ctx);
-  res.json({ data: out });
-}));
-
-organisationSettingsOpsRouter.delete('/approvals/levels/:id', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
-  const out = await tx((client) => approvals.deleteLevel(client, req.ctx, Number(req.params.id)), req.ctx);
-  res.json({ data: out });
-}));
-
-organisationSettingsOpsRouter.get('/approvals/fallbacks', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
-  const out = await tx((client) => approvals.listFallbackRules(client, req.ctx), req.ctx);
-  res.json({ data: out });
-}));
-
-organisationSettingsOpsRouter.post('/approvals/fallbacks', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
-  const out = await tx((client) => approvals.createFallbackRule(client, req.ctx, req.body ?? {}), req.ctx);
-  res.json({ data: out });
-}));
-
-organisationSettingsOpsRouter.patch('/approvals/fallbacks/:id', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
-  const out = await tx((client) => approvals.updateFallbackRule(client, req.ctx, Number(req.params.id), req.body ?? {}), req.ctx);
-  res.json({ data: out });
-}));
-
-organisationSettingsOpsRouter.delete('/approvals/fallbacks/:id', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
-  const out = await tx((client) => approvals.deleteFallbackRule(client, req.ctx, Number(req.params.id)), req.ctx);
+organisationSettingsOpsRouter.post('/approvals/workflows/:id/activate', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
+  const out = await tx((client) => approvals.setWorkflowActive(client, req.ctx, Number(req.params.id), true), req.ctx);
   res.json({ data: out });
 }));
 
 organisationSettingsOpsRouter.get('/approvals/resolve', requirePermission(manage('approvals')), asyncHandler(async (req, res) => {
   const out = await tx(
     (client) =>
-      approvals.resolveApprovalChain(
-        client,
-        req.ctx,
-        String(req.query.documentType ?? ''),
-        req.query.amount != null ? Number(req.query.amount) : null,
-        req.query.branchId != null ? Number(req.query.branchId) : null
-      ),
+      approvals.resolveWorkflow(client, req.ctx, {
+        entityType: qs(req.query.entityType),
+        amount: req.query.amount != null ? Number(req.query.amount) : null,
+      }),
     req.ctx
   );
   res.json({ data: out });

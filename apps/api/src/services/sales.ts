@@ -941,6 +941,42 @@ export async function createReceipt(
   const journalId = await finance.postReceipt(client, ctx, receiptId);
   await emitEvent(client, ctx, { eventType: 'sales.receipt_posted', entityType: 'receipts', entityId: receiptId, entityCode: receiptNo, payload: { journalId, amount } });
   await logAudit(client, ctx, { action: 'post', resource: 'receipts', recordId: receiptId, recordCode: receiptNo, newValues: { amount, journalId, allocations } });
+
+  // B2C e-receipt: fiscalise a consumer payment as a tax invoice (buyerType 1).
+  // The receipts table holds no line items, so the fiscal document reuses the
+  // linked invoice's goods — only when that invoice has no fiscal transaction yet,
+  // so a normally auto-fiscalised invoice is never reported twice. Gated on
+  // fiscalize_sales_on_post (the same gate as sales invoices).
+  if (primaryInvoice != null && Number(primaryInvoice) > 0) {
+    try {
+      const invCheck = await client.query(
+        `SELECT ci.total, ci.tax_amount,
+                EXISTS (SELECT 1 FROM efris_transactions t
+                         WHERE t.doc_ref_type = 'customer_invoices'
+                           AND t.doc_ref_id = $1 AND t.tenant_id = $2) AS already_fiscalized
+           FROM customer_invoices ci
+          WHERE ci.id = $1 AND ci.tenant_id = $2`,
+        [primaryInvoice, ctx.tenantId]
+      );
+      const invRow = invCheck.rows[0] as Record<string, unknown> | undefined;
+      if (invRow && invRow.already_fiscalized !== true) {
+        const { autoRegisterEfrisDocument } = await import('./finance-advanced.js');
+        await autoRegisterEfrisDocument(client, ctx, 'fiscalize_sales_on_post', {
+          docType: 'RECEIPT',
+          docRefType: 'receipts',
+          docRefId: receiptId,
+          docRefCode: receiptNo,
+          txnDate: input.receiptDate ?? new Date().toISOString().slice(0, 10),
+          currency: 'UGX',
+          grossAmount: Number(invRow.total ?? 0),
+          taxAmount: Number(invRow.tax_amount ?? 0),
+        });
+      }
+    } catch (err) {
+      console.error('[efris][b2c-receipt]', err instanceof Error ? err.message : err);
+    }
+  }
+
   return { receiptId, receiptNo, journalId, unallocatedAmount: round2(amount - allocated) };
 }
 
@@ -962,12 +998,12 @@ export async function createCreditNote(
   const creditNo = await nextDoc(client, ctx, 'CN');
   const ins = await client.query(
     `INSERT INTO credit_notes
-       (company_id, tenant_id, credit_no, invoice_id, customer_id, credit_date, amount, reason, reason_code, currency, tax_amount)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+       (company_id, tenant_id, credit_no, invoice_id, customer_id, credit_date, amount, reason, reason_code, currency, tax_amount, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, creditNo, input.invoiceId ?? null, input.customerId,
       input.creditDate ?? new Date().toISOString().slice(0, 10), amount, String(input.reason).trim(),
-      input.reasonCode ?? null, currency, taxAmount,
+      input.reasonCode ?? null, currency, taxAmount, ctx.userId ?? null,
     ]
   );
   const creditNoteId = Number(ins.rows[0].id);
@@ -999,12 +1035,12 @@ export async function createDebitNote(
   const debitNo = await nextDoc(client, ctx, 'DNM');
   const ins = await client.query(
     `INSERT INTO debit_notes
-       (company_id, tenant_id, debit_no, invoice_id, customer_id, debit_date, amount, reason, reason_code, currency, tax_amount)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+       (company_id, tenant_id, debit_no, invoice_id, customer_id, debit_date, amount, reason, reason_code, currency, tax_amount, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, debitNo, input.invoiceId ?? null, Number(input.customerId),
       input.debitDate ?? new Date().toISOString().slice(0, 10), amount, String(input.reason).trim(), reasonCode,
-      currency, taxAmount,
+      currency, taxAmount, ctx.userId ?? null,
     ]
   );
   const debitNoteId = Number(ins.rows[0].id);

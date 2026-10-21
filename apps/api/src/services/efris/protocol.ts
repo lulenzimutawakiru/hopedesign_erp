@@ -21,6 +21,16 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 const AES_BLOCK = 16;
 
+/**
+ * `globalInfo.version` is the "client software version" URA's gateway checks on
+ * every request (rejected with return code 2889 when below the current minimum).
+ * The historical value `1.1.20191201` is stale — URA now rejects it — but the
+ * current minimum is not published anywhere and must come from URA. This lets an
+ * operator supply the authoritative value via env or security flags without a
+ * code change; it is deliberately NOT guessed here.
+ */
+const DEFAULT_CLIENT_VERSION = process.env.EFRIS_CLIENT_VERSION?.trim() || '1.1.20191201';
+
 export class EfrisProtocolError extends Error {
   readonly code: string;
   constructor(code: string, message: string) {
@@ -197,6 +207,36 @@ export function normalizePrivateKey(raw: string): string {
   return value;
 }
 
+/**
+ * Decrypt URA's T104 `passowrdDes` value into the raw symmetric-key bytes.
+ *
+ * The S2S guide is explicit: "The value in passowrdDes is RSA encrypted using
+ * your public key, so you have to decrypt it using your private key. The value
+ * obtained after decryption is the AES key." The value is base64-encoded RSA
+ * ciphertext under PKCS#1 v1.5 padding (Java's default `Cipher.getInstance("RSA")`).
+ *
+ * Returns the raw decrypted bytes so the caller can hex-encode them for the AES
+ * helpers without lossy string round-trips. Never returns the encrypted value.
+ */
+export function rsaDecryptBase64(encryptedBase64: string, privateKeyPem: string): Buffer {
+  try {
+    const ciphertext = Buffer.from(encryptedBase64.trim(), 'base64');
+    return crypto.privateDecrypt(
+      {
+        key: normalizePrivateKey(privateKeyPem),
+        padding: crypto.constants.RSA_PKCS1_PADDING,
+      },
+      ciphertext
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new EfrisProtocolError(
+      'EFRIS_AES_KEY_DECRYPT_FAILED',
+      `URA symmetric key could not be decrypted with the device private key: ${message}`
+    );
+  }
+}
+
 export function looksLikePrivateKey(value: string | undefined): boolean {
   if (!value) return false;
   const normalized = normalizePrivateKey(value);
@@ -250,7 +290,7 @@ export function buildGlobalInfo(opts: UraGlobalOptions, now = new Date()): Recor
   const user = flagString(flags, 'userName', 'username') || 'admin';
   return {
     appId: flagString(flags, 'appId', 'app_id') || 'AP04',
-    version: '1.1.20191201',
+    version: flagString(flags, 'clientVersion', 'client_version', 'version') || DEFAULT_CLIENT_VERSION,
     dataExchangeId: crypto.randomBytes(16).toString('hex').toUpperCase(),
     interfaceCode: opts.interfaceCode,
     requestCode: 'TP',
@@ -275,11 +315,33 @@ export function buildGlobalInfo(opts: UraGlobalOptions, now = new Date()): Recor
   };
 }
 
-export function buildUnencryptedEnvelope(content: Record<string, unknown> | null, global: UraGlobalOptions, privateKeyPem?: string): Record<string, unknown> {
+/**
+ * Re-encodes a string so that a single-byte round trip through the Aisino TCS
+ * offline enabler reproduces the original UTF-8 bytes.
+ *
+ * The TCS decodes our base64 `content` as UTF-8 and then re-encodes it with a
+ * single-byte charset (Windows-1252) before forwarding to URA, which corrupts
+ * every non-ASCII character ("²" U+00B2 arrives as U+FFFD). Pre-encoding each
+ * UTF-8 code point as Latin-1 mojibake inverts that round trip: the TCS's
+ * single-byte re-encode emits the original UTF-8 bytes, so URA decodes the
+ * correct character. ASCII is unchanged.
+ */
+export function preEncodeForOfflineEnabler(text: string): string {
+  return Buffer.from(text, 'utf8').toString('latin1');
+}
+
+export function buildUnencryptedEnvelope(
+  content: Record<string, unknown> | null,
+  global: UraGlobalOptions,
+  privateKeyPem?: string,
+  opts?: { offlineEnabler?: boolean }
+): Record<string, unknown> {
   let contentB64 = '';
   let signature = '';
   if (content && Object.keys(content).length > 0) {
-    contentB64 = Buffer.from(JSON.stringify(content), 'utf8').toString('base64');
+    const json = JSON.stringify(content);
+    const text = opts?.offlineEnabler ? preEncodeForOfflineEnabler(json) : json;
+    contentB64 = Buffer.from(text, 'utf8').toString('base64');
     if (privateKeyPem) signature = signRsaSha1(contentB64, privateKeyPem);
   }
   return {
@@ -439,14 +501,34 @@ function compact(value: string | null | undefined): string {
 }
 
 /**
- * URA invoiceType on T109. 1 invoice, 2 credit note, 3 debit note.
+ * URA invoiceType. 1 normal (positive) invoice, 2 credit note (red/negative).
+ *
+ * A debit note is a supplementary POSITIVE invoice in URA's model — there is no
+ * dedicated invoiceType for it, so it fiscalises as a normal invoice (`1`).
+ * URA rejects `3` with `1135 basicInformation-->invoiceType:Invalid field value`.
  * payload_mapping.fixed can override the value when a gateway build differs.
  */
 export function invoiceTypeFor(docType: string): string {
   const kind = docType.trim().toUpperCase();
   if (kind === 'CREDIT_NOTE' || kind === 'CREDIT') return '2';
-  if (kind === 'DEBIT_NOTE' || kind === 'DEBIT') return '3';
   return '1';
+}
+
+/**
+ * A stock movement is not a tax document: URA records it through the T131
+ * stock-in/reconciliation interface, which returns a stock acknowledgement
+ * rather than an FDN + verification code. These doc_type values are routed to
+ * T131 instead of T109.
+ */
+export function isStockDocType(docType: string): boolean {
+  const kind = docType.trim().toUpperCase();
+  return kind === 'PURCHASE_RECEIPT'
+    || kind === 'GOODS_RECEIPT'
+    || kind === 'STOCK_IN'
+    || kind === 'STOCK_MOVEMENT'
+    || kind === 'STOCK_RECONCILIATION'
+    || kind === 'STOCK_ADJUSTMENT'
+    || kind === 'STOCK_OUT';
 }
 
 export function interfaceCodeFor(docType: string, flags: Record<string, unknown> | null | undefined): string {
@@ -456,7 +538,11 @@ export function interfaceCodeFor(docType: string, flags: Record<string, unknown>
   if (kind === 'CREDIT_NOTE' || kind === 'CREDIT') {
     const credit = flagString(flags, 'creditInterface', 'credit_interface');
     if (/^T\d{3}$/.test(credit)) return credit;
+    // URA applies credit notes via T110 ("Please use interface api-T110 to apply
+    // credit note"), not T109. Debit notes stay on T109 as positive invoices.
+    return 'T110';
   }
+  if (isStockDocType(kind)) return 'T131';
   return 'T109';
 }
 
@@ -468,6 +554,13 @@ export interface UraLine {
   taxPercent: number;
   /** Line gross (tax inclusive), as stored on invoice_items.line_total. */
   lineGross: number;
+  /** URA unit-of-measure code as registered on the goods (e.g. "CT"), not a generic default. */
+  unitOfMeasure?: string | null;
+  /** URA goods-category id/name the goods is registered under (T130). */
+  goodsCategoryId?: string | null;
+  goodsCategoryName?: string | null;
+  /** 1 when the line is VAT-applicable, 0 otherwise. */
+  vatApplicableFlag?: string | null;
 }
 
 export interface UraParty {
@@ -492,8 +585,17 @@ export interface UraInvoiceInput {
   buyer: UraParty | null;
   lines: UraLine[];
   oriInvoiceNo?: string | null;
+  oriInvoiceId?: string | null;
   deviceNo?: string | null;
   remarks?: string | null;
+  /** T110 credit note application: URA reason code (101-105). */
+  reasonCode?: string | null;
+  /** T110 credit note application: free-text reason. */
+  reason?: string | null;
+  /** T110 credit note application: application timestamp (defaults to now). */
+  applicationTime?: string | null;
+  /** T110 credit note application: seller's reference for the original sale. */
+  sellersReferenceNo?: string | null;
 }
 
 interface PreparedLine {
@@ -504,6 +606,10 @@ interface PreparedLine {
   tax: number;
   gross: number;
   rate: number;
+  unitOfMeasure: string;
+  goodsCategoryId: string;
+  goodsCategoryName: string;
+  vatApplicableFlag: string;
 }
 
 function prepareLines(input: UraInvoiceInput): PreparedLine[] {
@@ -530,6 +636,10 @@ function prepareLines(input: UraInvoiceInput): PreparedLine[] {
       tax,
       gross: net + tax,
       rate,
+      unitOfMeasure: compact(line.unitOfMeasure) || '101',
+      goodsCategoryId: compact(line.goodsCategoryId) || '',
+      goodsCategoryName: compact(line.goodsCategoryName) || '',
+      vatApplicableFlag: compact(line.vatApplicableFlag) || '',
     };
   });
   const netTarget = Math.max(input.grossAmount - input.taxAmount, 0);
@@ -562,9 +672,12 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
     item: line.description,
     itemCode: line.itemCode,
     qty: qty(line.quantity),
-    unitOfMeasure: '101',
-    unitPrice: money(line.quantity > 0 ? line.net / line.quantity : line.net),
-    total: money(line.net),
+    unitOfMeasure: line.unitOfMeasure,
+    // URA treats goodsDetails.unitPrice/total as TAX-INCLUSIVE (gross) and derives
+    // the VAT with tax = total * taxRate / (1 + taxRate). Sending the net amount
+    // here is rejected with 2776 "Tax calculation error".
+    unitPrice: money(line.quantity > 0 ? line.gross / line.quantity : line.gross),
+    total: money(line.gross),
     taxRate: line.rate > 0 ? line.rate.toFixed(2) : '0',
     tax: money(line.tax),
     discountTotal: '',
@@ -575,8 +688,8 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
     exciseFlag: '2',
     categoryId: '',
     categoryName: '',
-    goodsCategoryId: '',
-    goodsCategoryName: '',
+    goodsCategoryId: line.goodsCategoryId,
+    goodsCategoryName: line.goodsCategoryName,
     exciseRate: '',
     exciseRule: '',
     exciseTax: '',
@@ -585,6 +698,7 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
     exciseUnit: '',
     exciseCurrency: input.currency || 'UGX',
     exciseRateName: '',
+    vatApplicableFlag: line.vatApplicableFlag,
   }));
   const byCategory = new Map<string, { code: string; name: string; net: number; tax: number; gross: number; rate: number }>();
   for (const line of lines) {
@@ -628,7 +742,11 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
       issuedDate: issued,
       operator: 'admin',
       currency: input.currency || 'UGX',
-      oriInvoiceId: compact(input.oriInvoiceNo),
+      // T110 credit note references the original invoice by BOTH identifiers:
+      // oriInvoiceNo = original FDN, oriInvoiceId = original internal invoice id.
+      // URA rejects 2825 "without original invoice" when either is missing.
+      oriInvoiceNo: compact(input.oriInvoiceNo),
+      oriInvoiceId: compact(input.oriInvoiceId),
       invoiceType: invoiceTypeFor(input.docType),
       invoiceKind: '1',
       dataSource: '103',
@@ -666,5 +784,264 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
       paymentAmount: money(grossAmount),
       orderNumber: 'a',
     }],
+  };
+}
+
+/** URA credit-note reason codes (from the gateway's own T110 option list). */
+export const URA_CREDIT_NOTE_REASONS: Record<string, string> = {
+  '101': 'Return of products due to expiry or damage, etc.',
+  '102': 'Cancellation of the purchase',
+  '103': 'Invoice amount wrongly Stated due to miscalculation of price, tax, or discounts,etc.',
+  '104': 'Partial or complete waive off of the product sale after the invoice is generated and sent to customer.',
+  '105': 'Others (Please specify)',
+};
+
+/**
+ * Inner T110 credit-note application content.
+ *
+ * A credit note is a two-step workflow: the ERP first posts a T110 APPLICATION
+ * (this body) referencing the original invoice, and URA returns an application
+ * `referenceNo`. After URA approves it, a follow-up query (T111/T108) returns
+ * the actual red-invoice FDN. The structure differs from T109 in three ways
+ * that URA rejects if missed (return code 2825 "without original invoice"):
+ *
+ *   * `oriInvoiceId`/`oriInvoiceNo` sit at the TOP LEVEL, not in basicInformation;
+ *   * `basicInformation` is minimal (operator, invoiceKind, invoiceIndustryCode,
+ *     branchId) — no invoiceType, deviceNo, issuedDate, or dataSource;
+ *   * there is no sellerDetails block, and the body carries
+ *     invoiceApplyCategoryCode, reasonCode/reason and applicationTime.
+ *
+ * Amounts are the POSITIVE "what is being credited" values; URA negates them
+ * when it issues the red invoice on approval.
+ */
+export function buildT110Content(input: UraInvoiceInput): Record<string, unknown> {
+  const lines = prepareLines(input);
+  const seller = input.seller;
+  const buyer = input.buyer;
+  const buyerTin = compact(buyer?.tin);
+  const issued = compact(input.applicationTime) || ugandaTimestamp();
+  // A T110 credit note is a red invoice: URA rejects positive goodsDetails qty
+  // (1431 "Cannot be positive"), so qty/total/tax and the summary/payWay totals
+  // are negated while unitPrice stays positive.
+  const neg = (value: number): string => money(-Math.abs(value));
+  const goodsDetails = lines.map((line, index) => ({
+    item: line.description,
+    itemCode: line.itemCode,
+    qty: qty(-Math.abs(line.quantity)),
+    unitOfMeasure: line.unitOfMeasure,
+    // Same tax-inclusive (gross) model as T109, proven live on this sandbox.
+    unitPrice: money(line.quantity > 0 ? line.gross / line.quantity : line.gross),
+    total: neg(line.gross),
+    taxRate: line.rate > 0 ? line.rate.toFixed(2) : '0',
+    tax: neg(line.tax),
+    discountTotal: '',
+    discountTaxRate: '0',
+    orderNumber: String(index),
+    discountFlag: '2',
+    deemedFlag: '2',
+    exciseFlag: '2',
+    categoryId: '',
+    categoryName: '',
+    goodsCategoryId: line.goodsCategoryId,
+    goodsCategoryName: line.goodsCategoryName,
+    exciseRate: '',
+    exciseRule: '',
+    exciseTax: '',
+    pack: '',
+    stick: '',
+    exciseUnit: '',
+    // URA stores the original invoice's goodsDetails without exciseCurrency
+    // (only taxDetails keeps it), so the credit note must mirror that exactly —
+    // sending 'UGX' here is rejected 1476 "must be the same as the original invoice".
+    exciseCurrency: '',
+    exciseRateName: '',
+    vatApplicableFlag: line.vatApplicableFlag,
+  }));
+  const byCategory = new Map<string, { code: string; name: string; net: number; tax: number; gross: number; rate: number }>();
+  for (const line of lines) {
+    const category = taxCategory(line.rate);
+    const current = byCategory.get(category.code) ?? { ...category, net: 0, tax: 0, gross: 0, rate: line.rate };
+    current.net += line.net;
+    current.tax += line.tax;
+    current.gross += line.gross;
+    byCategory.set(category.code, current);
+  }
+  const taxDetails = [...byCategory.values()].map((row) => ({
+    taxCategoryCode: row.code,
+    netAmount: neg(row.net),
+    taxRate: row.rate > 0 ? row.rate.toFixed(2) : '0',
+    taxAmount: neg(row.tax),
+    grossAmount: neg(row.gross),
+    exciseUnit: '',
+    exciseCurrency: input.currency || 'UGX',
+    taxRateName: row.name,
+  }));
+  const netAmount = lines.reduce((sum, line) => sum + line.net, 0);
+  const taxAmount = lines.reduce((sum, line) => sum + line.tax, 0);
+  const grossAmount = netAmount + taxAmount;
+  return {
+    oriInvoiceId: compact(input.oriInvoiceId),
+    oriInvoiceNo: compact(input.oriInvoiceNo),
+    reasonCode: compact(input.reasonCode) || '102',
+    reason: compact(input.reason) || '',
+    applicationTime: issued,
+    invoiceApplyCategoryCode: '101',
+    currency: input.currency || 'UGX',
+    contactName: '',
+    contactMobileNum: '',
+    contactEmail: '',
+    source: '103',
+    remarks: compact(input.remarks).slice(0, 200),
+    sellersReferenceNo: compact(input.sellersReferenceNo ?? input.docRefCode).slice(0, 50),
+    goodsDetails,
+    taxDetails,
+    summary: {
+      netAmount: neg(netAmount),
+      taxAmount: neg(taxAmount),
+      grossAmount: neg(grossAmount),
+      itemCount: String(lines.length),
+      modeCode: '0',
+      remarks: compact(input.remarks).slice(0, 200),
+      qrCode: '',
+    },
+    buyerDetails: {
+      buyerTin,
+      buyerNinBrn: '',
+      buyerPassportNum: '',
+      buyerLegalName: compact(buyer?.legalName) || 'Cash customer',
+      buyerBusinessName: compact(buyer?.businessName) || compact(buyer?.legalName),
+      buyerAddress: compact(buyer?.address),
+      buyerEmail: compact(buyer?.email),
+      buyerMobilePhone: compact(buyer?.phone),
+      buyerLinePhone: '',
+      buyerPlaceOfBusi: '',
+      buyerType: buyerTin ? '0' : '1',
+      buyerCitizenship: '1',
+      buyerSector: '1',
+      buyerReferenceNo: '',
+    },
+    payWay: [{
+      paymentMode: '101',
+      paymentAmount: neg(grossAmount),
+      orderNumber: 'a',
+    }],
+    importServicesSeller: {
+      importBusinessName: '',
+      importEmailAddress: '',
+      importContactNumber: '',
+      importAddress: '',
+      importInvoiceDate: '',
+      importAttachmentName: '',
+      importAttachmentContent: '',
+    },
+    basicInformation: {
+      operator: 'admin',
+      invoiceKind: '1',
+      invoiceIndustryCode: '102',
+      branchId: '',
+    },
+  };
+}
+
+/**
+ * T131 stock-in `stockInType` options (from the gateway's own option list).
+ * `102` local purchase is the default; `101` is import.
+ */
+export const URA_STOCK_IN_TYPES: Record<string, string> = {
+  '101': 'Import',
+  '102': 'Local Purchase',
+};
+
+/**
+ * T131 stock-reconciliation `adjustType` options (from the gateway's own option
+ * list). Only these four exist; the ERP maps its adjustment types onto them.
+ */
+export const URA_ADJUSTMENT_TYPES: Record<string, string> = {
+  '101': 'Expired Goods',
+  '102': 'Damaged Goods',
+  '103': 'Personal Uses',
+  '104': 'Others. (Please specify)',
+};
+
+/**
+ * Map an ERP inventory-adjustment type onto a URA T131 adjustType code without
+ * inventing any URA code. URA only exposes four reasons (expired / damaged /
+ * personal use / others), so damage maps to 102 and every other ERP reason
+ * (stocktake, cycle count, correction, scrap, quarantine, release) maps to 104
+ * "Others".
+ */
+export function uraAdjustmentType(erpAdjustmentType: string | null | undefined): string {
+  const kind = (erpAdjustmentType ?? '').trim().toUpperCase();
+  if (kind === 'DAMAGE' || kind === 'DAMAGED') return '102';
+  return '104';
+}
+
+export interface UraStockLine {
+  /** URA goods code (products.efris_goods_code) — never a bare ERP SKU. */
+  goodsCode: string;
+  /** URA unit-of-measure code (products.efris_unit_of_measure, e.g. "CT"). */
+  measureUnit: string;
+  quantity: number;
+  /** Unit value URA records for the stock line (gross/unit cost). */
+  unitPrice: number;
+  remarks?: string | null;
+}
+
+export interface UraStockInput {
+  docType: string;
+  docRefCode: string;
+  /** YYYY-MM-DD the stock movement is effective. */
+  stockInDate: string;
+  /** '101' stock in, '102' adjustment/reconciliation. */
+  operationType: string;
+  /** stockInType: '101' import / '102' local purchase (stock in only). */
+  stockInType?: string | null;
+  /** adjustType: '101'-'104' (reconciliation only). */
+  adjustType?: string | null;
+  supplierTin?: string | null;
+  supplierName?: string | null;
+  branchId?: string | null;
+  /** Supplier invoice/receipt reference, when the movement references one. */
+  invoiceNo?: string | null;
+  remarks?: string | null;
+  lines: UraStockLine[];
+}
+
+/**
+ * Inner T131 stock-in / stock-reconciliation content. The structure is the
+ * gateway's `goodsStockIn` + `goodsStockInItem` shape; amounts are strings, and
+ * every empty optional field is sent as '' exactly as the reference client does.
+ * T131 never returns an FDN — success is a `returnCode` 00 stock acknowledgement.
+ */
+export function buildT131Content(input: UraStockInput): Record<string, unknown> {
+  const isReconciliation = input.operationType === '102';
+  return {
+    goodsStockIn: {
+      operationType: input.operationType,
+      supplierTin: compact(input.supplierTin),
+      supplierName: compact(input.supplierName),
+      adjustType: isReconciliation ? compact(input.adjustType) : '',
+      remarks: compact(input.remarks).slice(0, 200),
+      stockInDate: compact(input.stockInDate),
+      stockInType: isReconciliation ? '' : compact(input.stockInType) || '102',
+      productionBatchNo: '',
+      productionDate: '',
+      branchId: compact(input.branchId),
+      invoiceNo: compact(input.invoiceNo),
+      isCheckBatchNo: '',
+      rollBackIfError: '',
+      goodsTypeCode: '101',
+    },
+    goodsStockInItem: input.lines.map((line) => ({
+      commodityGoodsId: '',
+      goodsCode: compact(line.goodsCode),
+      measureUnit: compact(line.measureUnit),
+      quantity: qty(line.quantity),
+      unitPrice: money(line.unitPrice),
+      remarks: compact(line.remarks),
+      fuelTankId: '',
+      lossQuantity: '',
+      originalQuantity: '',
+    })),
   };
 }
