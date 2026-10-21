@@ -116,6 +116,55 @@ esac
 
 log "role=$NODE_ROLE (wg0=$WG_ADDR) mode=$MODE src=$SRC_ROLE_DIR"
 
+# ---- standalone (the mesh has one member left) ------------------------------
+# When wg0 has no configured peers, this node is no longer part of a two-node
+# mesh: the other node was decommissioned. The cross-node fragments would point
+# Caddy at an endpoint that no longer exists and stall a share of every
+# request, so remove the live fragments and reload Caddy to drop the dead
+# upstreams from the running config. This is the exact inverse of the install
+# path below. The tracked templates stay put so that re-adding a peer returns
+# this script to its normal reconcile behaviour with no further change.
+#
+# `wg show wg0 peers` lists CONFIGURED peers, independent of handshake state, so
+# it is empty only after an operator has deliberately removed the peer - a dead
+# but still-configured peer keeps this branch dormant and keeps alerting (via
+# the mesh route guard below), which is the correct behaviour until the peer is
+# removed.
+if ! wg show wg0 peers 2>/dev/null | grep -q .; then
+  removed=0
+  for frag in "${FRAGMENTS[@]}"; do
+    dst="$LIVE_DIR/$frag"
+    if [[ -f "$dst" ]]; then
+      if [[ "$MODE" == "apply" ]]; then
+        if rm -f "$dst" 2>/dev/null; then
+          removed=1
+          echo "  removed  $frag (wg0 has no peers - standalone)"
+          log "removed $dst: wg0 has no peers (standalone)"
+        else
+          log "ERROR: cannot remove $dst"
+          exit 1
+        fi
+      else
+        echo "  would-remove  $frag (wg0 has no peers - standalone)"
+      fi
+    fi
+  done
+
+  [[ "$MODE" == "apply" ]] || exit 0
+  [[ "$removed" == "1" ]] || { log "standalone (no wg0 peers) and no mesh fragments present; nothing to do"; exit 0; }
+
+  if [[ -z "$(docker inspect -f '{{.Id}}' "$CADDY_CONTAINER" 2>/dev/null)" ]]; then
+    log "WARN: $CADDY_CONTAINER is not running; dead peer fragments removed on disk and will be absent when it starts"
+    exit 0
+  fi
+  if docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >> "$LOG_FILE" 2>&1; then
+    log "reloaded $CADDY_CONTAINER; dead peer fragments removed (standalone)"
+    exit 0
+  fi
+  log "ERROR: caddy reload failed after removing dead peer fragments; stack-watchdog.sh's live-overlay guard will reconcile"
+  exit 1
+fi
+
 if [[ ! -d "$SRC_ROLE_DIR" ]]; then
   log "FATAL: $SRC_ROLE_DIR is missing - the tracked fragment set is not in the checkout; nothing to reconcile from"
   exit 1
