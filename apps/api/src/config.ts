@@ -116,6 +116,12 @@ export const config = {
     // Self-service enrolment is only reachable after a successful password
     // check. Switch off to force every personal address through an admin.
     allowSelfEnroll: (process.env.MFA_ALLOW_SELF_ENROLL ?? 'true').toLowerCase() !== 'false',
+    // MFA-005 (emergency grace): for this many days after an account's last
+    // completed MFA login the second factor is waived, so a delivery-provider
+    // outage (e.g. email quota) cannot lock out staff who proved themselves
+    // recently. Anchored to sessions.mfa_verified_at, never last_login_at, so a
+    // password-only attempt cannot mint its own grace. 0 disables the grace.
+    graceDays: num(process.env.MFA_GRACE_DAYS, 0),
   },
   rateLimitWindowMs: num(process.env.RATE_LIMIT_WINDOW_MS, 60_000),
   rateLimitMax: num(process.env.RATE_LIMIT_MAX, 300),

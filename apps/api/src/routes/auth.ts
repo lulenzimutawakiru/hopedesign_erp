@@ -120,6 +120,26 @@ async function totpFactorPaired(userId: number, tenantId: number): Promise<boole
 }
 
 /**
+ * MFA-005: true when the account completed an MFA login within the last
+ * `graceDays` days. This is the only trustworthy "recent successful login"
+ * signal: the login route writes `users.last_login_at` *before* the second
+ * factor is satisfied, so a password-only attempt could otherwise mint its own
+ * grace. `sessions.mfa_verified_at` is only ever set after the factor is
+ * verified, so it cannot be spoofed by someone who holds just the password.
+ */
+async function recentMfaLogin(userId: number, tenantId: number, graceDays: number): Promise<boolean> {
+  const res = await query(
+    `SELECT 1 FROM sessions
+      WHERE user_id = $1 AND mfa_verified_at IS NOT NULL
+        AND mfa_verified_at > now() - make_interval(days => $2::int)
+      LIMIT 1`,
+    [userId, graceDays],
+    { tenantId, userId }
+  );
+  return res.rows.length > 0;
+}
+
+/**
  * AUTH-004: the second factor described by a user row is only usable when its
  * holder can actually satisfy it.
  *
@@ -212,6 +232,28 @@ authRouter.post(
     // AUTH-004: `mfa_secret` alone is not proof of a usable factor, so a stale
     // or abandoned enrolment falls through to the enrollment branch below.
     const totpMfaReady = (await secondFactorUsable(user)) === 'totp';
+
+    // MFA-005: within the grace window the second factor is waived. Same trust
+    // model as a "remember this device" flag - the holder has already proved
+    // control of the factor recently, so a provider outage must not strand them.
+    // The session is still issued unverified-for-MFA, so a bypassed login cannot
+    // renew the window: it stays anchored to the last real verification.
+    if ((emailMfaReady || totpMfaReady) && config.mfa.graceDays > 0) {
+      if (await recentMfaLogin(userId, tenantId, config.mfa.graceDays)) {
+        console.warn(`[auth] mfa grace skip user=${userId} graceDays=${config.mfa.graceDays}`);
+        const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, false);
+        const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
+        await tx(async (client) => {
+          await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, {
+            action: 'login_mfa_grace',
+            resource: 'auth',
+            recordId: userId,
+            metadata: { graceDays: config.mfa.graceDays },
+          });
+        }, { tenantId, userId });
+        return res.json({ accessToken, refreshToken, user: redactUser(user) });
+      }
+    }
 
     if (emailMfaReady || totpMfaReady) {
       if (emailMfaReady) {
