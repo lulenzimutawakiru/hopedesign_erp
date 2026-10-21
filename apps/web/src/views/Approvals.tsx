@@ -54,6 +54,29 @@ export default function Approvals() {
     [loadPending]
   );
 
+  // Bulk approve fires all decisions concurrently, reloads the queue once, then
+  // reports how many failed so the user is never left believing a sign-off was
+  // recorded when the server refused it.
+  const bulkDecide = useCallback(
+    async (batch: ApprovalRow[], decision: string, comment: string) => {
+      const results = await Promise.allSettled(
+        batch.map((row) => {
+          const taskId = Number(row.task_id ?? row.taskId);
+          return api(`/api/approvals/${taskId}/decide`, {
+            method: 'POST',
+            body: JSON.stringify({ decision, comment: comment.trim() || undefined }),
+          });
+        })
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      await loadPending();
+      if (failed > 0) {
+        throw new Error(`${failed} of ${batch.length} approvals failed — review the queue before retrying.`);
+      }
+    },
+    [loadPending]
+  );
+
   const selectFilter = (value: string) => {
     setHistoryFilter(value);
   };
@@ -109,6 +132,7 @@ export default function Approvals() {
         <ApprovalQueue
           rows={rows}
           onDecide={decide}
+          onBulkDecide={bulkDecide}
           empty={
             <>
               <h3 style={{ marginTop: 0 }}>Nothing to approve</h3>
