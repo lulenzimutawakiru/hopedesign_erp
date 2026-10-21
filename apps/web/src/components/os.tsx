@@ -3,7 +3,7 @@ import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { CREATE_ITEMS } from '../work';
 import { useDialogFocus } from './dialogFocus';
-import { usePopover } from './popoverFocus';
+import { useMenu } from './popoverFocus';
 
 export { Skeleton } from './states';
 
@@ -81,17 +81,17 @@ export function Drawer({ title, onClose, children, footer }: { title: string; on
 export function CreateMenu() {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
-  const { rootRef, triggerRef } = usePopover(open, () => setOpen(false));
+  const { rootRef, triggerRef, panelRef } = useMenu(open, () => setOpen(false));
   const items = CREATE_ITEMS.filter((i) => can(user, i.perm));
   if (!items.length) return null;
   return (
     <div className="topbar-item" ref={rootRef}>
       <button ref={triggerRef} className="btn btn-primary btn-sm" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="menu">+ Create</button>
       {open && (
-        <div className="topbar-dropdown">
+        <div className="topbar-dropdown" role="menu" ref={panelRef}>
           <div className="dropdown-head">Start work</div>
           {items.map((i) => (
-            <button key={i.id} className="search-item" onClick={() => { setOpen(false); navigate(i.href); }}>
+            <button key={i.id} role="menuitem" className="search-item" onClick={() => { setOpen(false); navigate(i.href); }}>
               <span className="search-item-title">{i.label}</span>
             </button>
           ))}

@@ -45,3 +45,43 @@ export function usePopover(
 
   return { rootRef, triggerRef };
 }
+
+/**
+ * Adds menu keyboard semantics on top of `usePopover`: `role="menuitem"` items
+ * inside the panel are roved with ArrowUp/Down and Home/End. Escape still
+ * closes and returns focus to the trigger (inherited from `usePopover`).
+ */
+export function useMenu(
+  open: boolean,
+  onClose: () => void
+): {
+  rootRef: RefObject<HTMLDivElement>;
+  triggerRef: RefObject<HTMLButtonElement>;
+  panelRef: RefObject<HTMLDivElement>;
+} {
+  const { rootRef, triggerRef } = usePopover(open, onClose);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      const items = Array.from(panel.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])'));
+      if (!items.length) return;
+      const idx = items.indexOf(document.activeElement as HTMLElement);
+      let next: number;
+      if (e.key === 'ArrowDown') next = idx < 0 ? 0 : (idx + 1) % items.length;
+      else if (e.key === 'ArrowUp') next = idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = items.length - 1;
+      else return;
+      e.preventDefault();
+      items[next].focus();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  return { rootRef, triggerRef, panelRef };
+}
