@@ -68,8 +68,21 @@ export function JsonForm({ meta, initial, onSubmit, onCancel, submitLabel = 'Sav
   const set = (camel: string, value: unknown) => setValues((prev) => ({ ...prev, [camel]: value }));
 
   const submit = async () => {
-    setBusy(true);
     setError(null);
+    // Reject malformed structured fields up front instead of silently posting the
+    // raw text as a string: a jsonb column must never receive a non-object value.
+    for (const c of fields) {
+      if (c.dataType !== 'jsonb' && c.dataType !== 'json') continue;
+      const raw = values[c.camel];
+      if (raw === '' || raw === null || raw === undefined) continue;
+      try {
+        JSON.parse(String(raw));
+      } catch {
+        setError(`${prettyLabel(c.name)} is not valid JSON. Fix it, or clear the field.`);
+        return;
+      }
+    }
+    setBusy(true);
     try {
       const payload: Record<string, unknown> = {};
       for (const c of fields) {
@@ -83,11 +96,7 @@ export function JsonForm({ meta, initial, onSubmit, onCancel, submitLabel = 'Sav
         } else if (isBoolean(c.dataType)) {
           payload[c.camel] = Boolean(raw);
         } else if (c.dataType === 'jsonb' || c.dataType === 'json') {
-          try {
-            payload[c.camel] = JSON.parse(String(raw));
-          } catch {
-            payload[c.camel] = String(raw);
-          }
+          payload[c.camel] = JSON.parse(String(raw));
         } else {
           payload[c.camel] = String(raw);
         }

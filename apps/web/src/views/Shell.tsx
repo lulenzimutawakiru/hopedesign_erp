@@ -14,7 +14,7 @@ import QrTrace from './QrTrace';
 import CommandPalette from './CommandPalette';
 import { Toaster } from '../components/toast';
 import { WarehouseRoom, OperatorFloor } from './Rooms';
-import { PageLoader } from '../components/ui';
+import { Modal, PageLoader } from '../components/ui';
 
 // Route-gated views load on demand so the initial shell stays lean.
 const EntityList = lazy(() => import('./EntityList'));
@@ -109,11 +109,16 @@ export default function Shell() {
       const tag = (e.target as HTMLElement)?.tagName;
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement)?.isContentEditable;
       if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setCmdOpen(true); return; }
-      if (e.key === '/' && !typing) { e.preventDefault(); setCmdOpen(true); return; }
       if (e.key === 'Escape') {
         setScannerOpen(false); setCmdOpen(false); setHelpOpen(false); setMoreOpen(false); setSideOpen(false); setGMode(false);
         return;
       }
+      // While a blocking overlay owns the keyboard, suppress the shell's
+      // bare-letter and '/' shortcuts so they cannot fire underneath an open
+      // modal, drawer or palette (e.g. "a" would otherwise jump to Approvals
+      // mid-dialog). Ctrl/Cmd+K stays available as an explicit command chord.
+      if (document.querySelector('[aria-modal="true"], .modal-backdrop, .more-scrim, .drawer-scrim, .cmd-backdrop, .com-bell-backdrop')) return;
+      if (e.key === '/' && !typing) { e.preventDefault(); setCmdOpen(true); return; }
       if (typing) return;
       // A bare-letter shortcut must not answer a Ctrl/Cmd chord: Ctrl+S is the
       // save shortcut inside the settings console, Ctrl+A selects text, and so
@@ -319,16 +324,11 @@ export default function Shell() {
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
       <Toaster />
       {helpOpen && (
-        <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setHelpOpen(false)}>
-          <div className="modal" role="dialog" aria-labelledby="kbd-title">
-            <div className="modal-head"><h3 id="kbd-title">Keyboard</h3></div>
-            <div className="modal-body">
-              <p><kbd>Ctrl</kbd>+<kbd>K</kbd> command · <kbd>/</kbd> search · <kbd>S</kbd> scan · <kbd>A</kbd> tasks · <kbd>N</kbd> create</p>
-              <p><kbd>G</kbd> then <kbd>D</kbd> dashboard · <kbd>I</kbd> inventory · <kbd>P</kbd> plant · <kbd>H</kbd> warehouse · <kbd>W</kbd> work · <kbd>F</kbd> finance · <kbd>B</kbd> buy · <kbd>C</kbd> CRM · <kbd>E</kbd> people</p>
-              <p><kbd>Esc</kbd> closes overlays. <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> move focus.</p>
-            </div>
-          </div>
-        </div>
+        <Modal title="Keyboard" onClose={() => setHelpOpen(false)}>
+          <p><kbd>Ctrl</kbd>+<kbd>K</kbd> command · <kbd>/</kbd> search · <kbd>S</kbd> scan · <kbd>A</kbd> tasks · <kbd>N</kbd> create</p>
+          <p><kbd>G</kbd> then <kbd>D</kbd> dashboard · <kbd>I</kbd> inventory · <kbd>P</kbd> plant · <kbd>H</kbd> warehouse · <kbd>W</kbd> work · <kbd>F</kbd> finance · <kbd>B</kbd> buy · <kbd>C</kbd> CRM · <kbd>E</kbd> people</p>
+          <p><kbd>Esc</kbd> closes overlays. <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> move focus.</p>
+        </Modal>
       )}
     </div>
   );

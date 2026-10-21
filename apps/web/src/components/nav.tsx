@@ -20,6 +20,7 @@ import {
 } from '../nav';
 import { personaLabel, personaOf } from '../work';
 import { StaffPhoto } from './ui';
+import { useDialogFocus } from './dialogFocus';
 import { BrandMark } from './BrandMark';
 import { shortCompanyName } from '../company';
 
@@ -380,6 +381,49 @@ function NavButton({
   );
 }
 
+function MoreDrawerBody({
+  onClose,
+  path,
+  user,
+  counts,
+  onNavigate,
+  onScan,
+}: {
+  onClose: () => void;
+  path: string;
+  user: MeUser | null;
+  counts: Record<string, number>;
+  onNavigate: (href: string) => void;
+  onScan: () => void;
+}) {
+  const groups = visibleGroups(user);
+  const panelRef = useRef<HTMLElement>(null);
+  // Same focus contract as Modal/ConfirmDialog/Drawer (see dialogFocus.ts):
+  // trap Tab inside the drawer, restore focus to the trigger, and let Escape
+  // close it. The body mounts only while open so the trap engages on open.
+  useDialogFocus(panelRef, onClose);
+  return (
+    <div className="more-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <aside className="more-drawer" role="dialog" aria-label="All modules" ref={panelRef} tabIndex={-1}>
+        <div className="modal-head">
+          <h3>Modules</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="drawer-body">
+          <button className="handheld-scan" onClick={() => { onClose(); onScan(); }}>◉ Scan QR</button>
+          <NavTree
+            groups={groups}
+            path={path}
+            expanded
+            counts={counts}
+            onNavigate={(href) => { onNavigate(href); onClose(); }}
+          />
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 export function MoreDrawer({
   open,
   onClose,
@@ -397,33 +441,16 @@ export function MoreDrawer({
   onNavigate: (href: string) => void;
   onScan: () => void;
 }) {
-  const groups = visibleGroups(user);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="more-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className="more-drawer" role="dialog" aria-label="All modules">
-        <div className="modal-head">
-          <h3>Modules</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
-        </div>
-        <div className="drawer-body">
-          <button className="handheld-scan" onClick={() => { onClose(); onScan(); }}>◉ Scan QR</button>
-          <NavTree
-            groups={groups}
-            path={path}
-            expanded
-            counts={counts}
-            onNavigate={(href) => { onNavigate(href); onClose(); }}
-          />
-        </div>
-      </aside>
-    </div>
+    <MoreDrawerBody
+      onClose={onClose}
+      path={path}
+      user={user}
+      counts={counts}
+      onNavigate={onNavigate}
+      onScan={onScan}
+    />
   );
 }
 
