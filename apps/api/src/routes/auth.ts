@@ -220,6 +220,24 @@ authRouter.post(
     await query(`UPDATE users SET failed_attempts=0, locked_until=NULL, last_login_at=now() WHERE id=$1`, [userId], { tenantId, userId });
     await recordAttempt(identifier, ipOf(req), true);
 
+    // MFA-006: emergency kill-switch. When enforcement is disabled a verified
+    // password is enough - the second factor is waived outright so a delivery
+    // outage cannot lock staff out. Loud, audited, and meant to be temporary.
+    if (config.mfa.enforcementDisabled) {
+      console.warn(`[auth] mfa enforcement disabled; password-only session user=${userId}`);
+      const { sid, refreshToken } = await createSession(userId, tenantId, ipOf(req), req.ctx.userAgent, req.ctx.device, false);
+      const accessToken = signAccessToken({ sub: userId, tid: tenantId, sid, type: 'access' });
+      await tx(async (client) => {
+        await logAudit(client, { tenantId, userId, ip: ipOf(req), userAgent: req.ctx.userAgent, device: req.ctx.device }, {
+          action: 'login_mfa_disabled',
+          resource: 'auth',
+          recordId: userId,
+          metadata: { emergency: true },
+        });
+      }, { tenantId, userId });
+      return res.json({ accessToken, refreshToken, user: redactUser(user) });
+    }
+
     // AUTH-001 / MFA-002: a second factor must be satisfied before a session is
     // issued. `mfa_method` selects the challenge:
     //   EMAIL -> a six-digit code mailed to the holder's personal address
