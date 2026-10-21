@@ -1247,12 +1247,12 @@ function StatutoryTab() {
 
       <HrKpiGrid>
         <HrKpi label="Categories resolved" value={`${resolvedCount} / ${resolution.length}`} sub={`on ${asOf}`} />
-        <HrKpi label="Tables in effect" value={inEffect} accent="#168A5B" tint="rgba(22, 138, 91, 0.12)" />
+        <HrKpi label="Tables in effect" value={inEffect} accent="var(--success)" tint="rgba(22, 138, 91, 0.12)" />
         <HrKpi
           label="Not configured"
           value={missing.length}
           sub={missing.length ? 'payroll will treat these as zero' : 'every category has a table'}
-          accent={missing.length ? '#C93636' : 'var(--mod-hr)'}
+          accent={missing.length ? 'var(--danger)' : 'var(--mod-hr)'}
           tint="rgba(201, 54, 54, 0.12)"
         />
         <HrKpi label="Superseded" value={superseded} sub="kept so old payslips still explain themselves" />

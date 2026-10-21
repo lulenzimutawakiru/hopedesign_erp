@@ -46,13 +46,13 @@ export function HcmBoard() {
       <div className="kpi-grid--tiles kpi-grid--4">
         {[
           { label: 'Headcount', value: fmtNum(kpis.headcount), sub: fmtNum(kpis.onLeave) + ' on leave · ' + fmtNum(kpis.probation) + ' probation', href: '/people/employees', icon: '👥', accent: '#8B5CF6', tint: 'rgba(139,92,246,0.12)' },
-          { label: 'Positions gap', value: fmtNum(kpis.headcountGap), sub: fmtNum(kpis.occupiedHeadcount) + ' of ' + fmtNum(kpis.approvedHeadcount) + ' filled', href: '/people/positions', icon: '⊞', accent: '#1261A0', tint: 'rgba(18,97,160,0.12)' },
+          { label: 'Positions gap', value: fmtNum(kpis.headcountGap), sub: fmtNum(kpis.occupiedHeadcount) + ' of ' + fmtNum(kpis.approvedHeadcount) + ' filled', href: '/people/positions', icon: '⊞', accent: 'var(--hope)', tint: 'rgba(18,97,160,0.12)' },
           { label: 'Open requisitions', value: fmtNum(kpis.openRequisitions), sub: fmtNum(kpis.publishedVacancies) + ' published', href: '/people/requisitions', icon: '📋', accent: '#7C3AED', tint: 'rgba(124,58,237,0.12)' },
-          { label: 'In pipeline', value: fmtNum(kpis.applicationsInPipeline), sub: 'candidate applications', href: '/people/recruitment', icon: '◎', accent: '#2878D0', tint: 'rgba(40,120,208,0.12)' },
-          { label: 'Pending leave', value: fmtNum(kpis.pendingLeave), sub: fmtNum(kpis.pendingTraining) + ' training requests', href: '/people/leave', icon: '⛱', accent: '#D99A00', tint: 'rgba(217,154,0,0.12)' },
+          { label: 'In pipeline', value: fmtNum(kpis.applicationsInPipeline), sub: 'candidate applications', href: '/people/recruitment', icon: '◎', accent: 'var(--info)', tint: 'rgba(40,120,208,0.12)' },
+          { label: 'Pending leave', value: fmtNum(kpis.pendingLeave), sub: fmtNum(kpis.pendingTraining) + ' training requests', href: '/people/leave', icon: '⛱', accent: 'var(--warning)', tint: 'rgba(217,154,0,0.12)' },
           { label: 'Onboarding', value: fmtNum(kpis.pendingOnboarding), sub: fmtNum(kpis.expiringContracts) + ' contracts ending', href: '/people/onboarding', icon: '➜', accent: '#0891B2', tint: 'rgba(8,145,178,0.12)' },
-          { label: 'Exits (90d)', value: fmtNum(kpis.recentExits), sub: 'alumni on record', href: '/people/offboardings', icon: '↩', accent: '#C93636', tint: 'rgba(201,54,54,0.12)' },
-          { label: 'Recent payroll net', value: fmtMoney(kpis.recentPayrollNet), sub: 'gross ' + fmtMoney(kpis.recentPayrollGross), href: '/people/payrolls', icon: '₴', accent: '#168A5B', tint: 'rgba(22,138,91,0.12)' },
+          { label: 'Exits (90d)', value: fmtNum(kpis.recentExits), sub: 'alumni on record', href: '/people/offboardings', icon: '↩', accent: 'var(--danger)', tint: 'rgba(201,54,54,0.12)' },
+          { label: 'Recent payroll net', value: fmtMoney(kpis.recentPayrollNet), sub: 'gross ' + fmtMoney(kpis.recentPayrollGross), href: '/people/payrolls', icon: '₴', accent: 'var(--success)', tint: 'rgba(22,138,91,0.12)' },
         ].map((t) => (
           <button key={t.label} className="kpi-tile" style={tileStyle(t.accent, t.tint)} onClick={() => navigate(t.href)}>
             <span className="kpi-tile-icon" aria-hidden>{t.icon}</span>

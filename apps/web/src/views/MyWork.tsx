@@ -133,8 +133,8 @@ export default function MyWork() {
 
   const tiles = [
     tile('approvals', 'Approvals', fmtNum(bundle.counts.approvals), 'on your desk', '🗂️', '#8B5CF6', () => navigate('/inbox')),
-    tile('followups', 'Follow-ups', fmtNum((bundle.counts.activities ?? 0) + bundle.counts.tasks), `${fmtNum(bundle.counts.overdue)} overdue`, '📅', '#00A6A6', () => navigate('/crm/activities')),
-    tile('pipeline', 'My pipeline', fmtNum(bundle.counts.opportunities), `${fmtNum(bundle.counts.leads)} leads · ${fmtNum(bundle.counts.complaints)} complaints`, '📈', '#1261A0', () => navigate('/crm/mine')),
+    tile('followups', 'Follow-ups', fmtNum((bundle.counts.activities ?? 0) + bundle.counts.tasks), `${fmtNum(bundle.counts.overdue)} overdue`, '📅', 'var(--teal)', () => navigate('/crm/activities')),
+    tile('pipeline', 'My pipeline', fmtNum(bundle.counts.opportunities), `${fmtNum(bundle.counts.leads)} leads · ${fmtNum(bundle.counts.complaints)} complaints`, '📈', 'var(--hope)', () => navigate('/crm/mine')),
     tile('jobs', 'My jobs', fmtNum(bundle.counts.workOrders), 'live work orders', '⚙️', '#D97706', () => navigate('/operator')),
     ...(can(user, 'hr.leave.view') && personaOf(user) === 'people'
       ? [tile('leave', 'Leave requests', fmtNum(bundle.counts.leaveRequests), `${fmtNum(bundle.counts.contracts)} contracts expiring`, '🗓️', '#0E7490', () => navigate('/people/leave'))]
@@ -143,12 +143,12 @@ export default function MyWork() {
       ? [tile('payroll', 'Payroll runs', fmtNum(bundle.counts.payrollRuns), 'awaiting approval', '💰', '#7C3AED', () => navigate('/people/payrolls/runs'))]
       : []),
     ...(can(user, 'admin.sod.view') && personaOf(user) === 'admin'
-      ? [tile('sod', 'SoD conflicts', fmtNum(bundle.counts.sodConflicts), 'segregation of duties', '🛡️', '#C93636', () => navigate('/admin/sod'))]
+      ? [tile('sod', 'SoD conflicts', fmtNum(bundle.counts.sodConflicts), 'segregation of duties', '🛡️', 'var(--danger)', () => navigate('/admin/sod'))]
       : []),
     ...(can(user, 'admin.security.view') && personaOf(user) === 'admin'
       ? [tile('keys', 'API keys', fmtNum(bundle.counts.apiKeys), 'expiring within 30 days', '🔑', '#B45309', () => navigate('/admin/security'))]
       : []),
-    tile('exceptions', 'Exceptions', fmtNum(exceptionTotal), 'need a person', '⚠️', '#C93636', () => navigate('/inbox')),
+    tile('exceptions', 'Exceptions', fmtNum(exceptionTotal), 'need a person', '⚠️', 'var(--danger)', () => navigate('/inbox')),
   ];
 
   const nowActions = [

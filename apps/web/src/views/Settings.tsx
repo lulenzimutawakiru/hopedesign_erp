@@ -70,8 +70,8 @@ function valueProblem(key: string, s: SettingValue, draft: Draft | undefined): s
   if (UPLOAD_MANAGED_KEYS.has(key)) return null;
   const raw = draft === undefined || draft === null ? '' : String(draft);
   if (s.type === 'color') {
-    if (!raw) return 'Pick or enter a hex colour, e.g. #1261A0.';
-    if (!isValidHexColor(raw)) return 'Use a hex colour code, e.g. #1261A0.';
+    if (!raw) return 'Pick or enter a hex colour, e.g. var(--hope).';
+    if (!isValidHexColor(raw)) return 'Use a hex colour code, e.g. var(--hope).';
     return null;
   }
   if (!raw) return null; // Optional text fields may be left blank.
@@ -103,10 +103,10 @@ function CompanyProfilePreview({ drafts }: { drafts: Record<string, Record<strin
     const x = d[k];
     return x === undefined || x === null || x === '' ? fallback : String(x);
   };
-  const navy = isValidHexColor(val('brand_color', '#1261A0')) ? val('brand_color', '#1261A0') : '#1261A0';
-  const teal = isValidHexColor(val('brand_color_secondary', '#00A6A6'))
-    ? val('brand_color_secondary', '#00A6A6')
-    : '#00A6A6';
+  const navy = isValidHexColor(val('brand_color', 'var(--hope)')) ? val('brand_color', 'var(--hope)') : 'var(--hope)';
+  const teal = isValidHexColor(val('brand_color_secondary', 'var(--teal)'))
+    ? val('brand_color_secondary', 'var(--teal)')
+    : 'var(--teal)';
   const name = val('company_name', 'Company name');
   const tagline = val('company_tagline', '');
   const email = val('contact_email', '');
@@ -1046,7 +1046,7 @@ export default function Settings() {
               <input
                 type="color"
                 disabled={!editable}
-                value={isValidHexColor(String(draft ?? '')) ? String(draft ?? '') : '#1261A0'}
+                value={isValidHexColor(String(draft ?? '')) ? String(draft ?? '') : 'var(--hope)'}
                 onChange={(e) => setValue(cat.category, key, e.target.value)}
               />
               <input

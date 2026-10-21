@@ -174,7 +174,7 @@ function avatarHue(name: string): number {
   return h % 360;
 }
 
-const AVATAR_TONES = ['#8B5CF6', '#1261A0', '#0891B2', '#168A5B', '#D97706', '#C93636', '#4F46A5', '#2878D0'];
+const AVATAR_TONES = ['#8B5CF6', 'var(--hope)', '#0891B2', 'var(--success)', '#D97706', 'var(--danger)', '#4F46A5', 'var(--info)'];
 
 function Avatar({ name, sub, size = 'md' }: { name: string; sub?: string; size?: 'sm' | 'md' | 'lg' }) {
   const hue = avatarHue(name);
@@ -266,12 +266,12 @@ function lifecycleTerminal(status: string): { kind: 'ended' | 'archived' | 'reje
 
 
 const AUDIT_EVENTS: Array<{ key: string; icon: string; color: string }> = [
-  { key: 'create', icon: '📄', color: '#1261A0' },
+  { key: 'create', icon: '📄', color: 'var(--hope)' },
   { key: 'validate', icon: '🛡️', color: '#0891B2' },
-  { key: 'submit', icon: '🚀', color: '#2878D0' },
+  { key: 'submit', icon: '🚀', color: 'var(--info)' },
   { key: 'send_for_signature', icon: '✉️', color: '#D97706' },
-  { key: 'sign', icon: '✍️', color: '#168A5B' },
-  { key: 'execute', icon: '✅', color: '#168A5B' },
+  { key: 'sign', icon: '✍️', color: 'var(--success)' },
+  { key: 'execute', icon: '✅', color: 'var(--success)' },
   { key: 'update', icon: '✏️', color: '#4F46A5' },
   { key: 'variation', icon: '🔀', color: '#D97706' },
   { key: 'renewal', icon: '🔁', color: '#0891B2' },
@@ -418,12 +418,12 @@ function ContractBoard() {
   const expiryTrend = (charts.expiryTrend as Array<{ label: string; value: number }>) ?? [];
   const probationStatus = (charts.probationStatus as Array<{ label: string; value: number }>) ?? [];
   const kpiCards: Array<{ key: string; label: string; value: unknown; sub: string; href: string; icon: string; accent: string; tint: string }> = [
-    { key: 'active', label: 'Active contracts', value: kpis.active, sub: 'Executed or active today', href: '/people/contracts?status=ACTIVE', icon: '✓', accent: '#168A5B', tint: 'rgba(22,138,91,0.12)' },
-    { key: 'sig', label: 'Pending signature', value: kpis.pendingSignature, sub: 'Sent or partially signed', href: '/people/contracts/list?statuses=SENT_FOR_SIGNATURE,PARTIALLY_SIGNED', icon: '✎', accent: '#D99A00', tint: 'rgba(217,154,0,0.12)' },
-    { key: 'approval', label: 'Awaiting approval', value: kpis.awaitingApproval, sub: 'In the approval workflow', href: '/people/contracts/list?statuses=SUBMITTED,HR_REVIEW,MANAGER_REVIEW,FINANCE_REVIEW,LEGAL_REVIEW', icon: '◷', accent: '#2878D0', tint: 'rgba(40,120,208,0.12)' },
+    { key: 'active', label: 'Active contracts', value: kpis.active, sub: 'Executed or active today', href: '/people/contracts?status=ACTIVE', icon: '✓', accent: 'var(--success)', tint: 'rgba(22,138,91,0.12)' },
+    { key: 'sig', label: 'Pending signature', value: kpis.pendingSignature, sub: 'Sent or partially signed', href: '/people/contracts/list?statuses=SENT_FOR_SIGNATURE,PARTIALLY_SIGNED', icon: '✎', accent: 'var(--warning)', tint: 'rgba(217,154,0,0.12)' },
+    { key: 'approval', label: 'Awaiting approval', value: kpis.awaitingApproval, sub: 'In the approval workflow', href: '/people/contracts/list?statuses=SUBMITTED,HR_REVIEW,MANAGER_REVIEW,FINANCE_REVIEW,LEGAL_REVIEW', icon: '◷', accent: 'var(--info)', tint: 'rgba(40,120,208,0.12)' },
     { key: 'expiry', label: 'Expiring in 30 days', value: kpis.expiring30, sub: 'Fixed-term contracts', href: '/people/contracts/expiring', icon: '⏳', accent: '#D97706', tint: 'rgba(217,119,6,0.12)' },
     { key: 'prob', label: 'Probation ending', value: kpis.probationEnding30, sub: 'Within 30 days', href: '/people/contracts/probation-ending', icon: '●', accent: '#0891B2', tint: 'rgba(8,145,178,0.12)' },
-    { key: 'missing', label: 'Missing particulars', value: kpis.missingParticulars, sub: 'Need completion', href: '/people/contracts/missing-particulars', icon: '!', accent: '#C93636', tint: 'rgba(201,54,54,0.12)' },
+    { key: 'missing', label: 'Missing particulars', value: kpis.missingParticulars, sub: 'Need completion', href: '/people/contracts/missing-particulars', icon: '!', accent: 'var(--danger)', tint: 'rgba(201,54,54,0.12)' },
   ];
   return (
     <div className="page">
@@ -3440,21 +3440,21 @@ function MyContracts() {
       )}
       <div className="self-stats">
         <div className="self-stat">
-          <span className="self-stat-icon" style={tileStyle('#1261A0', 'rgba(18,97,160,0.12)')} aria-hidden>📄</span>
+          <span className="self-stat-icon" style={tileStyle('var(--hope)', 'rgba(18,97,160,0.12)')} aria-hidden>📄</span>
           <div>
             <span className="self-stat-num">{fmtNum(items.length)}</span>
             <span className="self-stat-k">Contracts on file</span>
           </div>
         </div>
         <div className="self-stat">
-          <span className="self-stat-icon" style={tileStyle('#168A5B', 'rgba(22,138,91,0.12)')} aria-hidden>✓</span>
+          <span className="self-stat-icon" style={tileStyle('var(--success)', 'rgba(22,138,91,0.12)')} aria-hidden>✓</span>
           <div>
             <span className="self-stat-num">{fmtNum(activeCount)}</span>
             <span className="self-stat-k">Active / executed</span>
           </div>
         </div>
         <div className="self-stat">
-          <span className="self-stat-icon" style={tileStyle('#D99A00', 'rgba(217,154,0,0.12)')} aria-hidden>✎</span>
+          <span className="self-stat-icon" style={tileStyle('var(--warning)', 'rgba(217,154,0,0.12)')} aria-hidden>✎</span>
           <div>
             <span className="self-stat-num">{fmtNum(pending.length)}</span>
             <span className="self-stat-k">Awaiting signature</span>

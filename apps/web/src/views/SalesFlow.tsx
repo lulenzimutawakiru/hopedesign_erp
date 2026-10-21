@@ -85,12 +85,12 @@ function SalesBoard() {
   const monthDelta = prevMonth > 0 ? Math.round(((monthSales - prevMonth) / prevMonth) * 100) : null;
 
   const tiles: { key: string; icon: string; label: string; value: string; sub: string; accent: string; href: string }[] = [
-    { key: 'today', icon: '💵', label: "Today's sales", value: fmtMoney(todaySales), sub: `${fmtMoney(n(k.todayReceipts))} collected today`, accent: '#00A6A6', href: '/sales/invoices' },
-    { key: 'month', icon: '📈', label: 'Monthly sales', value: fmtMoney(monthSales), sub: `${fmtNum(n(k.monthInvoices))} invoices${monthDelta != null ? ` · ${monthDelta > 0 ? '+' : ''}${monthDelta}% vs last month` : ''}`, accent: '#168A5B', href: '/sales/invoices' },
-    { key: 'target', icon: '🎯', label: 'Target', value: targetPct != null ? `${fmtNum(targetPct)}%` : '—', sub: `of ${fmtMoney(target)} monthly`, accent: '#D99A00', href: '/sales/orders' },
-    { key: 'orders', icon: '🧾', label: 'Open orders', value: fmtNum(n(k.openOrders)), sub: `${fmtNum(n(k.awaitingStock))} await stock`, accent: '#1261A0', href: '/sales/orders' },
+    { key: 'today', icon: '💵', label: "Today's sales", value: fmtMoney(todaySales), sub: `${fmtMoney(n(k.todayReceipts))} collected today`, accent: 'var(--teal)', href: '/sales/invoices' },
+    { key: 'month', icon: '📈', label: 'Monthly sales', value: fmtMoney(monthSales), sub: `${fmtNum(n(k.monthInvoices))} invoices${monthDelta != null ? ` · ${monthDelta > 0 ? '+' : ''}${monthDelta}% vs last month` : ''}`, accent: 'var(--success)', href: '/sales/invoices' },
+    { key: 'target', icon: '🎯', label: 'Target', value: targetPct != null ? `${fmtNum(targetPct)}%` : '—', sub: `of ${fmtMoney(target)} monthly`, accent: 'var(--warning)', href: '/sales/orders' },
+    { key: 'orders', icon: '🧾', label: 'Open orders', value: fmtNum(n(k.openOrders)), sub: `${fmtNum(n(k.awaitingStock))} await stock`, accent: 'var(--hope)', href: '/sales/orders' },
     { key: 'quotes', icon: '📝', label: 'Open quotes', value: fmtNum(n(k.openQuotes)), sub: conversion != null ? `${fmtNum(conversion)}% converted` : 'no conversions yet', accent: '#8B5CF6', href: '/sales/quotations' },
-    { key: 'ar', icon: '⏳', label: 'Outstanding AR', value: fmtMoney(n(k.openAr)), sub: `${fmtNum(n(k.overdueInvoices))} overdue`, accent: '#C93636', href: '/sales/invoices' },
+    { key: 'ar', icon: '⏳', label: 'Outstanding AR', value: fmtMoney(n(k.openAr)), sub: `${fmtNum(n(k.overdueInvoices))} overdue`, accent: 'var(--danger)', href: '/sales/invoices' },
     { key: 'mfg', icon: '🏭', label: 'In production', value: fmtNum(n(k.awaitingProduction)), sub: `${fmtNum(n(k.awaitingDispatch))} ready to dispatch`, accent: '#D97706', href: '/records/production/work_orders' },
     { key: 'aov', icon: '🧮', label: 'Average order', value: fmtMoney(n(k.averageOrderValue)), sub: 'per invoice this month', accent: '#0E7490', href: '/sales/invoices' },
     { key: 'margin', icon: '💹', label: 'Gross margin', value: grossMargin != null ? `${fmtNum(grossMargin)}%` : '—', sub: `GP ${fmtMoney(grossProfit)} this month`, accent: '#166534', href: '/sales/invoices' },

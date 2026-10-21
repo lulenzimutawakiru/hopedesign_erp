@@ -16,7 +16,7 @@ export function avatarHue(name: string): number {
   return h % 360;
 }
 
-const AVATAR_TONES = ['#8B5CF6', '#1261A0', '#0891B2', '#168A5B', '#D97706', '#C93636', '#4F46A5', '#2878D0'];
+const AVATAR_TONES = ['#8B5CF6', 'var(--hope)', '#0891B2', 'var(--success)', '#D97706', 'var(--danger)', '#4F46A5', 'var(--info)'];
 
 export function Avatar({ name, sub, size = 'md', meta = true }: { name: string; sub?: string; size?: 'sm' | 'md' | 'lg'; meta?: boolean }) {
   const bg = AVATAR_TONES[Math.floor((avatarHue(name) / 360) * AVATAR_TONES.length)];

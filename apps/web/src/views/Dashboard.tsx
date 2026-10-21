@@ -176,18 +176,18 @@ export default function Dashboard() {
 
   const cards = exec
     ? [
-        tile('stock', 'Stock on books', fmtMoney(exec.stockValue), `${fmtNum(exec.stockProducts)} SKUs on hand`, '📦', '#00A6A6', () => navigate('/inventory/stock')),
-        tile('orders', 'Open fulfilment', fmtNum(exec.openOrders), `${fmtNum(exec.openQuotes)} live quotations`, '🧾', '#1261A0', () => navigate('/sales/orders')),
-        tile('revenue', 'Cash in', fmtMoney(exec.monthRevenue), `${fmtNum(exec.monthInvoices)} invoices this month`, '💵', '#168A5B', () => navigate('/sales/invoices')),
-        tile('ar', 'Receivable risk', fmtMoney(exec.accountsReceivable), `${fmtNum(exec.arOverdue)} overdue`, '⏳', '#D99A00', () => navigate('/sales/invoices')),
+        tile('stock', 'Stock on books', fmtMoney(exec.stockValue), `${fmtNum(exec.stockProducts)} SKUs on hand`, '📦', 'var(--teal)', () => navigate('/inventory/stock')),
+        tile('orders', 'Open fulfilment', fmtNum(exec.openOrders), `${fmtNum(exec.openQuotes)} live quotations`, '🧾', 'var(--hope)', () => navigate('/sales/orders')),
+        tile('revenue', 'Cash in', fmtMoney(exec.monthRevenue), `${fmtNum(exec.monthInvoices)} invoices this month`, '💵', 'var(--success)', () => navigate('/sales/invoices')),
+        tile('ar', 'Receivable risk', fmtMoney(exec.accountsReceivable), `${fmtNum(exec.arOverdue)} overdue`, '⏳', 'var(--warning)', () => navigate('/sales/invoices')),
         tile('plant', 'Plant load', fmtNum(exec.workOrdersInProgress), `${fmtNum(exec.workOrdersCompleted)} closed of ${fmtNum(exec.workOrdersTotal)}`, '⚙️', '#D97706', () => navigate('/records/production/work_orders')),
         tile('inbox', 'To approve', fmtNum(exec.pendingApprovals), 'yes or no from you', '🗂️', '#8B5CF6', () => navigate('/inbox')),
       ]
     : [
-        tile('exceptions', 'To do now', fmtNum(work.exceptionCount), 'close these today', '⚠️', '#C93636', () => navigate('/inbox')),
+        tile('exceptions', 'To do now', fmtNum(work.exceptionCount), 'close these today', '⚠️', 'var(--danger)', () => navigate('/inbox')),
         tile('inbox', 'To approve', fmtNum(approvalsWaiting), 'yes or no from you', '🗂️', '#8B5CF6', () => navigate('/inbox')),
-        tile('stock', 'Stock on books', fmtMoney(work.stockValue), 'current valuation', '📦', '#00A6A6', () => navigate('/inventory/stock')),
-        tile('ar', 'Overdue AR', fmtMoney(work.overdueArAmount), 'collections risk', '⏳', '#D99A00', () => navigate('/sales/invoices')),
+        tile('stock', 'Stock on books', fmtMoney(work.stockValue), 'current valuation', '📦', 'var(--teal)', () => navigate('/inventory/stock')),
+        tile('ar', 'Overdue AR', fmtMoney(work.overdueArAmount), 'collections risk', '⏳', 'var(--warning)', () => navigate('/sales/invoices')),
       ];
 
   return (
