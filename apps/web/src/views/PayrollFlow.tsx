@@ -2359,21 +2359,21 @@ export function StatutoryCompliance() {
           label="Declared"
           value={money(filingsDeclaredTotal)}
           sub={filingsCurrency + ' across the filtered returns'}
-          accent="#1261A0"
+          accent="var(--hope)"
           tint="rgba(18, 97, 160, 0.12)"
         />
         <HrKpi
           label="Settled"
           value={money(filingsSettledTotal)}
           sub="Remitted and recorded against the return"
-          accent="#168A5B"
+          accent="var(--success)"
           tint="rgba(22, 138, 91, 0.12)"
         />
         <HrKpi
           label="Outstanding"
           value={money(filingsOutstandingTotal)}
           sub="Declared and not yet settled"
-          accent="#D99A00"
+          accent="var(--warning)"
           tint="rgba(217, 154, 0, 0.12)"
         />
         <HrKpi

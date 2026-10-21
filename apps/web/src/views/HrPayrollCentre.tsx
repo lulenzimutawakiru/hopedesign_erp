@@ -28,7 +28,7 @@ type PayrollCentrePayload = {
 function wfTone(state: unknown): { fg: string; bg: string; bd: string } {
   const s = String(state ?? 'PENDING');
   if (s === 'DONE') return { fg: '#0F4A32', bg: '#E3F3EB', bd: '#B8DCCB' };
-  if (s === 'CURRENT') return { fg: '#1261A0', bg: '#E4F0FA', bd: '#B8D5EA' };
+  if (s === 'CURRENT') return { fg: 'var(--hope)', bg: '#E4F0FA', bd: '#B8D5EA' };
   return { fg: 'var(--muted)', bg: 'var(--paper-2)', bd: 'var(--line)' };
 }
 
@@ -87,8 +87,8 @@ export function PayrollCommandCentre() {
       {error && <ErrorBanner error={error} />}
       <HrKpiGrid>
         <HrKpi label="Headcount" value={fmtNum(totals.headcount)} sub={current ? String(current.status ?? '') : 'No open run'} />
-        <HrKpi label="Gross payroll" value={fmtMoney(totals.gross)} sub={'Taxable ' + fmtMoney(totals.taxable)} accent="#1261A0" tint="rgba(18, 97, 160, 0.12)" />
-        <HrKpi label="Net payroll" value={fmtMoney(totals.net)} sub={'Deductions ' + fmtMoney(totals.deductions)} accent="#168A5B" tint="rgba(22, 138, 91, 0.12)" />
+        <HrKpi label="Gross payroll" value={fmtMoney(totals.gross)} sub={'Taxable ' + fmtMoney(totals.taxable)} accent="var(--hope)" tint="rgba(18, 97, 160, 0.12)" />
+        <HrKpi label="Net payroll" value={fmtMoney(totals.net)} sub={'Deductions ' + fmtMoney(totals.deductions)} accent="var(--success)" tint="rgba(22, 138, 91, 0.12)" />
         <HrKpi label="PAYE" value={fmtMoney(totals.paye)} sub={'LST ' + fmtMoney(totals.lst)} />
         <HrKpi label="NSSF" value={fmtMoney(nssfTotal)} sub={'Employee ' + fmtMoney(totals.employeeNssf) + ' - Employer ' + fmtMoney(totals.employerNssf)} />
         <HrKpi label="Employer cost" value={fmtMoney(totals.employerCost)} sub="Gross + employer NSSF + LST" accent="#B45309" tint="rgba(180, 83, 9, 0.12)" />
@@ -267,7 +267,7 @@ export function PayrollList() {
     const s = String(v ?? 'NORMAL');
     const tones: Record<string, { fg: string; bg: string; bd: string }> = {
       NORMAL: { fg: '#0F4A32', bg: '#E3F3EB', bd: '#B8DCCB' },
-      OFF_CYCLE: { fg: '#1261A0', bg: '#E4F0FA', bd: '#B8D5EA' },
+      OFF_CYCLE: { fg: 'var(--hope)', bg: '#E4F0FA', bd: '#B8D5EA' },
       FINAL: { fg: '#6D28D9', bg: '#EDE9FE', bd: '#C7B8EF' },
       ADJUSTMENT: { fg: '#B45309', bg: '#FDF3E0', bd: '#EFD9AE' },
       REVERSAL: { fg: '#8B1E1E', bg: '#FDECEC', bd: '#F1C2C2' },
@@ -313,9 +313,9 @@ export function PayrollList() {
       {error && <ErrorBanner error={error} />}
       <HrKpiGrid>
         <HrKpi label="Payroll runs" value={fmtNum(rows.length)} sub={fmtNum(openCount) + ' open - ' + fmtNum(paidCount) + ' paid'} />
-        <HrKpi label="Net this month" value={fmtMoney(netThisMonth)} sub="Approved, released or paid this period" accent="#168A5B" tint="rgba(22, 138, 91, 0.12)" />
-        <HrKpi label="Approval queue" value={fmtNum(queueCount)} sub="Submitted or approved, not yet released" accent="#D99A00" tint="rgba(217, 154, 0, 0.12)" />
-        <HrKpi label="Latest validation" value={latestScored ? String(latestScored.validationScore) + '%' : '-'} sub={latestScored ? 'Run ' + String(latestScored.payrollNo ?? '') : 'Validate a run to score readiness'} accent="#1261A0" tint="rgba(18, 97, 160, 0.12)" />
+        <HrKpi label="Net this month" value={fmtMoney(netThisMonth)} sub="Approved, released or paid this period" accent="var(--success)" tint="rgba(22, 138, 91, 0.12)" />
+        <HrKpi label="Approval queue" value={fmtNum(queueCount)} sub="Submitted or approved, not yet released" accent="var(--warning)" tint="rgba(217, 154, 0, 0.12)" />
+        <HrKpi label="Latest validation" value={latestScored ? String(latestScored.validationScore) + '%' : '-'} sub={latestScored ? 'Run ' + String(latestScored.payrollNo ?? '') : 'Validate a run to score readiness'} accent="var(--hope)" tint="rgba(18, 97, 160, 0.12)" />
       </HrKpiGrid>
       <HrToolbar>
         <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search run number, reason, period..." aria-label="Search payroll runs" />

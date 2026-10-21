@@ -29,10 +29,10 @@ export function PeopleBoard() {
   const contracts = (data.contracts as Rec[]) ?? [];
   const tiles: Array<{ label: string; value: unknown; sub: string; href: string; icon: string; accent: string; tint: string }> = [
     { label: 'Headcount', value: kpis.headcount, sub: fmtNum(kpis.onLeave) + ' on leave', href: '/people/employees', icon: '👥', accent: '#8B5CF6', tint: 'rgba(139,92,246,0.12)' },
-    { label: 'Pending leave', value: kpis.pendingLeave, sub: 'Waiting for approval', href: '/people/leave', icon: '⛱', accent: '#D99A00', tint: 'rgba(217,154,0,0.12)' },
-    { label: 'Active contracts', value: kpis.activeContracts, sub: fmtNum(kpis.pendingSignature) + ' awaiting signature', href: '/people/contracts', icon: '📄', accent: '#1261A0', tint: 'rgba(18,97,160,0.12)' },
+    { label: 'Pending leave', value: kpis.pendingLeave, sub: 'Waiting for approval', href: '/people/leave', icon: '⛱', accent: 'var(--warning)', tint: 'rgba(217,154,0,0.12)' },
+    { label: 'Active contracts', value: kpis.activeContracts, sub: fmtNum(kpis.pendingSignature) + ' awaiting signature', href: '/people/contracts', icon: '📄', accent: 'var(--hope)', tint: 'rgba(18,97,160,0.12)' },
     { label: 'Expiring (30d)', value: kpis.expiringContracts, sub: 'Fixed-term ending soon', href: '/people/contracts/expiring', icon: '⏳', accent: '#D97706', tint: 'rgba(217,119,6,0.12)' },
-    { label: 'Recent net pay', value: fmtMoney(kpis.lastNet), sub: 'Last 45 days released', href: '/people/payrolls', icon: '₴', accent: '#168A5B', tint: 'rgba(22,138,91,0.12)' },
+    { label: 'Recent net pay', value: fmtMoney(kpis.lastNet), sub: 'Last 45 days released', href: '/people/payrolls', icon: '₴', accent: 'var(--success)', tint: 'rgba(22,138,91,0.12)' },
     { label: 'Staff loans', value: fmtMoney(kpis.loanBook), sub: 'Outstanding book', href: '/people/loans', icon: '▣', accent: '#0891B2', tint: 'rgba(8,145,178,0.12)' },
   ];
   const actions: Array<{ href: string; title: string; hint: string; icon: string; show: boolean }> = [

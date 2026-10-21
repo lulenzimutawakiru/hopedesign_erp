@@ -513,8 +513,8 @@ function CompanyMark({ navy, teal, size = 40 }: { navy: string; teal: string; si
 function VerifyCompany({ company }: { company: CompanyInfo }) {
   const name = str(company.name);
   if (!name) return null;
-  const navy = isHexColor(str(company.brand_color)) ? str(company.brand_color) : '#1261A0';
-  const teal = isHexColor(str(company.brand_color_secondary)) ? str(company.brand_color_secondary) : '#00A6A6';
+  const navy = isHexColor(str(company.brand_color)) ? str(company.brand_color) : 'var(--hope)';
+  const teal = isHexColor(str(company.brand_color_secondary)) ? str(company.brand_color_secondary) : 'var(--teal)';
   const logo = /^https?:\/\//i.test(str(company.logo_url)) ? str(company.logo_url) : '';
   const tagline = str(company.tagline);
   const legal = str(company.legal_name);

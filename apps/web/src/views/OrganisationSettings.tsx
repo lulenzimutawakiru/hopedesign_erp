@@ -167,7 +167,7 @@ function valueProblem(def: SettingDef, draft: Draft | undefined): string | null 
   const raw = draft === undefined ? '' : String(draft);
   if (def.required === true && raw.trim() === '') return 'This field is required.';
   if (!raw) return null;
-  if (def.type === 'color' && !HEX_RE.test(raw)) return 'Use a hex colour such as #1261A0.';
+  if (def.type === 'color' && !HEX_RE.test(raw)) return 'Use a hex colour such as var(--hope).';
   if (def.type === 'email' && !EMAIL_RE.test(raw)) return 'Enter a valid email address.';
   if (def.type === 'url' && !URL_RE.test(raw)) return 'Enter a full URL starting with http:// or https://.';
   if (def.type === 'tel' && !PHONE_RE.test(raw)) return 'Enter a valid phone number.';
@@ -257,7 +257,7 @@ function FieldInput({
         <input
           type="color"
           className="setting-swatch"
-          value={HEX_RE.test(v) ? v : '#1261A0'}
+          value={HEX_RE.test(v) ? v : 'var(--hope)'}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
         />
@@ -266,7 +266,7 @@ function FieldInput({
           className="setting-color-text"
           value={v}
           disabled={disabled}
-          placeholder="#1261A0"
+          placeholder="var(--hope)"
           onChange={(e) => onChange(e.target.value)}
         />
       </div>

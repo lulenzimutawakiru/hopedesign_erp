@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "build": "node scripts/check-tokens.mjs && tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "node scripts/check-tokens.mjs && tsc --noEmit -p tsconfig.json",
+    "lint:tokens": "node scripts/check-tokens.mjs",
     "test": "vitest run"
   },
   "dependencies": {
