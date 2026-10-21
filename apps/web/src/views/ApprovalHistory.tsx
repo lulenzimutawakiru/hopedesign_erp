@@ -62,6 +62,7 @@ export default function ApprovalHistory({ rows }: { rows: ApprovalHistoryRow[] }
           const entityId = Number(pick(row, 'entity_id', 'entityId') ?? 0);
           const href = entityType && entityId ? pathForEntity(entityType, entityId) : '';
           const decision = String(pick(row, 'status') ?? '');
+          const instanceStatus = String(pick(row, 'instance_status', 'instanceStatus') ?? '');
           const amount = Number(pick(row, 'amount', 'total_amount', 'order_total'));
           const decidedAt = String(pick(row, 'decided_at', 'decidedAt') ?? '');
           const submittedBy = String(pick(row, 'submitted_by_name', 'submittedByName') ?? '');
@@ -77,6 +78,9 @@ export default function ApprovalHistory({ rows }: { rows: ApprovalHistoryRow[] }
                   <span className="cell-mono">{String(pick(row, 'entity_code', 'entityCode') ?? `#${entityId}`)}</span>
                   <Badge value={DECISION_LABEL[decision] ?? decision} />
                   <Badge value={stepLabel} />
+                  {instanceStatus && instanceStatus !== decision && (
+                    <Badge value={instanceStatus} />
+                  )}
                   {workflowName && <span className="queue-row-workflow">{workflowName}</span>}
                 </span>
                 <span className="queue-row-meta">
