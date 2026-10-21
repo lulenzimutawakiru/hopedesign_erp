@@ -21,7 +21,7 @@ import {
 import { personaLabel, personaOf } from '../work';
 import { StaffPhoto } from './ui';
 import { useDialogFocus } from './dialogFocus';
-import { usePopover } from './popoverFocus';
+import { useMenu, usePopover } from './popoverFocus';
 import { BrandMark } from './BrandMark';
 import { shortCompanyName } from '../company';
 
@@ -571,7 +571,7 @@ export function UserMenu({
 }) {
   const { photoRev } = useAuth();
   const [open, setOpen] = useState(false);
-  const { rootRef, triggerRef } = usePopover(open, () => setOpen(false));
+  const { rootRef, triggerRef, panelRef } = useMenu(open, () => setOpen(false));
   const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Account';
   const photoSrc = '/api/auth/me/photo?r=' + photoRev;
   const go = (fn: () => void) => {
@@ -584,8 +584,8 @@ export function UserMenu({
         <StaffPhoto path={photoSrc} hasPhoto={user?.has_photo} name={name} size={34} round />
       </button>
       {open && (
-        <div className="topbar-dropdown account-pop" role="menu">
-          <button type="button" className="account-id" onClick={() => go(() => navigate('/account'))}>
+        <div className="topbar-dropdown account-pop" role="menu" ref={panelRef}>
+          <button type="button" role="menuitem" className="account-id" onClick={() => go(() => navigate('/account'))}>
             <StaffPhoto path={photoSrc} hasPhoto={user?.has_photo} name={name} size={40} round />
             <span className="account-id-copy">
               <strong>{name}</strong>
@@ -594,35 +594,35 @@ export function UserMenu({
             </span>
           </button>
           <div className="account-sep" />
-          <button type="button" className="account-row" onClick={() => go(onPin)}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(onPin)}>
             <span>Pin this view</span>
           </button>
-          <button type="button" className="account-row" onClick={() => go(onFocus)}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(onFocus)}>
             <span>{focusMode ? 'Exit floor mode' : 'Floor mode'}</span>
             <span className="account-row-meta">{focusMode ? 'On' : 'Off'}</span>
           </button>
-          <button type="button" className="account-row" onClick={() => go(() => navigate('/work'))}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(() => navigate('/work'))}>
             <span>My activity</span>
           </button>
-          <button type="button" className="account-row" onClick={() => go(onHelp)}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(onHelp)}>
             <span>Keyboard shortcuts</span>
             <kbd>?</kbd>
           </button>
           <div className="account-sep" />
-          <button type="button" className="account-row" onClick={() => go(() => navigate('/account'))}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(() => navigate('/account'))}>
             <span>Preferences</span>
             <span className="account-row-meta">{prefsLabel}</span>
           </button>
-          <button type="button" className="account-row" onClick={() => go(() => navigate('/account/security'))}>
+          <button type="button" role="menuitem" className="account-row" onClick={() => go(() => navigate('/account/security'))}>
             <span>Security & MFA</span>
           </button>
           {can(user, 'admin.settings.view') && (
-            <button type="button" className="account-row" onClick={() => go(() => navigate('/settings'))}>
+            <button type="button" role="menuitem" className="account-row" onClick={() => go(() => navigate('/settings'))}>
               <span>Organisation settings</span>
             </button>
           )}
           <div className="account-sep" />
-          <button type="button" className="account-row account-row-out" onClick={() => go(onLogout)}>
+          <button type="button" role="menuitem" className="account-row account-row-out" onClick={() => go(onLogout)}>
             <span>Sign out</span>
           </button>
         </div>
