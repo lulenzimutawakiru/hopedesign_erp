@@ -196,12 +196,17 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
                   <span className="queue-note">
                     <input
                       autoFocus
+                      aria-label="Decision note"
                       value={comment}
                       onChange={(e) => setCommentByTask((m) => ({ ...m, [taskId]: e.target.value }))}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') decide(row, 'APPROVED');
+                        // Enter only dismisses the note editor — it must never decide.
+                        // Approving on Enter turned a reflex keystroke into a binding
+                        // sign-off, so the decision stays gated behind the explicit
+                        // Approve / Return / Reject buttons.
+                        if (e.key === 'Enter') setNoteOpen((m) => ({ ...m, [taskId]: false }));
                       }}
-                      placeholder="Note for this decision (enter to approve)"
+                      placeholder="Note for this decision"
                     />
                   </span>
                 )}
