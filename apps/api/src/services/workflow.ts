@@ -774,6 +774,13 @@ export interface ApprovalQueueRow extends pg.QueryResultRow {
  * `actionable` is the single derived flag the UI should act on; `blocked_reason`
  * says why. Neither is an authorization decision - decideTask re-checks both
  * rules inside its own transaction.
+ *
+ * The queue also includes tasks the caller may decide *under an active
+ * delegation*. A delegate holds the temporary role only transiently (it is never
+ * written to user_roles), so the direct-role EXISTS misses those tasks even
+ * though decideTask authorizes them through its delegation fallback. Rows
+ * decidable only by delegation carry `acting_role_name` / `delegator_name` /
+ * `delegation_code` so the UI can show whose authority is being exercised.
  */
 export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<ApprovalQueueRow[]> {
   const { query } = await import('../db.js');
@@ -797,17 +804,37 @@ export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<Appro
                  AND p.decided_by = $1
                  AND p.step_seq < t.step_seq
                  AND p.status IN ('APPROVED', 'REJECTED', 'RETURNED')
-            ) AS prior_decided_by_me
+            ) AS prior_decided_by_me,
+            dr.has_direct_role,
+            acting.delegation_id, acting.delegation_code,
+            acting.acting_role_code, acting.acting_role_name, acting.delegator_name
      FROM approval_tasks t
      JOIN workflow_instances i ON i.id = t.instance_id
      JOIN workflows w ON w.id = i.workflow_id
+     LEFT JOIN LATERAL (
+       SELECT EXISTS (
+         SELECT 1 FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+         WHERE ur.user_id = $1 AND (r.id = t.approver_role_id OR r.id = t.alternative_role_id)
+       ) AS has_direct_role
+     ) dr ON true
+     LEFT JOIN LATERAL (
+       SELECT d.id AS delegation_id, d.code AS delegation_code,
+              r.code AS acting_role_code, r.name AS acting_role_name,
+              du.first_name || ' ' || du.last_name AS delegator_name
+         FROM delegations d
+         JOIN roles r ON r.id = d.temporary_role_id
+         JOIN users du ON du.id = d.delegator_user_id
+        WHERE d.delegate_user_id = $1 AND d.tenant_id = i.tenant_id
+          AND d.status = 'ACTIVE' AND d.starts_at <= now() AND d.expires_at > now()
+          AND (r.id = t.approver_role_id OR r.id = t.alternative_role_id)
+        ORDER BY d.expires_at ASC
+        LIMIT 1
+     ) acting ON true
      WHERE t.status IN ('PENDING','ESCALATED')
        AND (t.approver_user_id = $1
-        OR EXISTS (
-           SELECT 1 FROM user_roles ur
-           JOIN roles r ON r.id = ur.role_id
-           WHERE ur.user_id = $1 AND (r.id = t.approver_role_id OR r.id = t.alternative_role_id)
-        )
+        OR dr.has_direct_role
+        OR acting.delegation_id IS NOT NULL
      )
      ORDER BY i.submitted_at`,
     [userId],
@@ -820,7 +847,25 @@ export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<Appro
         : row.prior_decided_by_me === true
           ? 'ALREADY_DECIDED_EARLIER_STEP'
           : null;
-    return { ...row, actionable: blockedReason === null, blocked_reason: blockedReason };
+    // A row is "acting under a delegation" only when the user is neither the
+    // task's direct assignee nor a permanent holder of the approver role: in
+    // both of those cases decideTask authorizes through the assignee/role path,
+    // not the delegation fallback, so labelling the row "acting" would mislead.
+    const acting =
+      row.delegation_id != null &&
+      row.acting_role_name != null &&
+      row.has_direct_role !== true &&
+      (row.approver_user_id == null || Number(row.approver_user_id) !== userId);
+    return {
+      ...row,
+      delegation_id: acting ? row.delegation_id : null,
+      delegation_code: acting ? row.delegation_code : null,
+      acting_role_code: acting ? row.acting_role_code : null,
+      acting_role_name: acting ? row.acting_role_name : null,
+      delegator_name: acting ? row.delegator_name : null,
+      actionable: blockedReason === null,
+      blocked_reason: blockedReason,
+    };
   });
 }
 

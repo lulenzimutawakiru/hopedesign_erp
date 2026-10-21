@@ -19,9 +19,16 @@ export interface ApprovalRow {
   created_by?: number | null;
   approver_user_id?: number | null;
   due_at?: string | null;
+  status?: string | null;
   amount?: number | null;
   company?: string | null;
   branch?: string | null;
+  /** Acting-under-delegation context; present only when the task is decidable via an active delegation. */
+  acting_role_code?: string | null;
+  acting_role_name?: string | null;
+  delegator_name?: string | null;
+  delegation_code?: string | null;
+  delegation_id?: number | null;
   /** False when the API would refuse a decision right now. Absent means decidable. */
   actionable?: boolean;
   /** Why the row cannot be decided yet: an earlier stage is open, or SoD. */
@@ -67,13 +74,18 @@ interface Props {
   /** Custom empty-state body rendered when the queue is clear. */
   empty?: ReactNode;
   onDecide: (row: ApprovalRow, decision: string, comment: string) => Promise<void>;
+  /** Batch decision path; when omitted the bulk-select controls are hidden. */
+  onBulkDecide?: (rows: ApprovalRow[], decision: string, comment: string) => Promise<void>;
 }
 
-export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
+export default function ApprovalQueue({ rows, empty, onDecide, onBulkDecide }: Props) {
   const [commentByTask, setCommentByTask] = useState<Record<number, string>>({});
   const [noteOpen, setNoteOpen] = useState<Record<number, boolean>>({});
   const [actingId, setActingId] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [selected, setSelected] = useState<Record<number, boolean>>({});
+  const [bulkArmed, setBulkArmed] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const overdueCount = rows.filter((r) => dueState(pick(r, 'due_at', 'dueAt'))?.kind === 'overdue').length;
   const soonCount = rows.filter((r) => dueState(pick(r, 'due_at', 'dueAt'))?.kind === 'soon').length;
@@ -94,6 +106,49 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setActingId(null);
+    }
+  };
+
+  // Bulk approve operates only on rows the API would actually let the user
+  // decide now; blocked rows (earlier step open, SoD) are never selectable, so a
+  // one-click batch action can't fire a decision the server would refuse.
+  const actionableRows = rows.filter((r) => {
+    const id = Number(r.task_id ?? r.taskId);
+    return id > 0 && pick(r, 'actionable') !== false;
+  });
+  const selectedIds = actionableRows
+    .filter((r) => selected[Number(r.task_id ?? r.taskId)])
+    .map((r) => Number(r.task_id ?? r.taskId));
+  const allSelected = actionableRows.length > 0 && selectedIds.length === actionableRows.length;
+
+  const toggleSelect = (taskId: number) => setSelected((m) => ({ ...m, [taskId]: !m[taskId] }));
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelected({});
+      return;
+    }
+    const next: Record<number, boolean> = {};
+    for (const r of actionableRows) next[Number(r.task_id ?? r.taskId)] = true;
+    setSelected(next);
+  };
+  const clearSelection = () => {
+    setSelected({});
+    setBulkArmed(false);
+  };
+
+  const bulkApprove = async () => {
+    if (!onBulkDecide) return;
+    const targets = actionableRows.filter((r) => selected[Number(r.task_id ?? r.taskId)]);
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    setError('');
+    try {
+      await onBulkDecide(targets, 'APPROVED', '');
+      clearSelection();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -121,6 +176,35 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
           {blockedCount > 0 && <span className="due-chip hold">{blockedCount} waiting on earlier steps</span>}
         </span>
       </div>
+      {onBulkDecide && actionableRows.length > 0 && (
+        <div className="queue-bulk">
+          <label className="queue-bulk-select">
+            <input
+              type="checkbox"
+              aria-label="Select all actionable"
+              checked={allSelected}
+              onChange={toggleSelectAll}
+            />
+            <span>{allSelected ? 'Deselect all' : 'Select all'}</span>
+          </label>
+          {selectedIds.length > 0 && !bulkArmed && (
+            <button className="btn btn-sm btn-success" disabled={bulkBusy} onClick={() => setBulkArmed(true)}>
+              Approve {selectedIds.length}
+            </button>
+          )}
+          {selectedIds.length > 0 && bulkArmed && (
+            <>
+              <span className="muted">Approve {selectedIds.length} selected?</span>
+              <button className="btn btn-sm btn-success" disabled={bulkBusy} onClick={bulkApprove}>
+                {bulkBusy ? 'Approving…' : 'Confirm'}
+              </button>
+              <button className="btn btn-sm btn-ghost" disabled={bulkBusy} onClick={() => setBulkArmed(false)}>
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {error && (
         <div style={{ margin: '8px 14px 0' }}>
           <ErrorBanner error={error} />
@@ -148,17 +232,49 @@ export default function ApprovalQueue({ rows, empty, onDecide }: Props) {
           const actionable = pick(row, 'actionable') !== false;
           const blockedText = actionable ? '' : blockedLabel(blockedRaw == null ? null : String(blockedRaw));
           const busyRow = actingId === taskId;
+          const isEscalated = String(pick(row, 'status') ?? '') === 'ESCALATED';
+          const actingRoleRaw = pick(row, 'acting_role_name', 'actingRoleName');
+          const delegatorRaw = pick(row, 'delegator_name', 'delegatorName');
+          const delegationCodeRaw = pick(row, 'delegation_code', 'delegationCode');
+          const actingRoleName = actingRoleRaw == null ? '' : String(actingRoleRaw);
+          const delegatorName = delegatorRaw == null ? '' : String(delegatorRaw);
+          const isActing = actingRoleName !== '';
 
           return (
             <div
-              className={`queue-row${due?.kind === 'overdue' ? ' overdue' : ''}${due?.kind === 'soon' ? ' due-soon' : ''}${actionable ? '' : ' queue-row-blocked'}`}
+              className={`queue-row${onBulkDecide ? ' queue-row--bulk' : ''}${due?.kind === 'overdue' ? ' overdue' : ''}${due?.kind === 'soon' ? ' due-soon' : ''}${actionable ? '' : ' queue-row-blocked'}`}
               key={taskId}
             >
+              {onBulkDecide && (
+                <label className="queue-row-check">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${String(pick(row, 'entity_code', 'entityCode') ?? `#${entityId}`)}`}
+                    checked={!!selected[taskId]}
+                    disabled={!actionable}
+                    onChange={() => toggleSelect(taskId)}
+                  />
+                </label>
+              )}
               <div className="queue-row-main">
                 <span className="queue-row-title">
                   <span className="cell-mono">{String(pick(row, 'entity_code', 'entityCode') ?? `#${entityId}`)}</span>
                   <Badge value={stepLabel} />
                   {workflowName && <span className="queue-row-workflow">{workflowName}</span>}
+                  {isEscalated && (
+                    <span className="queue-escalated-chip" title="This task is past its SLA and has been auto-escalated">
+                      Escalated
+                    </span>
+                  )}
+                  {isActing && (
+                    <span
+                      className="queue-acting-chip"
+                      title={`Acting as ${actingRoleName}${delegationCodeRaw ? ` (${String(delegationCodeRaw)})` : ''}${delegatorName ? ` on behalf of ${delegatorName}` : ''}`}
+                    >
+                      Acting as {actingRoleName}
+                      {delegatorName ? ` · for ${delegatorName}` : ''}
+                    </span>
+                  )}
                   {blockedText && (
                     <span className="queue-blocked-chip" title={blockedText}>
                       {blockedText}
