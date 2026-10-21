@@ -266,12 +266,12 @@ function lifecycleTerminal(status: string): { kind: 'ended' | 'archived' | 'reje
 
 
 const AUDIT_EVENTS: Array<{ key: string; icon: string; color: string }> = [
-  { key: 'create', icon: '📄', color: 'var(--hope)' },
+  { key: 'create', icon: '📄', color: '#1261A0' },
   { key: 'validate', icon: '🛡️', color: '#0891B2' },
-  { key: 'submit', icon: '🚀', color: 'var(--info)' },
+  { key: 'submit', icon: '🚀', color: '#2878D0' },
   { key: 'send_for_signature', icon: '✉️', color: '#D97706' },
-  { key: 'sign', icon: '✍️', color: 'var(--success)' },
-  { key: 'execute', icon: '✅', color: 'var(--success)' },
+  { key: 'sign', icon: '✍️', color: '#168A5B' },
+  { key: 'execute', icon: '✅', color: '#168A5B' },
   { key: 'update', icon: '✏️', color: '#4F46A5' },
   { key: 'variation', icon: '🔀', color: '#D97706' },
   { key: 'renewal', icon: '🔁', color: '#0891B2' },

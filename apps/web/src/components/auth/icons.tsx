@@ -219,10 +219,10 @@ export function BrandGlyph({
   size = 40,
   title,
   className,
-  plate = 'var(--hope)',
+  plate = '#1261A0',
   bar = '#FFFFFF',
-  band = 'var(--teal)',
-  cross = 'var(--navy)',
+  band = '#00A6A6',
+  cross = '#0B1F33',
 }: BrandGlyphProps) {
   return (
     <svg
