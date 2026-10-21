@@ -24,7 +24,9 @@
   --ink: #172B3A;
   --ink-soft: #172B3A;
   --muted: #5F6B76;
-  --muted-2: #8995A1;
+  /* #8995A1 failed WCAG AA (3.05:1) for the small labels/hints that use it;
+     #6A7683 is the nearest palette sibling that clears 4.5:1 on --paper. */
+  --muted-2: #6A7683;
   --line: #D9E1E8;
   --line-strong: #C5D0D9;
 

@@ -31,7 +31,7 @@ const CORE_TOKENS = {
   '#EEF2F6': '--paper-2',
   '#172B3A': '--ink',
   '#5F6B76': '--muted',
-  '#8995A1': '--muted-2',
+  '#6A7683': '--muted-2',
   '#D9E1E8': '--line',
   '#C5D0D9': '--line-strong',
 };
