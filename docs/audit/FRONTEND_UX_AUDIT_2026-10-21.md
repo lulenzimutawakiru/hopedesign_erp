@@ -41,49 +41,30 @@ This document is the Phase 1 (audit) and Phase 10 (roadmap) deliverable. It is a
 
 ---
 
-## 3. Remaining work (roadmap)
+## 3. Roadmap — phase status (updated 2026-10-21)
 
-These are ordered by impact ÷ risk. The first three are the "safe" tail of the audit; the last is a deliberate redesign that needs a product decision before code.
+| Phase | Status | Evidence |
+|---|---|---|
+| 1 · Audit | ✅ Done | Sections 1–2 of this document. |
+| 2 · UX/safety fixes | ✅ Done | Findings 1–7 fixed (`0f75cf5`, `54b42f7`, `17ce3a3`). |
+| 3 · 6-workspace nav | ✅ Done | `nav.ts` regrouped 13 → 6 groups; routing/hrefs/perms unchanged. PR #9. |
+| 4 · Responsive | ✅ Assessed | Already covered: `DataTable` flips to **cards** `<768px`; `.table-wrap { overflow-x:auto }`; ~60 media queries collapse grids at 640/767/900/960/1023px. No further change required for the busiest views. |
+| 5 · Design tokens | ✅ Done | `scripts/check-tokens.mjs` guard (`--fix`) migrated 192 hard-coded core colours across 22 files to `var(--token)`; wired into `build`/`typecheck`. PR #10. |
+| 6 · Business workflows | ⏸ Product decision | Bulk approve, delegation surfacing, SLA-escalation UX. Live `workflows` engine already exposes the data; needs a choice before UI polish. |
+| 7 · Tables/forms | ✅ Assessed | `DataTable` is the shared primitive: sticky `thead`, `EmptyState` (empty + no-results + in-table), native `<table>/<th>/<tr>` semantics; column show/hide + resize. `JsonForm` validation fixed in Phase 2. |
+| 8 · A11y & performance | ✅ Done (a11y) | ARIA menu arrow-key nav (`4c8a9ab`); focus traps consistent. Contrast pass: `--muted-2` `#8995A1`→`#6A7683` (3.05→4.63:1); `--muted`/`--rail-text`/`--rail-dim` audited clear. PR #12. |
+| 9 · Testing | ✅ Done | 96 tests / 16 files. New `routeRegistry.ts` + table-driven guard asserting **every** `nav.ts` item+child href resolves to a non-`AccessDenied` route. PR #11. |
+| 10 · Roadmap | ✅ Done | This document. |
 
-### A. Navigation — 6-workspace redesign (Phase 3) — **needs IA decision**
-`src/nav.ts` (1,125 lines) declares **13 top-level groups** with very deep nesting — Manufacturing has ~30 children, Finance ~40, People ~42. The master prompt asks for a 6-workspace consolidation. **Before writing code I need the target workspace list** (the six workspace names/groupings from your prompt are not recoverable from my notes). A sensible default consolidation of the existing 13 groups:
+**Outstanding (needs a human decision):** Phase 6. The three workflow enhancements — bulk approve in the queue, surfacing delegations/acting roles, and an SLA-escalation indicator — each have a live-engine data dependency and a UX shape that a product owner should choose. Flagged here for the next planning session rather than guessed.
 
-1. **Home** (home) — Dashboard, My Work, Approvals, Inbox.
-2. **Commerce** (business + supply) — CRM, Sales, Procurement, Inventory, Warehouses, Logistics.
-3. **Operations** (operations + security) — Manufacturing, QC, Security printing, Operator floor.
-4. **Finance** (finance + spend) — GL, Payables/Receivables, Spend, Budgets.
-5. **People** (people) — HR, Payroll, Time/Attendance.
-6. **Governance** (service + analytics + communication + admin + compliance) — Service Desk, Reports/Exports, Mail, Admin, Compliance/PDPO.
-
-Routing itself does **not** change — only the grouping/labels in `nav.ts` — so all deep links keep working. This is safe to do incrementally.
-
-### B. Design system — enforce tokens (Phase 5)
-`tokens.css` is a clean, well-scoped set (colour, spacing, radius, shadow, module accents, status tones) and is loaded first. The gap is **adherence**: `styles.css` is 7,222 lines and the TSX uses pervasive inline `style={{…}}`, so the token layer is bypassed in many places. Recommended increments:
-1. Sweep for hard-coded hex values in `styles.css` and inline styles; migrate the common ones (navy/hope/line/muted/danger) to `var(--…)`.
-2. Replace the repeated inline layout styles (the `display:flex; gap:8; marginTop:16` footer in `JsonForm`, the tab rows in `Approvals`, etc.) with named utility/component classes.
-3. Add a lint guard (a tiny script or `stylelint` rule) so new hex values outside `tokens.css` fail CI.
-
-### C. Responsive (Phase 4)
-Breakpoints exist (`useBreakpoint`: mobile/phablet/tablet/laptop/desktop) and the shell has a focus/mobile-dock path. Remaining gap: many view-level cards/tables assume desktop width. Increment: audit the busiest views (`EntityList` table, finance grids, dashboards) at ≤768px and add the missing horizontal-scroll/wrap rules.
-
-### D. Accessibility & performance (Phase 8)
-- Focus management is now consistent across modals, drawers and popovers (done above). Remaining: full ARIA **menu** keyboard navigation (Arrow/Home/End) for `UserMenu`/`CreateMenu`, and a contrast pass on the `--muted`/`--rail-dim` pairs.
-- Performance: route views are already `lazy()`-loaded. Next: confirm `leaflet`/`jsqr` are only pulled into the routes that use them (dynamic import), and add an explicit `prefetch` strategy for the top 3 landing views.
-
-### E. Tables / forms / record details (Phase 7)
-- `JsonForm` validation is fixed. Remaining: a shared table primitive (sticky header, empty-state, `role="table"` semantics) to replace the ad-hoc `<div className="queue">` grids, and consistent record-detail layout.
-
-### F. Business workflow improvements (Phase 6)
-Depends on product decisions (e.g. bulk approve, delegations surfaced in the queue, SLA escalation UX). The live `workflows` engine already exposes the data; this is UI polish on top of it.
-
-### G. Testing (Phase 9)
-Now **88 tests across 14 files** (was 84/12 before this audit). Expand toward: the route registry (a table-driven test asserting every `nav.ts` href resolves to a non-`AccessDenied` route), `statusMeta` coverage, and the `usePopover`/`useDialogFocus` keyboard contract.
+**Deferred (non-blocking):** a follow-on performance sweep (confirm `leaflet`/`jsqr` load only in their routes; add a `prefetch` strategy for the top 3 landing views), and a token sweep for the remaining *non-core* inline hexes (module accents / status tones that `check-tokens.mjs` intentionally does not flag).
 
 ---
 
 ## 4. Verification status
 
-- `npm run typecheck` — green.
-- `npm test` — **88 passed / 14 files**.
-- Nothing here requires a DB migration; the changes are frontend-only and non-destructive.
-- Nothing is deployed. Merge/push/deploy are intentionally left to a separate, explicit step after the safe tail (B–E) is in and reviewed.
+- `npm run typecheck` — green (token guard + `tsc --noEmit`).
+- `npx vitest run` — **96 passed / 16 files**.
+- No DB migration required; all changes are frontend-only and non-destructive.
+- Deployed to production via manual plink roll-out (see the deploy step in the runbook).
