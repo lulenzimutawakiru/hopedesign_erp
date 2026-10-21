@@ -9,7 +9,6 @@ import MyWork from './MyWork';
 import Reports from './Reports';
 import DataExports from './DataExports';
 import SecurityJobs from './SecurityJobs';
-import QrScanner from './QrScanner';
 import QrTrace from './QrTrace';
 import CommandPalette from './CommandPalette';
 import { Toaster } from '../components/toast';
@@ -44,6 +43,7 @@ const ComplianceFlow = lazy(() => import('./CompliancePdpo'));
 const OrganisationSettings = lazy(() => import('./OrganisationSettings'));
 const Account = lazy(() => import('./Account'));
 const PayrollSettings = lazy(() => import('./PayrollSettings'));
+const QrScanner = lazy(() => import('./QrScanner'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
   AccessDenied,
@@ -336,7 +336,11 @@ export default function Shell() {
         onScan={() => setScannerOpen(true)}
       />
 
-      {scannerOpen && <QrScanner onClose={() => setScannerOpen(false)} sheet={compact} />}
+      {scannerOpen && (
+        <Suspense fallback={<PageLoader />}>
+          <QrScanner onClose={() => setScannerOpen(false)} sheet={compact} />
+        </Suspense>
+      )}
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
       <Toaster />
       {helpOpen && (
