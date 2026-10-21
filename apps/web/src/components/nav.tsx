@@ -21,6 +21,7 @@ import {
 import { personaLabel, personaOf } from '../work';
 import { StaffPhoto } from './ui';
 import { useDialogFocus } from './dialogFocus';
+import { usePopover } from './popoverFocus';
 import { BrandMark } from './BrandMark';
 import { shortCompanyName } from '../company';
 
@@ -499,28 +500,16 @@ function ScopeRow({ k, v }: { k: string; v: string }) {
 
 export function ScopeChip({ user }: { user: MeUser | null }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open]);
+  const { rootRef, triggerRef } = usePopover(open, () => setOpen(false));
   if (!user) return null;
   const company = user.company_name ?? user.tenant_name ?? user.company_code ?? 'Company';
   const branch = user.branch_name ?? user.branch_code ?? '';
   const dept = user.department_name ?? user.department_code ?? '';
   return (
-    <div className="scope-wrap" ref={ref}>
+    <div className="scope-wrap" ref={rootRef}>
       <button
         type="button"
+        ref={triggerRef}
         className="scope-chip"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -582,20 +571,7 @@ export function UserMenu({
 }) {
   const { photoRev } = useAuth();
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open]);
+  const { rootRef, triggerRef } = usePopover(open, () => setOpen(false));
   const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Account';
   const photoSrc = '/api/auth/me/photo?r=' + photoRev;
   const go = (fn: () => void) => {
@@ -603,8 +579,8 @@ export function UserMenu({
     fn();
   };
   return (
-    <div className="topbar-item" ref={ref}>
-      <button className="account-trigger" onClick={() => setOpen((s) => !s)} aria-label="Account" aria-expanded={open}>
+    <div className="topbar-item" ref={rootRef}>
+      <button className="account-trigger" ref={triggerRef} onClick={() => setOpen((s) => !s)} aria-label="Account" aria-expanded={open}>
         <StaffPhoto path={photoSrc} hasPhoto={user?.has_photo} name={name} size={34} round />
       </button>
       {open && (

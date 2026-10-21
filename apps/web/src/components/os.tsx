@@ -1,8 +1,9 @@
-import { ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { ReactNode, useId, useRef, useState } from 'react';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { CREATE_ITEMS } from '../work';
 import { useDialogFocus } from './dialogFocus';
+import { usePopover } from './popoverFocus';
 
 export { Skeleton } from './states';
 
@@ -80,25 +81,12 @@ export function Drawer({ title, onClose, children, footer }: { title: string; on
 export function CreateMenu() {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open]);
+  const { rootRef, triggerRef } = usePopover(open, () => setOpen(false));
   const items = CREATE_ITEMS.filter((i) => can(user, i.perm));
   if (!items.length) return null;
   return (
-    <div className="topbar-item" ref={ref}>
-      <button className="btn btn-primary btn-sm" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="menu">+ Create</button>
+    <div className="topbar-item" ref={rootRef}>
+      <button ref={triggerRef} className="btn btn-primary btn-sm" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="menu">+ Create</button>
       {open && (
         <div className="topbar-dropdown">
           <div className="dropdown-head">Start work</div>
