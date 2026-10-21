@@ -235,7 +235,7 @@ function Sparkline({ values, tone = 'ok', width = 120, height = 34 }: { values: 
   const step = width / (pts.length - 1);
   const y = (v: number) => height - 4 - ((v - min) / span) * (height - 12);
   const line = pts.map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-  const stroke = tone === 'bad' ? 'var(--danger)' : tone === 'warn' ? 'var(--warning)' : 'var(--success)';
+  const stroke = tone === 'bad' ? '#C93636' : tone === 'warn' ? '#D99A00' : '#168A5B';
   return (
     <svg className="fin-spark" viewBox={`0 0 ${width} ${height}`} width={width} height={height} aria-hidden="true" focusable="false">
       <path d={`${line} L${width},${height} L0,${height} Z`} fill={stroke} opacity="0.1" />

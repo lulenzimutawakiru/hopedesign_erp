@@ -1868,7 +1868,7 @@ function SettingsPage() {
               <input
                 type="color"
                 disabled={!editable}
-                value={isValidHexColor(String(draft ?? '')) ? String(draft ?? '') : 'var(--hope)'}
+                value={isValidHexColor(String(draft ?? '')) ? String(draft ?? '') : '#1261A0'}
                 onChange={(e) => setValue(cat.category, key, e.target.value)}
               />
               <input

@@ -79,12 +79,12 @@ const ORG_KIND_LABEL: Record<OrgNodeData['kind'], string> = {
 
 const ORG_TONE_HEX: Record<string, string> = {
   company: '#8B5CF6',
-  division: 'var(--hope)',
-  dept: 'var(--info)',
-  unit: 'var(--teal)',
-  team: 'var(--success)',
-  position: 'var(--warning)',
-  employee: 'var(--muted)',
+  division: '#1261A0',
+  dept: '#2878D0',
+  unit: '#00A6A6',
+  team: '#168A5B',
+  position: '#D99A00',
+  employee: '#5F6B76',
 };
 
 function orgExportStamp(company: Rec): string {
@@ -206,7 +206,7 @@ function orgHtmlDoc(tree: OrgNodeData, company: Rec, doc: Rec): string {
 
   const nodeHtml = (node: OrgNodeData): string => {
     const isEmp = node.kind === 'employee';
-    const tone = ORG_TONE_HEX[node.kind] ?? 'var(--muted)';
+    const tone = ORG_TONE_HEX[node.kind] ?? '#5F6B76';
     const row =
       '<div class="row" data-tone="' + node.kind + '" style="--t:' + tone + '">' +
       '<i class="dot" aria-hidden="true"></i>' +
@@ -219,36 +219,36 @@ function orgHtmlDoc(tree: OrgNodeData, company: Rec, doc: Rec): string {
 
   const css = [
     '*{box-sizing:border-box}',
-    'body{margin:0;padding:30px 36px 48px;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
+    'body{margin:0;padding:30px 36px 48px;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#172B3A;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
     'header{max-width:960px}',
     '.kicker{margin:0;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8B5CF6}',
     'h1{margin:4px 0 0;font-size:26px;letter-spacing:-.01em}',
-    '.sub{margin:6px 0 0;color:var(--muted);max-width:720px}',
+    '.sub{margin:6px 0 0;color:#5F6B76;max-width:720px}',
     '.actions{margin:14px 0 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap}',
     '.hint{color:#8A97A3;font-size:12px}',
     '.stats{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0 6px}',
-    '.stat{border:1px solid var(--line);border-radius:12px;padding:7px 14px;min-width:110px;display:flex;flex-direction:column;gap:1px}',
-    '.stat span{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}',
-    '.stat b{font-size:19px;color:var(--ink)}',
+    '.stat{border:1px solid #D9E1E8;border-radius:12px;padding:7px 14px;min-width:110px;display:flex;flex-direction:column;gap:1px}',
+    '.stat span{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#5F6B76}',
+    '.stat b{font-size:19px;color:#172B3A}',
     '.tree{list-style:none;margin:16px 0 0;padding:0;max-width:960px}',
-    '.tree ul{list-style:none;margin:3px 0 3px 22px;padding:2px 0 2px 16px;border-left:1.5px dashed var(--line-strong)}',
-    '.row{display:flex;align-items:center;gap:8px;padding:6px 10px;margin:2px 0;border:1px solid transparent;border-left:3px solid var(--t,var(--muted));border-radius:10px;background:#fff}',
-    '.row:hover{background:var(--paper);border-color:var(--line)}',
+    '.tree ul{list-style:none;margin:3px 0 3px 22px;padding:2px 0 2px 16px;border-left:1.5px dashed #C5D0D9}',
+    '.row{display:flex;align-items:center;gap:8px;padding:6px 10px;margin:2px 0;border:1px solid transparent;border-left:3px solid var(--t,#5F6B76);border-radius:10px;background:#fff}',
+    '.row:hover{background:#F5F7FA;border-color:#D9E1E8}',
     'li.leaf>.row{margin:1px 0;border-left-color:transparent;background:#FAFBFD}',
-    '.dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--t,var(--muted));box-shadow:0 0 0 3px rgba(23,43,58,.06)}',
-    '.nm{flex:1 1 auto;min-width:0;font-weight:650;color:var(--ink);display:inline-flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    'code{font:11px/1 ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--paper-2);border:1px solid var(--line);color:var(--ink);padding:1px 7px;border-radius:999px;white-space:nowrap}',
-    '.c-muted{color:var(--muted);font-size:12px;white-space:nowrap}',
-    '.c-chip{display:inline-flex;align-items:baseline;gap:3px;white-space:nowrap;font-size:12px;color:var(--muted)}',
-    '.c-chip b{font-size:13px;color:var(--ink);font-weight:700}',
+    '.dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--t,#5F6B76);box-shadow:0 0 0 3px rgba(23,43,58,.06)}',
+    '.nm{flex:1 1 auto;min-width:0;font-weight:650;color:#172B3A;display:inline-flex;align-items:center;gap:7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    'code{font:11px/1 ui-monospace,SFMono-Regular,Consolas,monospace;background:#EEF2F6;border:1px solid #D9E1E8;color:#172B3A;padding:1px 7px;border-radius:999px;white-space:nowrap}',
+    '.c-muted{color:#5F6B76;font-size:12px;white-space:nowrap}',
+    '.c-chip{display:inline-flex;align-items:baseline;gap:3px;white-space:nowrap;font-size:12px;color:#5F6B76}',
+    '.c-chip b{font-size:13px;color:#172B3A;font-weight:700}',
     '.c-pill{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:650;white-space:nowrap}',
-    '.c-badge{background:#EAF1FB;color:var(--hope)}',
+    '.c-badge{background:#EAF1FB;color:#1261A0}',
     '.c-vacant{background:#FDF1E2;color:#D97706}',
-    '.c-fill{display:inline-block;width:46px;height:6px;border-radius:999px;background:var(--paper-2);overflow:hidden}',
-    '.c-fill i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--success),#35B77A)}',
+    '.c-fill{display:inline-block;width:46px;height:6px;border-radius:999px;background:#EEF2F6;overflow:hidden}',
+    '.c-fill i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#168A5B,#35B77A)}',
     'footer{margin:28px 0 0;color:#8A97A3;font-size:12px}',
-    'button.btn{border:1px solid var(--line-strong);background:#fff;color:var(--ink);border-radius:10px;padding:7px 14px;font:600 13px inherit;cursor:pointer}',
-    'button.btn:hover{background:var(--paper)}',
+    'button.btn{border:1px solid #C5D0D9;background:#fff;color:#172B3A;border-radius:10px;padding:7px 14px;font:600 13px inherit;cursor:pointer}',
+    'button.btn:hover{background:#F5F7FA}',
     '@media print{.actions{display:none}body{padding:12px}.row:hover{background:#fff}.tree ul{border-left-style:solid}}',
   ];
 

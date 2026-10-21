@@ -46,7 +46,7 @@ export function applyPrefs(p: Prefs = loadPrefs()) {
   const dark = p.theme === 'dark' || (p.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   root.dataset.theme = dark ? 'dark' : 'light';
   const themeMeta = document.querySelector('meta[name="theme-color"]');
-  if (themeMeta) themeMeta.setAttribute('content', dark ? '#08131F' : 'var(--navy)');
+  if (themeMeta) themeMeta.setAttribute('content', dark ? '#08131F' : '#0B1F33');
 }
 
 export function toggleFavorite(href: string): Prefs {

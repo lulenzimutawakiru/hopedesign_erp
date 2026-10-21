@@ -1,9 +1,17 @@
 // Design-token guard.
 //
 // tokens.css is the single source of truth for the core colour palette.
-// This script fails when one of those core colours is hard-coded anywhere
-// else in the app (CSS or inline styles), because it should be referenced
-// via var(--token) instead.
+// This script fails when one of those core colours is hard-coded in a CSS
+// context where it should be referenced via var(--token) instead.
+//
+// A `var(--token)` reference is only valid where real CSS is parsed:
+//   - .css files, and
+//   - React inline `style={{ ... }}` objects.
+// It is NOT valid in SVG presentation attributes (fill/stroke), <meta>
+// content, <input> colour values, data strings, validation hint copy, or
+// standalone export HTML/CSS strings (those documents load no tokens.css).
+// This script therefore scans only CSS files and `style={{ ... }}` regions,
+// so it never rewrites a colour into a context where var() would break it.
 //
 //   node scripts/check-tokens.mjs          # check only (exit 1 on violations)
 //   node scripts/check-tokens.mjs --fix    # rewrite hard-coded hex -> var(--token)
@@ -48,26 +56,81 @@ function walk(dir, out = []) {
   return out;
 }
 
-let violations = 0;
-let rewritten = 0;
-const files = walk(SRC_ROOT);
+// Balanced `style={{ ... }}` regions in a .ts/.tsx file. Inline style objects
+// are flat (no nested braces), but the walker still skips quoted strings so a
+// stray brace inside a string value cannot unbalance it.
+function styleRegions(src) {
+  const regions = [];
+  let i = 0;
+  const kw = 'style={';
+  while ((i = src.indexOf(kw, i)) !== -1) {
+    const b = src.indexOf('{', i + kw.length);
+    if (b === -1) break;
+    let depth = 0;
+    let j = b;
+    for (; j < src.length; j++) {
+      const c = src.charCodeAt(j);
+      if (c === 123) depth++; // {
+      else if (c === 125) { depth--; if (depth === 0) break; } // }
+      else if (c === 34 || c === 39 || c === 96) { // " ' `
+        const q = c;
+        j++;
+        while (j < src.length && src.charCodeAt(j) !== q) { if (src.charCodeAt(j) === 92) j++; j++; }
+      }
+    }
+    if (depth === 0) { regions.push([b, j + 1]); i = j + 1; }
+    else i = b + 1;
+  }
+  return regions;
+}
 
-for (const file of files) {
-  const src = readFileSync(file, 'utf8');
+// Count/replace core hex inside one region of `src`, returning the updated text.
+function sweep(text) {
   let changed = false;
-  let next = src;
+  let hits = 0;
+  let next = text;
   for (const [hex, token] of Object.entries(CORE_TOKENS)) {
-    // Match the exact 6-digit hex, not a prefix of a longer (8-digit RGBA) one.
     const re = new RegExp(hex.replace('#', '#') + '(?![0-9a-f])', 'gi');
-    const hits = next.match(re);
-    if (hits) {
-      violations += hits.length;
+    const found = next.match(re);
+    if (found) {
+      hits += found.length;
       if (FIX) {
         next = next.replace(re, `var(${token})`);
         changed = true;
       }
     }
   }
+  return { text: next, hits, changed };
+}
+
+let violations = 0;
+let rewritten = 0;
+const files = walk(SRC_ROOT);
+
+for (const file of files) {
+  const src = readFileSync(file, 'utf8');
+
+  // CSS files: the whole file is a valid CSS context.
+  // TS/TSX files: only inline `style={{ ... }}` objects are.
+  const regions = file.endsWith('.css') ? [[0, src.length]] : styleRegions(src);
+  if (regions.length === 0) continue;
+
+  let changed = false;
+  let next = src;
+  // Apply regions right-to-left so earlier spans keep their offsets.
+  for (let k = regions.length - 1; k >= 0; k--) {
+    const [s, e] = regions[k];
+    const inner = src.slice(s, e);
+    const res = sweep(inner);
+    if (res.hits) {
+      violations += res.hits;
+      if (res.changed) {
+        next = next.slice(0, s) + res.text + next.slice(e);
+        changed = true;
+      }
+    }
+  }
+
   if (FIX && changed) {
     writeFileSync(file, next);
     rewritten += 1;
@@ -77,7 +140,7 @@ for (const file of files) {
 if (FIX) {
   console.log(`check-tokens: rewrote ${violations} hard-coded colour(s) across ${rewritten} file(s) to var(--token).`);
 } else if (violations > 0) {
-  console.error(`check-tokens: ${violations} core colour(s) are hard-coded outside tokens.css. Run \`node scripts/check-tokens.mjs --fix\` to migrate them to var(--token).`);
+  console.error(`check-tokens: ${violations} core colour(s) are hard-coded in a CSS context. Run \`node scripts/check-tokens.mjs --fix\` to migrate them to var(--token).`);
   process.exit(1);
 } else {
   console.log('check-tokens: ok');
