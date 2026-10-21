@@ -20,6 +20,7 @@ import { sendStoredEmail } from '../../services/mail/send.js';
 import type { AuthUser } from '../../types.js';
 import { isResendConfigured } from '../../services/resend.js';
 import { isAfricasTalkingConfigured } from '../../services/africastalking.js';
+import { isMetaWhatsappConfigured } from '../../services/metaWhatsapp.js';
 import { config } from '../../config.js';
 import { messagingLimiter } from '../../middleware/rateLimits.js';
 
@@ -663,7 +664,7 @@ communicationOpsRouter.get(
   ...runGet('communication.command.view', async (c, ctx) => {
     const uid = ctx.userId ?? 0;
     const tenantId = ctx.tenantId ?? 0;
-    const [messages, emails, notifications, deliveries, templates, channels, unread, urgent, emailOut, smsOut, lastEmail, lastSms] = await Promise.all([
+    const [messages, emails, notifications, deliveries, templates, channels, unread, urgent, emailOut, smsOut, whatsappOut, lastEmail, lastSms, lastWhatsapp] = await Promise.all([
       c.query(`SELECT count(*)::int AS v FROM conversation_messages WHERE tenant_id = $1`, [tenantId]),
       c.query(`SELECT count(*)::int AS v FROM emails WHERE tenant_id = $1`, [tenantId]),
       c.query(`SELECT count(*)::int AS v FROM notifications WHERE user_id = $1 AND tenant_id = $2`, [uid, tenantId]),
@@ -674,6 +675,7 @@ communicationOpsRouter.get(
       c.query(`SELECT count(*)::int AS v FROM notifications WHERE user_id = $1 AND tenant_id = $2 AND read_at IS NULL AND archived_at IS NULL AND priority IN ('URGENT','CRITICAL') AND (snoozed_until IS NULL OR snoozed_until <= now())`, [uid, tenantId]),
       c.query(`SELECT status, count(*)::int AS v FROM emails WHERE tenant_id = $1 AND direction = 'OUT' GROUP BY status`, [tenantId]),
       c.query(`SELECT status, count(*)::int AS v FROM sms_messages WHERE tenant_id = $1 GROUP BY status`, [tenantId]),
+      c.query(`SELECT status, count(*)::int AS v FROM whatsapp_messages WHERE tenant_id = $1 AND direction = 'OUTBOUND' GROUP BY status`, [tenantId]),
       c.query(
         `SELECT er.error FROM email_recipients er JOIN emails e ON e.id = er.email_id
           WHERE e.tenant_id = $1 AND er.status = 'FAILED' AND er.error IS NOT NULL
@@ -682,6 +684,11 @@ communicationOpsRouter.get(
       ),
       c.query(
         `SELECT error FROM sms_messages WHERE tenant_id = $1 AND status = 'FAILED' AND error IS NOT NULL
+          ORDER BY id DESC LIMIT 1`,
+        [tenantId]
+      ),
+      c.query(
+        `SELECT error FROM whatsapp_messages WHERE tenant_id = $1 AND status = 'FAILED' AND error IS NOT NULL
           ORDER BY id DESC LIMIT 1`,
         [tenantId]
       ),
@@ -695,6 +702,7 @@ communicationOpsRouter.get(
     };
     const emailsBy = countBy(emailOut.rows);
     const smsBy = countBy(smsOut.rows);
+    const whatsappBy = countBy(whatsappOut.rows);
     return {
       totals: {
         messages: Number(messages.rows[0].v),
@@ -708,11 +716,16 @@ communicationOpsRouter.get(
         emailsSent: Number(emailsBy.SENT ?? 0),
         smsFailed: Number(smsBy.FAILED ?? 0),
         smsSent: Number(smsBy.SENT ?? 0),
+        whatsappFailed: Number(whatsappBy.FAILED ?? 0),
+        whatsappSent: Number(whatsappBy.SENT ?? 0),
+        whatsappDelivered: Number(whatsappBy.DELIVERED ?? 0),
+        whatsappRead: Number(whatsappBy.READ ?? 0),
       },
       deliveries: deliveryByStatus,
       lastErrors: {
         email: lastEmail.rows[0]?.error != null ? String(lastEmail.rows[0].error) : null,
         sms: lastSms.rows[0]?.error != null ? String(lastSms.rows[0].error) : null,
+        whatsapp: lastWhatsapp.rows[0]?.error != null ? String(lastWhatsapp.rows[0].error) : null,
       },
     };
   })
@@ -1121,6 +1134,22 @@ communicationOpsRouter.get(
                  s.id
             FROM sms_messages s
            WHERE s.tenant_id = $1
+          UNION ALL
+          SELECT w.id,
+                 'WHATSAPP'::text,
+                 'WHATSAPP'::text,
+                 w.status,
+                 w.recipient,
+                 left(w.body, 120),
+                 w.error,
+                 w.retry_count,
+                 w.sent_at,
+                 w.created_at,
+                 NULL,
+                 NULL, NULL, NULL, NULL,
+                 w.id
+            FROM whatsapp_messages w
+           WHERE w.tenant_id = $1 AND w.direction = 'OUTBOUND'
         ) x
         WHERE ${where.join(' AND ')}
         ORDER BY x.created_at DESC
@@ -1132,6 +1161,72 @@ communicationOpsRouter.get(
       rows: toCamelRows(rows.map((r) => stripTotal(r as Record<string, unknown>))),
       pagination: { page, pageSize, total },
     };
+  })
+);
+
+// ---------------------------------------------------------------------------
+// WhatsApp centre (two-way: outbound sends + inbound customer replies)
+// ---------------------------------------------------------------------------
+communicationOpsRouter.get(
+  '/whatsapp/messages',
+  ...runGet('communication.command.view', async (c, ctx, q) => {
+    const tenantId = ctx.tenantId ?? 0;
+    const { page, pageSize, offset } = parsePagination(q);
+    const where = ['w.tenant_id = $1'];
+    const params: unknown[] = [tenantId];
+    if (q.direction) {
+      params.push(String(q.direction).toUpperCase());
+      where.push(`w.direction = $${params.length}`);
+    }
+    if (q.status) {
+      params.push(String(q.status).toUpperCase());
+      where.push(`w.status = $${params.length}`);
+    }
+    if (q.phone) {
+      params.push(String(q.phone).trim());
+      where.push(`(w.recipient = $${params.length} OR w.from_number = $${params.length})`);
+    }
+    if (q.q) {
+      params.push(`%${String(q.q)}%`);
+      where.push(`w.body ILIKE $${params.length}`);
+    }
+    const { rows } = await c.query(
+      `SELECT w.*, COUNT(*) OVER() AS _total
+         FROM whatsapp_messages w
+        WHERE ${where.join(' AND ')}
+        ORDER BY w.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, pageSize, offset]
+    );
+    const total = rows.length ? Number(rows[0]._total) : 0;
+    return {
+      rows: toCamelRows(rows.map((r) => stripTotal(r as Record<string, unknown>))),
+      pagination: { page, pageSize, total },
+    };
+  })
+);
+
+communicationOpsRouter.get(
+  '/whatsapp/threads',
+  ...runGet('communication.command.view', async (c, ctx) => {
+    const tenantId = ctx.tenantId ?? 0;
+    // The peer is the customer: `from_number` on an inbound reply, `recipient`
+    // on an outbound send. Group by that number, newest activity first.
+    const { rows } = await c.query(
+      `SELECT COALESCE(NULLIF(w.from_number, ''), w.recipient) AS phone,
+              max(w.created_at) AS last_at,
+              count(*)::int AS message_count,
+              (SELECT m.body FROM whatsapp_messages m
+                WHERE m.tenant_id = w.tenant_id
+                  AND COALESCE(NULLIF(m.from_number, ''), m.recipient) = COALESCE(NULLIF(w.from_number, ''), w.recipient)
+                ORDER BY m.created_at DESC LIMIT 1) AS last_body
+         FROM whatsapp_messages w
+        WHERE w.tenant_id = $1
+        GROUP BY COALESCE(NULLIF(w.from_number, ''), w.recipient)
+        ORDER BY last_at DESC
+        LIMIT 200`,
+      [tenantId]
+    );
+    return { rows: toCamelRows(rows as Record<string, unknown>[]) };
   })
 );
 
@@ -1218,6 +1313,7 @@ communicationOpsRouter.get(
   ...runGet(PROVIDER_PERMS, async () => {
     const resend = isResendConfigured();
     const at = isAfricasTalkingConfigured();
+    const meta = isMetaWhatsappConfigured();
     return {
       email: {
         ready: resend,
@@ -1231,10 +1327,12 @@ communicationOpsRouter.get(
         senderId: at ? (config.africastalking.senderId || null) : null,
       },
       whatsapp: {
-        ready: Boolean(config.africastalking.whatsappNumber.trim()),
-        provider: config.africastalking.whatsappNumber.trim()
-          ? 'africastalking'
-          : 'none',
+        ready: meta || Boolean(config.africastalking.whatsappNumber.trim()),
+        provider: meta
+          ? 'meta'
+          : config.africastalking.whatsappNumber.trim()
+            ? 'africastalking'
+            : 'none',
       },
     };
   })
@@ -1253,8 +1351,8 @@ communicationOpsRouter.post(
     const subject = String(b.subject ?? 'HOPE DESIGN test email');
     const body = String(b.body ?? 'This is a test message from the HOPE DESIGN communication center.');
     const provider = String(b.provider ?? 'auto').toLowerCase();
-    if (!['auto', 'africastalking', 'resend'].includes(provider)) {
-      throw badRequest('provider must be auto, africastalking or resend');
+    if (!['auto', 'africastalking', 'resend', 'meta'].includes(provider)) {
+      throw badRequest('provider must be auto, africastalking, resend or meta');
     }
     const result =
       channel === 'EMAIL'

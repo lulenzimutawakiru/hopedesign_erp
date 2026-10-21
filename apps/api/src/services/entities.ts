@@ -12,23 +12,32 @@ export const ENTITIES: Record<
     onApprove?: 'none' | 'post' | 'authorize' | 'release';
     /** Column holding the creator/requester id, used to enforce segregation of duties on decisions. */
     ownerColumn?: string;
+    /**
+     * Whether submitting this entity must start an approval workflow. Defaults
+     * to true (fail closed): a missing workflow configuration is an error, not
+     * an auto-approval. Set false only for a transaction type whose policy
+     * deliberately forgoes approval (sales.quotations is the only exemption).
+     */
+    requiresApproval?: boolean;
+    /** Status an in-flight document is reset to when its approval is invalidated. */
+    draftStatus?: string;
   }
 > = {
   'sales.orders': { table: 'sales_orders', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
-  'sales.quotations': { table: 'sales_quotations', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
-  'sales.invoices': { table: 'customer_invoices', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post' },
-  'sales.credit_notes': { table: 'credit_notes', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post' },
-  'sales.debit_notes': { table: 'debit_notes', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post' },
+  'sales.quotations': { table: 'sales_quotations', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', requiresApproval: false },
+  'sales.invoices': { table: 'customer_invoices', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post', ownerColumn: 'created_by' },
+  'sales.credit_notes': { table: 'credit_notes', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post', ownerColumn: 'created_by' },
+  'sales.debit_notes': { table: 'debit_notes', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post', ownerColumn: 'created_by' },
   'procurement.orders': { table: 'purchase_orders', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
   'procurement.po_amendments': { table: 'po_amendments', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
   'procurement.suppliers': { table: 'suppliers', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
   'procurement.requisitions': { table: 'purchase_requisitions', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'requested_by' },
-  'procurement.supplier_invoices': { table: 'supplier_invoices', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post' },
-  'procurement.payments': { table: 'supplier_payments', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'release' },
-  'inventory.adjustments': { table: 'inventory_adjustments', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post' },
-  'inventory.transfers': { table: 'inventory_transfers', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post' },
-  'production.plans': { table: 'production_plans', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
-  'production.work_orders': { table: 'work_orders', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
+  'procurement.supplier_invoices': { table: 'supplier_invoices', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post', ownerColumn: 'created_by' },
+  'procurement.payments': { table: 'supplier_payments', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'release', ownerColumn: 'created_by', draftStatus: 'PENDING' },
+  'inventory.adjustments': { table: 'inventory_adjustments', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post', ownerColumn: 'created_by' },
+  'inventory.transfers': { table: 'inventory_transfers', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post', ownerColumn: 'created_by' },
+  'production.plans': { table: 'production_plans', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
+  'production.work_orders': { table: 'work_orders', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
   'production.boms': { table: 'boms', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },
   // Payroll is returned to DRAFT (not a terminal REJECTED) so a returned run can be
   // corrected and resubmitted; created_by drives the segregation-of-duties check

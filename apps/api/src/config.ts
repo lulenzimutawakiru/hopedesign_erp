@@ -113,6 +113,10 @@ export const config = {
     emailCodeTtlMinutes: num(process.env.MFA_EMAIL_CODE_TTL_MINUTES, 10),
     emailCodeMaxAttempts: num(process.env.MFA_EMAIL_CODE_MAX_ATTEMPTS, 5),
     emailCodeResendSeconds: num(process.env.MFA_EMAIL_CODE_RESEND_SECONDS, 60),
+    // WhatsApp sign-in code delivery (MFA-004). Reuses the email code settings
+    // unless explicitly overridden so the two channels stay in lockstep.
+    whatsappCodeTtlMinutes: num(process.env.MFA_WHATSAPP_CODE_TTL_MINUTES, num(process.env.MFA_EMAIL_CODE_TTL_MINUTES, 10)),
+    whatsappCodeResendSeconds: num(process.env.MFA_WHATSAPP_CODE_RESEND_SECONDS, num(process.env.MFA_EMAIL_CODE_RESEND_SECONDS, 60)),
     // Self-service enrolment is only reachable after a successful password
     // check. Switch off to force every personal address through an admin.
     allowSelfEnroll: (process.env.MFA_ALLOW_SELF_ENROLL ?? 'true').toLowerCase() !== 'false',
@@ -145,6 +149,18 @@ export const config = {
     // Svix signing secret for the inbound `email.received` webhook. Absent
     // means the inbound endpoint refuses everything rather than trusting it.
     webhookSecret: process.env.RESEND_WEBHOOK_SECRET ?? '',
+  },
+  // Meta WhatsApp Business Cloud API. Absent accessToken/phoneNumberId makes
+  // every send and the inbound webhook refuse (fail-closed), like resend above.
+  whatsapp: {
+    accessToken: process.env.WHATSAPP_ACCESS_TOKEN ?? '',
+    appSecret: process.env.WHATSAPP_APP_SECRET ?? '',
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ?? '',
+    businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID ?? '',
+    // Echoed back only when a Meta GET verification challenge presents the
+    // matching token; empty means the endpoint never accepts a subscription.
+    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN ?? '',
+    apiVersion: process.env.WHATSAPP_API_VERSION ?? 'v21.0',
   },
 };
 

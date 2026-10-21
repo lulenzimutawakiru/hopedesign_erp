@@ -169,6 +169,7 @@ describe('Payroll loans and salary advances', () => {
     expect(advances.body.data.total).toBeGreaterThanOrEqual(1);
 
     // Self-clean in FK order so re-runs never collide.
+    await db(`DELETE FROM journal_lines WHERE entry_id = $1`, [journalId]);
     await db(`DELETE FROM journal_entries WHERE id = $1`, [journalId]);
     await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
     await db(`DELETE FROM employee_loans WHERE employee_id = $1`, [employeeId]);

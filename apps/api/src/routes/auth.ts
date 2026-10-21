@@ -10,8 +10,9 @@ import { logAudit } from '../services/audit.js';
 import { loginLimiter, mfaLimiter, inviteLimiter, passwordResetLimiter } from '../middleware/rateLimits.js';
 import { ApiError } from '../utils.js';
 import { config } from '../config.js';
-import { issueEmailCode, verifyEmailCode, clearEmailCodes, EMAIL_RE } from '../services/mfaEmail.js';
+import { issueEmailCode, verifyEmailCode, clearEmailCodes, EMAIL_RE, issueWhatsAppCode } from '../services/mfaEmail.js';
 import { sendEmail } from '../services/bird.js';
+import { isMetaWhatsappConfigured } from '../services/metaWhatsapp.js';
 import { createTicket } from '../services/serviceDesk.js';
 
 const LOCKOUT_THRESHOLD = 5;
@@ -21,6 +22,24 @@ const RESET_TOKEN_TTL_MINUTES = 60;
 
 function ipOf(req: import('express').Request): string {
   return req.ctx.ip || '';
+}
+
+/**
+ * MFA-004: true when a WhatsApp sign-in code is deliverable to this user's
+ * phone - they have a phone on file and a WhatsApp provider is configured.
+ * The client offers the WhatsApp action only when this is true, so a user with
+ * no number or a tenant with no provider never sees a channel that would fail.
+ */
+function whatsappCodeAvailable(user: Record<string, unknown>): boolean {
+  const phone = String(user.phone ?? '').replace(/[\s()-]/g, '');
+  if (phone.length < 6) return false;
+  return isMetaWhatsappConfigured() || Boolean(config.africastalking.whatsappNumber.trim());
+}
+
+/** Mask a phone number to its last four digits, so the UI can echo which line. */
+function maskPhone(phone: string): string {
+  if (phone.length <= 4) return '•••';
+  return '••• ' + phone.slice(-4);
 }
 
 /**
@@ -295,6 +314,7 @@ authRouter.post(
             maskedEmail: maskEmail(personalEmail),
             alreadySent: Boolean(issued.alreadySent),
             resendAfterSeconds: issued.resendAfterSeconds ?? config.mfa.emailCodeResendSeconds,
+            whatsappAvailable: whatsappCodeAvailable(user),
             loginToken: signLoginToken(userId, tenantId),
             user: redactUser(user),
           });
@@ -750,6 +770,58 @@ authRouter.post(
       alreadySent: Boolean(issued.alreadySent),
       expiresInMinutes: issued.expiresInMinutes ?? config.mfa.emailCodeTtlMinutes,
       resendAfterSeconds: issued.resendAfterSeconds ?? config.mfa.emailCodeResendSeconds,
+    });
+  })
+);
+
+// ---------------------------------------------------------------- MFA WhatsApp code (login token flow)
+/**
+ * MFA-004: begin (or repeat) a WhatsApp challenge from the pre-session login
+ * token, delivering the six-digit code to the account's phone. The plaintext
+ * code is never returned to the client.
+ */
+authRouter.post(
+  '/mfa/whatsapp/start',
+  mfaLimiter,
+  asyncHandler(async (req, res) => {
+    const token = String(req.body?.loginToken ?? '');
+    if (!token) throw badRequest('loginToken is required');
+    let payload;
+    try {
+      payload = verifyLoginToken(token);
+    } catch {
+      throw unauthorized('Invalid login token');
+    }
+    const userRes = await query(`SELECT * FROM users WHERE id = $1 AND tenant_id = $2`, [payload.sub, payload.tid], { tenantId: payload.tid, userId: payload.sub });
+    const user = userRes.rows[0] as Record<string, unknown> | undefined;
+    if (!user) throw unauthorized('User not found');
+    const userId = Number(user.id);
+    const tenantId = Number(user.tenant_id);
+    const phone = String(user.phone ?? '').replace(/[\s()-]/g, '');
+    if (phone.length < 6) throw badRequest('No phone number is on file for this account');
+    if (!isMetaWhatsappConfigured() && !config.africastalking.whatsappNumber.trim()) {
+      throw new ApiError(503, 'WHATSAPP_DELIVERY_FAILED', 'WhatsApp delivery is not configured. Please try again shortly.');
+    }
+
+    const issued = await issueWhatsAppCode({
+      tenantId,
+      userId,
+      phone,
+      name: [user.first_name, user.last_name].filter(Boolean).join(' '),
+      purpose: 'LOGIN',
+      ip: ipOf(req),
+      userAgent: req.ctx.userAgent,
+    });
+    if (!issued.ok) {
+      throw new ApiError(503, 'WHATSAPP_DELIVERY_FAILED', 'We could not send your code. Please try again shortly.');
+    }
+    res.json({
+      ok: true,
+      method: 'whatsapp',
+      maskedPhone: maskPhone(phone),
+      alreadySent: Boolean(issued.alreadySent),
+      expiresInMinutes: issued.expiresInMinutes ?? config.mfa.whatsappCodeTtlMinutes,
+      resendAfterSeconds: issued.resendAfterSeconds ?? config.mfa.whatsappCodeResendSeconds,
     });
   })
 );

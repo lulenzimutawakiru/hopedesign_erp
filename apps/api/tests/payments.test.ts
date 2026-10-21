@@ -192,6 +192,7 @@ describe('Payroll payments', () => {
     );
     await db(`DELETE FROM payment_batches WHERE payroll_id = $1`, [payrollId]);
     await db(`DELETE FROM payslips WHERE payroll_id = $1`, [payrollId]);
+    await db(`DELETE FROM journal_lines WHERE entry_id = $1`, [journalId]);
     await db(`DELETE FROM journal_entries WHERE id = $1`, [journalId]);
     await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
     await deleteEmployees([employeeId]);

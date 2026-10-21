@@ -248,6 +248,7 @@ afterAll(async () => {
         WHERE tenant_id = $1 AND reference_type = 'customer_invoices' AND reference_id = $2`,
       [TENANT_ID, invoiceId]
     );
+    await asTenant('DELETE FROM invoice_items WHERE invoice_id = $1', [invoiceId]);
     await asTenant('DELETE FROM customer_invoices WHERE id = $1 AND tenant_id = $2', [invoiceId, TENANT_ID]);
   }
 

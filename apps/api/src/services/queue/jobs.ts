@@ -2,7 +2,7 @@ import { runDueReportSchedules } from '../reportScheduler.js';
 import { runDueCronJobs } from '../cronJobs.js';
 import { processNotificationDeliveries } from '../communication.js';
 import { runHikvisionWorkerTick } from '../hikvision/processor.js';
-import { runEfrisWorkerTick } from '../efris/processor.js';
+import { runEfrisWorkerTick, runEfrisCreditNotePollTick } from '../efris/processor.js';
 import { runServiceDeskSlaTick } from '../serviceDeskSla.js';
 
 /**
@@ -25,5 +25,6 @@ export const TASK_HANDLERS: Readonly<Record<string, TaskHandler>> = {
   'notification-dispatch': processNotificationDeliveries,
   'hikvision-queue': runHikvisionWorkerTick,
   'efris-worker': runEfrisWorkerTick,
+  'efris-credit-note-poll': runEfrisCreditNotePollTick,
   'service-desk-sla': runServiceDeskSlaTick,
 };

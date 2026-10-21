@@ -1,26 +1,23 @@
 import pg from 'pg';
 import { Ctx } from '../../db.js';
+import { ApprovalStep } from '../../types.js';
 import { badRequest, conflict, notFound, toCamelRow, toCamelRows } from '../../utils.js';
 import { logAudit } from '../audit.js';
+import { ENTITIES } from '../entities.js';
 
 /**
- * Approval configuration.
+ * Approval workflow configuration — the LIVE engine.
  *
- * Three tables, three questions:
- *   approval_workflows       - which document type routes through which chain
- *   approval_levels          - who signs each step, how many signatures, SLA
- *   approval_fallback_rules  - who steps in when the named approver is absent
+ * The declarative model (approval_workflows / approval_levels /
+ * approval_fallback_rules) was deprecated in migration 0204. This module now
+ * reads and writes the table the engine actually consults: `workflows`, whose
+ * `config` JSONB holds the ordered approval steps. Levels became steps, and
+ * temporary absence coverage is a first-class feature in services/governance.ts
+ * (delegations + acting roles), so it is not reimplemented here.
  *
- * The last one carries the invariant the spec is insistent about: a fallback
- * grants approval authority for a timeboxed window and nothing else. It must
- * never silently widen into administrative power, so every fallback is
- * required to name both a primary and a fallback, carry a reason and an end
- * date, and is refused outright if it would hand a fallback approver the
- * administrative permission set.
- *
- * Delegations and acting authority are NOT reimplemented here - they already
- * live in services/governance.ts with their own state machine. This module is
- * configuration; governance is the workflow that consumes it.
+ * Editing a workflow here changes what startWorkflow (services/workflow.ts) will
+ * do the next time a document of that entity type is submitted, because both
+ * read the same `workflows` row.
  */
 
 const UNIQUE_VIOLATION = '23505';
@@ -88,90 +85,190 @@ function int(v: unknown, field: string, min: number, max: number, required = fal
   return n;
 }
 
-export const DOCUMENT_TYPES = [
-  'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'PAYMENT', 'JOURNAL', 'INVOICE',
-  'CREDIT_NOTE', 'EXPENSE', 'PAYROLL', 'LEAVE_REQUEST', 'CONTRACT',
-  'STOCK_ADJUSTMENT', 'PRODUCTION_ORDER', 'PURCHASE_RETURN', 'SALES_ORDER', 'OTHER',
-] as const;
+/** Human label for an entity_type key, e.g. `procurement.supplier_invoices` -> "Supplier Invoices". */
+function entityLabel(type: string): string {
+  const overrides: Record<string, string> = {
+    'hr.payrolls': 'Payroll runs',
+    'hr.final_settlements': 'Final settlements',
+    'hr.requisitions': 'Job requisitions',
+    'hr.workforce_plans': 'Workforce plans',
+    'hr.contracts': 'Employment contracts',
+    'security_printing.jobs': 'Security jobs',
+    'ops.daily_closings': 'Daily cash closings',
+    'ops.replenishments': 'Petty cash replenishments',
+  };
+  if (overrides[type]) return overrides[type];
+  const resource = type.split('.').pop() ?? type;
+  return resource
+    .split('_')
+    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
+/** Convert a workflow `config` JSONB array to camel-case steps for the API. */
+function toCamelSteps(config: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(config)) return [];
+  return config.map((s) => {
+    const o = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
+    return {
+      seq: o.seq == null ? 0 : Number(o.seq),
+      name: String(o.name ?? ''),
+      approverRole: o.approver_role ?? null,
+      approverRoles: o.approver_roles ?? null,
+      approverUser: o.approver_user ?? null,
+      amountMin: o.amount_min ?? null,
+      amountMax: o.amount_max ?? null,
+      slaHours: o.sla_hours ?? null,
+      branchId: o.branch_id ?? null,
+      departmentId: o.department_id ?? null,
+      condition: o.condition ?? null,
+    };
+  });
+}
 
 /**
- * Permissions a fallback approver may never be handed by this screen.
- *
- * The point is that "who covers for the MD while she is away" and "who may
- * administer the ERP" are different questions. A fallback rule answers only
- * the first, so it cannot be used to bootstrap the second.
+ * Validate a step array and normalise it to the snake_case `ApprovalStep` shape
+ * the engine expects in `workflows.config`. Accepts camelCase or snake_case keys.
  */
-const ADMIN_PREFIXES = ['system.', 'organisation.security', 'organisation.settings.delete'];
+function parseSteps(raw: unknown): ApprovalStep[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw badRequest('At least one approval step is required');
+  }
+  return raw.map((s, i) => {
+    const o = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
+    const role = text(o.approver_role ?? o.approverRole, `steps[${i}].approver_role`);
+    const rolesRaw = o.approver_roles ?? o.approverRoles;
+    const approverRoles = Array.isArray(rolesRaw)
+      ? (rolesRaw as unknown[]).map((r) => text(r, 'approver_roles[]', true) as string)
+      : undefined;
+    const approverUser = idOrNull(o.approver_user ?? o.approverUser, 'approver_user');
+    if (!role && !(approverRoles && approverRoles.length) && approverUser === null) {
+      throw badRequest(`steps[${i}] needs an approver_role (or approver_roles or approver_user)`);
+    }
+    return {
+      seq: int(o.seq ?? o.step, `steps[${i}].seq`, 1, 1000) ?? i + 1,
+      name: text(o.name, `steps[${i}].name`, true) as string,
+      approver_role: role ?? undefined,
+      approver_roles: approverRoles,
+      approver_user: approverUser ?? undefined,
+      amount_min: money(o.amount_min ?? o.amountMin, 'amount_min') ?? undefined,
+      amount_max: money(o.amount_max ?? o.amountMax, 'amount_max') ?? undefined,
+      sla_hours: int(o.sla_hours ?? o.slaHours, 'sla_hours', 1, 8760) ?? undefined,
+      branch_id: idOrNull(o.branch_id ?? o.branchId, 'branch_id') ?? undefined,
+      department_id: idOrNull(o.department_id ?? o.departmentId, 'department_id') ?? undefined,
+      condition: text(o.condition, 'condition') ?? undefined,
+    };
+  });
+}
 
-export async function listWorkflows(client: pg.PoolClient, ctx: Ctx, opts: { documentType?: string | null } = {}) {
+/** Fail closed on a step naming a role that does not exist for this company. */
+async function assertRolesExist(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  steps: ApprovalStep[]
+): Promise<void> {
+  const res = await client.query('SELECT code FROM roles WHERE company_id = $1', [requireCompany(ctx)]);
+  const known = new Set(res.rows.map((r) => String(r.code)));
+  for (const step of steps) {
+    const codes = step.approver_roles?.length
+      ? step.approver_roles
+      : step.approver_role
+        ? [step.approver_role]
+        : [];
+    for (const code of codes) {
+      if (!known.has(code)) {
+        throw badRequest(`Approval step "${step.name}" references role "${code}" that does not exist for this company`);
+      }
+    }
+  }
+}
+
+export async function listWorkflows(client: pg.PoolClient, ctx: Ctx) {
   const res = await client.query(
-    `SELECT w.*,
-            (SELECT count(*) FROM approval_levels l WHERE l.workflow_id = w.id) AS level_count
-       FROM approval_workflows w
-      WHERE w.tenant_id = $1 AND w.company_id = $2
-        AND ($3::text IS NULL OR w.document_type = $3)
-      ORDER BY w.document_type, w.priority, w.code`,
-    [ctx.tenantId ?? null, requireCompany(ctx), opts.documentType ?? null]
+    `SELECT id, code, name, entity_type, description, is_active, status, version,
+            effective_from, updated_at,
+            jsonb_array_length(config) AS step_count
+       FROM workflows
+      WHERE tenant_id = $1 AND company_id = $2
+      ORDER BY entity_type`,
+    [ctx.tenantId ?? null, requireCompany(ctx)]
   );
   return toCamelRows(res.rows);
 }
 
+export async function listApproverRoles(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    'SELECT id, code, name FROM roles WHERE company_id = $1 ORDER BY code',
+    [requireCompany(ctx)]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Entity types the live engine can route, plus whether a workflow is already configured. */
+export async function listWorkflowEntities(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    'SELECT entity_type FROM workflows WHERE tenant_id = $1 AND company_id = $2',
+    [ctx.tenantId ?? null, requireCompany(ctx)]
+  );
+  const configured = new Set(res.rows.map((r) => String(r.entity_type)));
+  return Object.keys(ENTITIES)
+    .filter((type) => ENTITIES[type].requiresApproval !== false)
+    .map((type) => ({ type, label: entityLabel(type), configured: configured.has(type) }));
+}
+
 export async function getWorkflow(client: pg.PoolClient, ctx: Ctx, id: number) {
-  const w = await requireScoped(client, 'approval_workflows', ctx, id);
-  const levels = await client.query(
-    'SELECT * FROM approval_levels WHERE workflow_id = $1 ORDER BY level_no',
-    [id]
-  );
-  const fallbacks = await client.query(
-    'SELECT * FROM approval_fallback_rules WHERE workflow_id = $1 ORDER BY id',
-    [id]
-  );
-  return {
-    workflow: toCamelRow(w),
-    levels: toCamelRows(levels.rows),
-    fallbacks: toCamelRows(fallbacks.rows),
-  };
+  const w = await requireScoped(client, 'workflows', ctx, id);
+  const { config, ...rest } = w;
+  return { workflow: toCamelRow(rest), steps: toCamelSteps(config) };
 }
 
 export async function createWorkflow(client: pg.PoolClient, ctx: Ctx, body: Record<string, unknown>) {
-  const documentType = text(body.document_type ?? body.documentType, 'document_type', true) as string;
-  if (!(DOCUMENT_TYPES as readonly string[]).includes(documentType)) {
-    throw badRequest('document_type must be one of: ' + DOCUMENT_TYPES.join(', '));
+  const entityType = text(body.entity_type ?? body.entityType, 'entity_type', true) as string;
+  if (!ENTITIES[entityType] || ENTITIES[entityType].requiresApproval === false) {
+    throw badRequest('entity_type must be a workflow-enabled entity type');
   }
+  const existing = await client.query(
+    'SELECT 1 FROM workflows WHERE tenant_id = $1 AND company_id = $2 AND entity_type = $3 LIMIT 1',
+    [ctx.tenantId ?? null, requireCompany(ctx), entityType]
+  );
+  if (existing.rows.length > 0) {
+    throw conflict('A workflow is already configured for ' + entityType + '; edit it instead of creating another');
+  }
+
+  const steps = parseSteps(body.steps ?? body.config);
+  await assertRolesExist(client, ctx, steps);
+
   try {
     const res = await client.query(
-      `INSERT INTO approval_workflows
-          (tenant_id, company_id, code, name, document_type, description, priority,
-           min_amount, max_amount, scope, is_active, effective_from, effective_to, created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$14)
+      `INSERT INTO workflows
+          (company_id, tenant_id, code, name, entity_type, description, config,
+           is_active, status, version, effective_from)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,'PUBLISHED',1,$9::date)
        RETURNING *`,
       [
-        ctx.tenantId ?? null, requireCompany(ctx),
+        requireCompany(ctx), ctx.tenantId ?? null,
         text(body.code, 'code', true),
         text(body.name, 'name', true),
-        documentType,
+        entityType,
         text(body.description, 'description'),
-        int(body.priority, 'priority', 0, 100000) ?? 100,
-        money(body.min_amount ?? body.minAmount, 'min_amount'),
-        money(body.max_amount ?? body.maxAmount, 'max_amount'),
-        JSON.stringify(body.scope ?? {}),
+        JSON.stringify(steps),
         bool(body.is_active ?? body.isActive, true),
-        date(body.effective_from ?? body.effectiveFrom, 'effective_from') ?? new Date().toISOString().slice(0, 10),
-        date(body.effective_to ?? body.effectiveTo, 'effective_to'),
-        ctx.userId ?? null,
+        date(body.effective_from ?? body.effectiveFrom, 'effective_from'),
       ]
     );
+    const row = res.rows[0];
     await logAudit(client, ctx, {
       action: 'create',
       resource: 'organisation.settings.approval.workflow',
-      recordId: Number(res.rows[0].id),
-      recordCode: String(res.rows[0].code),
-      newValues: res.rows[0],
+      recordId: Number(row.id),
+      recordCode: String(row.code),
+      newValues: { entity_type: row.entity_type, steps },
     });
-    return toCamelRow(res.rows[0]);
+    const { config, ...rest } = row;
+    return { workflow: toCamelRow(rest), steps: toCamelSteps(config) };
   } catch (err) {
     if (pgCode(err) === UNIQUE_VIOLATION) {
-      throw conflict('An approval workflow with that code already exists for this company');
+      throw conflict('A workflow with that code already exists for this company');
     }
     throw err;
   }
@@ -183,435 +280,97 @@ export async function updateWorkflow(
   id: number,
   body: Record<string, unknown>
 ) {
-  const before = await requireScoped(client, 'approval_workflows', ctx, id);
-  const documentType = text(body.document_type ?? body.documentType, 'document_type');
-  if (documentType !== null && !(DOCUMENT_TYPES as readonly string[]).includes(documentType)) {
-    throw badRequest('document_type must be one of: ' + DOCUMENT_TYPES.join(', '));
+  const before = await requireScoped(client, 'workflows', ctx, id);
+  let steps: ApprovalStep[] | null = null;
+  if (body.steps !== undefined || body.config !== undefined) {
+    steps = parseSteps(body.steps ?? body.config);
+    await assertRolesExist(client, ctx, steps);
   }
   const res = await client.query(
-    `UPDATE approval_workflows SET
+    `UPDATE workflows SET
         name = COALESCE($3, name),
-        document_type = COALESCE($4, document_type),
-        description = COALESCE($5, description),
-        priority = COALESCE($6, priority),
-        min_amount = COALESCE($7, min_amount),
-        max_amount = COALESCE($8, max_amount),
-        scope = COALESCE($9::jsonb, scope),
-        is_active = COALESCE($10, is_active),
-        effective_from = COALESCE($11, effective_from),
-        effective_to = COALESCE($12, effective_to),
-        updated_by = $13,
+        description = COALESCE($4, description),
+        is_active = COALESCE($5, is_active),
+        effective_from = COALESCE($6::date, effective_from),
+        config = COALESCE($7::jsonb, config),
+        version = version + 1,
         updated_at = now()
       WHERE id = $1 AND tenant_id = $2 RETURNING *`,
     [
       id, ctx.tenantId ?? null,
       text(body.name, 'name'),
-      documentType,
       text(body.description, 'description'),
-      int(body.priority, 'priority', 0, 100000),
-      money(body.min_amount ?? body.minAmount, 'min_amount'),
-      money(body.max_amount ?? body.maxAmount, 'max_amount'),
-      body.scope === undefined ? null : JSON.stringify(body.scope),
       body.is_active === undefined && body.isActive === undefined
         ? null : bool(body.is_active ?? body.isActive, true),
       date(body.effective_from ?? body.effectiveFrom, 'effective_from'),
-      date(body.effective_to ?? body.effectiveTo, 'effective_to'),
-      ctx.userId ?? null,
+      steps === null ? null : JSON.stringify(steps),
     ]
   );
+  if (res.rows.length === 0) throw notFound('No such workflow: ' + id);
+  const row = res.rows[0];
   await logAudit(client, ctx, {
     action: 'update',
     resource: 'organisation.settings.approval.workflow',
     recordId: id,
-    recordCode: String(res.rows[0].code),
-    oldValues: before,
-    newValues: res.rows[0],
+    recordCode: String(row.code),
+    oldValues: { config: before.config },
+    newValues: { config: row.config, version: row.version },
   });
-  return toCamelRow(res.rows[0]);
+  const { config, ...rest } = row;
+  return { workflow: toCamelRow(rest), steps: toCamelSteps(config) };
 }
 
-/**
- * Deactivate rather than delete.
- *
- * A workflow that has routed real documents is referenced by their approval
- * history; removing the row would orphan that trail. Switching it off stops
- * new routing while leaving the record of what happened intact.
- */
-export async function deactivateWorkflow(client: pg.PoolClient, ctx: Ctx, id: number) {
-  const before = await requireScoped(client, 'approval_workflows', ctx, id);
+/** Deactivate rather than delete: real documents reference the workflow by id. */
+export async function setWorkflowActive(client: pg.PoolClient, ctx: Ctx, id: number, active: boolean) {
+  const before = await requireScoped(client, 'workflows', ctx, id);
   const res = await client.query(
-    `UPDATE approval_workflows SET is_active = false, updated_by = $3, updated_at = now()
+    `UPDATE workflows SET is_active = $3, updated_at = now()
       WHERE id = $1 AND tenant_id = $2 RETURNING *`,
-    [id, ctx.tenantId ?? null, ctx.userId ?? null]
+    [id, ctx.tenantId ?? null, active]
   );
+  if (res.rows.length === 0) throw notFound('No such workflow: ' + id);
+  const row = res.rows[0];
   await logAudit(client, ctx, {
-    action: 'deactivate',
+    action: active ? 'activate' : 'deactivate',
     resource: 'organisation.settings.approval.workflow',
     recordId: id,
-    recordCode: String(res.rows[0].code),
-    oldValues: before,
-    newValues: res.rows[0],
+    recordCode: String(row.code),
+    oldValues: { is_active: before.is_active },
+    newValues: { is_active: row.is_active },
   });
-  return toCamelRow(res.rows[0]);
-}
-
-// ===================== Levels =====================
-
-export async function createLevel(client: pg.PoolClient, ctx: Ctx, body: Record<string, unknown>) {
-  const workflowId = idOrNull(body.workflow_id ?? body.workflowId, 'workflow_id');
-  if (workflowId === null) throw badRequest('workflow_id is required');
-  const workflow = await requireScoped(client, 'approval_workflows', ctx, workflowId);
-
-  const roleId = idOrNull(body.approver_role_id ?? body.approverRoleId, 'approver_role_id');
-  const userId = idOrNull(body.approver_user_id ?? body.approverUserId, 'approver_user_id');
-  if (roleId === null && userId === null) {
-    throw badRequest('A level needs an approver role or an approver user');
-  }
-  if (roleId !== null && userId !== null) {
-    throw badRequest('A level takes an approver role or an approver user, not both');
-  }
-
-  const escalateTo = int(body.escalate_to_level_no ?? body.escalateToLevelNo, 'escalate_to_level_no', 1, 100);
-  const levelNo = int(body.level_no ?? body.levelNo, 'level_no', 1, 100, true) as number;
-  if (escalateTo !== null && escalateTo === levelNo) {
-    throw badRequest('A level cannot escalate to itself');
-  }
-
-  try {
-    const res = await client.query(
-      `INSERT INTO approval_levels
-          (workflow_id, tenant_id, company_id, level_no, name, approver_role_id, approver_user_id,
-           required_approvals, is_optional, allow_delegation, sla_hours, escalate_to_level_no)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [
-        workflowId, ctx.tenantId ?? null, Number(workflow.company_id),
-        levelNo,
-        text(body.name, 'name', true),
-        roleId, userId,
-        int(body.required_approvals ?? body.requiredApprovals, 'required_approvals', 1, 100) ?? 1,
-        bool(body.is_optional ?? body.isOptional, false),
-        bool(body.allow_delegation ?? body.allowDelegation, true),
-        int(body.sla_hours ?? body.slaHours, 'sla_hours', 1, 8760),
-        escalateTo,
-      ]
-    );
-    await logAudit(client, ctx, {
-      action: 'create',
-      resource: 'organisation.settings.approval.level',
-      recordId: Number(res.rows[0].id),
-      recordCode: String(workflow.code) + '#' + levelNo,
-      newValues: res.rows[0],
-    });
-    return toCamelRow(res.rows[0]);
-  } catch (err) {
-    if (pgCode(err) === UNIQUE_VIOLATION) {
-      throw conflict('That level number already exists on this workflow');
-    }
-    throw err;
-  }
-}
-
-export async function updateLevel(
-  client: pg.PoolClient,
-  ctx: Ctx,
-  id: number,
-  body: Record<string, unknown>
-) {
-  const before = await requireScoped(client, 'approval_levels', ctx, id);
-  const roleId = idOrNull(body.approver_role_id ?? body.approverRoleId, 'approver_role_id');
-  const userId = idOrNull(body.approver_user_id ?? body.approverUserId, 'approver_user_id');
-  if (roleId !== null && userId !== null) {
-    throw badRequest('A level takes an approver role or an approver user, not both');
-  }
-  const res = await client.query(
-    `UPDATE approval_levels SET
-        name = COALESCE($3, name),
-        approver_role_id = COALESCE($4, approver_role_id),
-        approver_user_id = COALESCE($5, approver_user_id),
-        required_approvals = COALESCE($6, required_approvals),
-        is_optional = COALESCE($7, is_optional),
-        allow_delegation = COALESCE($8, allow_delegation),
-        sla_hours = COALESCE($9, sla_hours),
-        escalate_to_level_no = COALESCE($10, escalate_to_level_no),
-        updated_at = now()
-      WHERE id = $1 AND tenant_id = $2 RETURNING *`,
-    [
-      id, ctx.tenantId ?? null,
-      text(body.name, 'name'), roleId, userId,
-      int(body.required_approvals ?? body.requiredApprovals, 'required_approvals', 1, 100),
-      body.is_optional === undefined && body.isOptional === undefined
-        ? null : bool(body.is_optional ?? body.isOptional, false),
-      body.allow_delegation === undefined && body.allowDelegation === undefined
-        ? null : bool(body.allow_delegation ?? body.allowDelegation, true),
-      int(body.sla_hours ?? body.slaHours, 'sla_hours', 1, 8760),
-      int(body.escalate_to_level_no ?? body.escalateToLevelNo, 'escalate_to_level_no', 1, 100),
-    ]
-  );
-  if (res.rows.length === 0) throw notFound('No such approval level: ' + id);
-  await logAudit(client, ctx, {
-    action: 'update',
-    resource: 'organisation.settings.approval.level',
-    recordId: id,
-    oldValues: before,
-    newValues: res.rows[0],
-  });
-  return toCamelRow(res.rows[0]);
-}
-
-export async function deleteLevel(client: pg.PoolClient, ctx: Ctx, id: number) {
-  const before = await requireScoped(client, 'approval_levels', ctx, id);
-  await client.query('DELETE FROM approval_levels WHERE id = $1 AND tenant_id = $2', [id, ctx.tenantId ?? null]);
-  await logAudit(client, ctx, {
-    action: 'delete',
-    resource: 'organisation.settings.approval.level',
-    recordId: id,
-    oldValues: before,
-  });
-  return { id, deleted: true };
-}
-
-// ===================== Fallback rules =====================
-
-export async function listFallbackRules(client: pg.PoolClient, ctx: Ctx) {
-  const res = await client.query(
-    `SELECT * FROM approval_fallback_rules
-      WHERE tenant_id = $1 AND company_id = $2
-      ORDER BY effective_from DESC, id DESC`,
-    [ctx.tenantId ?? null, requireCompany(ctx)]
-  );
-  return toCamelRows(res.rows);
+  return toCamelRow(row);
 }
 
 /**
- * Create a fallback rule.
- *
- * Requirements, all of them load-bearing:
- *   - a named primary and a named fallback (a rule with neither decides nothing);
- *   - a reason, because this is an exception to the org chart;
- *   - an end date, because a fallback without one becomes a permanent
- *     shadow authority nobody remembers granting.
+ * Which workflow + steps the live engine would use for an entity type and
+ * amount. Mirrors startWorkflow's match and amount-band filtering exactly, so
+ * this "test resolution" is honest about what will actually happen.
  */
-export async function createFallbackRule(
+export async function resolveWorkflow(
   client: pg.PoolClient,
   ctx: Ctx,
-  body: Record<string, unknown>
+  opts: { entityType?: string | null; amount?: number | null }
 ) {
-  const primaryRole = idOrNull(body.primary_role_id ?? body.primaryRoleId, 'primary_role_id');
-  const primaryUser = idOrNull(body.primary_user_id ?? body.primaryUserId, 'primary_user_id');
-  const fallbackRole = idOrNull(body.fallback_role_id ?? body.fallbackRoleId, 'fallback_role_id');
-  const fallbackUser = idOrNull(body.fallback_user_id ?? body.fallbackUserId, 'fallback_user_id');
-
-  if (primaryRole === null && primaryUser === null) {
-    throw badRequest('A fallback rule needs a primary role or a primary user');
-  }
-  if (primaryRole !== null && primaryUser !== null) {
-    throw badRequest('Name either a primary role or a primary user, not both');
-  }
-  if (fallbackRole === null && fallbackUser === null) {
-    throw badRequest('A fallback rule needs a fallback role or a fallback user');
-  }
-  if (fallbackRole !== null && fallbackUser !== null) {
-    throw badRequest('Name either a fallback role or a fallback user, not both');
-  }
-  if (primaryUser !== null && fallbackUser !== null && primaryUser === fallbackUser) {
-    throw badRequest('A fallback approver cannot be the same person as the primary approver');
-  }
-
-  const effectiveFrom = date(body.effective_from ?? body.effectiveFrom, 'effective_from');
-  const effectiveTo = date(body.effective_to ?? body.effectiveTo, 'effective_to', true) as string;
-  if (effectiveFrom !== null && effectiveTo <= effectiveFrom) {
-    throw badRequest('effective_to must be after effective_from');
-  }
-
-  if (fallbackRole !== null) {
-    await assertRoleIsNotAdministrative(client, ctx, fallbackRole);
-  }
-
-  const workflowId = idOrNull(body.workflow_id ?? body.workflowId, 'workflow_id');
-  const levelId = idOrNull(body.level_id ?? body.levelId, 'level_id');
-  if (workflowId !== null) await requireScoped(client, 'approval_workflows', ctx, workflowId);
-  if (levelId !== null) await requireScoped(client, 'approval_levels', ctx, levelId);
-
+  const entityType = opts.entityType;
+  if (!entityType) return { workflow: null, steps: [] };
   const res = await client.query(
-    `INSERT INTO approval_fallback_rules
-        (tenant_id, company_id, workflow_id, level_id, primary_role_id, primary_user_id,
-         fallback_role_id, fallback_user_id, reason, effective_from, effective_to,
-         is_active, created_by, updated_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10::date, now()),$11,$12,$13,$13)
-     RETURNING *`,
-    [
-      ctx.tenantId ?? null, requireCompany(ctx),
-      workflowId, levelId, primaryRole, primaryUser, fallbackRole, fallbackUser,
-      text(body.reason, 'reason', true),
-      effectiveFrom, effectiveTo,
-      bool(body.is_active ?? body.isActive, true),
-      ctx.userId ?? null,
-    ]
+    `SELECT * FROM workflows
+      WHERE tenant_id = $1 AND company_id = $2 AND entity_type = $3
+        AND is_active = true AND status = 'PUBLISHED'
+        AND (effective_from IS NULL OR effective_from <= CURRENT_DATE)
+      ORDER BY id LIMIT 1`,
+    [ctx.tenantId ?? null, requireCompany(ctx), entityType]
   );
-  await logAudit(client, ctx, {
-    action: 'create',
-    resource: 'organisation.settings.approval.fallback_rule',
-    recordId: Number(res.rows[0].id),
-    newValues: res.rows[0],
-    metadata: { reason: text(body.reason, 'reason', true) },
+  const wf = res.rows[0];
+  if (!wf) return { workflow: null, steps: [] };
+  const amount = opts.amount ?? null;
+  const applicable = toCamelSteps(wf.config).filter((s) => {
+    if (s.amountMin != null && (amount ?? 0) < Number(s.amountMin)) return false;
+    if (s.amountMax != null && Number(s.amountMax) > 0 && (amount ?? 0) > Number(s.amountMax)) return false;
+    return true;
   });
-  return toCamelRow(res.rows[0]);
-}
-
-export async function updateFallbackRule(
-  client: pg.PoolClient,
-  ctx: Ctx,
-  id: number,
-  body: Record<string, unknown>
-) {
-  const before = await requireScoped(client, 'approval_fallback_rules', ctx, id);
-  const fallbackRole = idOrNull(body.fallback_role_id ?? body.fallbackRoleId, 'fallback_role_id');
-  if (fallbackRole !== null) await assertRoleIsNotAdministrative(client, ctx, fallbackRole);
-  const effectiveTo = date(body.effective_to ?? body.effectiveTo, 'effective_to');
-  const res = await client.query(
-    `UPDATE approval_fallback_rules SET
-        reason = COALESCE($3, reason),
-        effective_to = COALESCE($4, effective_to),
-        is_active = COALESCE($5, is_active),
-        fallback_role_id = COALESCE($6, fallback_role_id),
-        fallback_user_id = COALESCE($7, fallback_user_id),
-        updated_by = $8,
-        updated_at = now()
-      WHERE id = $1 AND tenant_id = $2 RETURNING *`,
-    [
-      id, ctx.tenantId ?? null,
-      text(body.reason, 'reason'), effectiveTo,
-      body.is_active === undefined && body.isActive === undefined
-        ? null : bool(body.is_active ?? body.isActive, true),
-      fallbackRole,
-      idOrNull(body.fallback_user_id ?? body.fallbackUserId, 'fallback_user_id'),
-      ctx.userId ?? null,
-    ]
-  );
-  if (res.rows.length === 0) throw notFound('No such fallback rule: ' + id);
-  await logAudit(client, ctx, {
-    action: 'update',
-    resource: 'organisation.settings.approval.fallback_rule',
-    recordId: id,
-    oldValues: before,
-    newValues: res.rows[0],
-  });
-  return toCamelRow(res.rows[0]);
-}
-
-export async function deleteFallbackRule(client: pg.PoolClient, ctx: Ctx, id: number) {
-  const before = await requireScoped(client, 'approval_fallback_rules', ctx, id);
-  await client.query('DELETE FROM approval_fallback_rules WHERE id = $1 AND tenant_id = $2', [
-    id, ctx.tenantId ?? null,
-  ]);
-  await logAudit(client, ctx, {
-    action: 'delete',
-    resource: 'organisation.settings.approval.fallback_rule',
-    recordId: id,
-    oldValues: before,
-  });
-  return { id, deleted: true };
-}
-
-/**
- * Refuse a fallback role that carries administrative authority.
- *
- * Reads the role's permission set and rejects the rule if it holds anything in
- * ADMIN_PREFIXES. This is the code-level half of
- * "Super Admin should not automatically receive unrestricted business
- * authority" - the converse direction, that a business fallback must not
- * become an administrator.
- */
-async function assertRoleIsNotAdministrative(
-  client: pg.PoolClient,
-  ctx: Ctx,
-  roleId: number
-): Promise<void> {
-  // roles.permissions is a jsonb array of permission codes; role_permissions
-  // is the normalised join. Read both, so a role built either way is covered.
-  const res = await client.query(
-    `SELECT permission FROM (
-         SELECT jsonb_array_elements_text(r.permissions) AS permission
-           FROM roles r WHERE r.id = $1
-         UNION
-         SELECT p.code AS permission
-           FROM role_permissions rp
-           JOIN permissions p ON p.id = rp.permission_id
-          WHERE rp.role_id = $1
-       ) AS perms`,
-    [roleId]
-  );
-  for (const row of res.rows) {
-    for (const prefix of ADMIN_PREFIXES) {
-      if (String(row.permission) === prefix || String(row.permission).startsWith(prefix)) {
-        throw badRequest(
-          'That fallback role holds administrative permission ' + row.permission +
-          '. Approval fallback grants business authority only; it must not hand out administration.'
-        );
-      }
-    }
-  }
-}
-
-// ===================== Runtime consumer =====================
-
-/**
- * Resolve the approval chain that applies to a document.
- *
- * This is the function the rest of the ERP calls instead of hard-coding who
- * approves what. Narrowest match wins: a workflow scoped to a branch beats a
- * company-wide one, a higher priority number beats a lower, and amount bands
- * filter the candidates. Disabled workflows and out-of-window workflows are
- * ignored, so switching a workflow off takes effect immediately with no
- * deployment (AC-ORG-012).
- */
-export async function resolveApprovalChain(
-  client: pg.PoolClient,
-  ctx: Ctx,
-  documentType: string,
-  amount: number | null = null,
-  branchId: number | null = null
-) {
-  const res = await client.query(
-    `SELECT * FROM approval_workflows
-      WHERE tenant_id = $1 AND company_id = $2
-        AND document_type = $3 AND is_active = true
-        AND effective_from <= CURRENT_DATE
-        AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
-        AND (min_amount IS NULL OR $4::numeric IS NULL OR $4::numeric >= min_amount)
-        AND (max_amount IS NULL OR $4::numeric IS NULL OR $4::numeric <= max_amount)
-      ORDER BY priority DESC, id DESC`,
-    [ctx.tenantId ?? null, requireCompany(ctx), documentType, amount]
-  );
-  if (res.rows.length === 0) return { workflow: null, levels: [], fallbacks: [] };
-
-  // Prefer a workflow whose scope names this branch; otherwise take the first.
-  let chosen = res.rows[0];
-  if (branchId != null) {
-    const scoped = res.rows.find((r) => {
-      const scope = r.scope;
-      if (scope === null || typeof scope !== 'object') return false;
-      const list = (scope as Record<string, unknown>).branch_ids;
-      return Array.isArray(list) && list.map(Number).includes(Number(branchId));
-    });
-    if (scoped) chosen = scoped;
-  }
-
-  const levels = await client.query(
-    'SELECT * FROM approval_levels WHERE workflow_id = $1 ORDER BY level_no',
-    [chosen.id]
-  );
-  const fallbacks = await client.query(
-    `SELECT * FROM approval_fallback_rules
-      WHERE workflow_id = $1 AND is_active = true
-        AND effective_from <= CURRENT_DATE AND effective_to >= CURRENT_DATE`,
-    [chosen.id]
-  );
-  return {
-    workflow: toCamelRow(chosen),
-    levels: toCamelRows(levels.rows),
-    fallbacks: toCamelRows(fallbacks.rows),
-  };
+  const { config, ...rest } = wf;
+  return { workflow: toCamelRow(rest), steps: applicable };
 }
 
 async function requireScoped(

@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { query } from '../db.js';
 import { generateEmailOtp, hashOtp, safeEqualHex } from '../auth.js';
-import { sendEmail } from './bird.js';
+import { sendEmail, sendWhatsApp } from './bird.js';
 import { BRAND_COLORS, escapeHtml } from './emailBranding.js';
 import { renderTemplate } from './communication.js';
 
@@ -287,6 +287,136 @@ export async function issueEmailCode(opts: IssueEmailCodeOptions): Promise<Issue
   }
 
   return { ok: true, code, expiresAt, expiresInMinutes: ttl, resendAfterSeconds: config.mfa.emailCodeResendSeconds };
+}
+
+// ---------------------------------------------------------------------------
+// MFA-004: WhatsApp sign-in codes (the same code store, delivered over
+// WhatsApp instead of email). The unblocking fallback when email OTP is down.
+// ---------------------------------------------------------------------------
+
+export interface IssueWhatsAppCodeOptions {
+  tenantId: number;
+  userId: number;
+  phone: string;
+  name?: string | null;
+  purpose?: EmailCodePurpose;
+  ip?: string | null;
+  userAgent?: string | null;
+  /** Injected in tests; defaults to Meta/AT WhatsApp delivery. */
+  send?: (delivery: { to: string; name: string; code: string; purpose: EmailCodePurpose; ttlMinutes: number }) => Promise<{ ok: boolean; error?: string }>;
+}
+
+const defaultWhatsAppSender = async (delivery: {
+  to: string;
+  name: string;
+  code: string;
+  purpose: EmailCodePurpose;
+  ttlMinutes: number;
+}) => {
+  const greeting = delivery.name.trim() ? `Hello ${delivery.name.trim()},` : 'Hello,';
+  const text = [
+    greeting,
+    `Please use the verification code below to ${PURPOSE_COPY[delivery.purpose]}.`,
+    '',
+    delivery.code,
+    '',
+    'Do not disclose this code to any person, including members of staff.',
+    `This code expires in ${delivery.ttlMinutes} minutes and may be used once only.`,
+  ].join('\n');
+  const res = await sendWhatsApp({ to: delivery.to, text: { body: text } });
+  return { ok: res.ok, error: res.error };
+};
+
+/**
+ * Issue (or reuse) a WhatsApp sign-in code for a user.
+ *
+ * Mirrors issueEmailCode: the same generation/hash/store/cooldown logic, the
+ * same "at most one open code per user" supersede, and the same burn-on-failure
+ * so an undelivered code can never be guessed into a session. The cooldown is
+ * shared across channels so a client cannot switch channels to bypass it.
+ */
+export async function issueWhatsAppCode(opts: IssueWhatsAppCodeOptions): Promise<IssueEmailCodeResult> {
+  const purpose: EmailCodePurpose = opts.purpose ?? 'LOGIN';
+  const ttl = config.mfa.whatsappCodeTtlMinutes;
+  const cooldownMs = config.mfa.whatsappCodeResendSeconds * 1000;
+
+  const openRes = await query(
+    `SELECT id, created_at, expires_at
+       FROM mfa_email_codes
+      WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > now()
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [opts.userId, purpose],
+    { tenantId: opts.tenantId, userId: opts.userId }
+  );
+  const open = openRes.rows[0] as { id: number; created_at: Date; expires_at: Date } | undefined;
+  if (open) {
+    const ageMs = Date.now() - new Date(open.created_at).getTime();
+    const waitSeconds = Math.ceil((cooldownMs - ageMs) / 1000);
+    if (waitSeconds > 0) {
+      return {
+        ok: true,
+        alreadySent: true,
+        resendAfterSeconds: waitSeconds,
+        expiresAt: new Date(open.expires_at),
+      };
+    }
+  }
+
+  const code = generateEmailOtp();
+  const expiresAt = new Date(Date.now() + ttl * 60_000);
+
+  await query(
+    `UPDATE mfa_email_codes SET consumed_at = now()
+      WHERE user_id = $1 AND consumed_at IS NULL`,
+    [opts.userId],
+    { tenantId: opts.tenantId, userId: opts.userId }
+  );
+
+  await query(
+    `INSERT INTO mfa_email_codes
+       (tenant_id, user_id, email, code_hash, purpose, expires_at, max_attempts, ip, user_agent, channel, phone)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'WHATSAPP',$3)`,
+    [
+      opts.tenantId,
+      opts.userId,
+      opts.phone,
+      hashOtp(code),
+      purpose,
+      expiresAt,
+      config.mfa.emailCodeMaxAttempts,
+      opts.ip ?? null,
+      opts.userAgent ?? null,
+    ],
+    { tenantId: opts.tenantId, userId: opts.userId }
+  );
+
+  const sender = opts.send ?? defaultWhatsAppSender;
+  const delivered = await sender({
+    to: opts.phone,
+    name: String(opts.name ?? ''),
+    code,
+    purpose,
+    ttlMinutes: ttl,
+  });
+
+  if (!delivered.ok) {
+    console.error(
+      '[mfaWhatsApp] code delivery failed',
+      purpose,
+      `user ${opts.userId}`,
+      delivered.error ?? 'unknown error'
+    );
+    await query(
+      `UPDATE mfa_email_codes SET consumed_at = now()
+        WHERE user_id = $1 AND consumed_at IS NULL`,
+      [opts.userId],
+      { tenantId: opts.tenantId, userId: opts.userId }
+    );
+    return { ok: false, error: delivered.error ?? 'WhatsApp delivery failed' };
+  }
+
+  return { ok: true, code, expiresAt, expiresInMinutes: ttl, resendAfterSeconds: config.mfa.whatsappCodeResendSeconds };
 }
 
 export type EmailCodeVerifyError =

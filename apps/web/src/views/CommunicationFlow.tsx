@@ -456,7 +456,7 @@ function CommunicationAdmin() {
 }
 
 const providerLabel = (id: string) =>
-  id === 'africastalking' ? "Africa's Talking" : id === 'resend' ? 'Resend' : id === 'none' ? 'not configured' : id;
+  id === 'africastalking' ? "Africa's Talking" : id === 'resend' ? 'Resend' : id === 'meta' ? 'Meta WhatsApp' : id === 'none' ? 'not configured' : id;
 
 function providerReadyBadge(cfg: Rec) {
   const prov = String(cfg?.provider ?? 'none');
@@ -468,7 +468,7 @@ function providerReadyBadge(cfg: Rec) {
 function TestSendCard() {
   const { user } = useAuth();
   const [providers, setProviders] = useState<Rec | null>(null);
-  const [channel, setChannel] = useState<'EMAIL' | 'SMS'>('EMAIL');
+  const [channel, setChannel] = useState<'EMAIL' | 'SMS' | 'WHATSAPP'>('EMAIL');
   const [to, setTo] = useState(user?.email ?? '');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -501,10 +501,12 @@ function TestSendCard() {
   };
   const emailCfg = (providers?.email ?? {}) as Rec;
   const smsCfg = (providers?.sms ?? {}) as Rec;
+  const whatsappCfg = (providers?.whatsapp ?? {}) as Rec;
   const emailFrom = String(emailCfg.fromEmail ?? '');
   const emailProv = String(emailCfg.provider ?? 'none');
   const smsProv = String(smsCfg.provider ?? 'none');
   const smsSender = String(smsCfg.senderId ?? '');
+  const whatsappProv = String(whatsappCfg.provider ?? 'none');
   return (
     <section className="card card-pad" style={{ marginTop: 16 }}>
       <div className="card-head">
@@ -514,6 +516,8 @@ function TestSendCard() {
           {providerReadyBadge(emailCfg)}
           {' · '}SMS via {providerLabel(smsProv)}{smsSender ? ` · ${smsSender}` : ''}
           {providerReadyBadge(smsCfg)}
+          {' · '}WhatsApp via {providerLabel(whatsappProv)}
+          {providerReadyBadge(whatsappCfg)}
         </span>
       </div>
       {notice ? <div className="alert alert-success">{notice}</div> : null}
@@ -521,9 +525,10 @@ function TestSendCard() {
       <div className="form-grid" style={{ marginTop: 8 }}>
         <div className="field">
           <label>Channel</label>
-          <select value={channel} onChange={(e) => setChannel(e.target.value as 'EMAIL' | 'SMS')}>
+          <select value={channel} onChange={(e) => setChannel(e.target.value as 'EMAIL' | 'SMS' | 'WHATSAPP')}>
             <option value="EMAIL">Email</option>
             <option value="SMS">SMS</option>
+            <option value="WHATSAPP">WhatsApp</option>
           </select>
         </div>
         <div className="field field-required">
@@ -539,7 +544,7 @@ function TestSendCard() {
         {busy ? 'Sending…' : 'Send test'}
       </button>
       <p className="muted" style={{ marginTop: 8 }}>
-        Use this to confirm the from-domain and SMS wallet. Failures show the provider error (unverified domain, empty balance, missing key).
+        Use this to confirm the from-domain, SMS wallet, and WhatsApp number. Failures show the provider error (unverified domain, empty balance, missing key).
       </p>
     </section>
   );

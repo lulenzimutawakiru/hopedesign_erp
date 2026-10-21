@@ -520,6 +520,7 @@ describe('Finance CRUD+ workflows', () => {
           await execAsTenant(from.tenantId, from.companyId, 'DELETE FROM cash_transfers WHERE id = $1', [transferId]);
         }
         if (journalId) {
+          await execAsTenant(from.tenantId, from.companyId, 'DELETE FROM journal_lines WHERE entry_id = $1', [journalId]);
           await execAsTenant(from.tenantId, from.companyId, 'DELETE FROM journal_entries WHERE id = $1', [journalId]);
         }
         await execAsTenant(from.tenantId, from.companyId, 'DELETE FROM bank_accounts WHERE id IN ($1,$2)', [from.id, to.id]);
@@ -596,6 +597,7 @@ describe('Finance AR/AP aging and bank match', () => {
       expect(summary.body.data.draftJournals).toBeDefined();
       expect(summary.body.data.unreconciledBanks).toBeDefined();
     } finally {
+      await execAsTenant(tenantId, companyId, `DELETE FROM invoice_items WHERE invoice_id IN (SELECT id FROM customer_invoices WHERE invoice_no = ANY($1::text[]))`, [nos]);
       await execAsTenant(tenantId, companyId, `DELETE FROM customer_invoices WHERE invoice_no = ANY($1::text[])`, [nos]);
     }
   });
@@ -670,6 +672,7 @@ describe('Finance AR/AP aging and bank match', () => {
         await execAsTenant(bank.tenantId, bank.companyId, 'DELETE FROM bank_reconciliations WHERE bank_account_id = $1', [bank.id]);
         await execAsTenant(bank.tenantId, bank.companyId, 'DELETE FROM bank_transactions WHERE bank_account_id = $1', [bank.id]);
         if (journalId) {
+          await execAsTenant(bank.tenantId, bank.companyId, 'DELETE FROM journal_lines WHERE entry_id = $1', [journalId]);
           await execAsTenant(bank.tenantId, bank.companyId, 'DELETE FROM journal_entries WHERE id = $1', [journalId]);
         }
         await execAsTenant(bank.tenantId, bank.companyId, 'DELETE FROM bank_accounts WHERE id = $1', [bank.id]);
@@ -747,6 +750,7 @@ describe('Finance budget gate and posting rules', () => {
         await execAsTenant(account.tenantId, account.companyId, 'DELETE FROM expenses WHERE id = $1', [expenseId]);
       }
       if (account && journalId) {
+        await execAsTenant(account.tenantId, account.companyId, 'DELETE FROM journal_lines WHERE entry_id = $1', [journalId]);
         await execAsTenant(account.tenantId, account.companyId, 'DELETE FROM journal_entries WHERE id = $1', [journalId]);
       }
       if (budget) {
@@ -788,6 +792,7 @@ describe('Finance budget gate and posting rules', () => {
 
     const tenantId = Number(journal.body.data.journal.tenantId);
     const companyId = Number(journal.body.data.journal.companyId);
+    await execAsTenant(tenantId, companyId, 'DELETE FROM journal_lines WHERE entry_id = $1', [entryId]);
     await execAsTenant(tenantId, companyId, 'DELETE FROM journal_entries WHERE id = $1', [entryId]);
   });
 });

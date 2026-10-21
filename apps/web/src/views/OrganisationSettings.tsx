@@ -2573,225 +2573,179 @@ function FiscalPanel({ mayManage, onChanged }: { mayManage: boolean; onChanged: 
 // Approvals (kind: 'approvals')
 // ---------------------------------------------------------------------------
 
-const DOCUMENT_TYPES = [
-  'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'PAYMENT', 'JOURNAL', 'INVOICE',
-  'CREDIT_NOTE', 'EXPENSE', 'PAYROLL', 'LEAVE_REQUEST', 'CONTRACT',
-  'STOCK_ADJUSTMENT', 'PRODUCTION_ORDER', 'PURCHASE_RETURN', 'SALES_ORDER', 'OTHER',
-];
-
-/** Permission families a fallback approver can never be handed by this screen. */
-const ADMIN_PREFIXES = ['system.', 'organisation.security', 'organisation.settings.delete'];
-
-const blankWorkflow = (): Record<string, Draft> => ({
-  code: '',
+/** One editable approval step in the live workflows.config array. */
+const blankStep = (seq: number) => ({
+  seq,
   name: '',
-  document_type: 'PURCHASE_ORDER',
-  description: '',
-  priority: '100',
-  min_amount: '',
-  max_amount: '',
-  effective_from: todayISO(),
-  effective_to: '',
-  is_active: true,
-});
-
-const blankLevel = (): Record<string, Draft> => ({
-  level_no: '1',
-  name: '',
-  approver_role_id: '',
-  approver_user_id: '',
-  required_approvals: '1',
-  is_optional: false,
-  allow_delegation: true,
+  approver_role: '',
+  amount_min: '',
+  amount_max: '',
   sla_hours: '',
-  escalate_to_level_no: '',
-});
-
-const blankFallback = (): Record<string, Draft> => ({
-  primary_role_id: '',
-  primary_user_id: '',
-  fallback_role_id: '',
-  fallback_user_id: '',
-  reason: '',
-  effective_from: todayISO(),
-  effective_to: '',
-  is_active: true,
 });
 
 /**
- * Approval workflows, their levels and the fallback rules beneath them.
+ * Approval workflows, edited against the live engine.
  *
- * Two states that look like one are kept apart here. A workflow is the shape of
- * an approval - which rungs, in what order, above what amount. A fallback rule
- * is who stands in when a named approver is unavailable, and it always carries
- * an end date: a fallback without one becomes a permanent shadow authority
- * nobody remembers granting (AC-ORG-007, TC-ORG-003, TC-ORG-004).
- *
- * A fallback rule grants cover for an operational approval. It cannot be used
- * to hand anyone administrative rights - the server refuses the permission
- * families listed below outright, so the screen says so rather than offering
- * the option and failing.
+ * This screen reads and writes the `workflows` table the engine actually
+ * consults (services/workflow.ts startWorkflow), not the deprecated declarative
+ * approval_workflows/levels/fallbacks tables. A workflow maps an entity type to
+ * an ordered list of steps; a step names an approver role (or user) and an
+ * optional amount band and SLA. Temporary absence cover is a delegation, not a
+ * per-workflow fallback rule, and is managed under Governance.
  */
 function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChanged: () => void }) {
   const workflows = useLoad<Row[]>(BASE + '/approvals/workflows');
-  const fallbacks = useLoad<Row[]>(BASE + '/approvals/fallbacks');
+  const roles = useLoad<Row[]>(BASE + '/approvals/roles');
+  const entities = useLoad<Row[]>(BASE + '/approvals/entities');
   const act = useAction(() => {
     workflows.reload();
-    fallbacks.reload();
+    roles.reload();
+    entities.reload();
     detail.reload();
     onChanged();
   });
 
   const [openId, setOpenId] = useState<number | null>(null);
-  const detail = useLoad<{ workflow: Row; levels: Row[]; fallbacks: Row[] }>(
+  const detail = useLoad<{ workflow: Row; steps: Row[] }>(
     openId === null ? null : BASE + '/approvals/workflows/' + String(openId)
   );
 
-  const [wfForm, setWfForm] = useState<Record<string, Draft> | null>(null);
-  const [lvForm, setLvForm] = useState<Record<string, Draft> | null>(null);
-  const [fbForm, setFbForm] = useState<Record<string, Draft> | null>(null);
+  const [stepsForm, setStepsForm] = useState<Record<string, unknown>[] | null>(null);
+  const [newForm, setNewForm] = useState<Record<string, Draft> | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
   const [resolving, setResolving] = useState(false);
-  const [resolveType, setResolveType] = useState('PURCHASE_ORDER');
+  const [resolveType, setResolveType] = useState('');
   const [resolveAmount, setResolveAmount] = useState('');
   const [resolveAt, setResolveAt] = useState<string | null>(null);
 
-  const numOrNull = (v: Draft): number | null => (isBlank(v) ? null : Number(v));
-  const txtOrNull = (v: Draft): string | null => (isBlank(v) ? null : String(v).trim());
+  const roleRows = Array.isArray(roles.data) ? (roles.data as Row[]) : [];
+  const entityRows = Array.isArray(entities.data) ? (entities.data as Row[]) : [];
+  const wfRows = Array.isArray(workflows.data) ? (workflows.data as Row[]) : [];
+  const detailData = detail.data;
 
-  const saveWorkflow = () => {
-    if (!wfForm) return;
-    const code = str(wfForm.code).trim();
-    const name = str(wfForm.name).trim();
-    if (!code || !name) {
-      setProblem('A workflow code and name are both required.');
+  const roleLabel = (code: unknown): string => {
+    const c = str(code);
+    if (!c) return '—';
+    const r = roleRows.find((x) => str(x.code) === c);
+    return r ? str(r.name) + ' (' + str(r.code) + ')' : c;
+  };
+  const approverLabel = (r: Row): string =>
+    r.approverRole ? roleLabel(r.approverRole) : r.approverUser ? 'User #' + str(r.approverUser) : '—';
+  const entityLabelFor = (type: unknown): string => {
+    const t = str(type);
+    const e = entityRows.find((x) => str(x.type) === t);
+    return e ? str(e.label) : t;
+  };
+  const bandLabel = (step: Row): string => {
+    const lo = step.amountMin;
+    const hi = step.amountMax;
+    if (isBlank(lo) && isBlank(hi)) return 'All amounts';
+    if (isBlank(lo)) return 'Up to ' + fmt(hi);
+    if (isBlank(hi) || Number(hi) === 0) return 'From ' + fmt(lo);
+    return fmt(lo) + ' – ' + fmt(hi);
+  };
+
+  const updateStep = (i: number, key: string, value: unknown) =>
+    setStepsForm((prev) => (prev ? prev.map((s, j) => (j === i ? { ...s, [key]: value } : s)) : prev));
+  const removeStep = (i: number) =>
+    setStepsForm((prev) => (prev ? prev.filter((_, j) => j !== i) : prev));
+  const addStep = () =>
+    setStepsForm((prev) => [...(prev ?? []), blankStep((prev?.length ?? 0) + 1)]);
+  const moveStep = (i: number, dir: number) =>
+    setStepsForm((prev) => {
+      if (!prev) return prev;
+      const j = i + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      const t = next[i];
+      next[i] = next[j];
+      next[j] = t;
+      return next;
+    });
+
+  const setActive = (row: Row, active: boolean) => {
+    void act.run(
+      () =>
+        api(BASE + '/approvals/workflows/' + String(row.id) + (active ? '/activate' : '/deactivate'), {
+          method: 'POST',
+          body: '{}',
+        }),
+      str(row.code) + (active ? ' activated.' : ' deactivated.')
+    );
+  };
+
+  const openStepsEditor = () => {
+    if (!detailData) return;
+    setProblem(null);
+    setStepsForm(
+      arr(detailData.steps).map((s, i) => ({
+        seq: Number(s.seq ?? i + 1),
+        name: str(s.name),
+        approver_role: str(s.approverRole),
+        amount_min: isBlank(s.amountMin) ? '' : str(s.amountMin),
+        amount_max: isBlank(s.amountMax) ? '' : str(s.amountMax),
+        sla_hours: isBlank(s.slaHours) ? '' : str(s.slaHours),
+      }))
+    );
+  };
+
+  const saveSteps = () => {
+    if (!stepsForm || openId === null) return;
+    if (stepsForm.length === 0) {
+      setProblem('At least one step is required.');
+      return;
+    }
+    const steps = stepsForm.map((s, i) => ({
+      seq: i + 1,
+      name: str(s.name),
+      approver_role: str(s.approver_role) || undefined,
+      amount_min: isBlank(s.amount_min) ? undefined : Number(s.amount_min),
+      amount_max: isBlank(s.amount_max) ? undefined : Number(s.amount_max),
+      sla_hours: isBlank(s.sla_hours) ? undefined : Number(s.sla_hours),
+    }));
+    if (steps.some((s) => !s.name.trim())) {
+      setProblem('Every step needs a name.');
       return;
     }
     setProblem(null);
-    setWfForm(null);
+    setStepsForm(null);
+    void act.run(
+      () =>
+        api(BASE + '/approvals/workflows/' + String(openId), {
+          method: 'PATCH',
+          body: JSON.stringify({ steps }),
+        }),
+      'Steps saved.'
+    );
+  };
+
+  const saveNew = () => {
+    if (!newForm) return;
+    const entityType = str(newForm.entity_type).trim();
+    const code = str(newForm.code).trim();
+    const name = str(newForm.name).trim();
+    const stepName = str(newForm.step_name).trim();
+    const stepRole = str(newForm.step_role).trim();
+    if (!entityType || !code || !name || !stepName) {
+      setProblem('Entity type, code, name and a first step name are all required.');
+      return;
+    }
+    setProblem(null);
+    setNewForm(null);
     void act.run(
       () =>
         api(BASE + '/approvals/workflows', {
           method: 'POST',
           body: JSON.stringify({
+            entity_type: entityType,
             code,
             name,
-            document_type: str(wfForm.document_type),
-            description: txtOrNull(wfForm.description),
-            priority: isBlank(wfForm.priority) ? 100 : Number(wfForm.priority),
-            min_amount: numOrNull(wfForm.min_amount),
-            max_amount: numOrNull(wfForm.max_amount),
-            effective_from: txtOrNull(wfForm.effective_from),
-            effective_to: txtOrNull(wfForm.effective_to),
-            is_active: wfForm.is_active === true,
+            description: str(newForm.description).trim() || undefined,
+            steps: [{ seq: 1, name: stepName, approver_role: stepRole || undefined }],
           }),
         }),
       'Workflow ' + code + ' created.'
-    );
-  };
-
-  const saveLevel = () => {
-    if (!lvForm || openId === null) return;
-    const roleId = numOrNull(lvForm.approver_role_id);
-    const userId = numOrNull(lvForm.approver_user_id);
-    if (roleId === null && userId === null) {
-      setProblem('A level needs an approver role or an approver user.');
-      return;
-    }
-    if (roleId !== null && userId !== null) {
-      setProblem('A level takes an approver role or an approver user, not both.');
-      return;
-    }
-    if (!str(lvForm.name).trim()) {
-      setProblem('Give the level a name.');
-      return;
-    }
-    setProblem(null);
-    setLvForm(null);
-    void act.run(
-      () =>
-        api(BASE + '/approvals/levels', {
-          method: 'POST',
-          body: JSON.stringify({
-            workflow_id: openId,
-            level_no: Number(lvForm.level_no || 1),
-            name: str(lvForm.name).trim(),
-            approver_role_id: roleId,
-            approver_user_id: userId,
-            required_approvals: isBlank(lvForm.required_approvals) ? 1 : Number(lvForm.required_approvals),
-            is_optional: lvForm.is_optional === true,
-            allow_delegation: lvForm.allow_delegation === true,
-            sla_hours: numOrNull(lvForm.sla_hours),
-            escalate_to_level_no: numOrNull(lvForm.escalate_to_level_no),
-          }),
-        }),
-      'Approval level added.'
-    );
-  };
-
-  const saveFallback = () => {
-    if (!fbForm) return;
-    const primaryRole = numOrNull(fbForm.primary_role_id);
-    const primaryUser = numOrNull(fbForm.primary_user_id);
-    const fallbackRole = numOrNull(fbForm.fallback_role_id);
-    const fallbackUser = numOrNull(fbForm.fallback_user_id);
-    if ((primaryRole === null) === (primaryUser === null)) {
-      setProblem('Name either a primary role or a primary user, not both.');
-      return;
-    }
-    if ((fallbackRole === null) === (fallbackUser === null)) {
-      setProblem('Name either a fallback role or a fallback user, not both.');
-      return;
-    }
-    if (!str(fbForm.reason).trim()) {
-      setProblem('A fallback rule needs a stated reason.');
-      return;
-    }
-    if (!DATE_RE.test(str(fbForm.effective_to).trim())) {
-      setProblem('A fallback rule must end on a date, given as YYYY-MM-DD.');
-      return;
-    }
-    setProblem(null);
-    setFbForm(null);
-    void act.run(
-      () =>
-        api(BASE + '/approvals/fallbacks', {
-          method: 'POST',
-          body: JSON.stringify({
-            workflow_id: openId,
-            primary_role_id: primaryRole,
-            primary_user_id: primaryUser,
-            fallback_role_id: fallbackRole,
-            fallback_user_id: fallbackUser,
-            reason: str(fbForm.reason).trim(),
-            effective_from: txtOrNull(fbForm.effective_from),
-            effective_to: str(fbForm.effective_to).trim(),
-            is_active: fbForm.is_active === true,
-          }),
-        }),
-      'Fallback rule created.'
-    );
-  };
-
-  const deactivate = (row: Row) => {
-    void act.run(
-      () => api(BASE + '/approvals/workflows/' + String(row.id) + '/deactivate', { method: 'POST', body: '{}' }),
-      str(row.code) + ' deactivated.'
-    );
-  };
-
-  const removeLevel = (row: Row) => {
-    void act.run(
-      () => api(BASE + '/approvals/levels/' + String(row.id), { method: 'DELETE' }),
-      'Level removed.'
-    );
-  };
-
-  const removeFallback = (row: Row) => {
-    void act.run(
-      () => api(BASE + '/approvals/fallbacks/' + String(row.id), { method: 'DELETE' }),
-      'Fallback rule removed.'
     );
   };
 
@@ -2800,13 +2754,12 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
     return <PageLoader variant="page" />;
   }
 
-  const wfRows = Array.isArray(workflows.data) ? (workflows.data as Row[]) : [];
-  const fbRows = Array.isArray(fallbacks.data) ? (fallbacks.data as Row[]) : [];
-  const detailData = detail.data;
-
   return (
     <div className="stack">
-      <PanelNote error={workflows.error ?? fallbacks.error ?? detail.error ?? act.error} ok={act.ok} />
+      <PanelNote
+        error={workflows.error ?? roles.error ?? entities.error ?? detail.error ?? act.error}
+        ok={act.ok}
+      />
 
       {!mayManage && (
         <p className="setting-managed-note">
@@ -2816,7 +2769,7 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
 
       <div className="card">
         <div className="card-head">
-          <h3>Workflows</h3>
+          <h3>Approval workflows</h3>
           <div className="head-actions">
             <button
               type="button"
@@ -2835,7 +2788,7 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
               disabled={!mayManage || act.busy}
               onClick={() => {
                 setProblem(null);
-                setWfForm(blankWorkflow());
+                setNewForm({ entity_type: '', code: '', name: '', description: '', step_name: '', step_role: '' });
               }}
             >
               New workflow
@@ -2847,20 +2800,12 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
             columns={[
               { key: 'code', label: 'Code' },
               { key: 'name', label: 'Name' },
-              { key: 'documentType', label: 'Document' },
-              { key: 'priority', label: 'Priority' },
+              { key: 'entityType', label: 'Applies to', render: (r: Row) => entityLabelFor(r.entityType) },
               {
-                key: 'minAmount',
-                label: 'Band',
-                render: (r: Row) => (
-                  <span className="muted">
-                    {isBlank(r.minAmount) && isBlank(r.maxAmount)
-                      ? 'All amounts'
-                      : fmt(r.minAmount) + ' - ' + (isBlank(r.maxAmount) ? 'no limit' : fmt(r.maxAmount))}
-                  </span>
-                ),
+                key: 'stepCount',
+                label: 'Steps',
+                render: (r: Row) => (isBlank(r.stepCount) ? '-' : str(r.stepCount)),
               },
-              { key: 'levelCount', label: 'Levels' },
               {
                 key: 'isActive',
                 label: 'Status',
@@ -2876,11 +2821,16 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
                       className="btn btn-sm btn-ghost"
                       onClick={() => setOpenId(openId === Number(r.id) ? null : Number(r.id))}
                     >
-                      {openId === Number(r.id) ? 'Hide levels' : 'Levels'}
+                      {openId === Number(r.id) ? 'Hide steps' : 'Steps'}
                     </button>
-                    {mayManage && r.isActive === true && (
-                      <button type="button" className="btn btn-sm btn-ghost-danger" disabled={act.busy} onClick={() => deactivate(r)}>
-                        Deactivate
+                    {mayManage && (
+                      <button
+                        type="button"
+                        className={'btn btn-sm ' + (r.isActive === true ? 'btn-ghost-danger' : 'btn-ghost')}
+                        disabled={act.busy}
+                        onClick={() => setActive(r, r.isActive !== true)}
+                      >
+                        {r.isActive === true ? 'Deactivate' : 'Activate'}
                       </button>
                     )}
                   </div>
@@ -2897,30 +2847,16 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
         <div className="card">
           <div className="card-head">
             <h3>
-              {detailData ? str(detailData.workflow.code) : 'Workflow'} levels
+              {detailData ? str(detailData.workflow.code) : 'Workflow'} steps
             </h3>
             <div className="head-actions">
               <button
                 type="button"
-                className="btn btn-sm btn-ghost"
-                disabled={!mayManage || act.busy}
-                onClick={() => {
-                  setProblem(null);
-                  setLvForm(blankLevel());
-                }}
-              >
-                Add level
-              </button>
-              <button
-                type="button"
                 className="btn btn-sm btn-primary"
                 disabled={!mayManage || act.busy}
-                onClick={() => {
-                  setProblem(null);
-                  setFbForm(blankFallback());
-                }}
+                onClick={openStepsEditor}
               >
-                Add fallback
+                Edit steps
               </button>
             </div>
           </div>
@@ -2928,133 +2864,39 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
             {detailData ? (
               <RecordTable
                 columns={[
-                  { key: 'levelNo', label: 'Level' },
+                  { key: 'seq', label: 'Step', render: (r: Row) => str(r.seq) },
                   { key: 'name', label: 'Name' },
-                  {
-                    key: 'approver',
-                    label: 'Approver',
-                    render: (r: Row) =>
-                      r.approverUserId ? 'User #' + str(r.approverUserId) : 'Role #' + str(r.approverRoleId),
-                  },
-                  { key: 'requiredApprovals', label: 'Required' },
-                  {
-                    key: 'slaHours',
-                    label: 'SLA',
-                    render: (r: Row) => (isBlank(r.slaHours) ? '-' : str(r.slaHours) + 'h'),
-                  },
-                  {
-                    key: 'escalatesTo',
-                    label: 'Escalates to',
-                    render: (r: Row) => fmt(r.escalateToLevelNo),
-                  },
-                  {
-                    key: 'actions',
-                    label: '',
-                    render: (r: Row) =>
-                      mayManage ? (
-                        <button type="button" className="btn btn-sm btn-ghost-danger" disabled={act.busy} onClick={() => removeLevel(r)}>
-                          Remove
-                        </button>
-                      ) : null,
-                  },
+                  { key: 'approver', label: 'Approver', render: (r: Row) => approverLabel(r) },
+                  { key: 'band', label: 'Amount band', render: (r: Row) => <span className="muted">{bandLabel(r)}</span> },
+                  { key: 'slaHours', label: 'SLA', render: (r: Row) => (isBlank(r.slaHours) ? '-' : str(r.slaHours) + 'h') },
                 ]}
-                rows={arr(detailData.levels)}
-                empty="This workflow has no levels yet."
+                rows={arr(detailData.steps)}
+                empty="This workflow has no steps. Edit steps to add one."
               />
             ) : (
               <PageLoader />
             )}
           </div>
-          {detailData && arr(detailData.fallbacks).length > 0 && (
-            <div className="card-pad">
-              <h4>Fallbacks on this workflow</h4>
-              <RecordTable
-                columns={[
-                  {
-                    key: 'primary',
-                    label: 'Primary',
-                    render: (r: Row) => (r.primaryUserId ? 'User #' + str(r.primaryUserId) : 'Role #' + str(r.primaryRoleId)),
-                  },
-                  {
-                    key: 'fallback',
-                    label: 'Covered by',
-                    render: (r: Row) =>
-                      r.fallbackUserId ? 'User #' + str(r.fallbackUserId) : 'Role #' + str(r.fallbackRoleId),
-                  },
-                  { key: 'effectiveTo', label: 'Expires', render: (r: Row) => str(r.effectiveTo).slice(0, 10) },
-                  { key: 'reason', label: 'Reason' },
-                ]}
-                rows={arr(detailData.fallbacks)}
-                empty="No fallbacks on this workflow."
-              />
-            </div>
-          )}
         </div>
       )}
 
-      <div className="card">
-        <div className="card-head">
-          <h3>Fallback rules</h3>
-          <span className="muted" style={{ fontSize: 11 }}>
-            Acting authority that expires.
-          </span>
-        </div>
-        <div className="card-pad">
-          <RecordTable
-            columns={[
-              {
-                key: 'primary',
-                label: 'Primary',
-                render: (r: Row) => (r.primaryUserId ? 'User #' + str(r.primaryUserId) : 'Role #' + str(r.primaryRoleId)),
-              },
-              {
-                key: 'fallback',
-                label: 'Covered by',
-                render: (r: Row) =>
-                  r.fallbackUserId ? 'User #' + str(r.fallbackUserId) : 'Role #' + str(r.fallbackRoleId),
-              },
-              { key: 'effectiveFrom', label: 'From', render: (r: Row) => str(r.effectiveFrom).slice(0, 10) },
-              { key: 'effectiveTo', label: 'To', render: (r: Row) => str(r.effectiveTo).slice(0, 10) },
-              { key: 'reason', label: 'Reason' },
-              {
-                key: 'isActive',
-                label: 'Status',
-                render: (r: Row) => <Chip value={r.isActive === true ? 'ACTIVE' : 'INACTIVE'} />,
-              },
-              {
-                key: 'actions',
-                label: '',
-                render: (r: Row) =>
-                  mayManage ? (
-                    <button type="button" className="btn btn-sm btn-ghost-danger" disabled={act.busy} onClick={() => removeFallback(r)}>
-                      Remove
-                    </button>
-                  ) : null,
-              },
-            ]}
-            rows={fbRows}
-            empty="No fallback rules are configured."
-          />
-        </div>
-      </div>
-
       <p className="setting-managed-note">
-        A fallback rule delegates operational approval only. These permission families are refused by the
-        server and cannot be granted this way: {ADMIN_PREFIXES.join(', ')}. Administrative access and
-        business approval authority stay separate.
+        Temporary absence cover is a delegation, not a per-workflow rule: configure it under Governance
+        (delegations and acting roles). A workflow can carry more than one step; each step's amount band
+        decides which steps apply to a given document.
       </p>
 
-      {wfForm && (
+      {newForm && (
         <Modal
           title="New approval workflow"
-          onClose={() => setWfForm(null)}
+          onClose={() => setNewForm(null)}
           wide
           footer={
             <>
-              <button type="button" className="btn btn-ghost" onClick={() => setWfForm(null)}>
+              <button type="button" className="btn btn-ghost" onClick={() => setNewForm(null)}>
                 Cancel
               </button>
-              <button type="button" className="btn btn-primary" disabled={act.busy} onClick={saveWorkflow}>
+              <button type="button" className="btn btn-primary" disabled={act.busy} onClick={saveNew}>
                 {act.busy ? 'Saving...' : 'Create'}
               </button>
             </>
@@ -3062,156 +2904,130 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
         >
           {problem && <ErrorBanner error={new Error(problem)} />}
           <div className="form-grid">
-            <Field label="Code" required hint="For example PO-ABOVE-5M.">
-              <input type="text" value={str(wfForm.code)} onChange={(e) => setWfForm((f) => ({ ...f!, code: e.target.value }))} />
-            </Field>
-            <Field label="Name" required>
-              <input type="text" value={str(wfForm.name)} onChange={(e) => setWfForm((f) => ({ ...f!, name: e.target.value }))} />
-            </Field>
-            <Field label="Document type" required>
+            <Field label="Applies to" required>
               <select
-                value={str(wfForm.document_type)}
-                onChange={(e) => setWfForm((f) => ({ ...f!, document_type: e.target.value }))}
+                value={str(newForm.entity_type)}
+                onChange={(e) => setNewForm((f) => ({ ...f!, entity_type: e.target.value }))}
               >
-                {DOCUMENT_TYPES.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
+                <option value="">Choose an entity type…</option>
+                {entityRows.map((e) => (
+                  <option key={str(e.type)} value={str(e.type)} disabled={e.configured === true}>
+                    {str(e.label)}
+                    {e.configured === true ? ' (already configured)' : ''}
                   </option>
                 ))}
               </select>
             </Field>
-            <Field label="Priority" hint="Lower runs first when more than one workflow matches.">
-              <input type="number" value={str(wfForm.priority)} onChange={(e) => setWfForm((f) => ({ ...f!, priority: e.target.value }))} />
+            <Field label="Code" required hint="Short unique code, e.g. WF-PO.">
+              <input type="text" value={str(newForm.code)} onChange={(e) => setNewForm((f) => ({ ...f!, code: e.target.value }))} />
             </Field>
-            <Field label="Minimum amount" hint="Leave empty for no floor.">
-              <input type="number" value={str(wfForm.min_amount)} onChange={(e) => setWfForm((f) => ({ ...f!, min_amount: e.target.value }))} />
+            <Field label="Name" required>
+              <input type="text" value={str(newForm.name)} onChange={(e) => setNewForm((f) => ({ ...f!, name: e.target.value }))} />
             </Field>
-            <Field label="Maximum amount" hint="Leave empty for no ceiling.">
-              <input type="number" value={str(wfForm.max_amount)} onChange={(e) => setWfForm((f) => ({ ...f!, max_amount: e.target.value }))} />
+            <Field label="First step name" required hint="e.g. Finance Manager sign-off.">
+              <input type="text" value={str(newForm.step_name)} onChange={(e) => setNewForm((f) => ({ ...f!, step_name: e.target.value }))} />
             </Field>
-            <Field label="Effective from">
-              <input type="date" value={str(wfForm.effective_from)} onChange={(e) => setWfForm((f) => ({ ...f!, effective_from: e.target.value }))} />
-            </Field>
-            <Field label="Effective to" hint="Leave empty to keep the workflow open-ended.">
-              <input type="date" value={str(wfForm.effective_to)} onChange={(e) => setWfForm((f) => ({ ...f!, effective_to: e.target.value }))} />
-            </Field>
-            <Field label="Active">
-              <FieldInput type="boolean" value={wfForm.is_active === true} onChange={(v) => setWfForm((f) => ({ ...f!, is_active: v }))} />
+            <Field label="Approver role" hint="Leave empty to assign a user later.">
+              <select
+                value={str(newForm.step_role)}
+                onChange={(e) => setNewForm((f) => ({ ...f!, step_role: e.target.value }))}
+              >
+                <option value="">No role</option>
+                {roleRows.map((r) => (
+                  <option key={str(r.code)} value={str(r.code)}>
+                    {str(r.name)} ({str(r.code)})
+                  </option>
+                ))}
+              </select>
             </Field>
           </div>
           <Field label="Description">
-            <textarea rows={2} value={str(wfForm.description)} onChange={(e) => setWfForm((f) => ({ ...f!, description: e.target.value }))} />
+            <textarea rows={2} value={str(newForm.description)} onChange={(e) => setNewForm((f) => ({ ...f!, description: e.target.value }))} />
           </Field>
         </Modal>
       )}
 
-      {lvForm && (
+      {stepsForm && (
         <Modal
-          title="Add approval level"
-          onClose={() => setLvForm(null)}
-          footer={
-            <>
-              <button type="button" className="btn btn-ghost" onClick={() => setLvForm(null)}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-primary" disabled={act.busy} onClick={saveLevel}>
-                {act.busy ? 'Saving...' : 'Add level'}
-              </button>
-            </>
-          }
-        >
-          {problem && <ErrorBanner error={new Error(problem)} />}
-          <p className="muted">A level names an approver role or an approver user, never both.</p>
-          <div className="form-grid">
-            <Field label="Level" required>
-              <input type="number" value={str(lvForm.level_no)} onChange={(e) => setLvForm((f) => ({ ...f!, level_no: e.target.value }))} />
-            </Field>
-            <Field label="Name" required hint="For example Finance Manager sign-off.">
-              <input type="text" value={str(lvForm.name)} onChange={(e) => setLvForm((f) => ({ ...f!, name: e.target.value }))} />
-            </Field>
-            <Field label="Approver role id" hint="Numeric role id from the roles catalogue.">
-              <input type="number" value={str(lvForm.approver_role_id)} onChange={(e) => setLvForm((f) => ({ ...f!, approver_role_id: e.target.value }))} />
-            </Field>
-            <Field label="Approver user id">
-              <input type="number" value={str(lvForm.approver_user_id)} onChange={(e) => setLvForm((f) => ({ ...f!, approver_user_id: e.target.value }))} />
-            </Field>
-            <Field label="Required approvals">
-              <input type="number" value={str(lvForm.required_approvals)} onChange={(e) => setLvForm((f) => ({ ...f!, required_approvals: e.target.value }))} />
-            </Field>
-            <Field label="Escalate to level">
-              <input type="number" value={str(lvForm.escalate_to_level_no)} onChange={(e) => setLvForm((f) => ({ ...f!, escalate_to_level_no: e.target.value }))} />
-            </Field>
-            <Field label="SLA hours" hint="How long this level may sit before escalation.">
-              <input type="number" value={str(lvForm.sla_hours)} onChange={(e) => setLvForm((f) => ({ ...f!, sla_hours: e.target.value }))} />
-            </Field>
-            <Field label="Optional level">
-              <FieldInput type="boolean" value={lvForm.is_optional === true} onChange={(v) => setLvForm((f) => ({ ...f!, is_optional: v }))} />
-            </Field>
-            <Field label="Allow delegation" hint="Whether this level may be covered by a fallback rule.">
-              <FieldInput type="boolean" value={lvForm.allow_delegation === true} onChange={(v) => setLvForm((f) => ({ ...f!, allow_delegation: v }))} />
-            </Field>
-          </div>
-        </Modal>
-      )}
-
-      {fbForm && (
-        <Modal
-          title="Add fallback rule"
-          onClose={() => setFbForm(null)}
+          title="Edit approval steps"
+          onClose={() => setStepsForm(null)}
           wide
           footer={
             <>
-              <button type="button" className="btn btn-ghost" onClick={() => setFbForm(null)}>
+              <button type="button" className="btn btn-ghost" onClick={() => setStepsForm(null)}>
                 Cancel
               </button>
-              <button type="button" className="btn btn-primary" disabled={act.busy} onClick={saveFallback}>
-                {act.busy ? 'Saving...' : 'Create'}
+              <button type="button" className="btn btn-primary" disabled={act.busy} onClick={saveSteps}>
+                {act.busy ? 'Saving...' : 'Save steps'}
               </button>
             </>
           }
         >
           {problem && <ErrorBanner error={new Error(problem)} />}
           <p className="muted">
-            A fallback rule needs an end date. Without one it becomes a permanent shadow authority, so the
-            server requires the date and the reason (AC-ORG-007).
+            Steps run in order. A step's amount band decides whether it applies to a document: a step with
+            no band applies to every amount.
           </p>
-          <div className="form-grid">
-            <Field label="Primary role id" hint="Who normally approves.">
-              <input type="number" value={str(fbForm.primary_role_id)} onChange={(e) => setFbForm((f) => ({ ...f!, primary_role_id: e.target.value }))} />
-            </Field>
-            <Field label="Primary user id">
-              <input type="number" value={str(fbForm.primary_user_id)} onChange={(e) => setFbForm((f) => ({ ...f!, primary_user_id: e.target.value }))} />
-            </Field>
-            <Field label="Fallback role id" hint="Who covers. Administrative roles are refused.">
-              <input type="number" value={str(fbForm.fallback_role_id)} onChange={(e) => setFbForm((f) => ({ ...f!, fallback_role_id: e.target.value }))} />
-            </Field>
-            <Field label="Fallback user id">
-              <input type="number" value={str(fbForm.fallback_user_id)} onChange={(e) => setFbForm((f) => ({ ...f!, fallback_user_id: e.target.value }))} />
-            </Field>
-            <Field label="Effective from">
-              <input type="date" value={str(fbForm.effective_from)} onChange={(e) => setFbForm((f) => ({ ...f!, effective_from: e.target.value }))} />
-            </Field>
-            <Field label="Effective to" required>
-              <input type="date" value={str(fbForm.effective_to)} onChange={(e) => setFbForm((f) => ({ ...f!, effective_to: e.target.value }))} />
-            </Field>
-            <Field label="Active">
-              <FieldInput type="boolean" value={fbForm.is_active === true} onChange={(v) => setFbForm((f) => ({ ...f!, is_active: v }))} />
-            </Field>
+          <div className="stack">
+            {stepsForm.map((s, i) => (
+              <div className="card" key={i}>
+                <div className="card-pad">
+                  <div className="form-grid">
+                    <Field label={'Step ' + (i + 1) + ' name'} required>
+                      <input type="text" value={str(s.name)} onChange={(e) => updateStep(i, 'name', e.target.value)} />
+                    </Field>
+                    <Field label="Approver role">
+                      <select value={str(s.approver_role)} onChange={(e) => updateStep(i, 'approver_role', e.target.value)}>
+                        <option value="">No role</option>
+                        {roleRows.map((r) => (
+                          <option key={str(r.code)} value={str(r.code)}>
+                            {str(r.name)} ({str(r.code)})
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Minimum amount" hint="Blank = no floor.">
+                      <input type="number" value={str(s.amount_min)} onChange={(e) => updateStep(i, 'amount_min', e.target.value)} />
+                    </Field>
+                    <Field label="Maximum amount" hint="Blank or 0 = no ceiling.">
+                      <input type="number" value={str(s.amount_max)} onChange={(e) => updateStep(i, 'amount_max', e.target.value)} />
+                    </Field>
+                    <Field label="SLA hours" hint="How long before this step is overdue.">
+                      <input type="number" value={str(s.sla_hours)} onChange={(e) => updateStep(i, 'sla_hours', e.target.value)} />
+                    </Field>
+                  </div>
+                  <div className="head-actions" style={{ marginTop: 8 }}>
+                    <button type="button" className="btn btn-sm btn-ghost" disabled={i === 0} onClick={() => moveStep(i, -1)}>
+                      Up
+                    </button>
+                    <button type="button" className="btn btn-sm btn-ghost" disabled={i === stepsForm.length - 1} onClick={() => moveStep(i, 1)}>
+                      Down
+                    </button>
+                    <button type="button" className="btn btn-sm btn-ghost-danger" disabled={stepsForm.length === 1} onClick={() => removeStep(i)}>
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
-          <Field label="Reason" required hint="Why this cover is needed. Recorded on the audit trail.">
-            <textarea rows={2} value={str(fbForm.reason)} onChange={(e) => setFbForm((f) => ({ ...f!, reason: e.target.value }))} />
-          </Field>
+          <div style={{ marginTop: 8 }}>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={addStep}>
+              + Add step
+            </button>
+          </div>
         </Modal>
       )}
 
       {resolving && (
         <Modal title="Test an approval resolution" onClose={() => setResolving(false)} wide>
           <div className="form-grid">
-            <Field label="Document type" required>
+            <Field label="Entity type" required>
               <select value={resolveType} onChange={(e) => setResolveType(e.target.value)}>
-                {DOCUMENT_TYPES.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
+                <option value="">Choose…</option>
+                {entityRows.map((e) => (
+                  <option key={str(e.type)} value={str(e.type)}>
+                    {str(e.label)}
                   </option>
                 ))}
               </select>
@@ -3223,16 +3039,17 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
           <button
             type="button"
             className="btn btn-sm btn-primary"
+            disabled={!resolveType}
             onClick={() =>
               setResolveAt(
-                BASE + '/approvals/resolve?documentType=' + resolveType + (resolveAmount.trim() ? '&amount=' + resolveAmount.trim() : '')
+                BASE + '/approvals/resolve?entityType=' + encodeURIComponent(resolveType) + (resolveAmount.trim() ? '&amount=' + resolveAmount.trim() : '')
               )
             }
           >
             Resolve
           </button>
           {resolveAt && (
-            <Loader<{ workflow: Row | null; levels: Row[]; fallbacks: Row[] }> path={resolveAt}>
+            <Loader<{ workflow: Row | null; steps: Row[] }> path={resolveAt}>
               {(data) =>
                 data.workflow ? (
                   <div className="stack">
@@ -3241,26 +3058,17 @@ function ApprovalsPanel({ mayManage, onChanged }: { mayManage: boolean; onChange
                     </p>
                     <RecordTable
                       columns={[
-                        { key: 'levelNo', label: 'Level' },
+                        { key: 'seq', label: 'Step', render: (r: Row) => str(r.seq) },
                         { key: 'name', label: 'Name' },
-                        {
-                          key: 'approver',
-                          label: 'Approver',
-                          render: (r: Row) =>
-                            r.approverUserId ? 'User #' + str(r.approverUserId) : 'Role #' + str(r.approverRoleId),
-                        },
+                        { key: 'approver', label: 'Approver', render: (r: Row) => approverLabel(r) },
+                        { key: 'band', label: 'Amount band', render: (r: Row) => <span className="muted">{bandLabel(r)}</span> },
                       ]}
-                      rows={arr(data.levels)}
-                      empty="This workflow has no levels."
+                      rows={arr(data.steps)}
+                      empty="No step covers this amount."
                     />
-                    {arr(data.fallbacks).length > 0 && (
-                      <p className="muted">
-                        {arr(data.fallbacks).length} fallback rule(s) are in force for this chain.
-                      </p>
-                    )}
                   </div>
                 ) : (
-                  <Empty>No workflow matches that document type and amount.</Empty>
+                  <Empty>No workflow matches that entity type and amount.</Empty>
                 )
               }
             </Loader>

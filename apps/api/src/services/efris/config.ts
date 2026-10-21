@@ -36,6 +36,8 @@ export interface EfrisConfigurationRow {
   retry_backoff_seconds: number;
   poll_interval_seconds: number;
   fiscalize_sales_on_post: boolean;
+  fiscalize_stock_on_post: boolean;
+  fiscalize_purchases_on_post: boolean;
   auto_submit: boolean;
   notify_on_failure: boolean;
   notify_role_codes: unknown;
