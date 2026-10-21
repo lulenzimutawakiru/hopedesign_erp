@@ -122,6 +122,12 @@ export const config = {
     // recently. Anchored to sessions.mfa_verified_at, never last_login_at, so a
     // password-only attempt cannot mint its own grace. 0 disables the grace.
     graceDays: num(process.env.MFA_GRACE_DAYS, 0),
+    // MFA-006 (emergency kill-switch): when true the second factor is waived
+    // outright and a verified password issues a session directly. Intended only
+    // as a temporary outage breaker (e.g. the email OTP provider's quota is
+    // exhausted and staff are locked out); unset the flag to re-enable once
+    // delivery is restored.
+    enforcementDisabled: (process.env.MFA_ENFORCEMENT_DISABLED ?? 'false').toLowerCase() === 'true',
   },
   rateLimitWindowMs: num(process.env.RATE_LIMIT_WINDOW_MS, 60_000),
   rateLimitMax: num(process.env.RATE_LIMIT_MAX, 300),
