@@ -2,19 +2,11 @@
 
 export type NavGroupId =
   | 'home'
-  | 'business'
-  | 'supply'
+  | 'commerce'
   | 'operations'
-  | 'service'
-  | 'security'
   | 'finance'
-  | 'spend'
   | 'people'
-  | 'analytics'
-  | 'communication'
-  | 'documents'
-  | 'admin'
-  | 'compliance';
+  | 'governance';
 
 export type BadgeKind = 'approvals' | 'inventory' | 'quality' | 'security';
 
@@ -58,33 +50,8 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: 'service',
-    label: 'Service',
-    items: [
-      {
-        id: 'service_desk', label: 'Service Desk', href: '/service-desk', perm: 'service_desk.command.view', accent: 'sd',
-        keywords: 'service desk helpdesk itsm ticket incident request sla queue assignment escalation knowledge problem change access qr asset scan',
-        children: [
-          { id: 'sd_overview', label: 'My Service Desk', href: '/service-desk', perm: 'service_desk.command.view' , group: 'Command Center'},
-          { id: 'sd_new', label: 'New Request', href: '/service-desk/new', perm: 'service_desk.tickets.create' , group: 'Service Delivery'},
-          { id: 'sd_dashboard', label: 'Dashboards', href: '/service-desk/dashboard', perm: 'service_desk.command.view' , group: 'Service Delivery'},
-          { id: 'sd_tickets', label: 'Tickets', href: '/service-desk/tickets', perm: 'service_desk.tickets.view' , group: 'Service Delivery'},
-          { id: 'sd_workspace', label: 'Agent Workspace', href: '/service-desk/workspace', perm: 'service_desk.tickets.assign' , group: 'Service Delivery'},
-          { id: 'sd_queues', label: 'Queues & Teams', href: '/service-desk/queues', perm: 'service_desk.tickets.assign' , group: 'Service Delivery'},
-          { id: 'sd_knowledge', label: 'Knowledge Base', href: '/service-desk/knowledge', perm: 'service_desk.knowledge.view' , group: 'ITIL Practices'},
-          { id: 'sd_problems', label: 'Problems', href: '/service-desk/problems', perm: 'service_desk.problems.view' , group: 'ITIL Practices'},
-          { id: 'sd_changes', label: 'Changes', href: '/service-desk/changes', perm: 'service_desk.changes.view' , group: 'ITIL Practices'},
-          { id: 'sd_access', label: 'Access Requests', href: '/service-desk/access', perm: 'service_desk.access_requests.view' , group: 'ITIL Practices'},
-          { id: 'sd_scan', label: 'Asset Scan', href: '/service-desk/scan', perm: 'service_desk.asset_scans.view' , group: 'Assurance'},
-          { id: 'sd_reports', label: 'Reporting', href: '/service-desk/reports', perm: 'service_desk.reports.view' , group: 'Assurance'},
-          { id: 'sd_config', label: 'Configuration & SLA', href: '/service-desk/config', perm: 'service_desk.sla.manage' , group: 'Administration'},
-        ],
-      },
-    ],
-  },
-  {
-    id: 'business',
-    label: 'Business',
+    id: 'commerce',
+    label: 'Commerce',
     items: [
       {
         id: 'crm', label: 'CRM', href: '/crm', perm: 'crm.customers.view', module: 'crm', accent: 'crm',
@@ -119,12 +86,6 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'returns', label: 'Returns', href: '/sales/returns', perm: 'sales.returns.view' , group: 'Billing'},
         ],
       },
-    ],
-  },
-  {
-    id: 'supply',
-    label: 'Supply Chain',
-    items: [
       {
         id: 'procurement', label: 'Procurement', href: '/buy', perm: 'procurement.orders.view', module: 'procurement', accent: 'proc',
         keywords: 'purchase supplier po rfq requisition grn',
@@ -275,12 +236,6 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'doc_settings', label: 'Settings', href: '/documents/settings', perm: 'documents.settings.manage' , group: 'Governance'},
         ],
       },
-    ],
-  },
-  {
-    id: 'security',
-    label: 'Security',
-    items: [
       {
         id: 'security', label: 'Security Printing', href: '/security-jobs', perm: 'security_printing.jobs.view', module: 'security_printing', accent: 'sec',
         keywords: 'secure print custody job',
@@ -343,12 +298,6 @@ export const NAV_GROUPS: NavGroup[] = [
 
         ],
       },
-    ],
-  },
-  {
-    id: 'spend',
-    label: 'Requisitions & Spend',
-    items: [
       {
         id: 'spend', label: 'Requisitions & Spend', href: '/spend', perm: 'expenditure.dashboards.view', module: 'expenditure', accent: 'fin',
         keywords: 'requisition expenditure petty cash expense claim budget approval',
@@ -430,16 +379,29 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: 'analytics',
-    label: 'Analytics',
+    id: 'governance',
+    label: 'Governance',
     items: [
+      {
+        id: 'service_desk', label: 'Service Desk', href: '/service-desk', perm: 'service_desk.command.view', accent: 'sd',
+        keywords: 'service desk helpdesk itsm ticket incident request sla queue assignment escalation knowledge problem change access qr asset scan',
+        children: [
+          { id: 'sd_overview', label: 'My Service Desk', href: '/service-desk', perm: 'service_desk.command.view' , group: 'Command Center'},
+          { id: 'sd_new', label: 'New Request', href: '/service-desk/new', perm: 'service_desk.tickets.create' , group: 'Service Delivery'},
+          { id: 'sd_dashboard', label: 'Dashboards', href: '/service-desk/dashboard', perm: 'service_desk.command.view' , group: 'Service Delivery'},
+          { id: 'sd_tickets', label: 'Tickets', href: '/service-desk/tickets', perm: 'service_desk.tickets.view' , group: 'Service Delivery'},
+          { id: 'sd_workspace', label: 'Agent Workspace', href: '/service-desk/workspace', perm: 'service_desk.tickets.assign' , group: 'Service Delivery'},
+          { id: 'sd_queues', label: 'Queues & Teams', href: '/service-desk/queues', perm: 'service_desk.tickets.assign' , group: 'Service Delivery'},
+          { id: 'sd_knowledge', label: 'Knowledge Base', href: '/service-desk/knowledge', perm: 'service_desk.knowledge.view' , group: 'ITIL Practices'},
+          { id: 'sd_problems', label: 'Problems', href: '/service-desk/problems', perm: 'service_desk.problems.view' , group: 'ITIL Practices'},
+          { id: 'sd_changes', label: 'Changes', href: '/service-desk/changes', perm: 'service_desk.changes.view' , group: 'ITIL Practices'},
+          { id: 'sd_access', label: 'Access Requests', href: '/service-desk/access', perm: 'service_desk.access_requests.view' , group: 'ITIL Practices'},
+          { id: 'sd_scan', label: 'Asset Scan', href: '/service-desk/scan', perm: 'service_desk.asset_scans.view' , group: 'Assurance'},
+          { id: 'sd_reports', label: 'Reporting', href: '/service-desk/reports', perm: 'service_desk.reports.view' , group: 'Assurance'},
+          { id: 'sd_config', label: 'Configuration & SLA', href: '/service-desk/config', perm: 'service_desk.sla.manage' , group: 'Administration'},
+        ],
+      },
       { id: 'reports', label: 'Reports', href: '/reports', accent: 'rpt', keywords: 'report kpi export bi' },
-    ],
-  },
-  {
-    id: 'communication',
-    label: 'Communication',
-    items: [
       {
         id: 'communication_center', label: 'Comm Center', href: '/communication', perm: 'communication.command.view', module: 'communication', accent: 'com',
         keywords: 'inbox messages notifications email announcements templates delivery logs chat comms communication health sms test mail mailbox signature outbox approval classification distribution',
@@ -459,12 +421,6 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'com_settings', label: 'Settings', href: '/communication/settings', perm: 'communication.settings.manage' , group: 'Administration'},
         ],
       },
-    ],
-  },
-  {
-    id: 'admin',
-    label: 'Administration',
-    items: [
       {
         id: 'adminhome', label: 'Administration', href: '/admin', perm: 'admin.users.view', module: 'admin', accent: 'adm',
         keywords: 'admin users roles permissions rbac abac policies sod security sessions audit settings features health backups identity access control database db dba schema tables indexes queries monitoring storage migration restore',
@@ -503,12 +459,6 @@ export const NAV_GROUPS: NavGroup[] = [
         id: 'settings', label: 'Settings', href: '/settings', perm: 'admin.settings.view', accent: 'adm',
         keywords: 'settings preference config system company profile',
       },
-    ],
-  },
-  {
-    id: 'compliance',
-    label: 'Data Protection',
-    items: [
       {
         id: 'dataprotection', label: 'Data Protection', href: '/compliance', perm: 'compliance.pdpo.view', accent: 'adm',
         keywords: 'compliance pdpo personal data protection office data protection act privacy dpo register consent subject request breach filing equity',
