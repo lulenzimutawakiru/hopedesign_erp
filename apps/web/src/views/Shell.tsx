@@ -117,7 +117,7 @@ export default function Shell() {
       // bare-letter and '/' shortcuts so they cannot fire underneath an open
       // modal, drawer or palette (e.g. "a" would otherwise jump to Approvals
       // mid-dialog). Ctrl/Cmd+K stays available as an explicit command chord.
-      if (document.querySelector('[aria-modal="true"], .modal-backdrop, .more-scrim, .drawer-scrim, .cmd-backdrop, .com-bell-backdrop')) return;
+      if (document.querySelector('[aria-modal="true"], .modal-backdrop, .more-scrim, .drawer-scrim, .cmd-backdrop, .com-bell-backdrop, .topbar-dropdown')) return;
       if (e.key === '/' && !typing) { e.preventDefault(); setCmdOpen(true); return; }
       if (typing) return;
       // A bare-letter shortcut must not answer a Ctrl/Cmd chord: Ctrl+S is the
