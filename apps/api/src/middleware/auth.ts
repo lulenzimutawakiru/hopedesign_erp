@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import { verifyAccessToken } from '../auth.js';
 import { query } from '../db.js';
 import { AuthUser } from '../types.js';
-import { pendingAcknowledgement } from '../services/iso/gates.js';
+import { overdueAccessReview, pendingAcknowledgement } from '../services/iso/gates.js';
 import { forbidden, unauthorized } from '../utils.js';
 type ActingRoleSummary = NonNullable<AuthUser['actingRoles']>[number];
 
@@ -173,6 +173,10 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
       const pending = await pendingAcknowledgement(Number(user.id), Number(user.company_id), payload.tid);
       if (pending) return next(forbidden(`Accept the policy "${pending}" before continuing.`));
     }
+    if (!accessReviewExempt(req) && user.company_id) {
+      const overdue = await overdueAccessReview(Number(user.company_id), payload.tid, Number(user.id));
+      if (overdue) return next(forbidden(`Access review "${overdue}" is past its due date. Close it before continuing.`));
+    }
     next();
   } catch {
     next(unauthorized('Invalid or expired token'));
@@ -186,6 +190,15 @@ function acknowledgementExempt(req: Request): boolean {
   if (req.method === 'POST' && path === '/api/ops/compliance/acknowledgements') return true;
   if (req.method === 'GET' && path === '/api/ops/compliance/policies') return true;
   if (req.method === 'POST' && path === '/api/ops/compliance/security-events') return true;
+  return false;
+}
+
+function accessReviewExempt(req: Request): boolean {
+  if (acknowledgementExempt(req)) return true;
+  const path = req.path;
+  // The review itself has to stay reachable, or an overdue recertification could not be closed.
+  if (req.method === 'GET' && path === '/api/ops/compliance/entries') return true;
+  if (req.method === 'PATCH' && path.startsWith('/api/ops/compliance/entries/')) return true;
   return false;
 }
 const DELEGATIONS_SQL = `

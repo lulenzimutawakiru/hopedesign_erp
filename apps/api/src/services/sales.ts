@@ -8,7 +8,7 @@ import { logAudit } from './audit.js';
 import * as finance from './finance.js';
 import { notifyCustomer } from './communication.js';
 import { config } from '../config.js';
-import { assertNoQualityHold, assertRequirementReviewed } from './iso/gates.js';
+import { assertNoQualityHold, assertPostDelivery, assertRequirementReviewed } from './iso/gates.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -670,6 +670,7 @@ export async function deliverDeliveryNote(
   if (res.rows.length === 0) throw notFound('Delivery note not found');
   const dn = res.rows[0];
   if (!['DISPATCHED', 'IN_TRANSIT'].includes(dn.status)) throw badRequest(`Delivery note is ${dn.status}, cannot mark delivered`);
+  await assertPostDelivery(client, ctx, deliveryNoteId);
   await client.query(
     `UPDATE delivery_notes SET status = 'DELIVERED', delivered_at = $1, received_by = $2, signature = $3,
        recipient_name = COALESCE($4, recipient_name), recipient_phone = COALESCE($5, recipient_phone)

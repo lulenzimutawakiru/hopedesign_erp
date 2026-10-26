@@ -98,4 +98,4 @@ ufw status verbose
 
 echo
 echo "Host clock:"
-bash "$(cd "$(dirname "$0")" && pwd)/clock-check.sh" || echo "WARNING: host NTP check failed."
+bash "$(cd "$(dirname "$0")" && pwd)/clock-check.sh"

@@ -1359,6 +1359,47 @@ async function governanceAuthoritySweep(client: pg.PoolClient, ctx: Ctx): Promis
     expiredSignatureProfiles: result.expiredSignatureProfiles,
   };
 }
+/** Raise an open security event for a sensitive audit row that has not been alerted yet. */
+async function auditLogWatch(client: pg.PoolClient, ctx: Ctx): Promise<Record<string, unknown>> {
+  if (!ctx.tenantId) return { raised: 0 };
+  const rows = await client.query(
+    `SELECT a.id, a.company_id, a.action, a.resource, a.record_code
+       FROM audit_logs a
+      WHERE a.tenant_id = $1
+        AND a.company_id IS NOT NULL
+        AND a.created_at > now() - interval '20 minutes'
+        AND a.action IN ('delete', 'revoke', 'disable', 'approve_disposal')
+        AND NOT EXISTS (
+          SELECT 1 FROM iso_entries e
+           WHERE e.company_id = a.company_id
+             AND e.entry_type = 'security_event'
+             AND e.payload->>'auditId' = a.id::text
+        )
+      ORDER BY a.id
+      LIMIT 50`,
+    [ctx.tenantId],
+  );
+  for (const row of rows.rows) {
+    await client.query(
+      `INSERT INTO iso_entries
+         (company_id, tenant_id, entry_type, status, title, owner_role, payload)
+       VALUES ($1, $2, 'security_event', 'OPEN', $3, 'Security administrator', $4::jsonb)`,
+      [
+        row.company_id,
+        ctx.tenantId,
+        `Audit alert: ${row.action} on ${row.resource}`,
+        JSON.stringify({
+          auditId: Number(row.id),
+          action: row.action,
+          resource: row.resource,
+          recordCode: row.record_code,
+        }),
+      ],
+    );
+  }
+  return { raised: rows.rows.length };
+}
+
 async function runHandler(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Promise<Record<string, unknown>> {
   switch (job.jobType) {
     case 'STOCK_REORDER_CHECK':
@@ -1397,6 +1438,8 @@ async function runHandler(client: pg.PoolClient, ctx: Ctx, job: CronJobRow): Pro
       return governanceAuthoritySweep(client, ctx);
     case 'ATTENDANCE_SUMMARY_EMAIL':
       return attendanceSummaryEmail(client, ctx, job);
+    case 'AUDIT_LOG_WATCH':
+      return auditLogWatch(client, ctx);
     default:
       return { skipped: true, reason: `Unknown job type ${job.jobType}` };
   }

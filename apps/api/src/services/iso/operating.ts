@@ -191,6 +191,20 @@ function assertPayload(entryType: string, status: string, payload: Payload, revi
     case 'customer_property':
       requireText(payload, 'customer');
       requireText(payload, 'item');
+      if (!['SOUND', 'LOST', 'DAMAGED', 'UNSUITABLE'].includes(String(payload.condition))) {
+        throw badRequest('condition must be SOUND, LOST, DAMAGED or UNSUITABLE');
+      }
+      requireText(payload, 'report');
+      break;
+    case 'disposal_certificate':
+      requireText(payload, 'method');
+      requireTrue(payload, 'wiped');
+      break;
+    case 'maintenance_release':
+      requireText(payload, 'releasedBy');
+      break;
+    case 'vulnerability':
+      if (status === 'CLOSED') requireText(payload, 'patchedOn');
       break;
     case 'post_delivery':
       requireText(payload, 'followUp');

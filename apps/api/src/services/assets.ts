@@ -14,6 +14,7 @@ import * as inv from './inventory.js';
 import * as finance from './finance.js';
 import { formatDocDateTime, loadCompanyProfile } from './branding.js';
 import { renderDocument } from './documents.js';
+import { assertDisposalCertified, assertMaintenanceReleased } from './iso/gates.js';
 
 // ============================================================
 // Hope Design ERP - Enterprise Asset Management service
@@ -1522,6 +1523,7 @@ export async function approveDisposal(client: pg.PoolClient, ctx: Ctx, disposalI
     throw badRequest(`Disposal cannot be processed from status ${d.status}`);
   }
   const asset = await loadAsset(client, ctx, Number(d.asset_id));
+  await assertDisposalCertified(client, ctx, Number(asset.id));
   const approvedAt = new Date().toISOString();
 
   const tasks = await client.query(
@@ -2544,6 +2546,7 @@ export async function completeMaintenanceWorkOrder(client: pg.PoolClient, ctx: C
     throw badRequest(`Work order can only be completed from APPROVED/IN_PROGRESS (current: ${wo.status})`);
   }
   const asset = await loadAsset(client, ctx, Number(wo.asset_id));
+  await assertMaintenanceReleased(client, ctx, Number(asset.id));
   const parts = await client.query('SELECT * FROM asset_maintenance_parts WHERE work_order_id = $1', [workOrderId]);
   let partsCost = 0;
   for (const p of parts.rows) {

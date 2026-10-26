@@ -340,4 +340,50 @@ describe('ISO operating controls', () => {
       await db(`DELETE FROM products WHERE id = $1`, [productId]);
     }
   });
+
+  it('requires a condition and a report before customer property is current', async () => {
+    const { token } = await loginAs('admin');
+    const missing = await api.post('/api/ops/compliance/entries').set(auth(token)).send({
+      entryType: 'customer_property',
+      status: 'CURRENT',
+      title: 'Customer plate',
+      ownerRole: 'Security printing director',
+      payload: { customer: 'Acme', item: 'Printing plate' },
+    });
+    expect(missing.status).toBe(400);
+    expect(message(missing.body)).toMatch(/condition/);
+
+    const recorded = await api.post('/api/ops/compliance/entries').set(auth(token)).send({
+      entryType: 'customer_property',
+      status: 'CURRENT',
+      title: 'Customer plate',
+      ownerRole: 'Security printing director',
+      payload: { customer: 'Acme', item: 'Printing plate', condition: 'DAMAGED', report: 'Told the customer the plate was scratched.' },
+    });
+    expect(recorded.status).toBe(200);
+    expect(recorded.body.data.status).toBe('CURRENT');
+  });
+
+  it('sees an overdue access review inside a transaction that other tests cannot see', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const updated = await client.query(
+        `UPDATE iso_entries
+            SET due_on = CURRENT_DATE - 1
+          WHERE entry_type = 'access_review' AND status = 'OPEN'
+          RETURNING title`,
+      );
+      expect(updated.rows.length).toBeGreaterThan(0);
+      const overdue = await client.query(
+        `SELECT title FROM iso_entries
+          WHERE entry_type = 'access_review' AND status = 'OPEN' AND due_on < CURRENT_DATE
+          LIMIT 1`,
+      );
+      expect(String(overdue.rows[0].title).length).toBeGreaterThan(0);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
 });

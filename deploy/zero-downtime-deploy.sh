@@ -131,6 +131,20 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   exit 1
 fi
 
+# The host clock and the expected packages are checked before any backup or
+# image build. A failed check stops the rollout; it does not print a warning
+# and continue.
+log "[0/8] host clock"
+if ! bash deploy/clock-check.sh --require-sync; then
+  log "ABORT: the host clock is not synchronized; refusing to deploy."
+  exit 1
+fi
+log "[0/8] host software allow-list"
+if ! bash deploy/check-host-software.sh; then
+  log "ABORT: an allow-listed host package is missing; refusing to deploy."
+  exit 1
+fi
+
 # 1) Backup first - never roll out on top of the only good copy of the data.
 log "[1/8] database backup"
 if [[ -x deploy/postgres-backup.sh ]]; then

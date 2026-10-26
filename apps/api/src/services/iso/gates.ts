@@ -178,6 +178,83 @@ export async function assertErasureProven(
   }
 }
 
+/** Title of an open access review that is past its due date, or null. */
+export async function overdueAccessReview(companyId: number, tenantId: number, userId: number): Promise<string | null> {
+  try {
+    const res = await query(
+      `SELECT title FROM iso_entries
+        WHERE company_id = $1 AND entry_type = 'access_review' AND status = 'OPEN'
+          AND due_on < CURRENT_DATE
+        ORDER BY due_on
+        LIMIT 1`,
+      [companyId],
+      { tenantId, userId },
+    );
+    const title = res.rows[0]?.title;
+    return title ? String(title) : null;
+  } catch (err) {
+    const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';
+    // Absent until migration 0207. A missing table must not turn every login into an invalid token.
+    if (code === '42P01' || code === '42703') return null;
+    throw err;
+  }
+}
+
+export async function assertPostDelivery(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  deliveryNoteId: number,
+): Promise<void> {
+  const res = await client.query(
+    `SELECT 1 FROM iso_entries
+      WHERE tenant_id = $1 AND entry_type = 'post_delivery' AND status = 'CURRENT'
+        AND subject_table = 'delivery_notes' AND subject_id = $2
+        AND length(trim(coalesce(payload->>'followUp', ''))) > 0
+      LIMIT 1`,
+    [ctx.tenantId, deliveryNoteId],
+  );
+  if (res.rows.length === 0) {
+    throw badRequest('A delivery cannot be closed until the post-delivery follow-up is recorded.');
+  }
+}
+
+export async function assertMaintenanceReleased(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  assetId: number,
+): Promise<void> {
+  const res = await client.query(
+    `SELECT 1 FROM iso_entries
+      WHERE tenant_id = $1 AND entry_type = 'maintenance_release' AND status = 'CURRENT'
+        AND subject_table = 'asset_register' AND subject_id = $2
+        AND length(trim(coalesce(payload->>'releasedBy', ''))) > 0
+      LIMIT 1`,
+    [ctx.tenantId, assetId],
+  );
+  if (res.rows.length === 0) {
+    throw badRequest('An asset cannot return to use until a maintenance release names who released it.');
+  }
+}
+
+export async function assertDisposalCertified(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  assetId: number,
+): Promise<void> {
+  const res = await client.query(
+    `SELECT 1 FROM iso_entries
+      WHERE tenant_id = $1 AND entry_type = 'disposal_certificate' AND status = 'CURRENT'
+        AND subject_table = 'asset_register' AND subject_id = $2
+        AND payload->>'wiped' = 'true'
+        AND length(trim(coalesce(payload->>'method', ''))) > 0
+      LIMIT 1`,
+    [ctx.tenantId, assetId],
+  );
+  if (res.rows.length === 0) {
+    throw badRequest('An asset cannot be disposed until a certificate records the method and that it was wiped.');
+  }
+}
+
 /** Title of an approved policy this user still has to accept, or null. */
 export async function pendingAcknowledgement(userId: number, companyId: number, tenantId: number): Promise<string | null> {
   try {
