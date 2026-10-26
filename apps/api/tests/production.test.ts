@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api, auth, loginAs } from './helpers.js';
+import { api, auth, db, loginAs } from './helpers.js';
 
 describe('Work order wizard setup', () => {
   it('returns BOM, routing and exploded materials for a product', async () => {
@@ -40,6 +40,20 @@ describe('Work order wizard setup', () => {
 
     const released = await api.post(`/api/ops/production/work-orders/${id}/release`).set(auth(token)).send({});
     expect(released.status).toBe(200);
+
+    const plan = await db(`SELECT company_id, tenant_id FROM work_orders WHERE id = $1`, [id]);
+    for (const [entryType, payload] of [
+      ['quality_plan', '{"criteria":"Basis weight and moisture within specification"}'],
+      ['project_gate', '{"decision":"PASS"}'],
+      ['measurement_plan', '{"measure":"Good quantity","frequency":"each order"}'],
+    ] as const) {
+      await db(
+        `INSERT INTO iso_entries
+           (company_id, tenant_id, entry_type, status, title, owner_role, subject_table, subject_id, payload)
+         VALUES ($1,$2,$3,'CURRENT',$3,'Quality manager','work_orders',$4,$5::jsonb)`,
+        [plan.rows[0].company_id, plan.rows[0].tenant_id, entryType, id, payload],
+      );
+    }
 
     const started = await api.post(`/api/ops/production/work-orders/${id}/start`).set(auth(token)).send({});
     expect(started.status).toBe(200);

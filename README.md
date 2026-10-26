@@ -37,6 +37,10 @@ First login after seed: `admin` / the value of `SEED_ADMIN_PASSWORD` (generated 
 npm test
 ```
 
+## ISO alignment register
+
+`docs/ISO_CONTROL_REGISTER.md` is the internal alignment of this ERP to ISO/IEC 27001:2022 Annex A and to the ISO 9001:2015 clauses the product already operates. The same register is on the Compliance screen at `/compliance/iso`. It is not a certificate. Statuses are assessed from the code and cannot be edited in the screen.
+
 ## Ream authenticity, public verification & Niimbot printing
 
 Every ream is minted with its own unique, unforgeable QR (`code|secret` payload -

@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import { parsePdf } from './pdf.js';
 import { mintEmployeeIdentity } from './employeeIdentity.js';
 import { clockIn, clockOut } from './hr.js';
+import { assertScreeningClear } from './iso/gates.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const ACTIVE_EMPLOYEE_STATUS = "('ACTIVE','PROBATION','ON_LEAVE')";
@@ -1044,6 +1045,14 @@ export async function sendOffer(
   offerId: number,
   input: { expiresAt?: string | null } = {}
 ) {
+  const offerRow = await client.query(
+    `SELECT candidate_id, status FROM job_offers WHERE id = $1 AND tenant_id = $2`,
+    [offerId, ctx.tenantId],
+  );
+  if (offerRow.rows.length === 0 || offerRow.rows[0].status !== 'DRAFT') {
+    throw badRequest('Offer not found or not DRAFT');
+  }
+  await assertScreeningClear(client, ctx, Number(offerRow.rows[0].candidate_id));
   const res = await client.query(
     `UPDATE job_offers SET status = 'SENT', sent_at = now(), expires_at = COALESCE($3, expires_at, now() + interval '14 days')
      WHERE id = $1 AND tenant_id = $2 AND status = 'DRAFT' RETURNING offer_no, application_id`,
@@ -2886,6 +2895,23 @@ export async function createOffboarding(
     if (cl.rows.length) checklistId = Number(cl.rows[0].id);
   }
 
+  if (checklistId) {
+    const access = await client.query(
+      `SELECT id FROM offboarding_tasks
+        WHERE checklist_id = $1 AND category = 'IT_ACCESS' AND status = 'ACTIVE' LIMIT 1`,
+      [checklistId],
+    );
+    if (access.rows.length === 0) {
+      await client.query(
+        `INSERT INTO offboarding_tasks
+           (company_id, tenant_id, checklist_id, task_no, title, category, description, due_days, is_required, sort_order)
+         VALUES ($1,$2,$3,'IT-REVOKE','Revoke system access','IT_ACCESS',
+                 'Disable the leaver login and revoke every open session',0,true,0)`,
+        [ctx.companyId, ctx.tenantId, checklistId],
+      );
+    }
+  }
+
   const no = await nextDoc(client, ctx, 'OB');
   const ins = await client.query(
     `INSERT INTO offboarding_instances
@@ -2950,6 +2976,15 @@ export async function completeOffboardingTask(
   if (inst.rows.length === 0) throw notFound('Offboarding instance not found');
   const status = String(input.status ?? 'COMPLETED').toUpperCase();
   if (!['COMPLETED', 'WAIVED', 'IN_PROGRESS'].includes(status)) throw badRequest('Invalid task status');
+  if (status === 'WAIVED') {
+    const task = await client.query(
+      `SELECT category FROM offboarding_tasks WHERE id = $1`,
+      [taskId],
+    );
+    if (task.rows[0] && task.rows[0].category === 'IT_ACCESS') {
+      throw badRequest('System access removal cannot be waived.');
+    }
+  }
   const res = await client.query(
     `UPDATE offboarding_instance_tasks
      SET status = $3, completed_by = $4,
@@ -2985,8 +3020,29 @@ export async function completeOffboarding(
     [instanceId]
   );
   if (Number(pending.rows[0].n) > 0) throw badRequest(`${pending.rows[0].n} offboarding task(s) still pending`);
+  const accessOpen = await client.query(
+    `SELECT count(*)::int AS n
+       FROM offboarding_instance_tasks oit
+       JOIN offboarding_tasks ot ON ot.id = oit.task_id
+      WHERE oit.instance_id = $1 AND ot.category = 'IT_ACCESS' AND oit.status <> 'COMPLETED'`,
+    [instanceId],
+  );
+  if (Number(accessOpen.rows[0].n) > 0) throw badRequest('System access removal must be completed before the leaver can exit.');
 
   const employeeId = Number(inst.rows[0].employee_id);
+  const leavers = await client.query(
+    `UPDATE users SET status = 'DISABLED'
+      WHERE employee_id = $1 AND tenant_id = $2
+        AND status IN ('INVITED','PENDING_ACTIVATION','ACTIVE','LOCKED')
+      RETURNING id`,
+    [employeeId, ctx.tenantId],
+  );
+  for (const leaver of leavers.rows) {
+    await client.query(
+      `UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
+      [leaver.id],
+    );
+  }
   const effectiveDate = str(input.alumniDate) ?? fmtDate(inst.rows[0].effective_date);
   const offboardingType = String(inst.rows[0].offboarding_type);
   const exitReason = str(inst.rows[0].reason);

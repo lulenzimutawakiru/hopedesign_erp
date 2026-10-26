@@ -2,6 +2,7 @@ import pg from 'pg';
 import { Ctx } from '../db.js';
 import { badRequest, notFound, toCamelRow, toCamelRows } from '../utils.js';
 import { logAudit } from './audit.js';
+import { assertOutboundAllowed } from './iso/gates.js';
 
 export interface MoveInput {
   movementType: string;
@@ -37,6 +38,7 @@ function asStockRefusal(err: unknown): never {
 
 export async function postMove(client: pg.PoolClient, ctx: Ctx, m: MoveInput) {
   try {
+    await assertOutboundAllowed(client, ctx, m.movementType, m.product, m.batch);
     const res = await client.query('SELECT post_inventory_move($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) AS movement_id', [
       ctx.companyId,
       ctx.tenantId,

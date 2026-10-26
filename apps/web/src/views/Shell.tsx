@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { can, useAuth } from '../auth';
+import { informationClass } from '../classification';
 import { useHashRoute, navigate, matchRoute } from '../router';
 import { api } from '../api';
 import Dashboard from './Dashboard';
@@ -40,6 +41,7 @@ const DocumentsFlow = lazy(() => import('./DocumentsFlow'));
 const InventoryIntel = lazy(() => import('./InventoryIntel'));
 const ServiceDeskFlow = lazy(() => import('./ServiceDeskFlow'));
 const ComplianceFlow = lazy(() => import('./CompliancePdpo'));
+const ComplianceIso = lazy(() => import('./ComplianceIso'));
 const OrganisationSettings = lazy(() => import('./OrganisationSettings'));
 const Account = lazy(() => import('./Account'));
 const PayrollSettings = lazy(() => import('./PayrollSettings'));
@@ -181,12 +183,20 @@ export default function Shell() {
   const inventoryPath = path === '/inventory' || path.startsWith('/inventory/') || path.startsWith('/records/inventory/');
   const assetsPath = path === '/assets' || path.startsWith('/assets/');
   const serviceDeskPath = path === '/service-desk' || path.startsWith('/service-desk/');
+  const isoPath = path === '/compliance/iso' || path.startsWith('/compliance/iso/');
   const compliancePath = path === '/compliance' || path.startsWith('/compliance/');
 
   const denied = useMemo(() => {
     const perm = requiredPermForPath(path);
     if (!perm) return false;
-    return !itemVisible(user, { perm, module: perm.split('.')[0] });
+    if (itemVisible(user, { perm, module: perm.split('.')[0] })) return false;
+    // Quality roles open the ISO register and do not hold the data-protection
+    // permission. The compliance landing still renders for them so the ISO
+    // link on that page is reachable; the data-protection section stays gated.
+    if ((path === '/compliance' || path === '/compliance/overview') && can(user, 'compliance.iso.view')) {
+      return false;
+    }
+    return true;
   }, [path, user]);
 
   type RouteEntry = {
@@ -236,6 +246,7 @@ export default function Shell() {
       { match: () => path === '/inventory-intel' || path.startsWith('/inventory-intel/'), render: () => <InventoryIntel path={path} /> },
       { match: () => inventoryPath, render: () => <InventoryFlow path={path} /> },
       { match: () => serviceDeskPath, render: () => <ServiceDeskFlow path={path} /> },
+      { match: () => isoPath, render: () => <ComplianceIso /> },
       { match: () => compliancePath, render: () => <ComplianceFlow path={path} /> },
       { match: () => assetsPath, render: () => <AssetsFlow path={path} /> },
       { match: () => path.startsWith('/admin/organisation-settings'), render: () => <OrganisationSettings path={path} /> },
@@ -309,6 +320,11 @@ export default function Shell() {
         />
 
         <main id="main-content" className="content" tabIndex={-1}>
+          {informationClass(path) && (
+            <p className="muted" style={{ margin: '8px 16px 0', fontSize: 12 }} data-classification={informationClass(path)}>
+              {informationClass(path)}
+            </p>
+          )}
           {landing && (
             <div className="page module-sections-page">
               <ModuleSections item={landing} />

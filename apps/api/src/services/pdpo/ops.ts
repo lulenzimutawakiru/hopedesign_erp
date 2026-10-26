@@ -31,6 +31,7 @@ import pg from 'pg';
 import { Ctx } from '../../db.js';
 import { badRequest, conflict, notFound } from '../../utils.js';
 import { auditConfig } from '../companyConfig.js';
+import { assertErasureProven } from '../iso/gates.js';
 import {
   PdpoConfigPatch,
   PdpoConfigView,
@@ -1595,6 +1596,7 @@ export async function completeSubjectRequest(
   const before = await readSubjectRequest(client, companyId, id);
   if (!before.open) throw conflict(`${before.reference} is already closed`);
   const outcomeSummary = requiredText(body.outcomeSummary, 'outcomeSummary', 4000);
+  if (before.requestType === 'ERASURE') await assertErasureProven(client, ctx, id);
   const completedAt = instant(body.completedAt, 'completedAt') ?? new Date().toISOString();
 
   const res = await client.query(

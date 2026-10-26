@@ -3,6 +3,7 @@ import { Ctx } from '../db.js';
 import { badRequest, forbidden, notFound } from '../utils.js';
 import { startWorkflow } from './workflow.js';
 import { postMove } from './inventory.js';
+import { assertNoQualityHold } from './iso/gates.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import { generateQr } from './qr.js';
@@ -304,6 +305,54 @@ export async function handleSecureJobTaskApproved(
   }
 
   throw badRequest(`Unknown security workflow step ${stepSeq}`);
+}
+
+/**
+ * Self-authorize a security job submission by a final-authority role: collapse
+ * step-1 approval and step-2 materials authorization into one sign-off. This
+ * deliberately bypasses the dual-control rules in handleSecureJobTaskApproved
+ * (the requester may also approve and authorize) — requested product policy for
+ * final-authority roles; the custody and audit trail is the compensating record.
+ */
+export async function selfAuthorizeSecureJob(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  jobId: number
+) {
+  const user = ctx.userId;
+  if (!user) throw forbidden();
+  const job = await getSecureJob(client, ctx, jobId, 'SUBMITTED');
+  const jobNo = String(job.job_no);
+
+  await client.query(
+    `UPDATE security_jobs SET status = 'MATERIALS_AUTHORIZED',
+       approved_by = $2, approved_at = now(),
+       materials_authorized_by = $2, materials_authorized_at = now()
+     WHERE id = $1`,
+    [jobId, user]
+  );
+  await client.query(
+    `UPDATE security_job_requirements SET quantity_authorized = quantity_required WHERE job_id = $1`,
+    [jobId]
+  );
+  await addCustody(client, ctx, jobId, 'JOB_APPROVED', { fromUserId: user, toUserId: Number(job.requested_by) });
+  await addCustody(client, ctx, jobId, 'MATERIALS_AUTHORIZED', { fromUserId: user });
+  await logAudit(client, ctx, {
+    action: 'self_authorize',
+    resource: 'security_jobs',
+    recordId: jobId,
+    recordCode: jobNo,
+    newValues: { status: 'MATERIALS_AUTHORIZED', authorizedBy: user },
+    metadata: { reason: 'Self-authorized by final authority' },
+  });
+  await emitEvent(client, ctx, {
+    eventType: 'security_printing.self_authorized',
+    entityType: 'security_jobs',
+    entityId: jobId,
+    entityCode: jobNo,
+    payload: { reason: 'Self-authorized by final authority' },
+  });
+  return { jobId, jobNo, status: 'MATERIALS_AUTHORIZED' };
 }
 
 // ---------------------------------------------------------------------------
@@ -907,6 +956,7 @@ export async function dispatchSecureJob(client: pg.PoolClient, ctx: Ctx, jobId: 
   if (batches.length === 0) throw badRequest('At least one QC-passed batch is required for dispatch');
 
   for (const batch of batches) {
+    await assertNoQualityHold(client, ctx, Number(batch.product_id));
     const product = await productMeta(client, ctx, Number(batch.product_id));
     const productBatchId = await productBatchByNo(client, ctx, String(batch.batch_no));
     const unitCost = Number(product.standard_cost) || 0;

@@ -24,7 +24,7 @@ router all read from the same structure, so they cannot drift apart.
 | `communication` | Communication | Hikvision Live, Devices, Events, Failed Events, Exceptions, Attendance, Health, Reports |
 | `documents` | Documents | Document management |
 | `admin` | Administration | Admin dashboard, Database, Users, Roles, Policies, SoD, Security, Sessions, Audit, Settings, Features, Health, Backups, Delegations, Signatures, Organisation Settings, Workflows |
-| `compliance` | Data Protection | PDPO Overview, Processing, Consents, Subject requests, Breaches, Filings, Registration |
+| `compliance` | Compliance | PDPO Overview, Processing, Consents, Subject requests, Breaches, Filings, Registration, ISO register |
 
 ### 1.1 §11 deviation — navigation was NOT restructured
 

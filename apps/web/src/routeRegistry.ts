@@ -18,6 +18,7 @@ export function routeMatches(path: string): boolean {
   const inventoryPath = path === '/inventory' || path.startsWith('/inventory/') || path.startsWith('/records/inventory/');
   const assetsPath = path === '/assets' || path.startsWith('/assets/');
   const serviceDeskPath = path === '/service-desk' || path.startsWith('/service-desk/');
+  const isoPath = path === '/compliance/iso' || path.startsWith('/compliance/iso/');
   const compliancePath = path === '/compliance' || path.startsWith('/compliance/');
 
   const qrTrace = matchRoute(path, '/qr/:code');
@@ -53,6 +54,7 @@ export function routeMatches(path: string): boolean {
     path === '/inventory-intel' || path.startsWith('/inventory-intel/'),
     inventoryPath,
     serviceDeskPath,
+    isoPath,
     compliancePath,
     assetsPath,
     path.startsWith('/admin/organisation-settings'),

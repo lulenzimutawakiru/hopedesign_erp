@@ -18,6 +18,14 @@ interface StartWorkflowInput {
   branchId?: number | null;
 }
 
+/**
+ * Final-authority roles whose submissions self-authorize: the document is
+ * approved and posted/released immediately, with no approval chain. Deliberate
+ * product policy — these roles are treated as equivalent sign-off authorities.
+ * Extend the bypass by adding a role code here; removing one closes it back.
+ */
+const SELF_AUTHORIZE_ROLES = ['super_administrator', 'managing_director', 'executive_director', 'ceo'];
+
 const WORKFLOW_SQL = `
   SELECT id, code, name, entity_type, config FROM workflows
   WHERE company_id = $1 AND tenant_id = $2 AND entity_type = $3 AND is_active = true
@@ -194,6 +202,74 @@ async function enforceDelegationLimits(
   }
 }
 
+/**
+ * Return the self-authorizing role code the submitter holds for this company, or
+ * null. Scoped to the document's company so a role held only elsewhere does not
+ * authorize this submission. Fails closed: no match means the normal workflow.
+ */
+async function selfAuthorizeRole(
+  client: pg.PoolClient,
+  companyId: number | null,
+  ctx: Ctx
+): Promise<string | null> {
+  if (!ctx.userId || !companyId) return null;
+  const res = await client.query(
+    `SELECT r.code FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+     WHERE ur.user_id = $1 AND r.code = ANY($2::text[]) AND r.company_id = $3
+     LIMIT 1`,
+    [ctx.userId, SELF_AUTHORIZE_ROLES, companyId]
+  );
+  return res.rows.length ? String(res.rows[0].code) : null;
+}
+
+/**
+ * Self-authorize a submission by a final-authority role: mark the document
+ * approved and run its post/release side effect immediately, with no approval
+ * chain. The act is audited and emitted so the bypass is always traceable.
+ * Payroll and security printing carry their own lifecycle/dual-control logic,
+ * so they are dispatched to their own modules rather than a bare status flip.
+ */
+async function selfAuthorize(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  input: StartWorkflowInput,
+  roleCode: string
+): Promise<void> {
+  const entity = ENTITIES[input.entityType];
+  if (!entity) throw badRequest(`Unknown workflow entity ${input.entityType}`);
+
+  if (input.entityType === 'security_printing.jobs') {
+    const sec = await import('./securityPrinting.js');
+    await sec.selfAuthorizeSecureJob(client, ctx, input.entityId);
+  } else if (input.entityType === 'hr.payrolls') {
+    await payrollLifecycle.recordWorkflowDecision(client, ctx, {
+      payrollId: input.entityId,
+      approved: true,
+    });
+  } else {
+    await client.query(
+      `UPDATE ${entity.table} SET ${entity.statusColumn} = $1 WHERE id = $2`,
+      [entity.approvedStatus, input.entityId]
+    );
+    await runApprovalSideEffect(client, ctx, input.entityType, input.entityId);
+  }
+
+  await logAudit(client, ctx, {
+    action: 'self_authorized',
+    resource: 'approvals',
+    recordId: input.entityId,
+    recordCode: input.entityCode,
+    metadata: { entityType: input.entityType, role: roleCode, reason: 'Self-authorized by final authority' },
+  });
+  await emitEvent(client, ctx, {
+    eventType: `${input.entityType.replace('.', '_')}.self_authorized`,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    entityCode: input.entityCode,
+    payload: { role: roleCode, reason: 'Self-authorized by final authority' },
+  });
+}
+
 /** Start the configured workflow for an entity and create the first approval task. */
 export async function startWorkflow(client: pg.PoolClient, ctx: Ctx, input: StartWorkflowInput) {
   const companyId = input.companyId ?? ctx.companyId ?? null;
@@ -216,6 +292,16 @@ export async function startWorkflow(client: pg.PoolClient, ctx: Ctx, input: Star
       entityCode: input.entityCode,
       payload: { reason: 'Approval-free by policy' },
     });
+    return null;
+  }
+
+  // Role-based self-authorization: a final-authority role signs and posts its
+  // own submission immediately, so no workflow — nor even a configured one — is
+  // consulted. Evaluated after the entity-policy skip so quotations keep their
+  // existing approval-free behavior for everyone.
+  const selfRole = await selfAuthorizeRole(client, companyId, ctx);
+  if (selfRole) {
+    await selfAuthorize(client, ctx, input, selfRole);
     return null;
   }
 

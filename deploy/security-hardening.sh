@@ -95,3 +95,7 @@ sshd -T 2>/dev/null | grep -Ei '^(passwordauthentication|kbdinteractiveauthentic
 echo
 echo "UFW Firewall Status:"
 ufw status verbose
+
+echo
+echo "Host clock:"
+bash "$(cd "$(dirname "$0")" && pwd)/clock-check.sh" || echo "WARNING: host NTP check failed."

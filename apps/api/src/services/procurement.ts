@@ -11,6 +11,7 @@ import { logAudit } from './audit.js';
 import { notifyUserAdvanced } from './communication.js';
 import * as finance from './finance.js';
 import { config } from '../config.js';
+import { assertSupplierApproved } from './iso/gates.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const MAX_PR_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -938,6 +939,7 @@ export async function createPurchaseOrder(
 ) {
   const companyId = ctx.companyId;
   if (!companyId) throw badRequest('Company context required');
+  await assertSupplierApproved(client, ctx, input.supplierId);
   const poNo = await nextDoc(client, ctx, 'PO');
   let subtotal = 0;
   let tax = 0;

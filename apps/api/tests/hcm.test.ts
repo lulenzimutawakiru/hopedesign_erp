@@ -306,6 +306,14 @@ describe('HCM lifecycle', () => {
       });
       expect(offer.status).toBe(200);
       const offerId = Number(offer.body.data.offerId);
+      await db(
+        `INSERT INTO iso_entries
+           (company_id, tenant_id, entry_type, status, title, owner_role, subject_table, subject_id, payload)
+         SELECT company_id, tenant_id, 'screening', 'CURRENT', 'Screening clear', 'HR director', 'candidates', id,
+                '{"outcome":"CLEAR"}'::jsonb
+           FROM candidates WHERE id = $1`,
+        [candidateId],
+      );
       const offerSend = await api.post(`/api/ops/hcm/offers/${offerId}/send`).set(auth(hrToken)).send({});
       expect(offerSend.status).toBe(200);
       const accepted = await api

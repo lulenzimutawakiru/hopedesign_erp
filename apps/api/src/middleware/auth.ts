@@ -2,7 +2,8 @@ import { NextFunction, Request, Response } from 'express';
 import { verifyAccessToken } from '../auth.js';
 import { query } from '../db.js';
 import { AuthUser } from '../types.js';
-import { unauthorized } from '../utils.js';
+import { pendingAcknowledgement } from '../services/iso/gates.js';
+import { forbidden, unauthorized } from '../utils.js';
 type ActingRoleSummary = NonNullable<AuthUser['actingRoles']>[number];
 
 const USER_SQL = `
@@ -168,10 +169,24 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     req.ctx.companyId = user.company_id;
     req.ctx.branchId = user.branch_id;
     req.auth = user;
+    if (!acknowledgementExempt(req) && user.company_id) {
+      const pending = await pendingAcknowledgement(Number(user.id), Number(user.company_id), payload.tid);
+      if (pending) return next(forbidden(`Accept the policy "${pending}" before continuing.`));
+    }
     next();
   } catch {
     next(unauthorized('Invalid or expired token'));
   }
+}
+
+function acknowledgementExempt(req: Request): boolean {
+  const path = req.path;
+  if (req.method === 'POST' && path === '/api/auth/logout') return true;
+  if (req.method === 'GET' && (path === '/api/auth/me' || path === '/api/auth/me/photo')) return true;
+  if (req.method === 'POST' && path === '/api/ops/compliance/acknowledgements') return true;
+  if (req.method === 'GET' && path === '/api/ops/compliance/policies') return true;
+  if (req.method === 'POST' && path === '/api/ops/compliance/security-events') return true;
+  return false;
 }
 const DELEGATIONS_SQL = `
   SELECT d.id AS delegation_id, d.code AS delegation_code, d.delegator_user_id,

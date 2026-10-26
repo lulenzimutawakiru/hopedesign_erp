@@ -4247,6 +4247,11 @@ export default function CompliancePdpo({ path }: { path: string }) {
             </button>
           );
         })}
+        {can(user, 'compliance.iso.view') && (
+          <button className="btn btn-sm btn-ghost" type="button" onClick={() => navigate('/compliance/iso')}>
+            ISO register
+          </button>
+        )}
       </nav>
 
       {error && <ErrorBanner error={error} />}

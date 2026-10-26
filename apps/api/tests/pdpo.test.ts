@@ -1084,6 +1084,12 @@ describe('HTTP surface', () => {
     expect((refusedDelete.body as { error: { message: string } }).error.message).toContain(reference);
     expect((refusedDelete.body as { error: { message: string } }).error.message).toContain('cannot be deleted');
 
+    await pool.query(
+      `INSERT INTO iso_entries
+         (company_id, tenant_id, entry_type, status, title, owner_role, payload)
+       VALUES ($1,$2,'deletion_proof','CURRENT','Erasure proof','Data protection officer',$3::jsonb)`,
+      [COMPANY_ID, TENANT_ID, JSON.stringify({ subjectRequestId: id, backupsWiped: true, filesWiped: true })],
+    );
     const completed = await post('/subject-requests/' + id + '/complete', {
       outcomeSummary: 'The requested extract was sent to the subject.',
     });

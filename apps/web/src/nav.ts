@@ -460,16 +460,17 @@ export const NAV_GROUPS: NavGroup[] = [
         keywords: 'settings preference config system company profile',
       },
       {
-        id: 'dataprotection', label: 'Data Protection', href: '/compliance', perm: 'compliance.pdpo.view', accent: 'adm',
-        keywords: 'compliance pdpo personal data protection office data protection act privacy dpo register consent subject request breach filing equity',
+        id: 'dataprotection', label: 'Compliance', href: '/compliance', perm: 'compliance.pdpo.view', accent: 'adm',
+        keywords: 'compliance pdpo personal data protection office data protection act privacy dpo register consent subject request breach filing iso 27001 9001 annex',
         children: [
-          { id: 'complianceoverview', label: 'Overview', href: '/compliance/overview', perm: 'compliance.pdpo.view' , group: 'Overview'},
-          { id: 'complianceprocessing', label: 'Processing', href: '/compliance/activities', perm: 'compliance.processing_activities.view' , group: 'Processing'},
-          { id: 'complianceconsents', label: 'Consents', href: '/compliance/consents', perm: 'compliance.consents.view' , group: 'Processing'},
-          { id: 'compliancerequests', label: 'Subject requests', href: '/compliance/requests', perm: 'compliance.subject_requests.view' , group: 'Requests & Breaches'},
-          { id: 'compliancebreaches', label: 'Breaches', href: '/compliance/breaches', perm: 'compliance.breaches.view' , group: 'Requests & Breaches'},
-          { id: 'compliancefilings', label: 'Filings', href: '/compliance/filings', perm: 'compliance.pdpo.view' , group: 'Filings'},
-          { id: 'complianceregistration', label: 'Registration', href: '/compliance/config', perm: 'compliance.pdpo.manage' , group: 'Filings'},
+          { id: 'complianceoverview', label: 'Overview', href: '/compliance/overview', perm: 'compliance.pdpo.view' , group: 'Data protection'},
+          { id: 'complianceprocessing', label: 'Processing', href: '/compliance/activities', perm: 'compliance.processing_activities.view' , group: 'Data protection'},
+          { id: 'complianceconsents', label: 'Consents', href: '/compliance/consents', perm: 'compliance.consents.view' , group: 'Data protection'},
+          { id: 'compliancerequests', label: 'Subject requests', href: '/compliance/requests', perm: 'compliance.subject_requests.view' , group: 'Data protection'},
+          { id: 'compliancebreaches', label: 'Breaches', href: '/compliance/breaches', perm: 'compliance.breaches.view' , group: 'Data protection'},
+          { id: 'compliancefilings', label: 'Filings', href: '/compliance/filings', perm: 'compliance.pdpo.view' , group: 'Data protection'},
+          { id: 'complianceregistration', label: 'Registration', href: '/compliance/config', perm: 'compliance.pdpo.manage' , group: 'Data protection'},
+          { id: 'complianceiso', label: 'ISO register', href: '/compliance/iso', perm: 'compliance.iso.view', group: 'Standards' },
         ],
       },
     ],
@@ -911,6 +912,7 @@ export function requiredPermForPath(path: string): string | undefined {
       breaches: 'compliance.breaches.view',
       filings: 'compliance.pdpo.view',
       config: 'compliance.pdpo.manage',
+      iso: 'compliance.iso.view',
     };
     return map[parts[1] ?? ''] ?? 'compliance.pdpo.view';
   }

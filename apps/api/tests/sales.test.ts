@@ -14,6 +14,16 @@ async function sku(): Promise<number> {
   return Number(res.rows[0].id);
 }
 
+async function acceptRequirements(quotationId: number) {
+  const quote = await db(`SELECT company_id, tenant_id FROM sales_quotations WHERE id = $1`, [quotationId]);
+  await db(
+    `INSERT INTO iso_entries
+       (company_id, tenant_id, entry_type, status, title, owner_role, subject_table, subject_id, payload)
+     VALUES ($1,$2,'requirement_review','CURRENT','Customer requirements accepted','Sales director','sales_quotations',$3,'{"accepted":"true"}'::jsonb)`,
+    [quote.rows[0].company_id, quote.rows[0].tenant_id, quotationId],
+  );
+}
+
 describe('Sales order-to-cash ops', () => {
   it('converts an approved quotation into a sales order with copied lines', async () => {
     const { token } = await loginAs('sarah.sales');
@@ -32,6 +42,7 @@ describe('Sales order-to-cash ops', () => {
     expect(detail.body.data.quotation.status).toBe('APPROVED');
     expect(detail.body.data.items.length).toBe(1);
 
+    await acceptRequirements(quotationId);
     const convert = await api.post(`/api/ops/sales/quotations/${quotationId}/convert`).set(auth(token)).send({});
     expect(convert.status).toBe(200);
     expect(Number(convert.body.data.orderId)).toBeGreaterThan(0);
@@ -91,6 +102,7 @@ describe('Sales order-to-cash ops', () => {
     expect(quoted.status).toBe(200);
     const quotationId = quoted.body.data.quotationId;
     await api.post(`/api/ops/sales/quotations/${quotationId}/submit`).set(auth(token)).send({});
+    await acceptRequirements(quotationId);
     const converted = await api.post(`/api/ops/sales/quotations/${quotationId}/convert`).set(auth(token)).send({});
     expect(converted.status).toBe(200);
     const orderId = Number(converted.body.data.orderId);
@@ -150,6 +162,7 @@ describe('Sales order-to-cash ops', () => {
     expect(quoted.status).toBe(200);
     const quotationId = quoted.body.data.quotationId;
     await api.post(`/api/ops/sales/quotations/${quotationId}/submit`).set(auth(token)).send({});
+    await acceptRequirements(quotationId);
     const converted = await api.post(`/api/ops/sales/quotations/${quotationId}/convert`).set(auth(token)).send({});
     const orderId = Number(converted.body.data.orderId);
     await db(`UPDATE sales_orders SET status = 'APPROVED' WHERE id = $1`, [orderId]);

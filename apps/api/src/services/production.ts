@@ -7,6 +7,7 @@ import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import { generateQr } from './qr.js';
 import * as finance from './finance.js';
+import { assertWorkOrderReady } from './iso/gates.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -397,6 +398,7 @@ export async function startWorkOrder(client: pg.PoolClient, ctx: Ctx, workOrderI
   if (!['RELEASED', 'ON_HOLD'].includes(String(wo.status))) {
     throw badRequest(`Work order must be RELEASED or ON_HOLD to start (current: ${wo.status})`);
   }
+  await assertWorkOrderReady(client, ctx, workOrderId, Number(wo.product_id));
   if (wo.machine_id) {
     const machine = (await client.query(`SELECT * FROM machines WHERE id = $1`, [wo.machine_id])).rows[0];
     if (machine && ['BREAKDOWN', 'OFFLINE', 'MAINTENANCE'].includes(String(machine.status))) {

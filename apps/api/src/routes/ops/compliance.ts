@@ -18,13 +18,26 @@
  * There is no unauthenticated surface here, unlike the bank webhooks. Nothing
  * about a data protection register is inbound: every row is written by a named
  * human holding a named permission.
+ *
+ * The ISO register is the exception that proves the rule. It is not a tenant
+ * table and it cannot be edited from this router. The status of each control
+ * is the assessment in services/iso, so a caller cannot mark a control
+ * implemented.
  */
 import { Router } from 'express';
 import pg from 'pg';
 import { tx, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
-import { asyncHandler } from '../../utils.js';
+import { asyncHandler, notFound } from '../../utils.js';
 import * as pdpo from '../../services/pdpo/ops.js';
+import {
+  findControl,
+  ISO_ASSESSED_ON,
+  ISO_DISCLAIMER,
+  queryRegister,
+  summariseRegister,
+} from '../../services/iso/register.js';
+import * as isoOps from '../../services/iso/operating.js';
 
 export const complianceOpsRouter = Router();
 
@@ -206,3 +219,88 @@ complianceOpsRouter.post('/filings/:id/file', ...run('compliance.pdpo.file', (c,
 complianceOpsRouter.post('/filings/:id/acknowledge', ...run('compliance.pdpo.file', (c, ctx, b, p) => pdpo.acknowledgeSubmission(c, ctx, Number(p.id), b)));
 complianceOpsRouter.post('/filings/:id/reject', ...run('compliance.pdpo.file', (c, ctx, b, p) => pdpo.rejectSubmission(c, ctx, Number(p.id), b)));
 complianceOpsRouter.delete('/filings/:id', ...run('compliance.pdpo.file', (c, ctx, _b, p) => pdpo.deleteSubmission(c, ctx, Number(p.id))));
+
+// --------------------------------------------------------------- ISO register
+// Read-only. The catalogue is the assessment; this route only filters it.
+complianceOpsRouter.get('/iso', requirePermission('compliance.iso.view'), asyncHandler(async (req, res) => {
+  const controls = queryRegister({
+    framework: str(req.query.framework),
+    status: str(req.query.status),
+    q: str(req.query.q),
+  });
+  res.json({
+    data: {
+      assessedOn: ISO_ASSESSED_ON,
+      disclaimer: ISO_DISCLAIMER,
+      summary: summariseRegister(),
+      controls,
+    },
+  });
+}));
+
+complianceOpsRouter.get('/iso/:code', requirePermission('compliance.iso.view'), asyncHandler(async (req, res) => {
+  const control = findControl(String(req.params.code ?? ''));
+  if (!control) throw notFound('Control not found');
+  res.json({ data: control });
+}));
+
+// ------------------------------------------------------- ISO operating records
+// Any signed-in user can report a security event. Everything else is permissioned.
+complianceOpsRouter.post('/security-events', asyncHandler(async (req, res) => {
+  const body = req.body ?? {};
+  const out = await tx((client) => isoOps.createEntry(client, req.ctx, {
+    entryType: 'security_event',
+    status: 'OPEN',
+    title: String(body.title ?? ''),
+    ownerRole: body.ownerRole != null ? String(body.ownerRole) : 'Security administrator',
+    payload: body.payload ?? { description: body.description ?? null },
+  }), req.ctx);
+  res.json({ data: out });
+}));
+
+complianceOpsRouter.post('/acknowledgements', asyncHandler(async (req, res) => {
+  const out = await tx(
+    (client) => isoOps.acknowledgePolicy(client, req.ctx, Number(req.body?.policyId)),
+    req.ctx,
+  );
+  res.json({ data: out });
+}));
+
+complianceOpsRouter.get('/policies', ...runGet('compliance.operating.view', (c, ctx, q) => isoOps.listPolicies(c, ctx, str(q.kind))));
+complianceOpsRouter.post('/policies', ...run('compliance.operating.manage', (c, ctx, b) => isoOps.createPolicy(c, ctx, {
+  code: b.code != null ? String(b.code) : null,
+  kind: String(b.kind ?? ''),
+  title: String(b.title ?? ''),
+  version: String(b.version ?? ''),
+  body: String(b.body ?? ''),
+  ownerRole: String(b.ownerRole ?? ''),
+  nextReviewOn: b.nextReviewOn != null ? String(b.nextReviewOn) : null,
+  subjectUserId: b.subjectUserId != null ? Number(b.subjectUserId) : null,
+})));
+complianceOpsRouter.post('/policies/:id/approve', ...run('compliance.operating.manage', (c, ctx, b, p) => isoOps.approvePolicy(
+  c, ctx, Number(p.id), b.nextReviewOn != null ? String(b.nextReviewOn) : null,
+)));
+complianceOpsRouter.post('/policies/:id/retire', ...run('compliance.operating.manage', (c, ctx, _b, p) => isoOps.retirePolicy(c, ctx, Number(p.id))));
+complianceOpsRouter.get('/entries', ...runGet('compliance.operating.view', (c, ctx, q) => isoOps.listEntries(c, ctx, {
+  entryType: str(q.entryType),
+  status: str(q.status),
+  limit: int(q.limit),
+})));
+complianceOpsRouter.post('/entries', ...run('compliance.operating.manage', (c, ctx, b) => isoOps.createEntry(c, ctx, {
+  entryType: String(b.entryType ?? ''),
+  status: b.status != null ? String(b.status) : null,
+  title: String(b.title ?? ''),
+  ownerRole: String(b.ownerRole ?? ''),
+  subjectTable: b.subjectTable != null ? String(b.subjectTable) : null,
+  subjectId: b.subjectId != null ? Number(b.subjectId) : null,
+  dueOn: b.dueOn != null ? String(b.dueOn) : null,
+  reviewedOn: b.reviewedOn != null ? String(b.reviewedOn) : null,
+  payload: b.payload,
+})));
+complianceOpsRouter.patch('/entries/:id', ...run('compliance.operating.manage', (c, ctx, b, p) => isoOps.updateEntry(c, ctx, Number(p.id), {
+  status: b.status != null ? String(b.status) : null,
+  payload: b.payload,
+  reviewedOn: b.reviewedOn != null ? String(b.reviewedOn) : null,
+  title: b.title != null ? String(b.title) : null,
+})));
+complianceOpsRouter.post('/suppliers/:id/approve', ...run('compliance.operating.manage', (c, ctx, _b, p) => isoOps.approveSupplier(c, ctx, Number(p.id))));
