@@ -19,6 +19,20 @@ const RESOURCES: { resource: string; label: string; perm: string }[] = [
   { resource: 'returns', label: 'Returns', perm: 'sales.returns.view' },
 ];
 
+// Document types a user can create manually from the Sales workspace. The backend
+// create endpoints already exist for all of these; the composer just has to reach
+// them. Delivery notes are deliberately absent — they are produced by dispatching
+// a sales order (they carry order items and post a warehouse issue).
+const CREATE_PERMS: Record<string, string> = {
+  quotations: 'sales.quotations.create',
+  orders: 'sales.orders.create',
+  invoices: 'sales.invoices.create',
+  receipts: 'sales.receipts.create',
+  credit_notes: 'sales.credit_notes.create',
+  debit_notes: 'sales.debit_notes.create',
+  returns: 'sales.returns.create',
+};
+
 const QUOTE_STEPS = ['DRAFT', 'SUBMITTED', 'APPROVED', 'CONVERTED'];
 const ORDER_STEPS = ['DRAFT', 'SUBMITTED', 'APPROVED', 'ALLOCATED', 'DISPATCHED', 'INVOICED'];
 
@@ -716,12 +730,8 @@ function DocumentList({ resource }: { resource: string }) {
   }, [load]);
 
   const canCreateQuote = can(user, 'sales.quotations.create');
-  const canCreateOrder = can(user, 'sales.orders.create');
-  const canCreateInvoice = can(user, 'sales.invoices.create');
-  const showNew =
-    (resource === 'quotations' && canCreateQuote) ||
-    (resource === 'orders' && canCreateOrder) ||
-    (resource === 'invoices' && canCreateInvoice);
+  const createPerm = CREATE_PERMS[resource];
+  const showNew = Boolean(createPerm) && can(user, createPerm);
 
   const cols = listColumns(resource);
 
@@ -978,14 +988,20 @@ function Composer({ resource }: { resource: string }) {
     }
   };
 
-  if (resource !== 'quotations' && resource !== 'orders' && resource !== 'invoices') {
+  if (resource === 'receipts' || resource === 'credit_notes' || resource === 'debit_notes') {
+    return <MoneyDocComposer resource={resource} />;
+  }
+  if (resource === 'returns') {
+    return <ReturnComposer />;
+  }
+  if (resource === 'delivery_notes') {
     return (
       <div className="page">
         <header className="page-head">
           <div>
-            <button className="btn btn-sm" onClick={() => navigate(`/sales/${resource}`)}>Back</button>
-            <h1>Create from an order</h1>
-            <p className="muted">Delivery notes and receipts are created from a sales order — they are not typed in as standalone records.</p>
+            <button className="btn btn-sm" onClick={() => navigate('/sales/delivery_notes')}>Back</button>
+            <h1>Create from a sales order</h1>
+            <p className="muted">Delivery notes are produced by dispatching a sales order — open the order and use Dispatch. They carry order line items and post the warehouse issue, so they are not typed in as standalone records.</p>
           </div>
         </header>
       </div>
@@ -1121,6 +1137,296 @@ function Composer({ resource }: { resource: string }) {
         <div className="otc-total">
           Total {fmtMoney(total)}
           {discountAmount > 0 && <span className="muted" style={{ display: 'block', fontSize: 12, fontWeight: 400 }}>incl. {fmtMoney(discountAmount)} discount</span>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+const MONEY_DOC_META: Record<string, { title: string; note: string; path: string; idKey: string }> = {
+  receipts: {
+    title: 'New receipt',
+    note: 'Records a customer payment and posts it to the ledger. Link an invoice to allocate the payment against it.',
+    path: '/api/ops/sales/receipts',
+    idKey: 'receiptId',
+  },
+  credit_notes: {
+    title: 'New credit note',
+    note: 'Credits a customer (e.g. returned or disputed goods). Drafts go through the approval workflow.',
+    path: '/api/ops/sales/credit-notes',
+    idKey: 'creditNoteId',
+  },
+  debit_notes: {
+    title: 'New debit note',
+    note: 'Charges a customer extra (e.g. underbilling, freight or a price correction). Drafts go through the approval workflow.',
+    path: '/api/ops/sales/debit-notes',
+    idKey: 'debitNoteId',
+  },
+};
+
+const RECEIPT_METHODS = ['CASH', 'BANK_TRANSFER', 'MOBILE_MONEY', 'CHEQUE', 'CARD', 'OTHER'];
+const DEBIT_REASON_CODES = ['UNDERBILLING', 'ADDITIONAL_CHARGES', 'PRICE_CORRECTION', 'FREIGHT', 'TAX', 'OTHER'];
+
+function MoneyDocComposer({ resource }: { resource: string }) {
+  const meta = MONEY_DOC_META[resource];
+  const isReceipt = resource === 'receipts';
+  const isCredit = resource === 'credit_notes';
+  const isDebit = resource === 'debit_notes';
+
+  const [customerId, setCustomerId] = useState<number | ''>('');
+  const [customerLabel, setCustomerLabel] = useState('');
+  const [invoiceId, setInvoiceId] = useState<number | ''>('');
+  const [invoiceLabel, setInvoiceLabel] = useState('');
+  const [date, setDate] = useState('');
+  const [amount, setAmount] = useState(0);
+  const [taxAmount, setTaxAmount] = useState(0);
+  const [method, setMethod] = useState('CASH');
+  const [reference, setReference] = useState('');
+  const [reason, setReason] = useState('');
+  const [reasonCode, setReasonCode] = useState('OTHER');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const q = useHashQuery();
+
+  useEffect(() => {
+    const cid = Number(q.get('customer'));
+    const label = q.get('customerLabel');
+    if (cid > 0) {
+      setCustomerId(cid);
+      if (label) setCustomerLabel(label);
+    }
+  }, [q]);
+
+  const submit = async () => {
+    setError('');
+    if (!customerId) { setError('Select a customer'); return; }
+    if (amount <= 0) { setError('Amount must be positive'); return; }
+    if ((isCredit || isDebit) && !reason.trim()) { setError('Reason is required'); return; }
+    setBusy(true);
+    try {
+      const body: Rec = { customerId, amount };
+      if (isReceipt) {
+        body.method = method;
+        body.reference = reference.trim() || null;
+        body.receiptDate = date || null;
+        body.invoiceId = invoiceId || null;
+        body.description = reason.trim() || null;
+      } else {
+        body.reason = reason.trim();
+        body.reasonCode = isDebit ? reasonCode : null;
+        body.taxAmount = taxAmount || 0;
+        body.invoiceId = invoiceId || null;
+        if (isCredit) body.creditDate = date || null;
+        if (isDebit) body.debitDate = date || null;
+      }
+      const r = await api<{ data: Record<string, number> }>(meta.path, { method: 'POST', body: JSON.stringify(body) });
+      navigate(`/sales/${resource}/${r.data[meta.idKey]}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <button className="btn btn-sm" onClick={() => navigate(`/sales/${resource}`)}>Back</button>
+          <h1>{meta.title}</h1>
+          <p className="muted">{meta.note}</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn" onClick={() => navigate(`/sales/${resource}`)}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy} onClick={submit}>{busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </header>
+      {error && <ErrorBanner error={error} />}
+      <section className="card card-pad">
+        <div className="form-grid">
+          <LookupField
+            label="Customer"
+            required
+            endpoint="/api/ops/sales/customers"
+            display={(r) => `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`}
+            valueLabel={customerLabel}
+            onPick={(r) => { setCustomerId(num(r.id)); setCustomerLabel(`${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`); }}
+          />
+          <LookupField
+            label="Invoice (optional)"
+            endpoint="/api/ops/sales/invoices"
+            display={(r) => `${pick(r, 'invoiceNo', 'invoice_no') ?? ''} · ${pick(r, 'customerName', 'customer_name') ?? ''}`}
+            valueLabel={invoiceLabel}
+            onPick={(r) => { setInvoiceId(num(r.id)); setInvoiceLabel(`${pick(r, 'invoiceNo', 'invoice_no') ?? ''} · ${pick(r, 'customerName', 'customer_name') ?? ''}`); }}
+          />
+          <div className="field">
+            <label>{isReceipt ? 'Receipt date' : isCredit ? 'Credit date' : 'Debit note date'}</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Amount</label>
+            <input type="number" min={0} step="0.01" value={amount} onChange={(e) => setAmount(num(e.target.value))} />
+          </div>
+          {isReceipt ? (
+            <>
+              <div className="field">
+                <label>Method</label>
+                <select value={method} onChange={(e) => setMethod(e.target.value)}>
+                  {RECEIPT_METHODS.map((m) => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label>Reference</label>
+                <input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Cheque no., txn ref…" />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="field">
+                <label>Tax amount</label>
+                <input type="number" min={0} step="0.01" value={taxAmount} onChange={(e) => setTaxAmount(num(e.target.value))} />
+              </div>
+              {isDebit && (
+                <div className="field">
+                  <label>Reason code</label>
+                  <select value={reasonCode} onChange={(e) => setReasonCode(e.target.value)}>
+                    {DEBIT_REASON_CODES.map((rc) => <option key={rc} value={rc}>{rc.replace('_', ' ')}</option>)}
+                  </select>
+                </div>
+              )}
+            </>
+          )}
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>{isReceipt ? 'Description (optional)' : 'Reason'}</label>
+            <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder={isReceipt ? 'What the payment was for' : 'Why is this being issued?'} />
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+interface ReturnLine {
+  key: string;
+  productId: number | '';
+  productLabel: string;
+  quantity: number;
+  condition: string;
+}
+
+function ReturnComposer() {
+  const [customerId, setCustomerId] = useState<number | ''>('');
+  const [customerLabel, setCustomerLabel] = useState('');
+  const [reason, setReason] = useState('');
+  const [lines, setLines] = useState<ReturnLine[]>([{ key: `${Date.now()}-${Math.random()}`, productId: '', productLabel: '', quantity: 1, condition: 'RESALEABLE' }]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const q = useHashQuery();
+
+  useEffect(() => {
+    const cid = Number(q.get('customer'));
+    const label = q.get('customerLabel');
+    if (cid > 0) {
+      setCustomerId(cid);
+      if (label) setCustomerLabel(label);
+    }
+  }, [q]);
+
+  const setLine = (key: string, patch: Partial<ReturnLine>) => {
+    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+  };
+
+  const submit = async () => {
+    setError('');
+    if (!customerId) { setError('Select a customer'); return; }
+    if (!reason.trim()) { setError('Enter a return reason'); return; }
+    const items = lines
+      .filter((l) => l.productId && l.quantity > 0)
+      .map((l) => ({ productId: Number(l.productId), quantity: l.quantity, condition: l.condition }));
+    if (!items.length) { setError('Add at least one returned item'); return; }
+    setBusy(true);
+    try {
+      const r = await api<{ data: { returnId: number } }>('/api/ops/sales/returns', {
+        method: 'POST',
+        body: JSON.stringify({ customerId, reason: reason.trim(), items }),
+      });
+      navigate(`/sales/returns/${r.data.returnId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <button className="btn btn-sm" onClick={() => navigate('/sales/returns')}>Back</button>
+          <h1>New sales return</h1>
+          <p className="muted">Records goods coming back from a customer. Complete the return later to move stock into RETURNS or DAMAGED.</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn" onClick={() => navigate('/sales/returns')}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy} onClick={submit}>{busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </header>
+      {error && <ErrorBanner error={error} />}
+      <section className="card card-pad">
+        <div className="form-grid">
+          <LookupField
+            label="Customer"
+            required
+            endpoint="/api/ops/sales/customers"
+            display={(r) => `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`}
+            valueLabel={customerLabel}
+            onPick={(r) => { setCustomerId(num(r.id)); setCustomerLabel(`${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`); }}
+          />
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>Reason</label>
+            <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why are these goods being returned?" />
+          </div>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head">
+          <h3>Returned items</h3>
+          <button className="btn btn-sm" onClick={() => setLines((p) => [...p, { key: `${Date.now()}-${Math.random()}`, productId: '', productLabel: '', quantity: 1, condition: 'RESALEABLE' }])}>+ Line</button>
+        </div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th className="cell-num">Qty</th>
+                <th>Condition</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => (
+                <tr key={l.key}>
+                  <td>
+                    <LookupField
+                      compact
+                      endpoint="/api/ops/sales/products"
+                      display={(r) => `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`}
+                      valueLabel={l.productLabel}
+                      onPick={(r) => setLine(l.key, { productId: num(r.id), productLabel: `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}` })}
+                    />
+                  </td>
+                  <td><input className="cell-input" type="number" min={0} value={l.quantity} onChange={(e) => setLine(l.key, { quantity: num(e.target.value) })} /></td>
+                  <td>
+                    <select value={l.condition} onChange={(e) => setLine(l.key, { condition: e.target.value })}>
+                      <option value="RESALEABLE">Resaleable</option>
+                      <option value="DAMAGED">Damaged</option>
+                    </select>
+                  </td>
+                  <td><button className="btn btn-sm" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key))}>Remove</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </section>
     </div>
