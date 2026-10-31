@@ -19,10 +19,16 @@
 // Idempotent: every posted movement is tagged reference_type='a4-stock-sheet',
 // and the script refuses to run again once any such movement exists.
 //
+// --replace makes the sheet the *current* record: it first clears any existing
+// NATEX-A4 inventory (movements, layers, balances, batch quantities) and any
+// active quality hold on the product, then imports the sheet fresh. Use it when
+// the sheet should supersede the demo/seed stock rather than sit on top of it.
+//
 // Usage:
 //   node src/import-a4-stock.js                    # local dev (.env + .env.local)
-//   node src/import-a4-stock.js --env=.env.production
+//   node src/import-a4-stock.js --replace          # clear NATEX-A4, then import
 //   node src/import-a4-stock.js --dry-run          # print the plan, post nothing
+//   node src/import-a4-stock.js --replace --dry-run
 // ============================================================
 const path = require("path");
 const { Pool } = require("pg");
@@ -31,6 +37,7 @@ const dotenv = require("dotenv");
 const ROOT = path.resolve(__dirname, "..", "..", "..");
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
+const replace = args.includes("--replace");
 const envArg = args.find((a) => a.startsWith("--env="));
 
 // Resolve master data by code, not hard-coded id, so the import targets
@@ -141,14 +148,16 @@ async function main() {
     );
     const userId = user.rows.length ? user.rows[0].id : null;
 
-    // Idempotency guard.
-    const done = await client.query(
-      "SELECT 1 FROM inventory_movements WHERE reference_type = $1 LIMIT 1",
-      [REF_TYPE]
-    );
-    if (done.rows.length) {
-      console.log(`Already imported (movements tagged reference_type='${REF_TYPE}'). Nothing to do.`);
-      return;
+    // Idempotency guard (additive mode only; --replace clears and re-imports).
+    if (!replace) {
+      const done = await client.query(
+        "SELECT 1 FROM inventory_movements WHERE reference_type = $1 LIMIT 1",
+        [REF_TYPE]
+      );
+      if (done.rows.length) {
+        console.log(`Already imported (movements tagged reference_type='${REF_TYPE}'). Nothing to do.`);
+        return;
+      }
     }
 
     // Build the ordered movement plan. ISSUE runs against a running balance
@@ -187,6 +196,30 @@ async function main() {
     }
 
     await client.query("BEGIN");
+
+    if (replace) {
+      const holdInv = await client.query(
+        "DELETE FROM quality_holds WHERE tenant_id = $1 AND product_id = $2 AND status = 'HELD' RETURNING hold_no",
+        [tenantId, productId]
+      );
+      const holdProd = await client.query(
+        "DELETE FROM production_quality_holds WHERE tenant_id = $1 AND product_id = $2 AND status IN ('HELD','INVESTIGATING','QUARANTINE') RETURNING hold_no",
+        [tenantId, productId]
+      );
+      const mv = await client.query("DELETE FROM inventory_movements WHERE product_id = $1", [productId]);
+      const layers = await client.query("DELETE FROM inventory_layers WHERE product_id = $1", [productId]);
+      const inv = await client.query("DELETE FROM inventory WHERE product_id = $1", [productId]);
+      const batches = await client.query(
+        "UPDATE product_batches SET quantity = 0, updated_at = now() WHERE product_id = $1",
+        [productId]
+      );
+      const holds = [...holdInv.rows, ...holdProd.rows].map((r) => r.hold_no);
+      console.log(
+        `Cleared: ${mv.rowCount} movements, ${layers.rowCount} layers, ${inv.rowCount} balances, ` +
+          `${batches.rowCount} batches zeroed, holds [${holds.join(", ") || "none"}].`
+      );
+    }
+
     let posted = 0;
     for (const p of plans) {
       const res = await client.query(
@@ -209,7 +242,14 @@ async function main() {
     }
     await client.query("COMMIT");
 
-    console.log(`Done: ${posted} movements posted. Final on-hand = ${finalOnHand} reams.`);
+    const onhand = await client.query(
+      "SELECT COALESCE(SUM(quantity), 0) AS qty FROM inventory WHERE product_id = $1",
+      [productId]
+    );
+    console.log(
+      `Done: ${posted} movements posted. Expected on-hand = ${finalOnHand} reams; ` +
+        `verified inventory on-hand = ${Number(onhand.rows[0].qty)} reams.`
+    );
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
