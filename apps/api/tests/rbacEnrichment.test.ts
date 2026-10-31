@@ -174,3 +174,48 @@ describe('Role-assignment metadata and expiry', () => {
     }
   });
 });
+
+describe('Multiple roles per user', () => {
+  async function operationsDirectorRoleId(): Promise<number> {
+    const res = await db(
+      `SELECT r.id FROM roles r
+        JOIN users u ON u.tenant_id = r.tenant_id
+       WHERE u.username = $1 AND r.code = 'operations_director'
+       ORDER BY r.id LIMIT 1`,
+      [ADMIN]
+    );
+    return Number(res.rows[0].id);
+  }
+
+  it('adding a second role keeps the first and unions permissions', async () => {
+    const roleId = await operationsDirectorRoleId();
+    const target = await loginAs(TARGET);
+    const before = await getMe(target.token);
+    const beforeRoleCodes = before.roles.map((r) => String(r.role_code));
+    const beforePermissions = [...before.permissions];
+
+    // sarah.sales already holds her sales role; assigning a second role must
+    // not drop it, and the permission set must be the union of both roles.
+    try {
+      const assign = await api
+        .post(`/api/admin/users/${targetId}/roles`)
+        .set(auth(adminToken))
+        .send({ role_id: roleId });
+      expect(assign.status).toBe(200);
+
+      const after = await getMe(target.token);
+      const afterRoleCodes = after.roles.map((r) => String(r.role_code));
+
+      // Both roles are held at once.
+      expect(after.roles.length).toBeGreaterThan(before.roles.length);
+      expect(afterRoleCodes).toEqual(expect.arrayContaining(beforeRoleCodes));
+      expect(afterRoleCodes).toContain('operations_director');
+
+      // Permissions are the union: the new role's codes appear, the old survive.
+      expect(after.permissions).toContain('inventory.movements.view');
+      expect(after.permissions).toEqual(expect.arrayContaining(beforePermissions));
+    } finally {
+      await db('DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2', [targetId, roleId]);
+    }
+  });
+});
