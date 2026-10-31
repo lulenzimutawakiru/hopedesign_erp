@@ -1293,9 +1293,6 @@ html[data-theme='dark'] .scan-verified .verify-mark { color: #20C4C4; }
 .more-drawer .nav-sub-label { color: var(--muted); }
 .module-sections { margin-bottom: 8px; }
 .module-sections-page {
-  position: sticky;
-  top: 0;
-  z-index: 4;
   margin-bottom: 8px;
   padding-top: 2px;
   padding-bottom: 8px;
