@@ -178,6 +178,8 @@ const MODULES = {
     advances: ["view","create","settle","void"],
     taxes: ["view","create","update"],
     reports: ["view","print","export"],
+    cost_centres: ["view"],
+    profit_centres: ["view"],
     posting_rules: ["view","create","post"],
     templates: ["view","create"],
     tax_jurisdictions: ["view","create"],
@@ -341,7 +343,7 @@ const MODULES = {
     documents: ["view","create","update","delete","download"],
     photos: ["view","create","delete"],
     depreciation: ["view","create","post"],
-    impairments: ["view","create","submit","approve","reject","post"],
+    impairments: ["view","create","submit","approve","reject","post","cancel"],
     scans: ["view","perform","verify"],
     anomalies: ["view","investigate","resolve"],
     custodians: ["view"],
@@ -571,12 +573,65 @@ function buildPermissions() {
   return perms;
 }
 
+// Expand role grant patterns into concrete permission codes.
+// "*" is every code. "module.*" and "module.resource.*" are the trailing
+// wildcards. "module.*.action" is every code in that module with that action
+// (migration 0167: inventory.*.view means the read-only codes). A pattern that
+// matches nothing is skipped; the catalogue test rejects those.
+function expandGrants(grants) {
+  const perms = buildPermissions();
+  const all = perms.map((p) => p.code);
+  const byModule = {};
+  const byResource = {};
+  for (const p of perms) {
+    (byModule[p.module] ||= []).push(p.code);
+    (byResource[`${p.module}.${p.resource}`] ||= []).push(p.code);
+  }
+  const apply = (pattern, into, add) => {
+    if (pattern === "*") {
+      if (add) for (const c of all) into.add(c);
+      else into.clear();
+      return;
+    }
+    if (pattern.endsWith(".*")) {
+      const base = pattern.slice(0, -2);
+      const hits = byModule[base] || byResource[base] || [];
+      for (const c of hits) add ? into.add(c) : into.delete(c);
+      return;
+    }
+    const mid = /^([a-z0-9_]+)\.\*\.([a-z0-9_]+)$/.exec(pattern);
+    if (mid) {
+      const suffix = "." + mid[2];
+      for (const c of byModule[mid[1]] || []) {
+        if (c.endsWith(suffix)) add ? into.add(c) : into.delete(c);
+      }
+      return;
+    }
+    if (add) {
+      if (all.includes(pattern)) into.add(pattern);
+    } else {
+      into.delete(pattern);
+    }
+  };
+  const out = new Set();
+  const excludes = [];
+  for (const g of grants) {
+    if (g.startsWith("!")) {
+      excludes.push(g.slice(1));
+      continue;
+    }
+    apply(g, out, true);
+  }
+  for (const e of excludes) apply(e, out, false);
+  return [...out];
+}
+
 // Role catalogue per the ERP spec (section 9).
 // grants use wildcards: "*" = everything, "module.*" = module, "module.resource.*" = resource.
 const ROLES = [
   // Administration
   { code: "super_administrator", name: "Super Administrator", grants: ["*"] },
-  { code: "system_administrator", name: "System Administrator", grants: ["efris.configuration.manage","efris.dashboard.view","efris.transactions.view","efris.transactions.retry","efris.transactions.reprocess","efris.transactions.reject","efris.reconciliation.view","efris.errors.view","efris.errors.retry","efris.reports.view", "admin.*", "database.*", "settings", "workflows.*", "reports.*", "expenditure.*", "communication.*", "hikvision.*","governance.delegations.view","governance.signature_profiles.view","governance.document_signatures.view","governance.document_signatures.verify","compliance.pdpo.view","compliance.pdpo.export","compliance.processing_activities.view","compliance.consents.view","compliance.subject_requests.view","compliance.breaches.view","compliance.iso.view","compliance.operating.view","compliance.operating.manage"] },
+  { code: "system_administrator", name: "System Administrator", grants: ["efris.configuration.manage","efris.dashboard.view","efris.transactions.view","efris.transactions.retry","efris.transactions.reprocess","efris.transactions.reject","efris.reconciliation.view","efris.errors.view","efris.errors.retry","efris.reports.view", "admin.*", "database.*", "workflows.*", "reports.*", "expenditure.*", "communication.*", "hikvision.*","governance.delegations.view","governance.signature_profiles.view","governance.document_signatures.view","governance.document_signatures.verify","compliance.pdpo.view","compliance.pdpo.export","compliance.processing_activities.view","compliance.consents.view","compliance.subject_requests.view","compliance.breaches.view","compliance.iso.view","compliance.operating.view","compliance.operating.manage"] },
   { code: "security_administrator", name: "Security Administrator", grants: ["efris.dashboard.view","efris.transactions.view","efris.configuration.view","efris.reconciliation.view","efris.errors.view","efris.reports.view", "admin.users.*", "admin.roles.*", "admin.permissions.*", "admin.policies.*", "admin.sod.*", "admin.audit.*", "qr.*", "security_printing.audit.*", "hikvision.*","governance.delegations.view","governance.delegations.revoke","governance.signature_profiles.view","governance.signature_profiles.revoke","governance.document_signatures.view","governance.document_signatures.verify","compliance.pdpo.view","compliance.pdpo.export","compliance.processing_activities.view","compliance.consents.view","compliance.subject_requests.view","compliance.breaches.view","compliance.breaches.create","compliance.breaches.update","compliance.breaches.report","compliance.breaches.close","compliance.iso.view","compliance.operating.view","compliance.operating.manage"] },
   { code: "it_support_administrator", name: "IT Support Administrator", grants: ["admin.users.view", "admin.settings.*", "documents.*"] },
   { code: "integration_administrator", name: "Integration Administrator", grants: ["efris.configuration.manage","efris.dashboard.view","efris.transactions.view","efris.transactions.retry","efris.transactions.reprocess","efris.transactions.reject","efris.reconciliation.view","efris.errors.view","efris.errors.retry","efris.reports.view", "admin.imports.*", "admin.exports.*", "admin.events.*", "admin.integrations.*", "admin.settings.view", "hikvision.*"] },
@@ -627,28 +682,28 @@ const ROLES = [
   // Warehouse
   { code: "supply_chain_manager", name: "Supply Chain Manager", grants: ["inventory.*", "procurement.*", "logistics.*", "reports.inventory.*"] },
   { code: "warehouse_manager", name: "Warehouse Manager", grants: ["inventory.*", "logistics.deliveries.*", "workflows.instances.*", "quality.inspections.view", "procurement.orders.view", "procurement.goods_receipts.view", "procurement.goods_receipts.create", "sales.orders.view", "sales.orders.allocate", "sales.orders.dispatch", "sales.delivery_notes.view", "production.work_orders.view", "production.work_orders.issue"] },
-  { code: "warehouse_supervisor", name: "Warehouse Supervisor", grants: ["inventory.items.*", "inventory.stock.*", "inventory.movements.*", "inventory.transfers.*", "inventory.adjustments.submit", "inventory.bins.*", "qr.scan.*", "procurement.goods_receipts.view", "sales.orders.view", "production.work_orders.view", "inventory.counts.*", "inventory.quality_holds.view", "inventory.quality_holds.create", "inventory.handling_units.*", "inventory.allocations.*", "inventory.ledger.view", "inventory.traceability.view", "inventory.alerts.view", "inventory.alerts.acknowledge", "inventory.putaway.*", "inventory.receiving.*", "inventory.picking.*", "inventory.packing.*", "inventory.dispatch.*", "inventory.zones.view", "inventory.racks.view", "inventory.shelves.view"] },
-  { code: "storekeeper", name: "Storekeeper", grants: ["inventory.items.view", "inventory.stock.view", "inventory.movements.create", "inventory.reservations.*", "inventory.bins.view", "qr.scan.*", "inventory.transfers.view", "procurement.goods_receipts.view", "sales.orders.view", "inventory.ledger.view", "inventory.counts.view", "inventory.counts.create", "inventory.counts.enter", "inventory.handling_units.view", "inventory.traceability.view", "inventory.alerts.view", "inventory.putaway.execute", "inventory.putaway.confirm", "inventory.receiving.view", "inventory.picking.execute", "inventory.packing.execute", "inventory.dispatch.view"] },
+  { code: "warehouse_supervisor", name: "Warehouse Supervisor", grants: ["inventory.items.*", "inventory.stock.*", "inventory.movements.*", "inventory.transfers.*", "inventory.adjustments.submit", "inventory.bins.*", "qr.scans.*", "procurement.goods_receipts.view", "sales.orders.view", "production.work_orders.view", "inventory.counts.*", "inventory.quality_holds.view", "inventory.quality_holds.create", "inventory.handling_units.*", "inventory.allocations.*", "inventory.ledger.view", "inventory.traceability.view", "inventory.alerts.view", "inventory.alerts.acknowledge", "inventory.putaway.*", "inventory.receiving.*", "inventory.picking.*", "inventory.packing.*", "inventory.dispatch.*", "inventory.zones.view", "inventory.racks.view", "inventory.shelves.view"] },
+  { code: "storekeeper", name: "Storekeeper", grants: ["inventory.items.view", "inventory.stock.view", "inventory.movements.create", "inventory.reservations.*", "inventory.bins.view", "qr.scans.*", "inventory.transfers.view", "procurement.goods_receipts.view", "sales.orders.view", "inventory.ledger.view", "inventory.counts.view", "inventory.counts.create", "inventory.counts.enter", "inventory.handling_units.view", "inventory.traceability.view", "inventory.alerts.view", "inventory.putaway.execute", "inventory.putaway.confirm", "inventory.receiving.view", "inventory.picking.execute", "inventory.packing.execute", "inventory.dispatch.view"] },
   { code: "inventory_controller", name: "Inventory Controller", grants: ["inventory.items.*", "inventory.stock.*", "inventory.batches.*", "inventory.reservations.*", "inventory.adjustments.view", "reports.inventory.view", "inventory.ledger.view", "inventory.counts.view", "inventory.counts.schedule", "inventory.valuations.view", "inventory.forecasts.view", "inventory.risk.view", "inventory.alerts.view", "inventory.traceability.view", "inventory.reorder_recommendations.view"] },
   { code: "inventory_officer", name: "Inventory Officer", grants: ["inventory.items.*", "inventory.stock.*", "inventory.movements.*", "inventory.batches.*"] },
-  { code: "receiving_officer", name: "Receiving Officer", grants: ["procurement.goods_receipts.*", "inventory.items.view", "inventory.stock.view", "qr.scan.*"] },
-  { code: "dispatch_officer", name: "Dispatch Officer", grants: ["sales.delivery_notes.*", "logistics.deliveries.*", "inventory.stock.view", "qr.scan.*", "qr.codes.view"] },
+  { code: "receiving_officer", name: "Receiving Officer", grants: ["procurement.goods_receipts.*", "inventory.items.view", "inventory.stock.view", "qr.scans.*"] },
+  { code: "dispatch_officer", name: "Dispatch Officer", grants: ["sales.delivery_notes.*", "logistics.deliveries.*", "inventory.stock.view", "qr.scans.*", "qr.codes.view"] },
   { code: "stock_auditor", name: "Stock Auditor", grants: ["inventory.stock.view", "inventory.adjustments.*", "inventory.movements.view", "reports.inventory.view", "admin.audit.view"] },
-  { code: "stock_counter", name: "Stock Counter", grants: ["inventory.stock.view", "inventory.adjustments.create", "inventory.adjustments.submit", "qr.scan.*"] },
+  { code: "stock_counter", name: "Stock Counter", grants: ["inventory.stock.view", "inventory.adjustments.create", "inventory.adjustments.submit", "qr.scans.*"] },
   // Production
   { code: "production_director", name: "Production Director", grants: ["production.*", "quality.*", "maintenance.*", "inventory.stock.view", "reports.production.*", "compliance.operating.view", "compliance.operating.manage"] },
   { code: "production_manager", name: "Production Manager", grants: ["production.*", "quality.inspections.view", "maintenance.requests.*", "reports.production.view", "compliance.operating.view", "compliance.operating.manage"] },
-  { code: "production_planner", name: "Production Planner", grants: ["production.plans.*", "production.work_orders.view", "production.work_orders.create", "production.work_orders.submit", "production.boms.view", "production.routings.view", "inventory.stock.view", "demand"] },
+  { code: "production_planner", name: "Production Planner", grants: ["production.plans.*", "production.work_orders.view", "production.work_orders.create", "production.work_orders.submit", "production.boms.view", "production.routings.view", "inventory.stock.view"] },
   { code: "production_supervisor", name: "Production Supervisor", grants: ["production.work_orders.*", "production.outputs.*", "production.downtime.*", "production.machines.view", "quality.inspections.execute", "inventory.items.view", "inventory.movements.create"] },
   { code: "production_officer", name: "Production Officer", grants: ["production.work_orders.view", "production.work_orders.update", "production.outputs.*", "production.downtime.*"] },
   { code: "work_order_manager", name: "Work Order Manager", grants: ["production.work_orders.*", "production.plans.view", "production.costing.view"] },
   { code: "production_scheduler", name: "Production Scheduler", grants: ["production.plans.*", "production.work_orders.view", "production.work_orders.update", "production.machines.view"] },
-  { code: "machine_operator", name: "Machine Operator", grants: ["production.work_orders.view", "production.work_orders.start", "production.work_orders.record", "production.outputs.create", "production.downtime.create", "production.machines.view", "qr.scan.*", "quality.inspections.view"] },
+  { code: "machine_operator", name: "Machine Operator", grants: ["production.work_orders.view", "production.work_orders.start", "production.work_orders.record", "production.outputs.create", "production.downtime.create", "production.machines.view", "qr.scans.*", "quality.inspections.view"] },
   { code: "production_cost_analyst", name: "Production Cost Analyst", grants: ["production.costing.*", "production.work_orders.view", "reports.production.*"] },
   // Maintenance
   { code: "maintenance_manager", name: "Maintenance Manager", grants: ["maintenance.*", "production.machines.view", "inventory.items.view"] },
   { code: "maintenance_supervisor", name: "Maintenance Supervisor", grants: ["maintenance.*", "production.machines.view"] },
-  { code: "maintenance_technician", name: "Maintenance Technician", grants: ["maintenance.requests.view", "maintenance.requests.update", "maintenance.work_orders.*", "production.machines.view", "qr.scan.*"] },
+  { code: "maintenance_technician", name: "Maintenance Technician", grants: ["maintenance.requests.view", "maintenance.requests.update", "maintenance.work_orders.*", "production.machines.view", "qr.scans.*"] },
   { code: "electrical_technician", name: "Electrical Technician", grants: ["maintenance.work_orders.*", "maintenance.requests.view", "production.machines.view"] },
   { code: "mechanical_technician", name: "Mechanical Technician", grants: ["maintenance.work_orders.*", "maintenance.requests.view", "production.machines.view"] },
   { code: "machine_controller", name: "Machine Controller", grants: ["production.machines.*", "maintenance.requests.*", "maintenance.schedules.view"] },
@@ -657,16 +712,16 @@ const ROLES = [
   { code: "quality_director", name: "Quality Director", grants: ["quality.*", "production.work_orders.view", "reports.quality.*", "compliance.iso.view", "compliance.operating.view", "compliance.operating.manage"] },
   { code: "quality_manager", name: "Quality Manager", grants: ["quality.*", "production.work_orders.view", "reports.quality.view", "compliance.iso.view", "compliance.operating.view", "compliance.operating.manage"] },
   { code: "quality_supervisor", name: "Quality Supervisor", grants: ["quality.plans.*", "quality.inspections.*", "quality.defects.*", "quality.ncrs.*", "quality.capa.*"] },
-  { code: "quality_inspector", name: "Quality Inspector", grants: ["quality.inspections.*", "quality.results.*", "quality.defects.*", "quality.ncrs.view", "qr.scan.*", "inventory.stock.view"] },
+  { code: "quality_inspector", name: "Quality Inspector", grants: ["quality.inspections.*", "quality.results.*", "quality.defects.*", "quality.ncrs.view", "qr.scans.*", "inventory.stock.view"] },
   { code: "qc_officer", name: "QC Officer", grants: ["quality.inspections.view", "quality.inspections.execute", "quality.results.*", "quality.defects.*"] },
   { code: "ncr_officer", name: "NCR Officer", grants: ["quality.ncrs.*", "quality.capa.*"] },
   { code: "qa_auditor", name: "QA Auditor", grants: ["quality.inspections.view", "quality.ncrs.view", "quality.capa.view", "reports.quality.view", "admin.audit.view", "compliance.iso.view", "compliance.operating.view"] },
   // Security printing
   { code: "security_printing_director", name: "Security Printing Director", grants: ["security_printing.*", "qr.*", "quality.*", "reports.security.*"] },
   { code: "security_printing_manager", name: "Security Printing Manager", grants: ["security_printing.*", "qr.codes.*", "qr.labels.*", "qr.reams.*", "qr.cartons.*", "qr.packing.*", "reports.security.view"] },
-  { code: "security_production_supervisor", name: "Security Production Supervisor", grants: ["security_printing.jobs.*", "security_printing.custody.*", "security_printing.batches.*", "security_printing.operators.*", "security_printing.machines.*", "qr.scan.*", "qr.packing.*"] },
+  { code: "security_production_supervisor", name: "Security Production Supervisor", grants: ["security_printing.jobs.*", "security_printing.custody.*", "security_printing.batches.*", "security_printing.operators.*", "security_printing.machines.*", "qr.scans.*", "qr.packing.*"] },
   { code: "security_printing_officer", name: "Security Printing Officer", grants: ["security_printing.jobs.view", "security_printing.jobs.create", "security_printing.jobs.update", "security_printing.custody.view", "security_printing.custody.record"] },
-  { code: "secure_machine_operator", name: "Secure Machine Operator", grants: ["security_printing.jobs.view", "security_printing.jobs.update", "security_printing.custody.record", "production.work_orders.view", "production.outputs.create", "qr.scan.*"] },
+  { code: "secure_machine_operator", name: "Secure Machine Operator", grants: ["security_printing.jobs.view", "security_printing.jobs.update", "security_printing.custody.record", "production.work_orders.view", "production.outputs.create", "qr.scans.*"] },
   { code: "secure_materials_controller", name: "Secure Materials Controller", grants: ["security_printing.jobs.view", "security_printing.jobs.issue_materials", "security_printing.custody.record", "inventory.stock.view"] },
   { code: "secure_stock_controller", name: "Secure Stock Controller", grants: ["security_printing.batches.*", "security_printing.jobs.view", "inventory.stock.view", "qr.codes.view", "qr.labels.create"] },
   { code: "spoilage_controller", name: "Spoilage Controller", grants: ["security_printing.jobs.view", "security_printing.jobs.update", "security_printing.batches.*", "quality.defects.*", "quality.ncrs.view"] },
@@ -690,34 +745,34 @@ const ROLES = [
   // Logistics
   { code: "logistics_manager", name: "Logistics Manager", grants: ["logistics.*", "sales.delivery_notes.*", "reports.*"] },
   { code: "logistics_officer", name: "Logistics Officer", grants: ["logistics.trips.*", "logistics.fuel.*", "logistics.fleet.*", "logistics.deliveries.*"] },
-  { code: "dispatch_manager", name: "Dispatch Manager", grants: ["sales.delivery_notes.*", "logistics.deliveries.*", "inventory.stock.view", "qr.scan.*"] },
+  { code: "dispatch_manager", name: "Dispatch Manager", grants: ["sales.delivery_notes.*", "logistics.deliveries.*", "inventory.stock.view", "qr.scans.*"] },
   { code: "fleet_manager", name: "Fleet Manager", grants: ["logistics.vehicles.*", "logistics.fuel.*", "logistics.fleet.*", "logistics.drivers.*", "logistics.routes.*"] },
   { code: "fleet_officer", name: "Fleet Officer", grants: ["logistics.vehicles.view", "logistics.vehicles.update", "logistics.fuel.*", "logistics.fleet.*"] },
   { code: "delivery_coordinator", name: "Delivery Coordinator", grants: ["logistics.deliveries.*", "logistics.trips.view", "sales.delivery_notes.view"] },
-  { code: "driver", name: "Driver", grants: ["logistics.trips.view", "logistics.trips.update", "logistics.deliveries.view", "logistics.deliveries.deliver", "qr.scan.*", "sales.delivery_notes.view"] },
+  { code: "driver", name: "Driver", grants: ["logistics.trips.view", "logistics.trips.update", "logistics.deliveries.view", "logistics.deliveries.deliver", "qr.scans.*", "sales.delivery_notes.view"] },
   // Assets
   { code: "asset_manager", name: "Asset Manager", grants: ["assets.*", "finance.journals.view", "finance.journals.create", "finance.journals.post", "admin.audit.view"] },
   { code: "asset_officer", name: "Asset Officer", grants: ["assets.register.*", "assets.tags.*", "assets.transfers.*", "assets.movements.*", "assets.assignments.*", "assets.locations.*", "assets.categories.*", "assets.types.*", "assets.classes.*", "assets.maintenance.*", "assets.warranties.*", "assets.insurance.*", "assets.documents.*", "assets.photos.*", "assets.depreciation.*", "assets.scans.*", "assets.timeline.*", "assets.dashboards.*", "assets.reports.*", "assets.imports.*", "assets.exports.*"] },
-  { code: "asset_custodian", name: "Asset Custodian", grants: ["assets.register.view", "assets.register.print", "assets.register.scan", "assets.register.verify", "assets.register.comment", "assets.tags.view", "assets.scans.*", "assets.timeline.*", "assets.dashboards.view", "assets.documents.view", "assets.photos.view", "qr.scan.*"] },
+  { code: "asset_custodian", name: "Asset Custodian", grants: ["assets.register.view", "assets.register.print", "assets.register.scan", "assets.register.verify", "assets.register.comment", "assets.tags.view", "assets.scans.*", "assets.timeline.*", "assets.dashboards.view", "assets.documents.view", "assets.photos.view", "qr.scans.*"] },
   { code: "asset_auditor", name: "Asset Auditor", grants: ["assets.register.view", "assets.register.audit", "assets.register.verify", "assets.register.scan", "assets.audits.*", "assets.audit_items.*", "assets.anomalies.*", "assets.movements.view", "assets.scans.*", "assets.timeline.*", "assets.dashboards.view", "assets.reports.view", "admin.audit.view"] },
-  { code: "asset_storekeeper", name: "Asset Storekeeper", grants: ["assets.register.view", "assets.register.scan", "assets.register.verify", "assets.register.checkin", "assets.register.checkout", "assets.register.comment", "assets.tags.view", "assets.tags.print", "assets.locations.view", "assets.scans.*", "assets.timeline.*", "assets.dashboards.view", "qr.scan.*"] },
+  { code: "asset_storekeeper", name: "Asset Storekeeper", grants: ["assets.register.view", "assets.register.scan", "assets.register.verify", "assets.register.checkin", "assets.register.checkout", "assets.register.comment", "assets.tags.view", "assets.tags.print", "assets.locations.view", "assets.scans.*", "assets.timeline.*", "assets.dashboards.view", "qr.scans.*"] },
   { code: "asset_finance", name: "Asset Finance Officer", grants: ["assets.register.view", "assets.register.capitalize", "assets.register.depreciate", "assets.register.impair", "assets.depreciation.*", "assets.impairments.*", "assets.disposals.*", "assets.reports.*", "assets.exports.*", "finance.journals.view", "finance.journals.post"] },
   // Analytics
   { code: "bi_manager", name: "BI Manager", grants: ["reports.*", "admin.exports.*", "admin.imports.*"] },
   { code: "data_analyst", name: "Data Analyst", grants: ["reports.*", "admin.exports.*"] },
-  { code: "reporting_officer", name: "Reporting Officer", grants: ["reports.view", "reports.sales.view", "reports.procurement.view", "reports.inventory.view", "reports.production.view", "reports.finance.view", "reports.export", "reports.builder.view", "reports.builder.run", "reports.kpis.view"] },
+  { code: "reporting_officer", name: "Reporting Officer", grants: ["reports.*.view", "reports.*.export", "reports.builder.run"] },
   { code: "executive_viewer", name: "Executive Viewer", grants: ["reports.dashboards.view", "reports.dashboards.create", "reports.executive.view", "dashboard.*"] },
-  { code: "department_analyst", name: "Department Analyst", grants: ["reports.view", "reports.export", "reports.builder.view", "reports.builder.run", "reports.kpis.view"] },
+  { code: "department_analyst", name: "Department Analyst", grants: ["reports.*.view", "reports.*.export", "reports.builder.run"] },
   // Healthcare
   { code: "healthcare_admin", name: "Healthcare Administrator", grants: ["healthcare.*", "inventory.stock.view", "reports.healthcare.*", "admin.audit.view"] },
-  { code: "doctor", name: "Doctor", grants: ["healthcare.patients.*", "healthcare.visits.*", "healthcare.appointments.*", "healthcare.emrs.*", "healthcare.diagnoses.*", "healthcare.vitals.*", "healthcare.observations.*", "healthcare.prescriptions.*", "healthcare.lab_requests.*", "healthcare.lab_results.view", "healthcare.practitioners.view", "qr.scan.*", "reports.healthcare.view", "notifications.notifications.*"] },
-  { code: "nurse", name: "Nurse", grants: ["healthcare.patients.view", "healthcare.patients.create", "healthcare.patients.update", "healthcare.visits.*", "healthcare.appointments.*", "healthcare.vitals.*", "healthcare.observations.*", "healthcare.prescriptions.view", "healthcare.lab_requests.create", "healthcare.beds.view", "healthcare.wards.view", "qr.scan.*"] },
-  { code: "pharmacist", name: "Pharmacist", grants: ["healthcare.prescriptions.*", "healthcare.dispensings.*", "inventory.stock.view", "inventory.items.view", "inventory.batches.view", "inventory.movements.view", "qr.scan.*", "reports.healthcare.view"] },
-  { code: "lab_technician", name: "Lab Technician", grants: ["healthcare.lab_requests.*", "healthcare.lab_results.*", "healthcare.patients.view", "inventory.items.view", "inventory.stock.view", "qr.scan.*"] },
-  { code: "receptionist", name: "Receptionist", grants: ["healthcare.patients.*", "healthcare.visits.create", "healthcare.visits.update", "healthcare.visits.view", "healthcare.appointments.*", "healthcare.bills.view", "crm.customers.view", "qr.scan.*", "notifications.notifications.*"] },
+  { code: "doctor", name: "Doctor", grants: ["healthcare.patients.*", "healthcare.visits.*", "healthcare.appointments.*", "healthcare.emrs.*", "healthcare.diagnoses.*", "healthcare.vitals.*", "healthcare.observations.*", "healthcare.prescriptions.*", "healthcare.lab_requests.*", "healthcare.lab_results.view", "healthcare.practitioners.view", "qr.scans.*", "reports.healthcare.view", "notifications.notifications.*"] },
+  { code: "nurse", name: "Nurse", grants: ["healthcare.patients.view", "healthcare.patients.create", "healthcare.patients.update", "healthcare.visits.*", "healthcare.appointments.*", "healthcare.vitals.*", "healthcare.observations.*", "healthcare.prescriptions.view", "healthcare.lab_requests.create", "healthcare.beds.view", "healthcare.wards.view", "qr.scans.*"] },
+  { code: "pharmacist", name: "Pharmacist", grants: ["healthcare.prescriptions.*", "healthcare.dispensings.*", "inventory.stock.view", "inventory.items.view", "inventory.batches.view", "inventory.movements.view", "qr.scans.*", "reports.healthcare.view"] },
+  { code: "lab_technician", name: "Lab Technician", grants: ["healthcare.lab_requests.*", "healthcare.lab_results.*", "healthcare.patients.view", "inventory.items.view", "inventory.stock.view", "qr.scans.*"] },
+  { code: "receptionist", name: "Receptionist", grants: ["healthcare.patients.*", "healthcare.visits.create", "healthcare.visits.update", "healthcare.visits.view", "healthcare.appointments.*", "healthcare.bills.view", "crm.customers.view", "qr.scans.*", "notifications.notifications.*"] },
   { code: "insurance_officer", name: "Insurance Officer", grants: ["healthcare.insurance_payers.*", "healthcare.insurance_claims.*", "healthcare.bills.view", "healthcare.patients.view", "healthcare.visits.view", "reports.healthcare.view"] },
   { code: "medical_auditor", name: "Medical Auditor", grants: ["healthcare.patients.view", "healthcare.visits.view", "healthcare.emrs.view", "healthcare.prescriptions.view", "healthcare.dispensings.view", "healthcare.lab_requests.view", "healthcare.lab_results.view", "healthcare.insurance_claims.view", "healthcare.bills.view", "admin.audit.view", "reports.healthcare.view"] },
-  { code: "ward_nurse", name: "Ward Nurse", grants: ["healthcare.beds.view", "healthcare.beds.assign", "healthcare.beds.release", "healthcare.visits.view", "healthcare.visits.admit", "healthcare.visits.discharge", "healthcare.vitals.*", "healthcare.observations.*", "healthcare.patients.view", "qr.scan.*"] },
+  { code: "ward_nurse", name: "Ward Nurse", grants: ["healthcare.beds.view", "healthcare.beds.assign", "healthcare.beds.release", "healthcare.visits.view", "healthcare.visits.admit", "healthcare.visits.discharge", "healthcare.vitals.*", "healthcare.observations.*", "healthcare.patients.view", "qr.scans.*"] },
   // ---------------------------------------------------------------
   // Service Desk & ITSM
   // ---------------------------------------------------------------
@@ -796,15 +851,17 @@ const ROLES = [
   { code: "operations_assistant", name: "Operations Assistant", grants: [
     "dashboard.*","notifications.*","documents.*","communication.*",
     "service_desk.*","workflows.instances.view",
-    "reports.dashboards.*","reports.kpis.*","reports.operations.*",
+    "reports.dashboards.*","reports.kpis.*",
+    "reports.inventory.view","reports.production.view","reports.procurement.view",
+    "reports.quality.view","reports.logistics.view",
     "inventory.*.view","production.*.view","procurement.*.view",
     "expenditure.*.view","logistics.*.view","quality.*.view",
   ] },
   { code: "office_attendant", name: "Office Attendant", grants: [
     "dashboard.*","notifications.*",
-    "documents.documents.view","documents.library.view",
+    "documents.documents.view","documents.view",
     "communication.announcements.view","communication.messages.view",
-    "communication.messages.create",
+    "communication.messages.send",
     "service_desk.tickets.view","service_desk.tickets.create",
   ] },
 ];
@@ -1136,6 +1193,42 @@ const CRON_ROLE_EXTENSIONS = {
   production_director: CRON_PERMISSIONS,
 };
 
+// Finance cost-centre and profit-centre reads (migration 0147). finance.*
+// already covers the directors. These roles can read financial reports without
+// holding the rest of finance, which is the same set 0147 granted.
+const FINANCE_CENTRE_PERMISSIONS = ["finance.cost_centres.view", "finance.profit_centres.view"];
+const FINANCE_CENTRE_ROLE_EXTENSIONS = {
+  accountant: FINANCE_CENTRE_PERMISSIONS,
+  budget_officer: FINANCE_CENTRE_PERMISSIONS,
+  tax_officer: FINANCE_CENTRE_PERMISSIONS,
+  internal_auditor: FINANCE_CENTRE_PERMISSIONS,
+};
+
+// Approval exceptions (migration 0205). View and create follow the approval
+// queue. Review follows delegation authorisers, who also need view: the
+// exception API refuses a read without it. Roles with workflows.* or * already
+// expand to every exception action.
+const EXCEPTION_RAISE = ["workflows.exceptions.view", "workflows.exceptions.create"];
+const EXCEPTION_REVIEW = [
+  "workflows.exceptions.view",
+  "workflows.exceptions.approve",
+  "workflows.exceptions.reject",
+  "workflows.exceptions.resolve",
+  "workflows.exceptions.expire",
+];
+const EXCEPTION_ROLE_EXTENSIONS = {};
+for (const code of [
+  "operations_director", "cfo", "finance_manager", "chief_accountant", "accountant",
+  "sales_manager", "procurement_manager", "warehouse_manager", "production_supervisor",
+  "quality_inspector", "secure_job_approver", "hr_manager", "payroll_manager",
+  "asset_manager", "operations_manager", "md_assistant", "operations_assistant",
+]) {
+  EXCEPTION_ROLE_EXTENSIONS[code] = [...(EXCEPTION_ROLE_EXTENSIONS[code] || []), ...EXCEPTION_RAISE];
+}
+for (const code of ["hr_director", "hr_manager"]) {
+  EXCEPTION_ROLE_EXTENSIONS[code] = [...(EXCEPTION_ROLE_EXTENSIONS[code] || []), ...EXCEPTION_REVIEW];
+}
+
 for (const role of ROLES) {
   const extra = [
     ...(SERVICE_DESK_ROLE_EXTENSIONS[role.code] || []),
@@ -1143,8 +1236,10 @@ for (const role of ROLES) {
     ...(WORKFLOW_INSTANCE_ROLE_EXTENSIONS[role.code] || []),
     ...(MAIL_ROLE_EXTENSIONS[role.code] || []),
     ...(CRON_ROLE_EXTENSIONS[role.code] || []),
+    ...(FINANCE_CENTRE_ROLE_EXTENSIONS[role.code] || []),
+    ...(EXCEPTION_ROLE_EXTENSIONS[role.code] || []),
   ];
   if (extra.length) role.grants = [...role.grants, ...extra];
 }
 
-module.exports = { ACTIONS, MODULES, EXTRA_PERMISSIONS, CRON_ROLE_EXTENSIONS, buildPermissions, ROLES };
+module.exports = { ACTIONS, MODULES, EXTRA_PERMISSIONS, CRON_ROLE_EXTENSIONS, buildPermissions, expandGrants, ROLES };

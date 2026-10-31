@@ -4,7 +4,7 @@
 // ============================================================
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
-const { buildPermissions, ROLES } = require("./catalogue");
+const { buildPermissions, expandGrants, ROLES } = require("./catalogue");
 const { resolveSeedPassword } = require("./seed-password");
 
 // ---------- helpers ----------
@@ -53,52 +53,6 @@ async function bulkInsert(client, table, rows, returnIds = true) {
     params
   );
   return returnIds ? out.map((r) => r.id) : [];
-}
-
-// Expand role grant wildcards into concrete permission codes.
-// Unknown grants are skipped silently (catalogue contains strays).
-function expandGrants(grants) {
-  const perms = buildPermissions();
-  const all = perms.map((p) => p.code);
-  const byModule = {};
-  const byResource = {};
-  for (const p of perms) {
-    (byModule[p.module] ||= []).push(p.code);
-    (byResource[`${p.module}.${p.resource}`] ||= []).push(p.code);
-  }
-  const out = new Set();
-  const excludes = [];
-  for (const g of grants) {
-    if (g.startsWith("!")) {
-      excludes.push(g.slice(1));
-      continue;
-    }
-    if (g === "*") {
-      for (const c of all) out.add(c);
-      continue;
-    }
-    if (g.endsWith(".*")) {
-      // wildcard: expand module.* or module.resource.*
-      const base = g.slice(0, -2);
-      const hits = byModule[base] || byResource[base] || [];
-      for (const c of hits) out.add(c);
-      continue;
-    }
-    if (all.includes(g)) out.add(g);
-    // else: unknown grant -> skip
-  }
-  // Exclusion grants ("!admin.users.*") remove already-expanded codes.
-  for (const e of excludes) {
-    if (e === "*") { out.clear(); continue; }
-    if (e.endsWith(".*")) {
-      const base = e.slice(0, -2);
-      const hits = byModule[base] || byResource[base] || [];
-      for (const c of hits) out.delete(c);
-      continue;
-    }
-    out.delete(e);
-  }
-  return [...out];
 }
 
 // Reconcile the RBAC catalogue against an already-seeded tenant.
@@ -2465,13 +2419,9 @@ async function ensureMesSeed(client, tenantId, companyId = null, branchId = null
     bump("downtime_events", 7);
   }
 
-  // 14. Quality hold, rework order, subcontract order
-  await guarded("production_quality_holds", "company_id = $1 AND hold_no = $2", [companyId, "QH-2026-001"], {
-    company_id: companyId, tenant_id: tenantId, branch_id: branchId,
-    hold_no: "QH-2026-001", production_batch_id: batch002, work_order_id: wo1250,
-    product_id: prodA4, reason: "Ream weight below specification on sampled cartons",
-    held_qty: 1000, status: "HELD", held_by: qiana, held_at: ts("12:30"),
-  });
+  // 14. Rework order, subcontract order
+  // NOTE: no seeded quality hold — a HELD production_quality_holds row blocks
+  // outbound dispatch for its product, so demo holds are intentionally omitted.
   await guarded("rework_orders", "company_id = $1 AND rework_no = $2", [companyId, "RWK-2026-001"], {
     company_id: companyId, tenant_id: tenantId, branch_id: branchId,
     rework_no: "RWK-2026-001", source_work_order_id: wo1245,
