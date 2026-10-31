@@ -7,6 +7,7 @@ import { logAudit } from '../../services/audit.js';
 import { startWorkflow } from '../../services/workflow.js';
 import * as inv from '../../services/inventory.js';
 import * as wh from '../../services/warehouse.js';
+import * as se from '../../services/stockEntries.js';
 
 export const inventoryOpsRouter = Router();
 
@@ -83,6 +84,20 @@ inventoryOpsRouter.post('/catalogs/office-consumables', ...run('inventory.items.
 
 // Stock movements (scan-driven postings from the mobile/desktop scanner)
 inventoryOpsRouter.post('/moves', ...run('inventory.movements.create', (c, ctx, b) => inv.postMove(c, ctx, b as inv.MoveInput)));
+
+// Quick stock entry — a unified receive/issue/transfer document with drafts.
+// `action: 'submit'` posts immediately; the default saves a draft. Both are
+// idempotent on clientToken so a retried submit never posts twice.
+inventoryOpsRouter.post('/entries', ...run('inventory.movements.create', (c, ctx, b) =>
+  b.action === 'submit' ? se.submitEntry(c, ctx, b) : se.saveEntry(c, ctx, b)));
+inventoryOpsRouter.get('/entries', ...runGet('inventory.movements.view', (c, ctx, q) => se.listEntries(c, ctx, {
+  status: q.status != null && q.status !== '' ? String(q.status) : null,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+inventoryOpsRouter.get('/entries/:id', ...runGet('inventory.movements.view', (c, ctx, _q, p) => se.getEntry(c, ctx, Number(p.id))));
+inventoryOpsRouter.post('/entries/:id/submit', ...run('inventory.movements.create', (c, ctx, _b, p) => se.postEntry(c, ctx, Number(p.id))));
+inventoryOpsRouter.post('/entries/:id/cancel', ...run('inventory.movements.create', (c, ctx, _b, p) => se.cancelEntry(c, ctx, Number(p.id))));
 
 // Reservations
 inventoryOpsRouter.post('/reservations', ...run('inventory.reservations.create', (c, ctx, b) => inv.reserve(c, ctx, {

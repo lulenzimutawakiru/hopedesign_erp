@@ -139,6 +139,7 @@ function ProductSelect({ products, value, onChange, allLabel = 'All products' }:
 }
 
 function CommandCenter() {
+  const { user } = useAuth();
   const [data, setData] = useState<Rec | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -179,6 +180,39 @@ function CommandCenter() {
   ];
   return (
     <>
+      {(can(user, 'inventory.movements.create') || can(user, 'inventory.adjustments.create')) && (
+        <div className="card card-pad" style={{ marginBottom: 12 }}>
+          <div className="card-head" style={{ marginBottom: 8 }}><h3>Quick actions</h3></div>
+          <div className="kpi-grid">
+            {can(user, 'inventory.movements.create') && (
+              <>
+                <button className="kpi-card" onClick={() => navigate('/inventory/quick-entry/receive')}>
+                  <span className="kpi-label">Receive stock</span>
+                  <span className="kpi-value" aria-hidden>↓</span>
+                  <span className="kpi-sub">Goods in — a few steps</span>
+                </button>
+                <button className="kpi-card" onClick={() => navigate('/inventory/quick-entry/issue')}>
+                  <span className="kpi-label">Issue stock</span>
+                  <span className="kpi-value" aria-hidden>↑</span>
+                  <span className="kpi-sub">Goods out — a few steps</span>
+                </button>
+                <button className="kpi-card" onClick={() => navigate('/inventory/quick-entry/transfer')}>
+                  <span className="kpi-label">Transfer stock</span>
+                  <span className="kpi-value" aria-hidden>⇄</span>
+                  <span className="kpi-sub">Between warehouses</span>
+                </button>
+              </>
+            )}
+            {can(user, 'inventory.adjustments.create') && (
+              <button className="kpi-card" onClick={() => navigate('/inventory/adjustments/new')}>
+                <span className="kpi-label">Stock count</span>
+                <span className="kpi-value" aria-hidden>✓</span>
+                <span className="kpi-sub">Count &amp; adjust</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="kpi-grid">
         <button className="kpi-card" onClick={() => navigate('/inventory-intel/valuation')}>
           <span className="kpi-label">On hand value</span>

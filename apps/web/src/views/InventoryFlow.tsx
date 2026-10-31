@@ -8,6 +8,7 @@ import { DataTable } from '../components/DataTable';
 import { JsonForm } from '../components/JsonForm';
 import WarehouseOps from './WarehouseOps';
 import EntityDetail from './EntityDetail';
+import QuickEntry from './QuickEntry';
 
 type Rec = Record<string, unknown>;
 
@@ -18,6 +19,7 @@ const TABS: { resource: string; label: string; perm: string }[] = [
   { resource: 'office', label: 'Office Consumables', perm: 'inventory.items.view' },
   { resource: 'items', label: 'Products', perm: 'inventory.items.view' },
   { resource: 'movements', label: 'Movements', perm: 'inventory.movements.view' },
+  { resource: 'quick-entry', label: 'Quick Entry', perm: 'inventory.movements.create' },
   { resource: 'transfers', label: 'Transfers', perm: 'inventory.transfers.view' },
   { resource: 'adjustments', label: 'Adjustments', perm: 'inventory.adjustments.view' },
   { resource: 'batches', label: 'Batches', perm: 'inventory.batches.view' },
@@ -134,6 +136,7 @@ const OPS = new Set(['ops', 'receive', 'pick', 'issue', 'demand', 'putaway', 're
 export default function InventoryFlow({ path }: { path: string }) {
   const { resource, id } = parseInventoryPath(path);
   if (OPS.has(resource)) return <WarehouseOps path={path} />;
+  if (resource === 'quick-entry') return <QuickEntry initial={id} />;
   if (id === 'new') {
     if (resource === 'transfers') return <TransferComposer />;
     if (resource === 'adjustments') return <AdjustmentComposer />;
