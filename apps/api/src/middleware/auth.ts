@@ -14,9 +14,12 @@ const USER_SQL = `
 `;
 
 const ROLES_SQL = `
-  SELECT r.id AS role_id, r.code AS role_code, ur.company_id, ur.branch_id
+  SELECT r.id AS role_id, r.code AS role_code, ur.company_id, ur.branch_id, ur.department_id,
+         TO_CHAR(ur.expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS expires_at
   FROM user_roles ur JOIN roles r ON r.id = ur.role_id
   WHERE ur.user_id = $1
+    AND ur.status = 'ACTIVE'
+    AND (ur.expires_at IS NULL OR ur.expires_at > now())
 `;
 
 const PERMS_SQL = `
@@ -25,6 +28,17 @@ const PERMS_SQL = `
   JOIN permissions p ON p.id = rp.permission_id
   JOIN user_roles ur ON ur.role_id = rp.role_id
   WHERE ur.user_id = $1
+    AND ur.status = 'ACTIVE'
+    AND (ur.expires_at IS NULL OR ur.expires_at > now())
+`;
+
+const OVERRIDES_SQL = `
+  SELECT p.code, o.effect
+  FROM user_permission_overrides o
+  JOIN permissions p ON p.id = o.permission_id
+  WHERE o.user_id = $1
+    AND o.status = 'ACTIVE'
+    AND (o.expires_at IS NULL OR o.expires_at > now())
 `;
 
 export async function loadAuthUser(userId: number, tenantId: number): Promise<AuthUser> {
@@ -35,12 +49,24 @@ export async function loadAuthUser(userId: number, tenantId: number): Promise<Au
   if (Number(userRow.tenant_id) !== tenantId) throw unauthorized('Tenant mismatch');
   const rolesRes = await query(ROLES_SQL, [userId], { tenantId });
   const permsRes = await query(PERMS_SQL, [userId], { tenantId });
+  const overridesRes = await query(OVERRIDES_SQL, [userId], { tenantId });
   const delegationRes = await query(DELEGATIONS_SQL, [userId, tenantId], { tenantId });
   const actingRoles: ActingRoleSummary[] = [];
   const delegationPerms = new Set<string>();
   for (const row of delegationRes.rows as Record<string, unknown>[]) {
     const permCode = String(row.permission_code ?? '');
     if (permCode) delegationPerms.add(permCode);
+  }
+  // Per-user overrides are the last word on top of role- and delegation-derived
+  // permissions: a 'revoke' removes a code the roles or a delegation would
+  // otherwise grant, a 'grant' adds one they do not. Applied after the union so
+  // a revoke also beats a delegation that happens to carry the same code.
+  const permissions = new Set<string>([...permsRes.rows.map((r) => String(r.code)), ...delegationPerms]);
+  for (const row of overridesRes.rows as Record<string, unknown>[]) {
+    const code = String(row.code ?? '');
+    if (!code) continue;
+    if (row.effect === 'revoke') permissions.delete(code);
+    else permissions.add(code);
   }
   const actingByDelegation = new Map<number, ActingRoleSummary>();
   for (const row of delegationRes.rows as Record<string, unknown>[]) {
@@ -140,7 +166,7 @@ export async function loadAuthUser(userId: number, tenantId: number): Promise<Au
     ...(userRow as unknown as AuthUser),
     ...(scopeRes.rows[0] ?? {}),
     roles: rolesRes.rows as unknown as AuthUser['roles'],
-    permissions: [...new Set([...permsRes.rows.map((r) => String(r.code)), ...delegationPerms])],
+    permissions: [...permissions],
     activate_modules: activateModules,
     actingRoles: actingRoles.length > 0 ? actingRoles : undefined,
   };

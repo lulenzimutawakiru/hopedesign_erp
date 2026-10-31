@@ -303,10 +303,10 @@ adminRouter.post('/users', ...run('admin.users.create', async (c, ctx, body) => 
     : [];
   for (const rid of roleIds) {
     await c.query(
-      `INSERT INTO user_roles (user_id, role_id, company_id, branch_id)
-       SELECT $1, r.id, r.company_id, $3 FROM roles r WHERE r.id = $2 AND r.tenant_id = $4
+      `INSERT INTO user_roles (user_id, role_id, company_id, branch_id, department_id, assigned_by)
+       SELECT $1, r.id, r.company_id, $3, $4, $5 FROM roles r WHERE r.id = $2 AND r.tenant_id = $6
        ON CONFLICT DO NOTHING`,
-      [userId, rid, n(body.branch_id), ctx.tenantId]
+      [userId, rid, n(body.branch_id), n(body.department_id), ctx.userId ?? null, ctx.tenantId]
     );
   }
   let invitationToken: string | null = null;
@@ -338,8 +338,14 @@ adminRouter.get('/users/:id', ...runGet('admin.users.view', async (c, ctx, _q, p
   if (user.rows.length === 0) throw notFound('User not found');
   const row = user.rows[0] as Record<string, unknown>;
   const roles = await c.query(
-    `SELECT r.id, r.code, r.name, ur.company_id, ur.branch_id
-     FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+    `SELECT r.id, r.code, r.name, ur.company_id, ur.branch_id, ur.department_id,
+            ur.assigned_by, ur.assigned_at, ur.expires_at, ur.status,
+            COALESCE(NULLIF(TRIM(au.first_name || ' ' || au.last_name), ''), au.email) AS assigned_by_name,
+            d.code AS department_code, d.name AS department_name
+     FROM user_roles ur
+     JOIN roles r ON r.id = ur.role_id
+     LEFT JOIN users au ON au.id = ur.assigned_by
+     LEFT JOIN departments d ON d.id = ur.department_id
      WHERE ur.user_id = $1 ORDER BY r.name`,
     [userId]
   );
@@ -632,12 +638,20 @@ adminRouter.post('/users/:id/roles', ...run('admin.users.assign_roles', async (c
   if (unique.length === 0) throw badRequest('role_id or role_ids is required');
   const roles = await c.query('SELECT id, code FROM roles WHERE id = ANY($1::int[]) AND tenant_id = $2', [unique, ctx.tenantId]);
   if (roles.rows.length !== unique.length) throw badRequest('One or more roles were not found');
+  const departmentId = n(body.department_id);
+  const expiresAt = s(body.expires_at) || null;
+  const status = body.status != null ? String(body.status).toUpperCase() : 'ACTIVE';
+  if (!['ACTIVE', 'INACTIVE', 'EXPIRED', 'REVOKED'].includes(status)) throw badRequest(`Invalid role status ${status}`);
   for (const rid of unique) {
     await c.query(
-      `INSERT INTO user_roles (user_id, role_id, company_id, branch_id)
-       SELECT $1, r.id, r.company_id, $3 FROM roles r WHERE r.id = $2 AND r.tenant_id = $4
-       ON CONFLICT DO NOTHING`,
-      [userId, rid, n(body.branch_id), ctx.tenantId]
+      `INSERT INTO user_roles (user_id, role_id, company_id, branch_id, department_id, assigned_by, assigned_at, expires_at, status)
+       SELECT $1, r.id, r.company_id, $3, $4, $5, now(), $6::timestamptz, $7
+       FROM roles r WHERE r.id = $2 AND r.tenant_id = $8
+       ON CONFLICT (user_id, role_id)
+       DO UPDATE SET company_id = EXCLUDED.company_id, branch_id = EXCLUDED.branch_id,
+                     department_id = EXCLUDED.department_id, assigned_by = EXCLUDED.assigned_by,
+                     assigned_at = now(), expires_at = EXCLUDED.expires_at, status = EXCLUDED.status`,
+      [userId, rid, n(body.branch_id), departmentId, ctx.userId ?? null, expiresAt, status, ctx.tenantId]
     );
   }
   await logAudit(c, ctx, {
@@ -645,7 +659,7 @@ adminRouter.post('/users/:id/roles', ...run('admin.users.assign_roles', async (c
     resource: 'user_roles',
     recordId: userId,
     recordCode: u.rows[0].email,
-    metadata: { role_ids: unique, role_codes: roles.rows.map((r: { code: string }) => r.code) },
+    metadata: { role_ids: unique, role_codes: roles.rows.map((r: { code: string }) => r.code), department_id: departmentId, expires_at: expiresAt, status },
   });
   return { ok: true, assigned: unique };
 }));
@@ -666,6 +680,80 @@ adminRouter.delete('/users/:id/roles/:roleId', ...run('admin.users.assign_roles'
     recordId: userId,
     recordCode: u.rows[0].email,
     metadata: { role_id: roleId, removed: res.rowCount ?? 0 },
+  });
+  return { ok: true, removed: res.rowCount ?? 0 };
+}));
+
+// ---- Per-user permission overrides ----
+// A permission override grants or revokes a single permission for a single user
+// without inventing a throwaway role. Revoking a code removes it from the union
+// of the user's role- and delegation-derived permissions; granting adds it.
+adminRouter.get('/users/:id/permission-overrides', ...runGet('admin.permissions.view', async (c, ctx, _q, p) => {
+  const userId = Number(p.id);
+  const rows = await c.query(
+    `SELECT o.id, o.permission_id, o.effect, o.company_id, o.branch_id, o.reason,
+            o.assigned_by, o.assigned_at, o.expires_at, o.status,
+            p.code, p.module, p.resource, p.action,
+            COALESCE(NULLIF(TRIM(au.first_name || ' ' || au.last_name), ''), au.email) AS assigned_by_name
+     FROM user_permission_overrides o
+     JOIN permissions p ON p.id = o.permission_id
+     LEFT JOIN users au ON au.id = o.assigned_by
+     WHERE o.user_id = $1 AND o.tenant_id = $2
+     ORDER BY p.module, p.resource, p.action`,
+    [userId, ctx.tenantId]
+  );
+  return toCamelRows(rows.rows as Record<string, unknown>[]);
+}));
+
+adminRouter.post('/users/:id/permission-overrides', ...run('admin.permissions.assign', async (c, ctx, body, p) => {
+  const userId = Number(p.id);
+  const u = await c.query('SELECT email FROM users WHERE id = $1 AND tenant_id = $2', [userId, ctx.tenantId]);
+  if (u.rows.length === 0) throw notFound('User not found');
+  const code = String(body.permission ?? '').trim();
+  if (!code) throw badRequest('permission is required');
+  const effect = String(body.effect ?? 'grant').toLowerCase();
+  if (!['grant', 'revoke'].includes(effect)) throw badRequest('effect must be grant or revoke');
+  const perm = await c.query('SELECT id FROM permissions WHERE code = $1', [code]);
+  if (perm.rows.length === 0) throw notFound('Permission not found');
+  const permissionId = Number(perm.rows[0].id);
+  const expiresAt = s(body.expires_at) || null;
+  const status = body.status != null ? String(body.status).toUpperCase() : 'ACTIVE';
+  if (!['ACTIVE', 'INACTIVE', 'EXPIRED', 'REVOKED'].includes(status)) throw badRequest(`Invalid override status ${status}`);
+  const ins = await c.query(
+    `INSERT INTO user_permission_overrides
+       (tenant_id, user_id, permission_id, effect, company_id, branch_id, reason, assigned_by, assigned_at, expires_at, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),$9::timestamptz,$10)
+     ON CONFLICT (user_id, permission_id)
+     DO UPDATE SET effect = EXCLUDED.effect, company_id = EXCLUDED.company_id, branch_id = EXCLUDED.branch_id,
+                   reason = EXCLUDED.reason, assigned_by = EXCLUDED.assigned_by, assigned_at = now(),
+                   expires_at = EXCLUDED.expires_at, status = EXCLUDED.status
+     RETURNING id, user_id, permission_id, effect, reason, expires_at, status`,
+    [ctx.tenantId, userId, permissionId, effect, n(body.company_id), n(body.branch_id), s(body.reason), ctx.userId ?? null, expiresAt, status]
+  );
+  await logAudit(c, ctx, {
+    action: 'permission_override',
+    resource: 'user_permission_overrides',
+    recordId: Number(ins.rows[0].id),
+    recordCode: code,
+    metadata: { userId, effect, expires_at: expiresAt },
+    newValues: { code, effect },
+  });
+  return toCamelRow(ins.rows[0] as Record<string, unknown>);
+}));
+
+adminRouter.delete('/users/:id/permission-overrides/:overrideId', ...run('admin.permissions.assign', async (c, ctx, _body, p) => {
+  const userId = Number(p.id);
+  const overrideId = Number(p.overrideId);
+  const res = await c.query(
+    `DELETE FROM user_permission_overrides WHERE id = $1 AND user_id = $2 AND tenant_id = $3`,
+    [overrideId, userId, ctx.tenantId]
+  );
+  if ((res.rowCount ?? 0) === 0) throw notFound('Permission override not found');
+  await logAudit(c, ctx, {
+    action: 'permission_override_remove',
+    resource: 'user_permission_overrides',
+    recordId: overrideId,
+    metadata: { userId },
   });
   return { ok: true, removed: res.rowCount ?? 0 };
 }));

@@ -24,7 +24,7 @@ export interface AuthUser {
   personal_email?: string | null;
   personal_email_verified_at?: string | null;
   attributes: Record<string, unknown>;
-  roles: { role_id: number; role_code: string; company_id: number | null; branch_id: number | null }[];
+  roles: { role_id: number; role_code: string; company_id: number | null; branch_id: number | null; department_id?: number | null; expires_at?: string | null }[];
   permissions: string[];
   activate_modules: string[];
   actingRoles?: {

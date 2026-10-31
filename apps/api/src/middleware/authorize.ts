@@ -46,6 +46,8 @@ export function requirePermission(permission: string | string[]) {
              JOIN user_roles ur ON ur.role_id = rp.role_id
              JOIN permissions p ON p.id = rp.permission_id
              WHERE ur.user_id = $3 AND p.code = primary_permission
+               AND ur.status = 'ACTIVE'
+               AND (ur.expires_at IS NULL OR ur.expires_at > now())
            )`,
         [user.tenant_id, matched, user.id],
         req.ctx
@@ -129,6 +131,8 @@ export function requirePermission(permission: string | string[]) {
       const scopeOk = await query(
         `SELECT 1 FROM user_roles ur
          WHERE ur.user_id = $1 AND ur.company_id IS NOT NULL AND ur.company_id <> $2
+           AND ur.status = 'ACTIVE'
+           AND (ur.expires_at IS NULL OR ur.expires_at > now())
          LIMIT 1`,
         [user.id, req.ctx.companyId ?? user.company_id],
         req.ctx

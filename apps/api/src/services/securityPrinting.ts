@@ -70,7 +70,10 @@ async function getSecureJob(
 async function assertRole(client: pg.PoolClient, userId: number, roleCode: string) {
   const res = await client.query(
     `SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-     WHERE ur.user_id = $1 AND r.code = $2 LIMIT 1`,
+     WHERE ur.user_id = $1 AND r.code = $2
+       AND ur.status = 'ACTIVE'
+       AND (ur.expires_at IS NULL OR ur.expires_at > now())
+     LIMIT 1`,
     [userId, roleCode]
   );
   if (res.rows.length === 0) throw forbidden(`Requires role ${roleCode}`);

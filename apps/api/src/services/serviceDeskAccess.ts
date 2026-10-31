@@ -539,7 +539,8 @@ async function usersWithRole(
     'SELECT DISTINCT ur.user_id AS id FROM user_roles ur ' +
       'JOIN roles r ON r.id = ur.role_id ' +
       'JOIN users u ON u.id = ur.user_id ' +
-      "WHERE r.code = $1 AND u.status = 'ACTIVE' AND (u.company_id = $2 OR u.company_id IS NULL)",
+      "WHERE r.code = $1 AND u.status = 'ACTIVE' AND (u.company_id = $2 OR u.company_id IS NULL) " +
+      "AND ur.status = 'ACTIVE' AND (ur.expires_at IS NULL OR ur.expires_at > now())",
     [roleCode, ctx.companyId]
   );
   return res.rows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id) && id > 0);

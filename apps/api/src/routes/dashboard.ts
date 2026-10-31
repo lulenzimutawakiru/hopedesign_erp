@@ -276,6 +276,7 @@ dashboardRouter.get(
        WHERE t.status IN ('PENDING','ESCALATED') AND i.tenant_id = $1
          AND (t.approver_user_id = $2 OR EXISTS (
            SELECT 1 FROM user_roles ur WHERE ur.user_id = $2 AND (ur.role_id = t.approver_role_id OR ur.role_id = t.alternative_role_id)
+             AND ur.status = 'ACTIVE' AND (ur.expires_at IS NULL OR ur.expires_at > now())
          ))
        ORDER BY t.id DESC LIMIT 20`,
       [tenant, userId]

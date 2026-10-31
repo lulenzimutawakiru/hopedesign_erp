@@ -19,12 +19,18 @@ interface StartWorkflowInput {
 }
 
 /**
- * Final-authority roles whose submissions self-authorize: the document is
- * approved and posted/released immediately, with no approval chain. Deliberate
- * product policy — these roles are treated as equivalent sign-off authorities.
- * Extend the bypass by adding a role code here; removing one closes it back.
+ * Final-business-authority roles whose submissions self-authorize: the document
+ * is approved and posted/released immediately, with no approval chain.
+ *
+ * Deliberately **excludes** `super_administrator`. Per the dual-super-admin
+ * model, the System Administrator holds equal *system* authority but is not the
+ * final *business* approver: a major business transaction they submit must route
+ * to the Managing Director (a holder of `managing_director`) through the normal
+ * workflow, so the System Administrator can never self-approve their own major
+ * business transaction. Extend the bypass by adding a role code here; removing
+ * one closes it back.
  */
-const SELF_AUTHORIZE_ROLES = ['super_administrator', 'managing_director', 'executive_director', 'ceo'];
+const SELF_AUTHORIZE_ROLES = ['managing_director', 'executive_director', 'ceo'];
 
 const WORKFLOW_SQL = `
   SELECT id, code, name, entity_type, config FROM workflows
@@ -216,6 +222,8 @@ async function selfAuthorizeRole(
   const res = await client.query(
     `SELECT r.code FROM user_roles ur JOIN roles r ON r.id = ur.role_id
      WHERE ur.user_id = $1 AND r.code = ANY($2::text[]) AND r.company_id = $3
+       AND ur.status = 'ACTIVE'
+       AND (ur.expires_at IS NULL OR ur.expires_at > now())
      LIMIT 1`,
     [ctx.userId, SELF_AUTHORIZE_ROLES, companyId]
   );
@@ -642,7 +650,10 @@ export async function decideTask(
   if (roleCodes.length) {
     const roleCheck = await client.query(
       `SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-       WHERE ur.user_id = $1 AND r.code = ANY($2::text[]) LIMIT 1`,
+       WHERE ur.user_id = $1 AND r.code = ANY($2::text[])
+         AND ur.status = 'ACTIVE'
+         AND (ur.expires_at IS NULL OR ur.expires_at > now())
+       LIMIT 1`,
       [user, roleCodes]
     );
     if (roleCheck.rows.length === 0) {
@@ -904,6 +915,8 @@ export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<Appro
          SELECT 1 FROM user_roles ur
          JOIN roles r ON r.id = ur.role_id
          WHERE ur.user_id = $1 AND (r.id = t.approver_role_id OR r.id = t.alternative_role_id)
+           AND ur.status = 'ACTIVE'
+           AND (ur.expires_at IS NULL OR ur.expires_at > now())
        ) AS has_direct_role
      ) dr ON true
      LEFT JOIN LATERAL (
