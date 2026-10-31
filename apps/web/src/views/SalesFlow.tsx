@@ -3,6 +3,7 @@ import { api, fmtDate, fmtMoney, fmtNum, ListResult, openDocument } from '../api
 import { useAuth, can } from '../auth';
 import { navigate, useHashQuery, useHashRoute } from '../router';
 import { pick } from '../helpers';
+import { useMenu } from '../components/popoverFocus';
 import DownloadMenu from '../components/DownloadMenu';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { toast } from '../components/toast';
@@ -21,8 +22,9 @@ const RESOURCES: { resource: string; label: string; perm: string }[] = [
 
 // Document types a user can create manually from the Sales workspace. The backend
 // create endpoints already exist for all of these; the composer just has to reach
-// them. Delivery notes are deliberately absent — they are produced by dispatching
-// a sales order (they carry order items and post a warehouse issue).
+// them. Delivery notes are created by dispatching an order (they carry order items
+// and post the warehouse issue), so their "create" action is the order dispatch
+// permission — the DeliveryComposer is a manual dispatch form.
 const CREATE_PERMS: Record<string, string> = {
   quotations: 'sales.quotations.create',
   orders: 'sales.orders.create',
@@ -31,7 +33,22 @@ const CREATE_PERMS: Record<string, string> = {
   credit_notes: 'sales.credit_notes.create',
   debit_notes: 'sales.debit_notes.create',
   returns: 'sales.returns.create',
+  delivery_notes: 'sales.orders.dispatch',
 };
+
+// Order + labels for the "+ New document" menu on a customer's desk. Permissions
+// stay single-sourced from CREATE_PERMS; only the flow order and singular labels
+// are declared here.
+const CREATE_MENU_ITEMS: { resource: string; label: string; perm: string }[] = [
+  { resource: 'quotations', label: 'Quotation', perm: CREATE_PERMS.quotations },
+  { resource: 'orders', label: 'Sales order', perm: CREATE_PERMS.orders },
+  { resource: 'delivery_notes', label: 'Delivery note', perm: CREATE_PERMS.delivery_notes },
+  { resource: 'invoices', label: 'Invoice', perm: CREATE_PERMS.invoices },
+  { resource: 'receipts', label: 'Receipt', perm: CREATE_PERMS.receipts },
+  { resource: 'credit_notes', label: 'Credit note', perm: CREATE_PERMS.credit_notes },
+  { resource: 'debit_notes', label: 'Debit note', perm: CREATE_PERMS.debit_notes },
+  { resource: 'returns', label: 'Sales return', perm: CREATE_PERMS.returns },
+];
 
 const QUOTE_STEPS = ['DRAFT', 'SUBMITTED', 'APPROVED', 'CONVERTED'];
 const ORDER_STEPS = ['DRAFT', 'SUBMITTED', 'APPROVED', 'ALLOCATED', 'DISPATCHED', 'INVOICED'];
@@ -409,6 +426,9 @@ function CustomerDesk({ id }: { id: number }) {
   const [doc, setDoc] = useState<Rec | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('overview');
+  const [newOpen, setNewOpen] = useState(false);
+  const newMenu = useMenu(newOpen, () => setNewOpen(false));
+  const createMenuItems = CREATE_MENU_ITEMS.filter((i) => can(user, i.perm));
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/sales/customers/${id}/360`)
       .then((r) => setDoc(r.data))
@@ -472,8 +492,29 @@ function CustomerDesk({ id }: { id: number }) {
           </p>
         </div>
         <div className="head-actions">
-          {can(user, 'sales.quotations.create') && <button className="btn" onClick={() => go('quotations')}>New quotation</button>}
-          {can(user, 'sales.orders.create') && <button className="btn btn-primary" onClick={() => go('orders')}>New order</button>}
+          {createMenuItems.length > 0 && (
+            <div style={{ position: 'relative' }} ref={newMenu.rootRef}>
+              <button
+                ref={newMenu.triggerRef}
+                className="btn btn-primary"
+                aria-expanded={newOpen}
+                aria-haspopup="menu"
+                onClick={() => setNewOpen((v) => !v)}
+              >
+                + New document
+              </button>
+              {newOpen && (
+                <div className="topbar-dropdown" style={{ top: 36, right: 0, minWidth: 220 }} role="menu" ref={newMenu.panelRef}>
+                  <div className="dropdown-head">Create for {String(c.name)}</div>
+                  {createMenuItems.map((i) => (
+                    <button key={i.resource} role="menuitem" className="search-item" onClick={() => { setNewOpen(false); go(i.resource); }}>
+                      <span className="search-item-title">{i.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <button className="btn" onClick={() => navigate('/finance/ar')}>View AR</button>
         </div>
       </header>
@@ -995,17 +1036,7 @@ function Composer({ resource }: { resource: string }) {
     return <ReturnComposer />;
   }
   if (resource === 'delivery_notes') {
-    return (
-      <div className="page">
-        <header className="page-head">
-          <div>
-            <button className="btn btn-sm" onClick={() => navigate('/sales/delivery_notes')}>Back</button>
-            <h1>Create from a sales order</h1>
-            <p className="muted">Delivery notes are produced by dispatching a sales order — open the order and use Dispatch. They carry order line items and post the warehouse issue, so they are not typed in as standalone records.</p>
-          </div>
-        </header>
-      </div>
-    );
+    return <DeliveryComposer />;
   }
 
   return (
@@ -1433,6 +1464,164 @@ function ReturnComposer() {
   );
 }
 
+function DeliveryComposer() {
+  const [orderId, setOrderId] = useState<number | ''>('');
+  const [orderLabel, setOrderLabel] = useState('');
+  const [items, setItems] = useState<Rec[]>([]);
+  const [dispatchQty, setDispatchQty] = useState<Record<number, number>>({});
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [dispatchDate, setDispatchDate] = useState('');
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loadingOrder, setLoadingOrder] = useState(false);
+  const q = useHashQuery();
+  const customerId = Number(q.get('customer')) > 0 ? Number(q.get('customer')) : null;
+  const ordersEndpoint = customerId
+    ? `/api/ops/sales/delivery-notes/dispatchable-orders?customerId=${customerId}`
+    : '/api/ops/sales/delivery-notes/dispatchable-orders';
+
+  const pickOrder = async (r: Rec) => {
+    setOrderId(num(r.id));
+    setOrderLabel(`${pick(r, 'orderNo', 'order_no') ?? ''} · ${pick(r, 'customerName', 'customer_name') ?? ''}`);
+    setLoadingOrder(true);
+    setError('');
+    try {
+      const res = await api<{ data: { items: Rec[] } }>(`/api/ops/sales/delivery-notes/dispatch-preview/${num(r.id)}`);
+      const its = res.data.items ?? [];
+      setItems(its);
+      const qty: Record<number, number> = {};
+      for (const it of its) {
+        const rem = Math.max(0, num(it.quantity) - num(pick(it, 'dispatchedQty', 'dispatched_qty')));
+        qty[num(it.id)] = rem;
+      }
+      setDispatchQty(qty);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingOrder(false);
+    }
+  };
+
+  const submit = async () => {
+    setError('');
+    if (!orderId) { setError('Select a sales order to dispatch'); return; }
+    const payloadItems = items
+      .filter((it) => (dispatchQty[num(it.id)] ?? 0) > 0)
+      .map((it) => ({ orderItemId: num(it.id), quantity: dispatchQty[num(it.id)] ?? 0 }));
+    if (!payloadItems.length) { setError('Enter a dispatch quantity'); return; }
+    setBusy(true);
+    try {
+      const r = await api<{ data: { deliveryNoteId: number } }>(`/api/ops/sales/orders/${orderId}/dispatch`, {
+        method: 'POST',
+        body: JSON.stringify({
+          items: payloadItems,
+          recipientName: recipientName.trim() || null,
+          recipientPhone: recipientPhone.trim() || null,
+          dispatchDate: dispatchDate || null,
+          notes: notes.trim() || null,
+        }),
+      });
+      navigate(`/sales/delivery_notes/${r.data.deliveryNoteId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <button className="btn btn-sm" onClick={() => navigate('/sales/delivery_notes')}>Back</button>
+          <h1>New delivery note</h1>
+          <p className="muted">Dispatch a sales order to create a delivery note. Remaining quantities are pre-filled.</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn" onClick={() => navigate('/sales/delivery_notes')}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy || !orderId} onClick={submit}>{busy ? 'Dispatching…' : 'Dispatch'}</button>
+        </div>
+      </header>
+      {error && <ErrorBanner error={error} />}
+      <section className="card card-pad">
+        <div className="form-grid">
+          <LookupField
+            label="Sales order"
+            required
+            endpoint={ordersEndpoint}
+            display={(r) => `${pick(r, 'orderNo', 'order_no') ?? ''} · ${pick(r, 'customerName', 'customer_name') ?? ''} (${fmtNum(pick(r, 'remainingQty', 'remaining_qty'))} left)`}
+            valueLabel={orderLabel}
+            onPick={pickOrder}
+          />
+          <div className="field">
+            <label>Dispatch date</label>
+            <input type="date" value={dispatchDate} onChange={(e) => setDispatchDate(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Recipient name</label>
+            <input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Recipient phone</label>
+            <input value={recipientPhone} onChange={(e) => setRecipientPhone(e.target.value)} />
+          </div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>Notes</label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </div>
+        </div>
+      </section>
+      {orderId && (
+        <section className="card">
+          <div className="card-head"><h3>Items to dispatch</h3></div>
+          {loadingOrder ? <PageLoader label="Loading order items…" /> : (
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th className="cell-num">Ordered</th>
+                    <th className="cell-num">Dispatched</th>
+                    <th className="cell-num">This dispatch</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((it) => {
+                    const rem = Math.max(0, num(it.quantity) - num(pick(it, 'dispatchedQty', 'dispatched_qty')));
+                    if (rem <= 0) return null;
+                    return (
+                      <tr key={num(it.id)}>
+                        <td>{String(pick(it, 'productName', 'product_name') ?? pick(it, 'productCode', 'product_code'))}</td>
+                        <td className="cell-num">{fmtNum(it.quantity)}</td>
+                        <td className="cell-num">{fmtNum(pick(it, 'dispatchedQty', 'dispatched_qty'))}</td>
+                        <td>
+                          <input
+                            className="cell-input"
+                            type="number"
+                            min={0}
+                            max={rem}
+                            value={dispatchQty[num(it.id)] ?? 0}
+                            onChange={(e) => setDispatchQty((p) => ({ ...p, [num(it.id)]: num(e.target.value) }))}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {items.every((it) => Math.max(0, num(it.quantity) - num(pick(it, 'dispatchedQty', 'dispatched_qty'))) <= 0) && (
+                    <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--muted)', padding: 28 }}>Nothing left to dispatch</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
 function LookupField({
   label,
   required,
@@ -1461,7 +1650,8 @@ function LookupField({
     const t = setTimeout(() => {
       const params = new URLSearchParams({ pageSize: '12' });
       if (q.trim() && q !== valueLabel) params.set('q', q.trim());
-      api<ListResult>(`${endpoint}?${params.toString()}`)
+      const sep = endpoint.includes('?') ? '&' : '?';
+      api<ListResult>(`${endpoint}${sep}${params.toString()}`)
         .then((r) => setRows(r.data))
         .catch(() => setRows([]));
     }, 180);

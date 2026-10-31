@@ -72,6 +72,11 @@ salesOpsRouter.post('/orders/:id/dispatch', ...run('sales.orders.dispatch', (c, 
   notes: b.notes != null ? String(b.notes) : null,
 })));
 
+salesOpsRouter.get('/delivery-notes/dispatchable-orders', ...runGet('sales.orders.dispatch', (c, ctx, q) => sales.listDispatchableOrders(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  customerId: q.customerId != null ? Number(q.customerId) : undefined,
+})));
+salesOpsRouter.get('/delivery-notes/dispatch-preview/:orderId', ...runGet('sales.orders.dispatch', (c, ctx, _q, p) => sales.getSalesOrder(c, ctx, Number(p.orderId))));
 salesOpsRouter.get('/delivery-notes/:id', ...runGet('sales.delivery_notes.view', (c, ctx, _q, p) => sales.getDeliveryNote(c, ctx, Number(p.id))));
 salesOpsRouter.post('/delivery-notes/:id/deliver', ...run('sales.delivery_notes.deliver', (c, ctx, b, p) => sales.deliverDeliveryNote(c, ctx, Number(p.id), {
   receivedBy: b.receivedBy != null ? String(b.receivedBy) : null,

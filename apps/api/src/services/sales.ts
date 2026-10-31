@@ -1744,6 +1744,38 @@ export async function listOrders(
   return { rows: toCamelRows(res.rows), page, pageSize };
 }
 
+/** Orders that can be dispatched into a delivery note (status allows dispatch and items remain). */
+export async function listDispatchableOrders(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  filters: { q?: string; customerId?: number }
+) {
+  const params: unknown[] = [ctx.tenantId, ctx.companyId];
+  const where = [
+    'so.tenant_id = $1',
+    'so.company_id = $2',
+    `so.status IN ('APPROVED','ALLOCATED','PARTIALLY_DISPATCHED','DISPATCHED')`,
+    `EXISTS (SELECT 1 FROM sales_order_items i WHERE i.order_id = so.id AND i.quantity > i.dispatched_qty)`,
+  ];
+  if (filters.q?.trim()) {
+    params.push(`%${filters.q.trim()}%`);
+    where.push(`(so.order_no ILIKE $${params.length} OR c.name ILIKE $${params.length})`);
+  }
+  if (filters.customerId) {
+    params.push(filters.customerId);
+    where.push(`so.customer_id = $${params.length}`);
+  }
+  const res = await client.query(
+    `SELECT so.id, so.order_no, so.status, c.id AS customer_id, c.code AS customer_code, c.name AS customer_name,
+            (SELECT COALESCE(sum(i.quantity - i.dispatched_qty),0) FROM sales_order_items i WHERE i.order_id = so.id)::numeric AS remaining_qty
+     FROM sales_orders so JOIN customers c ON c.id = so.customer_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY so.id DESC LIMIT 80`,
+    params
+  );
+  return toCamelRows(res.rows);
+}
+
 export async function listInvoices(client: pg.PoolClient, ctx: Ctx, filters: { q?: string; status?: string } = {}) {
   const params: unknown[] = [ctx.tenantId, ctx.companyId];
   const where = ['inv.tenant_id = $1', 'inv.company_id = $2'];
