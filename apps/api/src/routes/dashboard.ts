@@ -67,7 +67,7 @@ dashboardRouter.get(
     const pendingApprovals = await query(
       `SELECT count(*)::int AS count FROM approval_tasks t
        JOIN workflow_instances i ON i.id = t.instance_id
-       WHERE t.status = 'PENDING' AND i.tenant_id = $1 AND ($2::bigint IS NULL OR i.company_id = $2)`,
+       WHERE t.status IN ('PENDING','ESCALATED') AND i.tenant_id = $1 AND ($2::bigint IS NULL OR i.company_id = $2)`,
       [req.auth!.tenant_id, company], ctx
     );
 
@@ -142,7 +142,7 @@ dashboardRouter.get(
     const approvals = await safe(
       `SELECT count(*)::int AS count FROM approval_tasks t
        JOIN workflow_instances i ON i.id = t.instance_id
-       WHERE t.status = 'PENDING' AND i.tenant_id = $1 AND ($2::bigint IS NULL OR i.company_id = $2)`,
+       WHERE t.status IN ('PENDING','ESCALATED') AND i.tenant_id = $1 AND ($2::bigint IS NULL OR i.company_id = $2)`,
       [tenant, company]
     );
     const lowStock = await safe(
@@ -273,7 +273,7 @@ dashboardRouter.get(
     const approvals = await safe(
       `SELECT t.id AS task_id, i.entity_type, i.entity_id, i.entity_code, t.step_name AS step_label, t.status, t.created_at, t.due_at
        FROM approval_tasks t JOIN workflow_instances i ON i.id = t.instance_id
-       WHERE t.status = 'PENDING' AND i.tenant_id = $1
+       WHERE t.status IN ('PENDING','ESCALATED') AND i.tenant_id = $1
          AND (t.approver_user_id = $2 OR EXISTS (
            SELECT 1 FROM user_roles ur WHERE ur.user_id = $2 AND (ur.role_id = t.approver_role_id OR ur.role_id = t.alternative_role_id)
          ))

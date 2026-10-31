@@ -549,7 +549,7 @@ export async function rejectWorkflow(client: pg.PoolClient, ctx: Ctx, instanceId
   );
   await client.query(
     `UPDATE approval_tasks SET status = 'REJECTED', comment = $2, decided_at = now()
-     WHERE instance_id = $1 AND status = 'PENDING'`,
+     WHERE instance_id = $1 AND status IN ('PENDING','ESCALATED')`,
     [instanceId, comment ?? null]
   );
   const entity = ENTITIES[String(inst.entity_type)];
@@ -624,7 +624,9 @@ export async function decideTask(
   );
   const task = taskRes.rows[0];
   if (!task) throw notFound('Approval task not found');
-  if (task.status !== 'PENDING') throw badRequest(`Task is already ${task.status}`);
+  // ESCALATED is still an open, awaiting-decision state (a task the escalation
+  // cron flagged for senior review), so it remains decidable here.
+  if (task.status !== 'PENDING' && task.status !== 'ESCALATED') throw badRequest(`Task is already ${task.status}`);
 
   // Verify the deciding user is an authorized approver (role or direct assignee)
   if (task.approver_user_id && Number(task.approver_user_id) !== user) throw forbidden('Not your approval task');
@@ -738,7 +740,7 @@ export async function decideTask(
   // dual-control rule still reports first for security_printing.jobs.
   const earlierPendingRes = await client.query(
     `SELECT 1 FROM approval_tasks
-     WHERE instance_id = $1 AND step_seq < $2 AND status = 'PENDING'
+     WHERE instance_id = $1 AND step_seq < $2 AND status IN ('PENDING','ESCALATED')
      LIMIT 1`,
     [task.instance_id, task.step_seq]
   );
@@ -784,7 +786,7 @@ export async function decideTask(
   // Approved: check whether all steps are done
   const remaining = await client.query(
     `SELECT count(*)::int AS n FROM approval_tasks
-     WHERE instance_id = $1 AND status = 'PENDING'`,
+     WHERE instance_id = $1 AND status IN ('PENDING','ESCALATED')`,
     [task.instance_id]
   );
   if (Number(remaining.rows[0].n) === 0) {
@@ -800,7 +802,7 @@ export async function decideTask(
        FROM approval_tasks t
        LEFT JOIN roles r ON r.id = t.approver_role_id
        LEFT JOIN roles ar ON ar.id = t.alternative_role_id
-      WHERE t.instance_id = $1 AND t.status = 'PENDING'
+      WHERE t.instance_id = $1 AND t.status IN ('PENDING','ESCALATED')
       ORDER BY t.step_seq
       LIMIT 1`,
     [task.instance_id]
@@ -882,7 +884,7 @@ export async function getApprovalsQueue(ctx: Ctx, userId: number): Promise<Appro
               SELECT 1 FROM approval_tasks e
                WHERE e.instance_id = t.instance_id
                  AND e.step_seq < t.step_seq
-                 AND e.status = 'PENDING'
+                 AND e.status IN ('PENDING','ESCALATED')
             ) AS stage_ready,
             EXISTS (
               SELECT 1 FROM approval_tasks p

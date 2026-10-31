@@ -103,7 +103,7 @@ communicationOpsRouter.get(
     );
     const approvals = await c.query(
       `SELECT count(*)::int AS value FROM approval_tasks t
-        WHERE t.status = 'PENDING'
+        WHERE t.status IN ('PENDING','ESCALATED')
           AND (t.approver_user_id = $1 OR EXISTS (
                 SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
                  WHERE ur.user_id = $1 AND (r.id = t.approver_role_id OR r.id = t.alternative_role_id)))`,

@@ -102,7 +102,7 @@ async function findPendingTask(ctx: Ctx, entityType: string, entityId: number) {
     `SELECT t.id, t.status FROM approval_tasks t
      JOIN workflow_instances i ON i.id = t.instance_id
      WHERE i.tenant_id=$1 AND i.entity_type=$2 AND i.entity_id=$3
-       AND t.status='PENDING' ORDER BY t.step_seq LIMIT 1`,
+       AND t.status IN ('PENDING','ESCALATED') ORDER BY t.step_seq LIMIT 1`,
     [ctx.tenantId, entityType, entityId], ctx
   );
   return res.rows[0] ? Number(res.rows[0].id) : null;

@@ -795,7 +795,7 @@ export async function cancelRequisition(client: pg.PoolClient, ctx: Ctx, requisi
   if (inst.rows.length) {
     await client.query(
       `UPDATE approval_tasks SET status = 'REJECTED', comment = 'Cancelled by requester', decided_at = now()
-       WHERE instance_id = $1 AND status = 'PENDING'`,
+       WHERE instance_id = $1 AND status IN ('PENDING','ESCALATED')`,
       [Number(inst.rows[0].id)]
     );
   }
