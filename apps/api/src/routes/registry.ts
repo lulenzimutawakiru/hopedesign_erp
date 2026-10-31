@@ -86,7 +86,7 @@ export const ENTITIES: (CrudConfig & Handlers)[] = [
 
   // ------------------------------------------------ Logistics
   { table: 'vehicles', module: 'logistics', resource: 'vehicles', label: 'Vehicle', codeColumn: 'code', statusColumn: 'status', searchable: ['code', 'plate_no', 'make', 'model'], defaultOrder: 't.id DESC' },
-  { table: 'routes', module: 'logistics', resource: 'routes', label: 'Route', codeColumn: 'code', searchable: ['code', 'name', 'origin', 'destination'], defaultOrder: 't.id DESC' },
+  { table: 'routes', module: 'logistics', resource: 'routes', label: 'Route', codeColumn: 'code', codePrefix: 'RT', searchable: ['code', 'name', 'origin', 'destination'], defaultOrder: 't.id DESC' },
   { table: 'drivers', module: 'logistics', resource: 'drivers', label: 'Driver', searchable: ['name', 'licence_no', 'phone'], defaultOrder: 't.id DESC' },
   { table: 'trips', module: 'logistics', resource: 'trips', label: 'Trip', codeColumn: 'trip_no', codePrefix: 'TRP', statusColumn: 'status', searchable: ['trip_no', 'destination'], defaultOrder: 't.id DESC', transitions: { cancel: 'CANCELLED' },
     listColumns: ['customer_name', 'vehicle_plate', 'driver_name', 'delivery_no'],

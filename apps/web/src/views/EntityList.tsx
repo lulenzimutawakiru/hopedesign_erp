@@ -3,6 +3,7 @@ import { api, EntityMeta, ListResult } from '../api';
 import { DataTable, type DataTableQuery } from '../components/DataTable';
 import { JsonForm } from '../components/JsonForm';
 import { SupplierForm } from '../components/SupplierForm';
+import { RouteForm } from './RouteForm';
 import { ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { navigate, RouteMatch, useHashQuery } from '../router';
 import { moduleLabel } from '../helpers';
@@ -198,6 +199,8 @@ export default function EntityList({ route }: { route: RouteMatch }) {
         <Modal title={`New ${meta.label}`} onClose={() => setShowCreate(false)} wide>
           {module === 'procurement' && resource === 'suppliers' ? (
             <SupplierForm onCancel={() => setShowCreate(false)} onCreated={createSupplier} />
+          ) : module === 'logistics' && resource === 'routes' ? (
+            <RouteForm onSubmit={create} onCancel={() => setShowCreate(false)} submitLabel="Create route" />
           ) : (
             <JsonForm meta={meta} onSubmit={create} onCancel={() => setShowCreate(false)} submitLabel="Create" />
           )}

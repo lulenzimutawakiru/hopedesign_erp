@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, EntityMeta, fmtBool, fmtDate, fmtMoney, fmtNum } from '../api';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { JsonForm } from '../components/JsonForm';
+import { RouteMap } from '../components/LocationMap';
+import { RouteForm } from './RouteForm';
 import { navigate, RouteMatch } from '../router';
 import { moduleLabel, pick } from '../helpers';
 import { useAuth, can } from '../auth';
@@ -28,6 +30,11 @@ const HIDDEN_FIELDS = new Set([
   'tenantId', 'companyId', 'branchId', 'secretHash',
 ]);
 
+/** Coordinate columns are shown on the map, not as raw numbers. */
+function isCoord(name: string): boolean {
+  return /(^|_)(lat|lng|latitude|longitude)$/.test(name);
+}
+
 function prettyLabel(name: string): string {
   return name
     .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -38,7 +45,7 @@ function prettyLabel(name: string): string {
 function detailSections(row: Record<string, unknown>): [string, string, unknown][] {
   const out: [string, string, unknown][] = [];
   for (const [k, v] of Object.entries(row)) {
-    if (HIDDEN_FIELDS.has(k)) continue;
+    if (HIDDEN_FIELDS.has(k) || isCoord(k)) continue;
     if (v === null || v === undefined || v === '') continue;
     out.push([k, prettyLabel(k), v]);
   }
@@ -148,6 +155,17 @@ export default function EntityDetail({ route }: { route: RouteMatch }) {
   const status = pick<string>(row, meta.statusColumn ?? '', 'status') ?? null;
   const code = pick<string>(row, meta.codeColumn ?? '', 'id') ?? '';
 
+  // A route can be drawn on a map when its endpoints have coordinates.
+  const isRoute = module === 'logistics' && resource === 'routes';
+  const routeOrigin =
+    isRoute && Number.isFinite(Number(row.originLat)) && Number.isFinite(Number(row.originLng))
+      ? { lat: Number(row.originLat), lng: Number(row.originLng), label: String(row.origin ?? 'Origin') }
+      : null;
+  const routeDest =
+    isRoute && Number.isFinite(Number(row.destinationLat)) && Number.isFinite(Number(row.destinationLng))
+      ? { lat: Number(row.destinationLat), lng: Number(row.destinationLng), label: String(row.destination ?? 'Destination') }
+      : null;
+
   const actions = allowedActions(status, module, resource, (p) => can(user, p));
   const tr = meta.transitions ?? {};
   const extraActions: { id: string; label: string; tone?: 'danger' }[] = [];
@@ -219,6 +237,13 @@ export default function EntityDetail({ route }: { route: RouteMatch }) {
             ))}
           </dl>
         </section>
+
+        {isRoute && (
+          <section className="card" style={{ gridColumn: '1 / -1' }}>
+            <div className="card-head"><h3>Route map</h3></div>
+            <RouteMap origin={routeOrigin} destination={routeDest} height={260} />
+          </section>
+        )}
 
         <div className="detail-side">
           <section className="card">
@@ -320,7 +345,11 @@ export default function EntityDetail({ route }: { route: RouteMatch }) {
 
       {editOpen && (
         <Modal title={`Edit ${meta.label}`} onClose={() => setEditOpen(false)} wide>
-          <JsonForm meta={meta} initial={row} onSubmit={saveEdit} onCancel={() => setEditOpen(false)} submitLabel="Save" />
+          {isRoute ? (
+            <RouteForm initial={row} onSubmit={saveEdit} onCancel={() => setEditOpen(false)} submitLabel="Save route" />
+          ) : (
+            <JsonForm meta={meta} initial={row} onSubmit={saveEdit} onCancel={() => setEditOpen(false)} submitLabel="Save" />
+          )}
         </Modal>
       )}
 

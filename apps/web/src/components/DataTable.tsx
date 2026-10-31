@@ -13,10 +13,15 @@ const HIDDEN = new Set([
   'tenantId', 'companyId', 'branchId',
 ]);
 
+/** Coordinate columns are map inputs, not table columns. */
+function isCoord(name: string): boolean {
+  return /(^|_)(lat|lng|latitude|longitude)$/.test(name);
+}
+
 export function pickColumns(meta: EntityMeta, max = 7): string[] {
   const cols: string[] = [];
   const push = (name: string) => {
-    if (!name || HIDDEN.has(name) || cols.includes(name)) return;
+    if (!name || HIDDEN.has(name) || isCoord(name) || cols.includes(name)) return;
     cols.push(name);
   };
   if (meta.codeColumn) push(meta.codeColumn);
@@ -24,7 +29,7 @@ export function pickColumns(meta: EntityMeta, max = 7): string[] {
   push('code');
   if (meta.statusColumn) push(meta.statusColumn);
   const preferred = meta.columns.filter((c) => {
-    if (HIDDEN.has(c.name) || HIDDEN.has(c.camel)) return false;
+    if (HIDDEN.has(c.name) || HIDDEN.has(c.camel) || isCoord(c.name)) return false;
     if (c.name.endsWith('_at') || c.name.endsWith('_by')) return false;
     if (c.name.endsWith('_id') && !['customer_id', 'product_id', 'supplier_id'].includes(c.name)) return false;
     return true;
