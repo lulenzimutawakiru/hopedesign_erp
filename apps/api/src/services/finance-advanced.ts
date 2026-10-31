@@ -568,6 +568,9 @@ export async function registerEfrisDocument(
         doc_ref_id, doc_ref_code, txn_date, currency, gross_amount, tax_amount,
         idempotency_key, status, request_ref, request_payload, requested_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18)
+     ON CONFLICT (tenant_id, doc_ref_type, doc_ref_id)
+       WHERE status IN ('PENDING','QUEUED','PROCESSING','TRANSMITTED','FISCALIZED','RETRYING')
+     DO NOTHING
      RETURNING *`,
     [
       ctx.companyId, ctx.tenantId,
@@ -585,7 +588,19 @@ export async function registerEfrisDocument(
       ctx.userId ?? null,
     ]
   );
-  const row = ins.rows[0];
+  let row = ins.rows[0];
+  if (!row) {
+    // A live fiscal transaction already exists for this document (registered
+    // under a different idempotency key). Return it unchanged rather than
+    // fiscalising the same document twice (FIN-2).
+    const existing = await client.query(
+      `SELECT * FROM efris_transactions
+        WHERE tenant_id = $1 AND doc_ref_type = $2 AND doc_ref_id = $3
+        ORDER BY id DESC LIMIT 1`,
+      [ctx.tenantId, input.docRefType, Number(input.docRefId)]
+    );
+    return toCamelRow(existing.rows[0]);
+  }
   await finAudit(client, ctx, {
     action: auto ? 'EFRIS_QUEUED' : 'EFRIS_REGISTERED',
     module: 'efris', docType: input.docType, docId: Number(row.id), docCode: input.docRefCode,

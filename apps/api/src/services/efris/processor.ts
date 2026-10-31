@@ -554,7 +554,16 @@ async function loadReceiptFiscalSource(client: pg.PoolClient, row: ClaimedFiscal
   return { ...base, buyer, lines };
 }
 
-/** Run one claimed transaction through submission inside its own transaction. */
+/**
+ * Run one claimed transaction through submission.
+ *
+ * The URA round-trip (`submitFiscalDocument`) is a network call that can take
+ * many seconds or time out, so it is made with NO open transaction: source
+ * documents are read and the payload built in one short transaction, the submit
+ * runs outside it, and the outcome is written in a second short transaction.
+ * Holding a pooled connection + open transaction across the HTTP call would
+ * starve the pool and keep locks held for the whole round-trip (WK-1).
+ */
 async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean> {
   const client = await pool.connect();
   try {
@@ -612,6 +621,11 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
     const stored = row.request_payload && Object.keys(row.request_payload).length > 0 ? row.request_payload : null;
     const storedIsUra = Boolean(stored && (stored.goodsDetails || stored.sellerDetails || stored.goodsStockIn));
 
+    // End the read phase before the network call: the URA submit must not hold
+    // an open transaction (or its pooled connection) across a multi-second
+    // round-trip.
+    await client.query('COMMIT');
+
     const raw = await submitFiscalDocument({
       mode: config.mode,
       baseUrl: config.base_url ?? '',
@@ -626,6 +640,11 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
       tin: taxpayer?.tin ?? null,
       securityFlags: config.security_flags,
     });
+
+    // Begin a fresh transaction to persist the URA outcome, re-applying the
+    // transaction-local app context that ended with the read phase's COMMIT.
+    await client.query('BEGIN');
+    await applyWorkerContext(client, row);
 
     // A T110 credit note is an application: URA returns a referenceNo, not an FDN.
     // Record it as TRANSMITTED (awaiting URA approval) and let the polling worker
