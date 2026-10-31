@@ -6,6 +6,7 @@
   "scripts": {
     "migrate": "node src/migrate.js",
     "seed": "node src/seed.js",
+    "import:a4-stock": "node src/import-a4-stock.js",
     "reset": "node src/reset.js",
     "build": "node -e \"console.log('@hopedesign/db: no build step')\""
   },
