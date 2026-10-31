@@ -211,7 +211,7 @@ async function ensureCrmProcurementMasters(client, tenantId) {
          currency, status, security_classification)
        VALUES (1, $1, $2, $3, 'HDG-WALK-IN', 'Walk-In Counter Customer',
          'COMPANY', '+256700000001', 'walkin@hopedesign.co.ug',
-         'Plot 12, Namanve Industrial Park, Kampala, Uganda', 0, 0, 'UGX',
+         'Plot 59 Kyambogo Drive, Kyambogo', 0, 0, 'UGX',
          'ACTIVE', 'NONE')
        ON CONFLICT (id) DO NOTHING`,
       [companyId, tenantId, branchId]
@@ -436,7 +436,7 @@ async function ensureHcmSeed(client, tenantId, companyId = null) {
   // Locations (workplaces/factory)
   if ((await count("locations")) === 0) {
     for (const l of [
-      { code: "KAMPALA-HQ", name: "Kampala Headquarters", type: "WORKPLACE", address: "Plot 12, Namanve Industrial Park, Kampala", city: "Kampala" },
+      { code: "KAMPALA-HQ", name: "Kampala Headquarters", type: "WORKPLACE", address: "Plot 59 Kyambogo Drive, Kyambogo", city: "Kampala" },
       { code: "NAMANVE-FACTORY", name: "Namanve Factory", type: "FACTORY", address: "Namanve Industrial Park, Kampala", city: "Kampala" },
     ]) {
       await insertOne(client, "locations", {
@@ -2883,7 +2883,7 @@ async function seedAll(pool) {
           tin: "1012345678",
           vrn: "VAT-UG-1020304",
           currency: "UGX",
-          address: "Plot 12, Namanve Industrial Park, Kampala, Uganda",
+          address: "Plot 59 Kyambogo Drive, Kyambogo",
           phone: "+256 414 000 000",
           email: "info@hopedesign.jorlentech.com",
           website: "https://hopedesign.jorlentech.com",
@@ -2903,7 +2903,7 @@ async function seedAll(pool) {
           tenant_id: tenantId,
           code: "KAMPALA-HQ",
           name: "Kampala Headquarters",
-          address: "Plot 12, Namanve Industrial Park, Kampala, Uganda",
+          address: "Plot 59 Kyambogo Drive, Kyambogo",
           phone: "+256 414 000 000",
           email: "info@hopedesign.jorlentech.com",
           status: "ACTIVE",

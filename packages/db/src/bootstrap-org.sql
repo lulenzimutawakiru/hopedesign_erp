@@ -9,7 +9,7 @@ INSERT INTO companies (
 ) VALUES (
   2, 2, 'HDG', 'Hope Design Group Ltd', 'Hope Design Group Ltd',
   '1012345678', 'VAT-UG-1020304', 'UGX',
-  'Plot 12, Namanve Industrial Park, Kampala, Uganda',
+  'Plot 59 Kyambogo Drive, Kyambogo',
   '+256 414 000 000', 'info@hopedesign.jorlentech.com', 'https://hopedesign.jorlentech.com',
   '07-01', 'ACTIVE'
 ) ON CONFLICT (id) DO NOTHING;
