@@ -2,7 +2,6 @@
 # deploy/check-host-software.sh --strict fails when an installed package is not listed here.
 docker-ce
 docker-compose-plugin
-caddy
 chrony
 ufw
 openssh-server
