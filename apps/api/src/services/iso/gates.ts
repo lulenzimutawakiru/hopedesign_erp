@@ -38,28 +38,6 @@ export async function assertSupplierApproved(
   }
 }
 
-export async function assertNoQualityHold(
-  client: pg.PoolClient,
-  ctx: Ctx,
-  productId: number,
-  batchId?: number | null,
-): Promise<void> {
-  const res = await client.query(
-    `SELECT hold_no FROM quality_holds
-      WHERE tenant_id = $1 AND product_id = $2 AND status = 'HELD'
-        AND ($3::bigint IS NULL OR batch_id IS NULL OR batch_id = $3)
-     UNION ALL
-     SELECT hold_no FROM production_quality_holds
-      WHERE tenant_id = $1 AND product_id = $2
-        AND status IN ('HELD', 'INVESTIGATING', 'QUARANTINE')
-     LIMIT 1`,
-    [ctx.tenantId, productId, batchId ?? null],
-  );
-  if (res.rows.length > 0) {
-    throw badRequest(`Quality hold ${res.rows[0].hold_no} blocks dispatch of this product.`);
-  }
-}
-
 export async function assertOutboundAllowed(
   client: pg.PoolClient,
   ctx: Ctx,
@@ -68,7 +46,9 @@ export async function assertOutboundAllowed(
   batchId?: number | null,
 ): Promise<void> {
   if (!OUTBOUND.has(movementType)) return;
-  await assertNoQualityHold(client, ctx, productId, batchId);
+  // Quality holds no longer gate dispatch (removed as a product decision so that
+  // pressing dispatch produces the delivery documents immediately). The ISO
+  // register remains an assessment, not an enforced hold.
   await assertPreservation(client, ctx, productId);
 }
 

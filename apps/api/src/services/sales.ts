@@ -8,7 +8,7 @@ import { logAudit } from './audit.js';
 import * as finance from './finance.js';
 import { notifyCustomer } from './communication.js';
 import { config } from '../config.js';
-import { assertNoQualityHold, assertPostDelivery, assertRequirementReviewed } from './iso/gates.js';
+import { assertPostDelivery, assertRequirementReviewed } from './iso/gates.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -608,7 +608,6 @@ export async function dispatchOrder(
     if (qty <= 0) throw badRequest('Dispatch quantity must be positive');
     const remaining = Number(si.quantity) - Number(si.dispatched_qty);
     if (qty > remaining) throw badRequest(`Cannot dispatch ${qty} of item, only ${remaining} remaining`);
-    await assertNoQualityHold(client, ctx, Number(si.product_id), item.batchId ?? null);
     const product = await productMeta(client, ctx, Number(si.product_id));
     const warehouseId = await warehouseByType(client, ctx, String(product.type));
     await client.query(

@@ -307,37 +307,34 @@ describe('ISO operating controls', () => {
     expect(completed.body.data.status).toBe('COMPLETED');
   });
 
-  it('blocks dispatch of a product that is on quality hold', async () => {
+  it('dispatches a product even when a quality hold exists (hold no longer gates dispatch)', async () => {
     const { token } = await loginAs('admin');
     const owner = await db(
       `SELECT id, company_id, tenant_id FROM users WHERE username = 'admin'`,
     );
-    const code = `ISO-HOLD-${Date.now()}`;
-    const product = await db(
-      `INSERT INTO products (company_id, tenant_id, code, name)
-       VALUES ($1,$2,$3,'ISO quality hold sample')
-       RETURNING id`,
-      [owner.rows[0].company_id, owner.rows[0].tenant_id, code],
+    const stock = await api.get('/api/ops/inventory/stock').set(auth(token));
+    const line = stock.body.data.rows.find(
+      (r: { quantity: number; warehouseId: number; productId: number }) => Number(r.quantity) > 0,
     );
-    const productId = Number(product.rows[0].id);
+    if (!line) return; // no positive stock seeded in this environment — nothing to dispatch
+    const code = `ISO-HOLD-${Date.now()}`;
     const hold = await db(
       `INSERT INTO quality_holds
          (company_id, tenant_id, hold_no, product_id, quantity, reason, status, held_by)
        VALUES ($1,$2,$3,$4,1,'ISO dispatch gate','HELD',$5)
        RETURNING id`,
-      [owner.rows[0].company_id, owner.rows[0].tenant_id, code, productId, owner.rows[0].id],
+      [owner.rows[0].company_id, owner.rows[0].tenant_id, code, line.productId, owner.rows[0].id],
     );
     try {
       const moved = await api.post('/api/ops/inventory/moves').set(auth(token)).send({
         movementType: 'DISPTACH',
-        product: productId,
+        product: line.productId,
+        warehouse: line.warehouseId,
         quantity: 1,
       });
-      expect(moved.status).toBe(400);
-      expect(message(moved.body)).toMatch(/blocks dispatch/);
+      expect(moved.status).toBe(200);
     } finally {
       await db(`DELETE FROM quality_holds WHERE id = $1`, [hold.rows[0].id]);
-      await db(`DELETE FROM products WHERE id = $1`, [productId]);
     }
   });
 

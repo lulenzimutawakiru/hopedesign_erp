@@ -3,7 +3,6 @@ import { Ctx } from '../db.js';
 import { badRequest, forbidden, notFound } from '../utils.js';
 import { startWorkflow } from './workflow.js';
 import { postMove } from './inventory.js';
-import { assertNoQualityHold } from './iso/gates.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import { generateQr } from './qr.js';
@@ -959,7 +958,6 @@ export async function dispatchSecureJob(client: pg.PoolClient, ctx: Ctx, jobId: 
   if (batches.length === 0) throw badRequest('At least one QC-passed batch is required for dispatch');
 
   for (const batch of batches) {
-    await assertNoQualityHold(client, ctx, Number(batch.product_id));
     const product = await productMeta(client, ctx, Number(batch.product_id));
     const productBatchId = await productBatchByNo(client, ctx, String(batch.batch_no));
     const unitCost = Number(product.standard_cost) || 0;
