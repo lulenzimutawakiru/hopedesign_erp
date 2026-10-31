@@ -88,6 +88,7 @@ metaRouter.get(
         searchable: cfg.searchable ?? [],
         qrEntityType: cfg.qrEntityType ?? null,
         allowDelete: cfg.allowDelete === true,
+        listColumns: cfg.listColumns ?? [],
         transitions: cfg.transitions ?? null,
         columns,
         writable,

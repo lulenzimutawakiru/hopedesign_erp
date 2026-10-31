@@ -129,6 +129,7 @@ export interface EntityMeta {
   searchable: string[];
   qrEntityType: string | null;
   allowDelete?: boolean;
+  listColumns?: string[];
   transitions?: Record<string, string> | null;
   columns: MetaColumn[];
   writable: string[];

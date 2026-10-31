@@ -85,10 +85,17 @@ export const ENTITIES: (CrudConfig & Handlers)[] = [
   { table: 'maintenance_work_orders', module: 'maintenance', resource: 'work_orders', label: 'Maintenance Work Order', codeColumn: 'mwo_no', statusColumn: 'status', searchable: ['mwo_no'], defaultOrder: 't.id DESC' },
 
   // ------------------------------------------------ Logistics
-  { table: 'vehicles', module: 'logistics', resource: 'vehicles', label: 'Vehicle', codeColumn: 'registration_no', statusColumn: 'status', searchable: ['registration_no', 'make', 'model'], defaultOrder: 't.id DESC' },
-  { table: 'routes', module: 'logistics', resource: 'routes', label: 'Route', searchable: ['name'], defaultOrder: 't.id DESC' },
-  { table: 'drivers', module: 'logistics', resource: 'drivers', label: 'Driver', searchable: ['first_name', 'last_name', 'phone'], defaultOrder: 't.id DESC' },
-  { table: 'trips', module: 'logistics', resource: 'trips', label: 'Trip', codeColumn: 'trip_no', statusColumn: 'status', searchable: ['trip_no'], defaultOrder: 't.id DESC' },
+  { table: 'vehicles', module: 'logistics', resource: 'vehicles', label: 'Vehicle', codeColumn: 'code', statusColumn: 'status', searchable: ['code', 'plate_no', 'make', 'model'], defaultOrder: 't.id DESC' },
+  { table: 'routes', module: 'logistics', resource: 'routes', label: 'Route', codeColumn: 'code', searchable: ['code', 'name', 'origin', 'destination'], defaultOrder: 't.id DESC' },
+  { table: 'drivers', module: 'logistics', resource: 'drivers', label: 'Driver', searchable: ['name', 'licence_no', 'phone'], defaultOrder: 't.id DESC' },
+  { table: 'trips', module: 'logistics', resource: 'trips', label: 'Trip', codeColumn: 'trip_no', codePrefix: 'TRP', statusColumn: 'status', searchable: ['trip_no', 'destination'], defaultOrder: 't.id DESC', transitions: { cancel: 'CANCELLED' },
+    listColumns: ['customer_name', 'vehicle_plate', 'driver_name', 'delivery_no'],
+    listSelect: `t.*,
+      (SELECT v.plate_no FROM vehicles v WHERE v.id = t.vehicle_id) AS vehicle_plate,
+      (SELECT v.code FROM vehicles v WHERE v.id = t.vehicle_id) AS vehicle_code,
+      (SELECT d.name FROM drivers d WHERE d.id = t.driver_id) AS driver_name,
+      (SELECT dn.delivery_no FROM delivery_notes dn WHERE dn.id = t.delivery_note_id) AS delivery_no,
+      (SELECT c.name FROM customers c WHERE c.id = t.customer_id) AS customer_name` },
   { table: 'fuel_logs', module: 'logistics', resource: 'fuel', label: 'Fuel Log', searchable: [], defaultOrder: 't.id DESC' },
   { table: 'fleet_maintenance', module: 'logistics', resource: 'fleet', label: 'Fleet Maintenance', searchable: [], defaultOrder: 't.id DESC' },
 

@@ -40,7 +40,14 @@ export function pickColumns(meta: EntityMeta, max = 7): string[] {
     }
   }
   if (cols.length === 0) push('id');
-  return cols.slice(0, max);
+  const core = cols.slice(0, max);
+  // Computed (display-only) columns declared by the server's listSelect are always
+  // surfaced — they are the human-readable labels the raw foreign keys don't carry.
+  for (const c of meta.listColumns ?? []) {
+    if (!c || HIDDEN.has(c) || core.includes(c)) continue;
+    core.push(c);
+  }
+  return core;
 }
 
 function camelOf(name: string): string {
@@ -291,10 +298,14 @@ export function DataTable({
             <tr>
               {columns.map((c) => (
                 <th key={c} style={widths[c] ? { width: widths[c], minWidth: widths[c] } : { minWidth: 96 }} aria-sort={sortCol === c ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}>
-                  <button className="th-btn" onClick={() => toggleSort(c)}>
-                    {titleCase(c.replace(/Id$/, ''))}
-                    {sortCol === c ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
-                  </button>
+                  {meta.listColumns?.includes(c) ? (
+                    <span className="th-btn th-btn-static">{titleCase(c.replace(/Id$/, ''))}</span>
+                  ) : (
+                    <button className="th-btn" onClick={() => toggleSort(c)}>
+                      {titleCase(c.replace(/Id$/, ''))}
+                      {sortCol === c ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                    </button>
+                  )}
                   <span className="col-resizer" onMouseDown={(e) => startResize(c, e)} />
                 </th>
               ))}

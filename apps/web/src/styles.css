@@ -1051,6 +1051,7 @@ html[data-theme='dark'] .delivery-row { border-color: #254154; }
 .ke-add { margin-top: 4px; }
 
 .th-btn { border: 0; background: none; font: inherit; color: inherit; cursor: pointer; padding: 0; text-transform: inherit; letter-spacing: inherit; font-weight: inherit; }
+.th-btn-static { cursor: default; }
 .col-pop { display: flex; flex-wrap: wrap; gap: 8px; }
 .density-compact table.data td, .density-compact table.data th { padding: 6px 8px; }
 .density-spacious table.data td, .density-spacious table.data th { padding: 14px 14px; }

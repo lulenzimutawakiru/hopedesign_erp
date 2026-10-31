@@ -9,6 +9,7 @@ import * as finance from './finance.js';
 import { notifyCustomer } from './communication.js';
 import { config } from '../config.js';
 import { assertPostDelivery, assertRequirementReviewed } from './iso/gates.js';
+import { completeTripForDelivery, syncTripForDelivery } from './logistics.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -640,6 +641,9 @@ export async function dispatchOrder(
     `UPDATE delivery_notes SET status = 'DISPATCHED' WHERE id = $1`,
     [deliveryNoteId]
   );
+  // Feed the logistics module from this dispatch: a Trip (IN_TRANSIT) carrying
+  // the vehicle, driver, customer and destination straight off the sales order.
+  await syncTripForDelivery(client, ctx, deliveryNoteId);
   const totals = await client.query(
     `SELECT sum(quantity)::numeric AS qty, sum(dispatched_qty)::numeric AS dispatched
      FROM sales_order_items WHERE order_id = $1`,
@@ -680,6 +684,8 @@ export async function deliverDeliveryNote(
       deliveryNoteId,
     ]
   );
+  // The goods have arrived: close the linked trip(s) in the logistics module.
+  await completeTripForDelivery(client, ctx, deliveryNoteId);
   await emitEvent(client, ctx, { eventType: 'sales.delivery_delivered', entityType: 'delivery_notes', entityId: deliveryNoteId, entityCode: String(dn.delivery_no), payload: { receivedBy: input.receivedBy } });
   await logAudit(client, ctx, { action: 'deliver', resource: 'delivery_notes', recordId: deliveryNoteId, recordCode: String(dn.delivery_no), newValues: input });
   return { deliveryNoteId, deliveryNo: String(dn.delivery_no) };

@@ -58,6 +58,8 @@ export interface CrudConfig {
   excludeFilter?: { column: string; values: string[] };
   /** Column values forced on create when the caller omits them. */
   defaults?: Record<string, unknown>;
+  /** Computed (display-only) columns added by `listSelect` and surfaced in the list. */
+  listColumns?: string[];
   transitions?: { cancel?: string; void?: string; archive?: string; restore?: string };
 }
 
