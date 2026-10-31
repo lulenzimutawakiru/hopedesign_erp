@@ -437,7 +437,7 @@ async function ensureHcmSeed(client, tenantId, companyId = null) {
   if ((await count("locations")) === 0) {
     for (const l of [
       { code: "KAMPALA-HQ", name: "Kampala Headquarters", type: "WORKPLACE", address: "Plot 59 Kyambogo Drive, Kyambogo", city: "Kampala" },
-      { code: "NAMANVE-FACTORY", name: "Namanve Factory", type: "FACTORY", address: "Plot 59 Kyambogo Drive, Kyambogo", city: "Kampala" },
+      { code: "KYAMBOGO-FACTORY", name: "Kyambogo Factory", type: "FACTORY", address: "Plot 59 Kyambogo Drive, Kyambogo", city: "Kampala" },
     ]) {
       await insertOne(client, "locations", {
         company_id: companyId,
