@@ -23,6 +23,7 @@ interface Line {
 
 const TYPE_BY_SLUG: Record<string, EntryType> = { receive: 'RECEIPT', issue: 'ISSUE', transfer: 'TRANSFER' };
 const TYPE_VERB: Record<EntryType, string> = { RECEIPT: 'received', ISSUE: 'issued', TRANSFER: 'transferred' };
+const TYPE_LABEL: Record<EntryType, string> = { RECEIPT: 'Receive', ISSUE: 'Issue', TRANSFER: 'Transfer' };
 
 // Module-level so EntityPicker's effect deps stay stable across renders.
 const mapItemRow = (r: Rec) => ({
@@ -141,6 +142,8 @@ export default function QuickEntry({ initial }: { initial?: string | null }) {
     };
   }, [syncPending]);
 
+  const addLine = useCallback(() => setLines((p) => [...p, newLine()]), []);
+
   const reset = () => {
     setLines([newLine()]);
     setReferenceNo('');
@@ -217,6 +220,11 @@ export default function QuickEntry({ initial }: { initial?: string | null }) {
     : entryType === 'ISSUE' ? 'Stock out of a warehouse — issue to production, scrap, sales.'
     : 'Move stock from one warehouse to another.';
 
+  const filledLines = lines.filter((l) => !!l.productId);
+  const totalQty = lines.reduce((s, l) => s + (l.productId ? num(l.quantity) : 0), 0);
+  const lineCount = filledLines.length;
+  const colSpan = isReceipt ? 7 : 5;
+
   return (
     <div className="page">
       <header className="page-head">
@@ -228,7 +236,9 @@ export default function QuickEntry({ initial }: { initial?: string | null }) {
         <div className="head-actions">
           <button className="btn" onClick={() => navigate('/inventory/stock')}>Cancel</button>
           <button className="btn" disabled={busy} onClick={() => submit('draft')}>{busy ? 'Saving…' : 'Save draft'}</button>
-          <button className="btn btn-primary" disabled={busy} onClick={() => submit('post')}>{busy ? 'Posting…' : 'Post now'}</button>
+          <button className="btn btn-primary" disabled={busy} onClick={() => submit('post')}>
+            {busy ? 'Posting…' : entryType === 'TRANSFER' ? 'Post transfer' : `Post ${TYPE_VERB[entryType]}`}
+          </button>
         </div>
       </header>
 
@@ -242,7 +252,7 @@ export default function QuickEntry({ initial }: { initial?: string | null }) {
             className={entryType === t ? 'tab active' : 'tab'}
             onClick={() => setEntryType(t)}
           >
-            {t === 'RECEIPT' ? 'Receive' : t === 'ISSUE' ? 'Issue' : 'Transfer'}
+            {TYPE_LABEL[t]}
           </button>
         ))}
       </div>
@@ -303,7 +313,10 @@ export default function QuickEntry({ initial }: { initial?: string | null }) {
       <section className="card">
         <div className="card-head">
           <h3>Items</h3>
-          <button className="btn btn-sm" onClick={() => setLines((p) => [...p, newLine()])}>+ Line</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span className="hint">{lineCount} line{lineCount === 1 ? '' : 's'}{lineCount > 0 ? ` · ${totalQty} total` : ''}</span>
+            <button className="btn btn-sm" onClick={addLine}>+ Line</button>
+          </div>
         </div>
         <div className="table-wrap">
           <table className="data">
@@ -319,40 +332,58 @@ export default function QuickEntry({ initial }: { initial?: string | null }) {
               </tr>
             </thead>
             <tbody>
-              {lines.map((l) => (
-                <tr key={l.key}>
-                  <td>
-                    <EntityPicker
-                      endpoint="/api/inventory/items"
-                      mapRow={mapItemRow}
-                      value={l.productId ? String(l.productId) : ''}
-                      initialLabel={l.label || undefined}
-                      placeholder="Search item…"
-                      onChange={(v, o) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, productId: v ? Number(v) : '', label: o?.label ?? '' } : x))}
-                    />
-                  </td>
-                  <td><input className="cell-input" type="number" min={0} value={l.quantity} onChange={(e) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, quantity: num(e.target.value) } : x))} /></td>
-                  <td>
-                    <EntityPicker
-                      endpoint="/api/inventory/batches"
-                      mapRow={mapBatchRow}
-                      value={l.batchId ? String(l.batchId) : ''}
-                      placeholder="Batch…"
-                      onChange={(v) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, batchId: v ? Number(v) : '' } : x))}
-                    />
-                  </td>
-                  <td>
-                    <select className="cell-input" value={l.binId ? String(l.binId) : ''} onChange={(e) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, binId: e.target.value ? Number(e.target.value) : '' } : x))}>
-                      <option value="">—</option>
-                      {bins.map((b) => <option key={String(b.id)} value={String(b.id)}>{String(pick(b, 'code'))}</option>)}
-                    </select>
-                  </td>
-                  {isReceipt && <td><input className="cell-input" type="number" min={0} step="0.01" value={l.unitCost} onChange={(e) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, unitCost: num(e.target.value) } : x))} /></td>}
-                  {isReceipt && <td><input className="cell-input" type="date" value={l.expiryDate} onChange={(e) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, expiryDate: e.target.value } : x))} /></td>}
-                  <td><button className="btn btn-sm" onClick={() => setLines((p) => (p.length === 1 ? p : p.filter((x) => x.key !== l.key)))}>Remove</button></td>
-                </tr>
-              ))}
+              {lines.map((l, i) => {
+                const isLast = i === lines.length - 1;
+                const enterAddsLine = isLast ? (e: React.KeyboardEvent<HTMLInputElement>) => {
+                  if (e.key === 'Enter') { e.preventDefault(); addLine(); }
+                } : undefined;
+                return (
+                  <tr key={l.key}>
+                    <td>
+                      <EntityPicker
+                        endpoint="/api/inventory/items"
+                        mapRow={mapItemRow}
+                        value={l.productId ? String(l.productId) : ''}
+                        initialLabel={l.label || undefined}
+                        placeholder="Search item…"
+                        autoFocus={i === 0}
+                        onChange={(v, o) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, productId: v ? Number(v) : '', label: o?.label ?? '' } : x))}
+                      />
+                    </td>
+                    <td><input className="cell-input" type="number" min={0} value={l.quantity} onKeyDown={enterAddsLine} onChange={(e) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, quantity: num(e.target.value) } : x))} /></td>
+                    <td>
+                      <EntityPicker
+                        endpoint="/api/inventory/batches"
+                        mapRow={mapBatchRow}
+                        value={l.batchId ? String(l.batchId) : ''}
+                        placeholder="Batch…"
+                        onChange={(v) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, batchId: v ? Number(v) : '' } : x))}
+                      />
+                    </td>
+                    <td>
+                      <select className="cell-input" value={l.binId ? String(l.binId) : ''} onChange={(e) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, binId: e.target.value ? Number(e.target.value) : '' } : x))}>
+                        <option value="">—</option>
+                        {bins.map((b) => <option key={String(b.id)} value={String(b.id)}>{String(pick(b, 'code'))}</option>)}
+                      </select>
+                    </td>
+                    {isReceipt && <td><input className="cell-input" type="number" min={0} step="0.01" value={l.unitCost} onKeyDown={enterAddsLine} onChange={(e) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, unitCost: num(e.target.value) } : x))} /></td>}
+                    {isReceipt && <td><input className="cell-input" type="date" value={l.expiryDate} onKeyDown={enterAddsLine} onChange={(e) => setLines((p) => p.map((x) => x.key === l.key ? { ...x, expiryDate: e.target.value } : x))} /></td>}
+                    <td>
+                      <button className="btn btn-sm" disabled={lines.length === 1} onClick={() => setLines((p) => (p.length === 1 ? p : p.filter((x) => x.key !== l.key)))}>
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={colSpan}>
+                  <button className="btn btn-sm" onClick={addLine}>+ Add line</button>
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </section>

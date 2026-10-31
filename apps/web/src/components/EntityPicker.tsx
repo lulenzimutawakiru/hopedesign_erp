@@ -32,6 +32,8 @@ interface EntityPickerProps {
   initialLabel?: string;
   /** Shown when a search returns nothing. */
   emptyHint?: string;
+  /** Focus the combobox input on mount (for fast, keyboard-first entry). */
+  autoFocus?: boolean;
   id?: string;
   className?: string;
 }
@@ -66,6 +68,7 @@ export default function EntityPicker({
   ariaLabel,
   initialLabel,
   emptyHint = 'No matches',
+  autoFocus = false,
   id,
   className,
 }: EntityPickerProps) {
@@ -198,6 +201,7 @@ export default function EntityPicker({
           aria-label={ariaLabel}
           aria-activedescendant={open && visible[active] ? `${listId}-${active}` : undefined}
           autoComplete="off"
+          autoFocus={autoFocus}
           disabled={disabled}
           placeholder={open ? placeholder : undefined}
           value={display}
