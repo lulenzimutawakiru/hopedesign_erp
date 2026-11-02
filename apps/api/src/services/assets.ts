@@ -1060,8 +1060,8 @@ export async function listTagPrintJobs(client: pg.PoolClient, ctx: Ctx, q: Recor
   const limit = Math.min(100, Math.max(1, Number(q.pageSize) || 25));
   const offset = Math.max(0, (Number(q.page) || 1) - 1) * limit;
   const params: unknown[] = [ctx.tenantId, ctx.companyId];
-  let where = 'tenant_id = $1 AND company_id = $2';
-  if (q.status) { params.push(String(q.status).toUpperCase()); where += ` AND status = $${params.length}`; }
+  let where = 'p.tenant_id = $1 AND p.company_id = $2';
+  if (q.status) { params.push(String(q.status).toUpperCase()); where += ` AND p.status = $${params.length}`; }
   params.push(limit, offset);
   const rows = await client.query(
     `SELECT p.*, u.first_name || ' ' || u.last_name AS requested_by_name, lt.name AS template_name
