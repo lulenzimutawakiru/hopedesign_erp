@@ -168,17 +168,17 @@ describe('modern payroll engine', () => {
     expect(Number(item!.basicPay)).toBe(3000000);
     // Basic + taxable 250k + non-taxable 100k + overtime 100k + bonus 150k + commission 120k + earning 80k.
     expect(Number(item!.grossPay)).toBe(3800000);
-    // The non-taxable component stays out of the tax base. Employee NSSF
-    // (5% of 3.8m = 190k) is deductible before PAYE (FY2026/27 bands).
-    expect(Number(item!.taxableIncome)).toBe(3710000);
-    // PAYE on 3.71m: 20% on 335k-410k + 25% on 410k-485k + 30% over 485k.
-    expect(Number(item!.paye)).toBe(1001250);
+    // The non-taxable component stays out of the tax base. LST (25k) is
+    // deducted before PAYE to match the client's register (FY2026/27 bands).
+    expect(Number(item!.taxableIncome)).toBe(3875000);
+    // PAYE on 3.875m: 20% on 335k-410k + 25% on 410k-485k + 30% over 485k.
+    expect(Number(item!.paye)).toBe(1050750);
     expect(Number(item!.nssf)).toBe(190000);
     expect(Number(item!.employerNssf)).toBe(380000);
     // Component deduction 50k + employee deduction 30k + benefit employee share 40k.
     expect(Number(item!.otherDeductions)).toBe(120000);
     // LST 25k applies to the September run (KCCA collection months Jul-Oct).
-    expect(Number(item!.netPay)).toBe(2463750);
+    expect(Number(item!.netPay)).toBe(2414250);
 
     const breakdown = parseBreakdown(item!.breakdown);
     expect(breakdown.earnings.map((e) => ({ kind: e.kind, amount: e.amount, taxable: e.taxable }))).toEqual([

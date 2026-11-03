@@ -1278,10 +1278,11 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
       : extraEarnings;
     const gross = round2(basic + allowances + extraForEmployee + variableEarnings + employeeEarnings);
     // PAYE runs on chargeable income (basic + taxable allowances/earnings),
-    // so non-taxable components never inflate the tax charge. Under Uganda's
-    // Income Tax Act the employee NSSF contribution is deductible from
-    // chargeable income before PAYE; LST is withheld separately and never
-    // reduces taxable pay.
+    // so non-taxable components never inflate the tax charge. NOTE: the
+    // client's register deducts LST from chargeable income before PAYE in the
+    // months LST is actually charged, and employee NSSF otherwise — the client
+    // asked us to match that historical treatment (2026-11-03) even though the
+    // statutory default is always to deduct NSSF.
     const chargeableIncome = round2(basic + contractAllowances + extraForEmployee + taxableComponentEarnings + variableEarnings + taxableEmployeeEarnings + benefitsTaxable);
     // Which employment this payslip is: the employee's own job, or a second job
     // the company pays as a second employer. The flag is a fact about the
@@ -1294,7 +1295,7 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     // deducting the same contribution again would double-charge one contributor.
     const nssf = statutory.computeNssf(gross, nssfCfg, { scope: employmentScope });
     const lst = statutory.computeLst(gross, lstCfg, { periodStart, periodEnd });
-    const taxableIncome = round2(Math.max(0, chargeableIncome - nssf.employee));
+    const taxableIncome = round2(Math.max(0, chargeableIncome - (lst > 0 ? lst : nssf.employee)));
     // A second employer withholds a fixed rate instead of on the resident
     // bands. The tenant must have adopted a PAYE_SECONDARY rule that covers
     // second employments; without one, or where the rule names a different
