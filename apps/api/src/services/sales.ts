@@ -10,6 +10,7 @@ import { notifyCustomer } from './communication.js';
 import { config } from '../config.js';
 import { assertPostDelivery, assertRequirementReviewed } from './iso/gates.js';
 import { completeTripForDelivery, syncTripForDelivery } from './logistics.js';
+import { resolveAppSettings, settingNumber } from './companyConfig.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -56,6 +57,15 @@ async function companyBankDefaults(client: pg.PoolClient, ctx: Ctx) {
     bankAccountName: stored['bank_account_name'] ?? '',
     bankAccountNumber: stored['bank_account_number'] ?? '',
   };
+}
+
+/** Default VAT rate applied to a new sales line that does not specify one. */
+async function defaultTaxRate(client: pg.PoolClient, ctx: Ctx): Promise<number> {
+  const settings = await resolveAppSettings(client, ctx);
+  const rate = settingNumber(settings, 'general.default_tax_rate');
+  // A non-positive default would silently re-introduce 0%-VAT lines, which URA
+  // rejects as "Out of Scope for VAT" (error 2856) for a standard-rated good.
+  return rate > 0 ? rate : 18;
 }
 
 function validateDiscount(discountType: string, discountValue: number) {
@@ -161,13 +171,14 @@ export async function createQuotation(
   let subtotal = 0;
   let discount = 0;
   let tax = 0;
+  const defaultRate = await defaultTaxRate(client, ctx);
   for (const item of input.items) {
     const product = await productMeta(client, ctx, item.productId);
     const qty = Number(item.quantity);
     if (qty <= 0) throw badRequest('Quantity must be positive');
     const unitPrice = Number(item.unitPrice);
     const discountPercent = Number(item.discountPercent ?? 0);
-    const taxPercent = Number(item.taxPercent ?? 0);
+    const taxPercent = item.taxPercent != null ? Number(item.taxPercent) : defaultRate;
     const lineTotal = qty * unitPrice;
     const discountAmt = lineTotal * (discountPercent / 100);
     const taxAmt = (lineTotal - discountAmt) * (taxPercent / 100);
@@ -395,13 +406,14 @@ export async function createSalesOrder(
     discountAmt: number;
     deliveryDate: string | null;
   }> = [];
+  const defaultRate = await defaultTaxRate(client, ctx);
   for (const item of lines) {
     const product = await productMeta(client, ctx, item.productId);
     const qty = Number(item.quantity);
     if (qty <= 0) throw badRequest('Quantity must be positive');
     const unitPrice = Number(item.unitPrice);
     const discountPercent = Number(item.discountPercent ?? 0);
-    const taxPercent = Number(item.taxPercent ?? 0);
+    const taxPercent = item.taxPercent != null ? Number(item.taxPercent) : defaultRate;
     const lineTotal = qty * unitPrice;
     const discountAmt = lineTotal * (discountPercent / 100);
     lineSpecs.push({
@@ -811,11 +823,12 @@ export async function createInvoice(
       subtotal += lineTotal;
     }
   } else {
+    const defaultRate = await defaultTaxRate(client, ctx);
     for (const item of input.items ?? []) {
       const qty = Number(item.quantity);
       if (qty <= 0) throw badRequest('Quantity must be positive');
       const unitPrice = Number(item.unitPrice);
-      const taxPercent = Number(item.taxPercent ?? 0);
+      const taxPercent = item.taxPercent != null ? Number(item.taxPercent) : defaultRate;
       let productId: number | null = null;
       let description = item.description != null ? String(item.description).trim() : '';
       if (item.productId != null) {
