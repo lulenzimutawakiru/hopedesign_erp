@@ -28,6 +28,15 @@ async function getProduct(client: pg.PoolClient, ctx: Ctx, productId: number) {
   return r.rows[0] as { id: number; name: string; unit_id: number | null };
 }
 
+/** Units available for a product's per-purpose UOM mapping (for the picker). */
+export async function listUnits(client: pg.PoolClient, ctx: Ctx) {
+  const r = await client.query(
+    `SELECT id, code, name FROM units WHERE tenant_id = $1 ORDER BY code ASC`,
+    [ctx.tenantId]
+  );
+  return toCamelRows(r.rows);
+}
+
 /**
  * List a product's UOM mappings, always including a BASE row. If the product
  * has no stored BASE mapping, a synthetic one is derived from products.unit_id
