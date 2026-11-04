@@ -11,7 +11,7 @@
  * with an accessible name.
  */
 
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 
 export interface IconProps {
   /** Rendered square size in px. */
@@ -195,52 +195,54 @@ export interface BrandGlyphProps {
   /** Accessible name. When omitted the glyph is hidden from assistive tech. */
   title?: string;
   className?: string;
-  /** Background plate colour. */
+  /** Background plate colour (midnight navy). */
   plate?: string;
-  /** Upright bar colour. */
-  bar?: string;
-  /** Horizontal band colour. */
-  band?: string;
-  /** Centre cross colour. */
-  cross?: string;
+  /** "N" monogram gradient start colour (electric blue). */
+  mark?: string;
+  /** Gradient end + node colour (accent cyan). */
+  node?: string;
 }
 
 /**
- * The HOPE DESIGN mark, drawn inline.
+ * The NATEX CLOUD mark, drawn inline.
  *
  * This is the same artwork the organisation ships as `public/logo.svg` and
- * `public/favicon.svg`. Corporate marks elsewhere in the app are strictly
- * asset-driven (see `components/BrandMark`), which leaves text-only chrome
- * whenever a tenant has not uploaded a wordmark. Drawing the organisation's own
- * shipped glyph here means the sign-in header always carries real brand
- * artwork, and it costs no request and no dependency.
+ * `public/favicon.svg`: a navy rounded-square plate carrying a rising "N"
+ * (electric blue -> cyan) and a cyan node. Corporate marks elsewhere in the app
+ * are strictly asset-driven (see `components/BrandMark`), which leaves
+ * text-only chrome whenever a tenant has not uploaded a wordmark. Drawing the
+ * product's own shipped glyph here means the sign-in header always carries real
+ * brand artwork, and it costs no request and no dependency.
  */
 export function BrandGlyph({
   size = 40,
   title,
   className,
-  plate = '#1261A0',
-  bar = '#FFFFFF',
-  band = '#00A6A6',
-  cross = '#0B1F33',
+  plate = '#101D35',
+  mark = '#1677FF',
+  node = '#13C8E8',
 }: BrandGlyphProps) {
+  const gradId = useId();
   return (
     <svg
       width={size}
       height={size}
-      viewBox="0 0 40 40"
+      viewBox="0 0 48 48"
       className={className ? `auth-glyph ${className}` : 'auth-glyph'}
       role={title ? 'img' : undefined}
       aria-hidden={title ? undefined : true}
       focusable="false"
     >
       {title ? <title>{title}</title> : null}
-      <rect width="40" height="40" rx="8" fill={plate} />
-      <rect x="8" y="8" width="6.2" height="24" rx="1.2" fill={bar} />
-      <rect x="25.8" y="8" width="6.2" height="24" rx="1.2" fill={bar} />
-      <rect x="8" y="17" width="24" height="6" rx="1" fill={band} />
-      <rect x="18.6" y="14.4" width="2.8" height="11.2" rx="0.4" fill={cross} />
-      <rect x="14.4" y="18.6" width="11.2" height="2.8" rx="0.4" fill={cross} />
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor={mark} />
+          <stop offset="1" stopColor={node} />
+        </linearGradient>
+      </defs>
+      <rect width="48" height="48" rx="11" fill={plate} />
+      <path d="M15 33V15l18 18V15" fill="none" stroke={`url(#${gradId})`} strokeWidth="4.4" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="33" cy="15" r="2.6" fill={node} />
     </svg>
   );
 }
