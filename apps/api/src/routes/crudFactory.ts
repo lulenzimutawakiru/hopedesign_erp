@@ -14,6 +14,7 @@ export const BASE_EXCLUDED = new Set([
 /** Lifecycle / posting fields — only workflow and ops services may write these. */
 export const PROCESS_EXCLUDED = new Set([
   'status',
+  'approval_status',
   'approved_by', 'approved_at',
   'rejected_by', 'rejected_at',
   'submitted_by', 'submitted_at',

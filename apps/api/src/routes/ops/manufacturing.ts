@@ -244,3 +244,15 @@ manufacturingOpsRouter.get('/routings/:id', ...runGet('production.boms.view', (c
 manufacturingOpsRouter.post('/routings', ...run('production.boms.create', (c, ctx, b) => mfg.createRouting(c, ctx, b)));
 manufacturingOpsRouter.put('/routings/:id', ...run('production.boms.update', (c, ctx, b, p) => mfg.updateRouting(c, ctx, Number(p.id), b)));
 manufacturingOpsRouter.delete('/routings/:id', ...run('production.boms.delete', (c, ctx, b, p) => mfg.deleteRouting(c, ctx, Number(p.id), b)));
+
+// ---------------------------------------------------------------------------
+// Parity inquiries & maintenance
+// ---------------------------------------------------------------------------
+manufacturingOpsRouter.get('/boms/where-used/:productId', ...runGet('production.boms.view', (c, ctx, q, p) => mfg.whereUsed(c, ctx, Number(p.productId), q.indented === 'true' || q.indented === '1')));
+manufacturingOpsRouter.post('/boms/copy', ...run('production.boms.create', (c, ctx, b) => mfg.copyBom(c, ctx, b)));
+manufacturingOpsRouter.get('/materials/unused', ...runGet('production.boms.view', (c, ctx) => mfg.unusedMaterials(c, ctx)));
+manufacturingOpsRouter.get('/work-orders/ready', ...runGet('production.work_orders.view', (c, ctx) => mfg.readyToProduce(c, ctx)));
+manufacturingOpsRouter.get('/coa/batches', ...runGet('quality.inspections.view', (c, ctx) => mfg.coaBatchDesk(c, ctx)));
+manufacturingOpsRouter.get('/coa/:batchId', ...runGet('quality.inspections.view', (c, ctx, _q, p) => mfg.certificateOfAnalysis(c, ctx, Number(p.batchId))));
+manufacturingOpsRouter.get('/spec-groups', ...runGet('production.plans.view', (c, ctx) => mfg.specGroupsDesk(c, ctx)));
+manufacturingOpsRouter.post('/spec-groups/rename', ...run('production.plans.create', (c, ctx, b) => mfg.renameSpecGroup(c, ctx, b)));

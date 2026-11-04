@@ -18,7 +18,7 @@ export default function App() {
   const path = useHashRoute();
 
   useEffect(() => {
-    document.title = company.name !== 'Company' ? `${shortCompanyName(company.name)} OS` : 'HOPE DESIGN';
+    document.title = company.name !== 'Company' ? `${shortCompanyName(company.name)} OS` : 'Natex Cloud';
   }, [company]);
 
   useEffect(() => {

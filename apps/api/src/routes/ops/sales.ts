@@ -39,6 +39,7 @@ salesOpsRouter.get('/customers/:id/360', ...runGet('sales.quotations.view', (c, 
 salesOpsRouter.get('/quotations', ...runGet('sales.quotations.view', (c, ctx, q) => sales.listQuotations(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
+  customerId: q.customerId != null ? Number(q.customerId) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
 })));
@@ -54,6 +55,7 @@ salesOpsRouter.post('/quotations/:id/send', ...run('sales.quotations.send', (c, 
 salesOpsRouter.get('/orders', ...runGet('sales.orders.view', (c, ctx, q) => sales.listOrders(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
+  customerId: q.customerId != null ? Number(q.customerId) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
 })));
@@ -89,11 +91,14 @@ salesOpsRouter.post('/delivery-notes/:id/deliver', ...run('sales.delivery_notes.
 salesOpsRouter.get('/invoices', ...runGet('sales.invoices.view', (c, ctx, q) => sales.listInvoices(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
+  customerId: q.customerId != null ? Number(q.customerId) : undefined,
 })));
 salesOpsRouter.get('/invoices/:id', ...runGet('sales.invoices.view', (c, ctx, _q, p) => sales.getInvoice(c, ctx, Number(p.id))));
 salesOpsRouter.post('/invoices', ...run('sales.invoices.create', (c, ctx, b) => sales.createInvoice(c, ctx, b)));
 salesOpsRouter.post('/invoices/:id/post', ...run('sales.invoices.post', (c, ctx, _b, p) => sales.postInvoice(c, ctx, Number(p.id))));
-salesOpsRouter.get('/receipts', ...runGet('sales.receipts.view', (c, ctx) => sales.listReceipts(c, ctx)));
+salesOpsRouter.get('/receipts', ...runGet('sales.receipts.view', (c, ctx, q) => sales.listReceipts(c, ctx, {
+  customerId: q.customerId != null ? Number(q.customerId) : undefined,
+})));
 salesOpsRouter.get('/receipts/:id', ...runGet('sales.receipts.view', (c, ctx, _q, p) => sales.getReceipt(c, ctx, Number(p.id))));
 salesOpsRouter.post('/receipts', ...run('sales.receipts.create', (c, ctx, b) => sales.createReceipt(c, ctx, {
   invoiceId: b.invoiceId != null ? Number(b.invoiceId) : null,

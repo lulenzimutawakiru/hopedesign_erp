@@ -511,11 +511,134 @@ function ProductStock({ id }: { id: number }) {
           </table>
         </div>
       </section>
+      <ProductUoms id={id} />
       <section className="card">
         <div className="card-head"><h3>Recent movements</h3></div>
         <MovementTable rows={data.movements} compact />
       </section>
     </div>
+  );
+}
+
+const UOM_PURPOSES = ['PURCHASE', 'PRODUCTION', 'SALES', 'EFRIS'] as const;
+
+function ProductUoms({ id }: { id: number }) {
+  const { user } = useAuth();
+  const canEdit = can(user, 'inventory.items.edit');
+  const [uoms, setUoms] = useState<Rec[]>([]);
+  const [units, setUnits] = useState<Rec[]>([]);
+  const [base, setBase] = useState<Rec | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [drafts, setDrafts] = useState<Record<string, { unitId: string; factor: string }>>({});
+
+  const load = useCallback(async () => {
+    setError('');
+    try {
+      const [u, un] = await Promise.all([
+        api<{ data: Rec[] }>(`/api/ops/inventory/products/${id}/uoms`),
+        api<{ data: Rec[] }>('/api/ops/inventory/units'),
+      ]);
+      const list = u.data ?? [];
+      setUoms(list.filter((r) => r.purpose !== 'BASE'));
+      setBase(list.find((r) => r.purpose === 'BASE') ?? null);
+      setUnits(un.data ?? []);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to load units of measure'); }
+  }, [id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openEditor = () => {
+    const d: Record<string, { unitId: string; factor: string }> = {};
+    for (const p of UOM_PURPOSES) {
+      const existing = uoms.find((r) => r.purpose === p);
+      d[p] = { unitId: existing ? String(existing.unitId ?? '') : '', factor: existing ? String(existing.conversionFactor ?? '') : '' };
+    }
+    setDrafts(d);
+    setOpen(true);
+  };
+
+  const save = async () => {
+    setBusy(true); setError('');
+    try {
+      const payload = UOM_PURPOSES.map((p) => ({
+        purpose: p,
+        unitId: Number(drafts[p]?.unitId ?? 0),
+        conversionFactor: Number(drafts[p]?.factor ?? 0),
+      })).filter((r) => Number.isInteger(r.unitId) && r.unitId > 0 && r.conversionFactor > 0);
+      await api(`/api/ops/inventory/products/${id}/uoms`, { method: 'PUT', body: JSON.stringify({ uoms: payload }) });
+      setOpen(false);
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to save units of measure'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h3>Units of measure</h3>
+        {canEdit && <button className="btn btn-sm" onClick={openEditor}>Edit</button>}
+      </div>
+      {error && <ErrorBanner error={error} />}
+      <div className="table-wrap">
+        <table className="data">
+          <thead>
+            <tr><th>Purpose</th><th>Unit</th><th className="cell-num">Conversion factor</th><th>Default</th></tr>
+          </thead>
+          <tbody>
+            {base && (
+              <tr>
+                <td><Badge value="BASE" /></td>
+                <td>{String(base.unitCode ?? '')}{base.unitName ? ` · ${String(base.unitName)}` : ''}</td>
+                <td className="cell-num">1</td>
+                <td>{base.isDefault ? <Badge value="DEFAULT" /> : '—'}</td>
+              </tr>
+            )}
+            {UOM_PURPOSES.map((p) => {
+              const row = uoms.find((r) => r.purpose === p);
+              if (!row) return null;
+              return (
+                <tr key={p}>
+                  <td><Badge value={p} /></td>
+                  <td>{String(row.unitCode ?? '')}{row.unitName ? ` · ${String(row.unitName)}` : ''}</td>
+                  <td className="cell-num">{fmtNum(row.conversionFactor)}</td>
+                  <td>{row.isDefault ? <Badge value="DEFAULT" /> : '—'}</td>
+                </tr>
+              );
+            })}
+            {!base && uoms.length === 0 && (
+              <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>No UOM conversions set. Add purchase, production, sales and EFRIS conversions so documents work in the right unit.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>Conversion factor = how many base units are in one unit of that purpose (e.g. 5 reams per carton).</p>
+      {open && (
+        <Modal title="Edit units of measure" onClose={() => setOpen(false)} footer={
+          <>
+            <button className="btn" onClick={() => setOpen(false)}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+          </>
+        }>
+          {base && <p className="muted" style={{ marginTop: 0 }}>BASE is pinned to {String(base.unitName ?? base.unitCode ?? '')} at factor 1. Set the other purposes below.</p>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {UOM_PURPOSES.map((p) => (
+              <div className="field" key={p}>
+                <label>{p.replace(/_/g, ' ')}</label>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <select style={{ flex: 1 }} value={drafts[p]?.unitId ?? ''} aria-label={`${p} unit`} onChange={(e) => setDrafts((prev) => ({ ...prev, [p]: { ...prev[p], unitId: e.target.value } }))}>
+                    <option value="">— none —</option>
+                    {units.map((u) => <option key={String(u.id)} value={String(u.id)}>{String(u.code)}{u.name ? ` · ${String(u.name)}` : ''}</option>)}
+                  </select>
+                  <input type="number" step="any" min="0" style={{ width: 140 }} placeholder="Factor" aria-label={`${p} factor`} value={drafts[p]?.factor ?? ''} onChange={(e) => setDrafts((prev) => ({ ...prev, [p]: { ...prev[p], factor: e.target.value } }))} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </section>
   );
 }
 

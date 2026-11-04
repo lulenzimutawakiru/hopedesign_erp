@@ -36,6 +36,10 @@ export const ENTITIES: Record<
   'procurement.payments': { table: 'supplier_payments', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'release', ownerColumn: 'created_by', draftStatus: 'PENDING' },
   'inventory.adjustments': { table: 'inventory_adjustments', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post', ownerColumn: 'created_by' },
   'inventory.transfers': { table: 'inventory_transfers', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', onApprove: 'post', ownerColumn: 'created_by' },
+  // Product master data approval: a parallel approval_status column keeps the
+  // maker-checker flow separate from the lifecycle `status` (ACTIVE/INACTIVE/
+  // DISCONTINUED) that pickers and catalogue filters depend on.
+  'inventory.items': { table: 'products', statusColumn: 'approval_status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', draftStatus: 'DRAFT', ownerColumn: 'created_by' },
   'production.plans': { table: 'production_plans', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
   'production.work_orders': { table: 'work_orders', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
   'production.boms': { table: 'boms', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED' },

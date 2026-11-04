@@ -748,12 +748,15 @@ function DocumentList({ resource }: { resource: string }) {
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
+  const [customerId, setCustomerId] = useState<number | ''>('');
+  const [customerLabel, setCustomerLabel] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({ page: String(page), pageSize: '25' });
     if (q.trim()) params.set('q', q.trim());
+    if (customerId) params.set('customerId', String(customerId));
     const ops = ['quotations', 'orders', 'invoices', 'receipts'].includes(resource);
     const r = await api<ListResult & { data: Rec[] | { rows: Rec[] } }>(
       ops ? `/api/ops/sales/${resource}?${params.toString()}` : `/api/sales/${resource}?${params.toString()}`
@@ -761,7 +764,7 @@ function DocumentList({ resource }: { resource: string }) {
     const rows = Array.isArray(r.data) ? r.data : (r.data as { rows: Rec[] }).rows ?? [];
     setRows(rows);
     setTotal(r.pagination?.total ?? rows.length);
-  }, [page, q, resource]);
+  }, [page, q, customerId, resource]);
 
   useEffect(() => {
     setBusy(true);
@@ -789,6 +792,18 @@ function DocumentList({ resource }: { resource: string }) {
       <div className="toolbar toolbar-sticky">
         <div className="toolbar-left">
           <input className="search-input" placeholder="Search document number…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+          <span className="muted" style={{ fontSize: 12 }}>Customer</span>
+          <LookupField
+            compact
+            endpoint="/api/ops/sales/customers"
+            placeholder="Filter by customer…"
+            display={(r) => `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`}
+            valueLabel={customerLabel}
+            onPick={(r) => { setCustomerId(num(r.id)); setCustomerLabel(`${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`); setPage(1); }}
+          />
+          {customerId ? (
+            <button className="btn btn-sm" type="button" onClick={() => { setCustomerId(''); setCustomerLabel(''); setPage(1); }} aria-label="Clear customer filter">Clear</button>
+          ) : null}
         </div>
         <div className="toolbar-right">
           {canCreateQuote && resource !== 'quotations' && (
@@ -1630,6 +1645,7 @@ function LookupField({
   valueLabel,
   onPick,
   compact,
+  placeholder,
 }: {
   label?: string;
   required?: boolean;
@@ -1638,6 +1654,7 @@ function LookupField({
   valueLabel: string;
   onPick: (row: Rec) => void;
   compact?: boolean;
+  placeholder?: string;
 }) {
   const [q, setQ] = useState(valueLabel);
   const [open, setOpen] = useState(false);
@@ -1662,7 +1679,7 @@ function LookupField({
     <div className="lookup">
       <input
         value={q}
-        placeholder="Search…"
+        placeholder={placeholder ?? 'Search…'}
         onFocus={() => setOpen(true)}
         onChange={(e) => { setQ(e.target.value); setOpen(true); }}
         onBlur={() => setTimeout(() => setOpen(false), 180)}

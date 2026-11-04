@@ -27,7 +27,7 @@ function showBanner(loaded: string, available: string): void {
 
   const text = document.createElement('span');
   text.className = 'update-banner-text';
-  text.textContent = 'A newer version of HOPE DESIGN is available.';
+  text.textContent = 'A newer version of Natex Cloud is available.';
 
   const hint = document.createElement('span');
   hint.className = 'update-banner-hint';

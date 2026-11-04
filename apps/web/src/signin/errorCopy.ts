@@ -23,7 +23,7 @@ const UNREACHABLE =
   /failed to fetch|networkerror|network request failed|load failed|fetch failed|econnrefused|econnreset|enotfound|etimedout|err_network|err_internet|err_connection|err_name_not_resolved/i;
 
 const OFFLINE_TEXT =
-  "We couldn't connect to HOPE DESIGN ERP. Check your network connection and try again.";
+  "We couldn't connect to Natex Cloud. Check your network connection and try again.";
 
 const INVALID_CREDENTIALS_TEXT =
   'The username or password is incorrect. Please verify your details and try again.';
@@ -36,7 +36,7 @@ const NOT_ACTIVE_TEXT =
 const LOCKED_TEXT =
   'Your account has been temporarily locked after repeated unsuccessful attempts. Contact your administrator or support team.';
 
-const UNAVAILABLE_TEXT = 'HOPE DESIGN ERP is temporarily unavailable. Please try again shortly.';
+const UNAVAILABLE_TEXT = 'Natex Cloud is temporarily unavailable. Please try again shortly.';
 
 const RESET_LINK_TEXT = 'This reset link is invalid or has expired. Request a new one.';
 

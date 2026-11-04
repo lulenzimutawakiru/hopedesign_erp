@@ -17,6 +17,7 @@ SECURITY_ASSESSMENT_2026.md
 # Scratch / agent working files – never commit these
 tmp-ux/
 tmp-hr/
+tmp-data/
 .login-resp.json
 *.token.txt
 *.probe.cjs

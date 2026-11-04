@@ -8,6 +8,10 @@ import * as fin from '../../services/finance.js';
 import * as finAdv from '../../services/finance-advanced.js';
 import * as efrisDir from '../../services/efris/directory.js';
 import * as efrisTaxpayer from '../../services/efris/taxpayer.js';
+import * as efrisGoods from '../../services/efris/goods.js';
+import * as efrisStock from '../../services/efris/stock.js';
+import * as taxFilings from '../../services/taxFilings.js';
+import * as reportHistory from '../../services/reportHistory.js';
 import * as finAppr from '../../services/financeApprovals.js';
 import * as kcbOps from '../../services/kcb/ops.js';
 import * as equityOps from '../../services/equity/ops.js';
@@ -432,6 +436,92 @@ financeOpsRouter.post('/efris/errors/:id/archive', ...run('efris.errors.archive'
 
 // ERP vs EFRIS reconciliation (spec 94).
 financeOpsRouter.get('/efris/reconciliation', ...runGet('efris.reconciliation.view', (c, ctx, q) => efrisDir.efrisReconciliation(c, ctx, q.from != null ? String(q.from) : null, q.to != null ? String(q.to) : null)));
+
+// EFRIS stock-movement report (T131 stock-in / stock reconciliation).
+financeOpsRouter.get('/efris/stock-movements', ...runGet(['efris.transactions.view', 'finance.efris.view'], (c, ctx, q) => efrisStock.stockMovementReport(c, ctx, {
+  from: q.from != null ? String(q.from) : null,
+  to: q.to != null ? String(q.to) : null,
+  status: q.status != null ? String(q.status) : null,
+})));
+
+// URA goods catalogue (Part J) — searchable copy + bulk import from the official list.
+financeOpsRouter.get('/efris/goods', ...runGet('efris.configuration.view', (c, ctx, q) => efrisGoods.listGoods(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+financeOpsRouter.post('/efris/goods/import', ...run('efris.configuration.manage', (c, ctx, b) => efrisGoods.importGoods(c, ctx, Array.isArray(b?.items) ? b.items : [])));
+
+// Product -> goods registration lifecycle (Part J). REGISTERED is operator-confirmed.
+financeOpsRouter.get('/efris/registrations', ...runGet('efris.configuration.view', (c, ctx, q) => efrisGoods.listProductRegistrations(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  status: q.status != null ? String(q.status) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+financeOpsRouter.post('/efris/registrations/:productId/map', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisGoods.mapProductToGoods(c, ctx, Number(p.productId), { goodsCode: String(b.goodsCode ?? '') })));
+financeOpsRouter.post('/efris/registrations/:productId/status', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisGoods.setRegistrationStatus(c, ctx, Number(p.productId), { status: String(b.status ?? '') })));
+
+// ---- VAT return filing (Spec 2) ----
+// prepare() computes output/input VAT from posted tax_transactions (ERP-side
+// only). submit/file/close/cancel are operator-confirmed transitions: URA
+// exposes no authorised filing API, so a human records the reference after
+// filing on the portal.
+financeOpsRouter.get('/tax/filings', ...runGet('finance.tax_filings.view', (c, ctx, q) => taxFilings.listTaxFilings(c, ctx, {
+  filingType: q.filingType != null ? String(q.filingType) : undefined,
+  status: q.status != null ? String(q.status) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+financeOpsRouter.post('/tax/filings/prepare', ...run('finance.tax_filings.manage', (c, ctx, b) => taxFilings.prepareTaxFiling(c, ctx, {
+  filingType: b.filingType != null ? String(b.filingType) : undefined,
+  period: b.period != null ? String(b.period) : undefined,
+  periodStart: String(b.periodStart ?? ''),
+  periodEnd: String(b.periodEnd ?? ''),
+})));
+financeOpsRouter.get('/tax/filings/:id', ...runGet('finance.tax_filings.view', (c, ctx, _q, p) => taxFilings.getTaxFiling(c, ctx, Number(p.id))));
+financeOpsRouter.post('/tax/filings/:id/submit', ...run('finance.tax_filings.manage', (c, ctx, b, p) => taxFilings.submitFiling(c, ctx, Number(p.id), {
+  uraReference: b.uraReference != null ? String(b.uraReference) : undefined,
+  notes: b.notes != null ? String(b.notes) : undefined,
+})));
+financeOpsRouter.post('/tax/filings/:id/file', ...run('finance.tax_filings.manage', (c, ctx, b, p) => taxFilings.fileFiling(c, ctx, Number(p.id), {
+  uraReference: b.uraReference != null ? String(b.uraReference) : undefined,
+  notes: b.notes != null ? String(b.notes) : undefined,
+})));
+financeOpsRouter.post('/tax/filings/:id/close', ...run('finance.tax_filings.manage', (c, ctx, _b, p) => taxFilings.closeFiling(c, ctx, Number(p.id))));
+financeOpsRouter.post('/tax/filings/:id/cancel', ...run('finance.tax_filings.manage', (c, ctx, b, p) => taxFilings.cancelFiling(c, ctx, Number(p.id), {
+  notes: b.notes != null ? String(b.notes) : undefined,
+})));
+
+// ---- Tax report history (Spec 2) ----
+// Durable log of ERP-generated and URA-portal reports (Z-reports, VAT returns,
+// credit/debit registers). Recording a portal report is the manual controlled
+// process for portal-only functions; nothing is marked RECEIVED without the
+// operator attaching/confirming the report.
+financeOpsRouter.get('/reports/history', ...runGet('finance.reports.view', (c, ctx, q) => reportHistory.listReports(c, ctx, {
+  reportType: q.reportType != null ? String(q.reportType) : undefined,
+  source: q.source != null ? String(q.source) : undefined,
+  status: q.status != null ? String(q.status) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+financeOpsRouter.get('/reports/history/:id', ...runGet('finance.reports.view', (c, ctx, _q, p) => reportHistory.getReport(c, ctx, Number(p.id))));
+financeOpsRouter.post('/reports/history', ...run('finance.tax_filings.manage', (c, ctx, b) => reportHistory.recordReport(c, ctx, {
+  reportType: String(b.reportType ?? ''),
+  source: b.source != null ? String(b.source) : undefined,
+  status: b.status != null ? String(b.status) : undefined,
+  period: b.period != null ? String(b.period) : null,
+  title: b.title != null ? String(b.title) : null,
+  summary: b.summary != null ? b.summary : null,
+  attachmentPath: b.attachmentPath != null ? String(b.attachmentPath) : null,
+  notes: b.notes != null ? String(b.notes) : null,
+})));
+financeOpsRouter.patch('/reports/history/:id', ...run('finance.tax_filings.manage', (c, ctx, b, p) => reportHistory.updateReport(c, ctx, Number(p.id), {
+  status: b.status != null ? String(b.status) : undefined,
+  attachmentPath: b.attachmentPath != null ? String(b.attachmentPath) : null,
+  notes: b.notes != null ? String(b.notes) : null,
+  summary: b.summary != null ? b.summary : null,
+})));
 // ---- Budget control: revisions, commitments, availability ----
 financeOpsRouter.get('/budget/revisions', ...runGet('finance.budget_revisions.view', (c, ctx, q) => finAdv.listBudgetRevisions(c, ctx, q.budgetId != null ? Number(q.budgetId) : undefined)));
 financeOpsRouter.post('/budget/revisions', ...run('finance.budget_revisions.create', (c, ctx, b) => finAdv.createBudgetRevision(c, ctx, {

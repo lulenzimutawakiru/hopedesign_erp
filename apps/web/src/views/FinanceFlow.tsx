@@ -5323,7 +5323,10 @@ const EFRIS_TABS = [
   ['errors', 'Error centre'],
   ['recon', 'Reconciliation'],
   ['logs', 'Sync logs'],
+  ['stock', 'Stock movements'],
   ['taxpayers', 'Taxpayers'],
+  ['goods', 'Goods catalogue'],
+  ['registrations', 'Registrations'],
   ['setup', 'Integration setup'],
 ] as const;
 
@@ -5347,8 +5350,393 @@ const EFRIS_PRODUCTION_ENDPOINT = 'https://efrisws.ura.go.ug/ws/taapp/getInforma
 /** Shown on the credential card. The values themselves never leave the server environment. */
 const EFRIS_ENV_HINT = 'Device private key or OAuth secret, in the server environment';
 
+/** Mirrors efris_registration_status values used by the product -> goods mapping. */
+const EFRIS_REGISTRATION_STATUSES = ['UNMAPPED', 'MAPPED', 'SUBMITTED', 'REGISTERED', 'EXCLUDED'] as const;
+
+/**
+ * Parse a pasted TSV/CSV block of URA goods rows into the import payload.
+ * Expected columns: goodsCode, goodsName, categoryName, unitOfMeasure, vatRate, exciseRate.
+ * A header row (first token "code" / "goodsCode" / "goods_code") is skipped.
+ */
+function parseGoodsImport(text: string): Rec[] {
+  const items: Rec[] = [];
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const cells = (line.includes('\t') ? line.split('\t') : line.split(',')).map((c) => (c ?? '').trim());
+    const code = cells[0] ?? '';
+    const name = cells[1] ?? '';
+    if (!code || !name) continue;
+    if (/^(code|goods_code|goodscode)$/i.test(code)) continue;
+    items.push({
+      goodsCode: code,
+      goodsName: name,
+      categoryName: cells[2] || undefined,
+      unitOfMeasure: cells[3] || undefined,
+      vatRate: cells[4] ? Number(cells[4]) : 0,
+      exciseRate: cells[5] ? Number(cells[5]) : 0,
+    });
+  }
+  return items;
+}
+
+/** URA goods catalogue copy: search + idempotent bulk import. */
+function GoodsCatalogue() {
+  const { user } = useAuth();
+  const canManage = can(user, 'efris.configuration.manage');
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
+  const [total, setTotal] = useState(0);
+  const [q, setQ] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+      if (q.trim()) params.set('q', q.trim());
+      const r = await api<{ data: { items: Rec[]; pagination: { total: number } } }>(`/api/ops/finance/efris/goods?${params.toString()}`);
+      setRows(r.data?.items ?? []);
+      setTotal(r.data?.pagination?.total ?? 0);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to load the goods catalogue'); }
+    finally { setLoading(false); }
+  }, [page, pageSize, q]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const runImport = async () => {
+    setBusy(true); setError('');
+    try {
+      const items = parseGoodsImport(importText);
+      if (items.length === 0) throw new Error('Paste at least one goods row.');
+      await api<{ data: { imported: number; received: number } }>('/api/ops/finance/efris/goods/import', { method: 'POST', body: JSON.stringify({ items }) });
+      setImportOpen(false); setImportText('');
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Import failed'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <section className={`card card-pad${loading ? ' is-loading' : ''}`}>
+      <div className="card-head">
+        <div>
+          <h3>URA goods catalogue ({total.toLocaleString()})</h3>
+          <p className="muted" style={{ margin: 0 }}>
+            A searchable copy of the official URA goods list. Import rows to keep it current; mapping a product
+            to a goods code happens under Registrations.
+          </p>
+        </div>
+        <div className="row-actions">
+          {canManage && <button className="btn btn-primary" disabled={busy} onClick={() => setImportOpen(true)}>Import goods</button>}
+        </div>
+      </div>
+      {error && <ErrorBanner error={error} />}
+      <div className="toolbar" style={{ marginBottom: 12 }}>
+        <input className="search-input" type="search" value={q} placeholder="Search code, name or category…" aria-label="Search goods catalogue" onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+      </div>
+      {loading ? <Skeleton rows={6} /> : rows.length === 0 ? (
+        <EmptyState title="No goods in the catalogue"
+          body={q ? `Nothing matches "${q.trim()}".` : 'Import the official URA goods list to begin.'}
+          action={canManage ? 'Import goods' : undefined} onAction={canManage ? () => setImportOpen(true) : undefined} />
+      ) : (
+        <>
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Goods code</th><th>Description</th><th>Category</th><th>UoM</th>
+                  <th className="cell-num">VAT %</th><th className="cell-num">Excise %</th><th>Active</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={String(r.id)}>
+                    <td className="cell-mono">{String(r.goodsCode)}</td>
+                    <td>{String(r.goodsName)}</td>
+                    <td className="muted">{String(r.categoryName ?? '—')}</td>
+                    <td className="muted">{String(r.unitOfMeasure ?? '—')}</td>
+                    <td className="cell-num">{fmtNum(r.vatRate)}</td>
+                    <td className="cell-num">{fmtNum(r.exciseRate)}</td>
+                    <td>{r.isActive ? <Badge value="ACTIVE" /> : <Badge value="INACTIVE" />}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={page} pageSize={pageSize} total={total} onPage={setPage} onPageSize={(n) => { setPageSize(n); setPage(1); }} />
+        </>
+      )}
+      {importOpen && (
+        <Modal title="Import URA goods" onClose={() => setImportOpen(false)} footer={
+          <>
+            <button className="btn" onClick={() => setImportOpen(false)}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy} onClick={runImport}>{busy ? 'Importing…' : 'Import'}</button>
+          </>
+        }>
+          <p className="muted" style={{ marginTop: 0 }}>Paste one goods row per line, tab-separated (copy a range from a spreadsheet):</p>
+          <pre className="cell-mono" style={{ fontSize: 12, padding: 8, background: 'var(--panel)', borderRadius: 6 }}>{'goodsCode\tgoodsName\tcategoryName\tunitOfMeasure\tvatRate\texciseRate'}</pre>
+          <textarea rows={8} style={{ width: '100%' }} value={importText} aria-label="Goods rows" placeholder={'10101001\tWhite paper A4 80gsm\tPaper products\tREAM\t18\t0'} onChange={(e) => setImportText(e.target.value)} />
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+/** Product -> goods registration lifecycle: map a product to a goods code and record its status. */
+function ProductRegistrations() {
+  const { user } = useAuth();
+  const canManage = can(user, 'efris.configuration.manage');
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [q, setQ] = useState('');
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [catalogue, setCatalogue] = useState<Rec[]>([]);
+  const [mapTarget, setMapTarget] = useState<Rec | null>(null);
+  const [mapCode, setMapCode] = useState('');
+  const [statusTarget, setStatusTarget] = useState<Rec | null>(null);
+  const [statusVal, setStatusVal] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const params = new URLSearchParams({ page: String(page), pageSize: '50' });
+      if (q.trim()) params.set('q', q.trim());
+      if (status) params.set('status', status);
+      const r = await api<{ data: { items: Rec[]; pagination: { total: number } } }>(`/api/ops/finance/efris/registrations?${params.toString()}`);
+      setRows(r.data?.items ?? []);
+      setTotal(r.data?.pagination?.total ?? 0);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to load registrations'); }
+    finally { setLoading(false); }
+  }, [page, q, status]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    api<{ data: { items: Rec[] } }>('/api/ops/finance/efris/goods?pageSize=500')
+      .then((r) => setCatalogue(r.data?.items ?? []))
+      .catch(() => undefined);
+  }, []);
+
+  const doMap = async () => {
+    if (!mapTarget) return;
+    setBusy(true); setError('');
+    try {
+      await api(`/api/ops/finance/efris/registrations/${Number(mapTarget.id)}/map`, { method: 'POST', body: JSON.stringify({ goodsCode: mapCode.trim() }) });
+      setMapTarget(null); setMapCode('');
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to map goods'); }
+    finally { setBusy(false); }
+  };
+
+  const doStatus = async () => {
+    if (!statusTarget) return;
+    setBusy(true); setError('');
+    try {
+      await api(`/api/ops/finance/efris/registrations/${Number(statusTarget.id)}/status`, { method: 'POST', body: JSON.stringify({ status: statusVal }) });
+      setStatusTarget(null);
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to set status'); }
+    finally { setBusy(false); }
+  };
+
+  const matched = mapCode.trim() ? catalogue.find((g) => String(g.goodsCode) === mapCode.trim()) : undefined;
+
+  return (
+    <section className={`card card-pad${loading ? ' is-loading' : ''}`}>
+      <div className="card-head">
+        <div>
+          <h3>Product registrations ({total.toLocaleString()})</h3>
+          <p className="muted" style={{ margin: 0 }}>
+            Map each product to a URA goods code, then record its registration status. REGISTERED is
+            operator-confirmed against URA evidence — the ERP never marks it on its own.
+          </p>
+        </div>
+      </div>
+      {error && <ErrorBanner error={error} />}
+      <div className="toolbar" style={{ marginBottom: 12 }}>
+        <input className="search-input" type="search" value={q} placeholder="Search product, code or goods code…" aria-label="Search registrations" onChange={(e) => { setQ(e.target.value); setPage(1); }} />
+        <select className="search-input" style={{ maxWidth: 200 }} value={status} aria-label="Filter by registration status" onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
+          <option value="">All statuses</option>
+          {EFRIS_REGISTRATION_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+        </select>
+      </div>
+      {loading ? <Skeleton rows={6} /> : rows.length === 0 ? (
+        <EmptyState title="No products to register"
+          body={q || status ? 'Nothing matches these filters.' : 'Products appear here as soon as they exist in the catalogue.'} />
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Product</th><th>Type</th><th>Goods code</th><th>Goods name</th>
+                <th>Status</th><th>Registered at</th><th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={String(r.id)}>
+                  <td>
+                    <div className="cell-mono">{String(r.code)}</div>
+                    <div>{String(r.name)}</div>
+                  </td>
+                  <td className="muted">{String(r.type ?? '—')}</td>
+                  <td className="cell-mono">{String(r.efrisGoodsCode ?? '—')}</td>
+                  <td className="muted">{String(r.efrisGoodsName ?? '—')}</td>
+                  <td><Badge value={r.efrisRegistrationStatus ?? 'UNMAPPED'} /></td>
+                  <td className="muted">{r.efrisRegisteredAt ? String(r.efrisRegisteredAt).slice(0, 10) : '—'}</td>
+                  <td>
+                    <div className="row-actions">
+                      {canManage && <button className="btn btn-sm" disabled={busy} onClick={() => { setMapTarget(r); setMapCode(String(r.efrisGoodsCode ?? '')); }}>Map goods</button>}
+                      {canManage && <button className="btn btn-sm" disabled={busy} onClick={() => { setStatusTarget(r); setStatusVal(String(r.efrisRegistrationStatus ?? 'UNMAPPED')); }}>Set status</button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Pager page={page} pageSize={50} total={total} onPage={setPage} />
+        </div>
+      )}
+      {mapTarget && (
+        <Modal title={`Map ${String(mapTarget.name ?? mapTarget.code)} to a goods code`} onClose={() => setMapTarget(null)} footer={
+          <>
+            <button className="btn" onClick={() => setMapTarget(null)}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy || !mapCode.trim()} onClick={doMap}>{busy ? 'Mapping…' : 'Map'}</button>
+          </>
+        }>
+          <div className="field">
+            <label htmlFor="map-goods-code">URA goods code</label>
+            <input id="map-goods-code" list="efris-goods-codes" value={mapCode} onChange={(e) => setMapCode(e.target.value)} placeholder="Search the catalogue by code" />
+            <datalist id="efris-goods-codes">
+              {catalogue.map((g) => <option key={String(g.id)} value={String(g.goodsCode)}>{String(g.goodsName)}</option>)}
+            </datalist>
+            <span className="hint">{matched ? String(matched.goodsName) : 'The code must exist in the goods catalogue.'}</span>
+          </div>
+        </Modal>
+      )}
+      {statusTarget && (
+        <Modal title={`Set registration status for ${String(statusTarget.name ?? statusTarget.code)}`} onClose={() => setStatusTarget(null)} footer={
+          <>
+            <button className="btn" onClick={() => setStatusTarget(null)}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy} onClick={doStatus}>{busy ? 'Saving…' : 'Save'}</button>
+          </>
+        }>
+          <div className="field">
+            <label htmlFor="reg-status">Registration status</label>
+            <select id="reg-status" value={statusVal} onChange={(e) => setStatusVal(e.target.value)}>
+              {EFRIS_REGISTRATION_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+            </select>
+            <span className="hint">REGISTERED is confirmed against URA evidence, never derived automatically.</span>
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+/** EFRIS stock-movement report (T131): stock-in and reconciliation with URA acknowledgement status. */
+function StockMovementsReport() {
+  const [data, setData] = useState<{ items: Rec[]; summary: Rec[] } | null>(null);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      if (status) params.set('status', status);
+      const r = await api<{ data: { items: Rec[]; summary: Rec[] } }>(`/api/ops/finance/efris/stock-movements?${params.toString()}`);
+      setData({ items: r.data?.items ?? [], summary: r.data?.summary ?? [] });
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to load stock movements'); }
+    finally { setLoading(false); }
+  }, [from, to, status]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const items = data?.items ?? [];
+  const summary = data?.summary ?? [];
+  const statusOptions = Array.from(new Set(items.map((r) => String(r.status ?? '')).filter(Boolean))).sort();
+
+  return (
+    <section className={`card card-pad${loading ? ' is-loading' : ''}`}>
+      <div className="card-head">
+        <div>
+          <h3>Stock movements ({items.length.toLocaleString()})</h3>
+          <p className="muted" style={{ margin: 0 }}>
+            Every stock movement registered with URA via T131 — goods receipts (stock-in) and negative
+            inventory adjustments (reconciliation). A T131 acknowledgement is not an FDN, so FDN fields
+            stay empty unless URA actually returned one.
+          </p>
+        </div>
+      </div>
+      {error && <ErrorBanner error={error} />}
+      <div className="toolbar" style={{ marginBottom: 12 }}>
+        <input className="search-input" type="date" value={from} aria-label="From date" onChange={(e) => setFrom(e.target.value)} />
+        <input className="search-input" type="date" value={to} aria-label="To date" onChange={(e) => setTo(e.target.value)} />
+        <select className="search-input" style={{ maxWidth: 200 }} value={status} aria-label="Filter by status" onChange={(e) => setStatus(e.target.value)}>
+          <option value="">All statuses</option>
+          {statusOptions.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+        </select>
+      </div>
+      {summary.length > 0 && (
+        <div className="kpi-grid" style={{ marginBottom: 14 }}>
+          {summary.map((s) => (
+            <div key={String(s.status)} className={`kpi-card${/FAILED|REJECTED/.test(String(s.status)) ? ' card-warn' : ''}`}>
+              <span className="kpi-label">{String(s.status).replace(/_/g, ' ')}</span>
+              <span className="kpi-value">{fmtNum(s.count)}</span>
+              <span className="kpi-sub">{fmtMoney(s.grossTotal)} gross · {fmtMoney(s.taxTotal)} tax</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {loading ? <Skeleton rows={6} /> : items.length === 0 ? (
+        <EmptyState title="No stock movements yet"
+          body={from || to || status ? 'Nothing matches these filters.' : 'Register a goods receipt or stock reconciliation to send a T131 stock movement to URA.'} />
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Date</th><th>Movement</th><th>Source</th><th>Counterparty</th>
+                <th className="cell-num">Gross</th><th className="cell-num">Tax</th><th>Status</th><th>FDN / VRC</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((r) => (
+                <tr key={String(r.id)}>
+                  <td>{String(r.txnDate ?? '').slice(0, 10)}</td>
+                  <td><Badge value={r.movementKind} /></td>
+                  <td className="cell-mono">{String(r.sourceNo ?? r.docRefCode ?? '—')}</td>
+                  <td>{String(r.counterparty ?? '—')}{r.counterpartyTin ? <span className="muted"> · {String(r.counterpartyTin)}</span> : null}</td>
+                  <td className="cell-num">{fmtMoney(r.grossAmount)}</td>
+                  <td className="cell-num">{fmtMoney(r.taxAmount)}</td>
+                  <td><Badge value={r.status} /></td>
+                  <td className="cell-mono">{r.fdn ? `${String(r.fdn)}${r.verificationCode ? ` / ${String(r.verificationCode)}` : ''}` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function EfrisDesk() {
-  type EfrisTabKey = 'txn' | 'docs' | 'errors' | 'recon' | 'logs' | 'taxpayers' | 'setup';
+  type EfrisTabKey = 'txn' | 'docs' | 'errors' | 'recon' | 'logs' | 'stock' | 'taxpayers' | 'goods' | 'registrations' | 'setup';
   type EfrisPanel = string;
   const { user } = useAuth();
   const [tab, setTab] = useState<EfrisTabKey>('txn');
@@ -5468,7 +5856,11 @@ function EfrisDesk() {
   const canSubmit = can(user, 'efris.transactions.submit') || can(user, 'finance.efris.create');
   const canManageConfig = can(user, 'efris.configuration.manage');
   const canViewConfig = canManageConfig || can(user, 'efris.configuration.view');
-  const visibleTabs = EFRIS_TABS.filter(([t]) => (t === 'taxpayers' || t === 'setup' ? canViewConfig : true));
+  const visibleTabs = EFRIS_TABS.filter(([t]) => (
+    t === 'taxpayers' || t === 'setup' || t === 'goods' || t === 'registrations' ? canViewConfig
+      : t === 'stock' ? (can(user, 'efris.transactions.view') || can(user, 'finance.efris.view'))
+        : true
+  ));
   // Filtering, sorting and the shared chrome used by every data tab.
   const uniq = (values: unknown[]) => Array.from(new Set(values.map((v) => String(v ?? '').trim()).filter(Boolean))).sort();
   const failedPanel = (panel: EfrisPanel) => loadFailures.some((f) => f.panel === panel);
@@ -5526,6 +5918,9 @@ function EfrisDesk() {
       code: (r) => String(r.errorCode ?? ''), retries: (r) => Number(r.retryCount ?? 0), state: (r) => (r.resolved ? 1 : 0),
     },
     recon: {},
+    stock: {},
+    goods: {},
+    registrations: {},
     logs: { time: (r) => String(r.createdAt ?? ''), ref: (r) => String(r.docRefCode ?? ''), status: (r) => String(r.status ?? '') },
     taxpayers: {
       code: (r) => String(r.code ?? ''), name: (r) => String(r.legalName ?? ''), tin: (r) => String(r.tin ?? ''),
@@ -5541,6 +5936,9 @@ function EfrisDesk() {
     docs: { doc: 'ERP document', fdn: 'FDN', status: 'Status', fiscalized: 'Fiscalized at' },
     errors: { time: 'Time', stage: 'Stage', ref: 'Reference', code: 'Code', retries: 'Retries', state: 'State' },
     recon: {},
+    stock: {},
+    goods: {},
+    registrations: {},
     logs: { time: 'Time', ref: 'Reference', status: 'Status' },
     taxpayers: { code: 'Code', name: 'Legal name', tin: 'TIN', type: 'Type', status: 'Registration' },
     setup: { code: 'Code', name: 'Name', mode: 'Mode', active: 'Active', duplicate: 'Duplicate window' },
@@ -6025,6 +6423,9 @@ function EfrisDesk() {
           )}
         </section>
       )}
+      {tab === 'stock' && <StockMovementsReport />}
+      {tab === 'goods' && <GoodsCatalogue />}
+      {tab === 'registrations' && <ProductRegistrations />}
       {tab === 'logs' && (
         <>
           {filterCard}
@@ -6960,8 +7361,214 @@ function TaxCompliance() {
         )}
       </section>
 
+      <VatFilingDesk />
+
       {txnOpen && <TaxTxnModal taxes={taxes} busy={busy} onClose={() => setTxnOpen(false)} onSave={save} />}
     </div>
+  );
+}
+
+/**
+ * VAT return filing + report history (Spec 2 tax compliance). Backed by the
+ * /tax/filings and /reports/history endpoints. Prepare is ERP-side only; submit/
+ * file/close/cancel are operator-confirmed manual steps because URA exposes no
+ * authorised filing API.
+ */
+function VatFilingDesk() {
+  const { user } = useAuth();
+  const [filings, setFilings] = useState<Rec[]>([]);
+  const [reports, setReports] = useState<Rec[]>([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [prepareOpen, setPrepareOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+
+  const load = useCallback(() => {
+    setError('');
+    Promise.allSettled([
+      api<{ data: { items: Rec[] } }>('/api/ops/finance/tax/filings').then((r) => setFilings(r.data?.items ?? [])),
+      api<{ data: { items: Rec[] } }>('/api/ops/finance/reports/history').then((r) => setReports(r.data?.items ?? [])),
+    ]).then((results) => {
+      const failed = results
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
+      if (failed.length) setError(failed.join(' · '));
+    }).finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const canManage = can(user, 'finance.tax_filings.manage');
+
+  const transition = async (id: number, action: 'submit' | 'file' | 'close' | 'cancel') => {
+    setBusy(true); setError('');
+    try {
+      await api(`/api/ops/finance/tax/filings/${id}/${action}`, { method: 'POST', body: JSON.stringify({}) });
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+
+  const filingActions = (f: Rec): ReactNode => {
+    if (!canManage) return null;
+    const status = String(f.status ?? '');
+    const btn = (label: string, action: 'submit' | 'file' | 'close' | 'cancel') => (
+      <button key={action} className="btn btn-sm btn-ghost" disabled={busy}
+        onClick={() => void transition(Number(f.id), action)}>{label}</button>
+    );
+    if (status === 'PREPARED') return <>{btn('Submit', 'submit')} {btn('Cancel', 'cancel')}</>;
+    if (status === 'SUBMITTED') return <>{btn('File', 'file')} {btn('Cancel', 'cancel')}</>;
+    if (status === 'FILED') return <>{btn('Close', 'close')}</>;
+    return null;
+  };
+
+  return (
+    <>
+      {error && <ErrorBanner error={error} />}
+
+      <section className="card card-pad" style={{ marginTop: 16 }}>
+        <div className="card-head">
+          <h3>VAT returns ({filings.length.toLocaleString()})</h3>
+          {canManage && <button className="btn btn-sm btn-primary" onClick={() => setPrepareOpen(true)}>Prepare VAT return</button>}
+        </div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          ERP-computed output/input VAT per period. Submit and file record an operator's confirmation on the URA portal — URA exposes no filing API, so these are controlled manual steps.
+        </p>
+        {loading ? <Skeleton rows={4} /> : filings.length === 0 ? (
+          <EmptyState title="No VAT returns yet"
+            body="Prepare a return for a month and the output/input VAT from posted transactions is computed here."
+            action={canManage ? 'Prepare VAT return' : undefined} onAction={() => setPrepareOpen(true)} />
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Period</th><th>Type</th><th>Status</th>
+                  <th className="cell-num">Output VAT</th><th className="cell-num">Input VAT</th>
+                  <th className="cell-num">Net payable</th><th>URA ref</th><th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filings.map((f) => (
+                  <tr key={String(f.id)}>
+                    <td>{String(f.period ?? '')}</td>
+                    <td>{String(f.filingType ?? '').replace(/_/g, ' ')}</td>
+                    <td><Badge value={f.status} /></td>
+                    <td className="cell-num">{fmtMoney(f.outputVat)}</td>
+                    <td className="cell-num">{fmtMoney(f.inputVat)}</td>
+                    <td className="cell-num">{fmtMoney(f.netVatPayable)}</td>
+                    <td className="cell-mono">{String(f.uraReference ?? '—')}</td>
+                    <td>{filingActions(f)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card card-pad" style={{ marginTop: 16 }}>
+        <div className="card-head">
+          <h3>Report history ({reports.length.toLocaleString()})</h3>
+          {canManage && <button className="btn btn-sm btn-primary" onClick={() => setReportOpen(true)}>Record report</button>}
+        </div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Controlled manual trail for portal-only URA reports (Z-report, VAT return, registers). The ERP records that a report was requested or received — it never claims to hold an official report it does not.
+        </p>
+        {loading ? <Skeleton rows={4} /> : reports.length === 0 ? (
+          <EmptyState title="No report history"
+            body="Record a requested or received URA report to keep a manual trail of portal-only reports."
+            action={canManage ? 'Record report' : undefined} onAction={() => setReportOpen(true)} />
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr><th>Type</th><th>Source</th><th>Status</th><th>Period</th><th>Title</th><th>Recorded</th></tr>
+              </thead>
+              <tbody>
+                {reports.map((r) => (
+                  <tr key={String(r.id)}>
+                    <td>{String(r.reportType ?? '').replace(/_/g, ' ')}</td>
+                    <td><Badge value={r.source} /></td>
+                    <td><Badge value={r.status} /></td>
+                    <td>{String(r.period ?? '—')}</td>
+                    <td>{String(r.title ?? '—')}</td>
+                    <td>{String(r.createdAt ?? '').slice(0, 10) || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {prepareOpen && (
+        <PrepareFilingModal busy={busy} onClose={() => setPrepareOpen(false)} onSave={async (p) => {
+          setBusy(true); setError('');
+          try { await api('/api/ops/finance/tax/filings/prepare', { method: 'POST', body: JSON.stringify(p) }); setPrepareOpen(false); load(); }
+          catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+        }} />
+      )}
+      {reportOpen && (
+        <RecordReportModal busy={busy} onClose={() => setReportOpen(false)} onSave={async (p) => {
+          setBusy(true); setError('');
+          try { await api('/api/ops/finance/reports/history', { method: 'POST', body: JSON.stringify(p) }); setReportOpen(false); load(); }
+          catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+        }} />
+      )}
+    </>
+  );
+}
+
+function PrepareFilingModal({ busy, onClose, onSave }: { busy: boolean; onClose: () => void; onSave: (p: Rec) => void }) {
+  const [filingType, setFilingType] = useState('VAT_RETURN');
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
+  const valid = /^\d{4}-\d{2}-\d{2}$/.test(periodStart) && /^\d{4}-\d{2}-\d{2}$/.test(periodEnd) && periodStart <= periodEnd;
+  return (
+    <Modal title="Prepare VAT return" onClose={onClose} footer={<>
+      <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+      <button className="btn btn-primary" disabled={busy || !valid} onClick={() => onSave({ filingType, periodStart, periodEnd })}>{busy ? 'Preparing…' : 'Prepare'}</button>
+    </>}>
+      <div className="field"><label>Filing type</label>
+        <select value={filingType} onChange={(e) => setFilingType(e.target.value)}>
+          <option value="VAT_RETURN">VAT return</option>
+          <option value="WHT_RETURN">Withholding tax return</option>
+        </select>
+      </div>
+      <div className="field"><label>Period start</label><input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} /></div>
+      <div className="field"><label>Period end</label><input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} /></div>
+    </Modal>
+  );
+}
+
+function RecordReportModal({ busy, onClose, onSave }: { busy: boolean; onClose: () => void; onSave: (p: Rec) => void }) {
+  const [reportType, setReportType] = useState('');
+  const [source, setSource] = useState('ERP');
+  const [status, setStatus] = useState('REQUESTED');
+  const [period, setPeriod] = useState('');
+  const [title, setTitle] = useState('');
+  const [notes, setNotes] = useState('');
+  return (
+    <Modal title="Record report" onClose={onClose} footer={<>
+      <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+      <button className="btn btn-primary" disabled={busy || !reportType.trim()} onClick={() => onSave({ reportType, source, status, period: period || null, title: title || null, notes: notes || null })}>{busy ? 'Recording…' : 'Record'}</button>
+    </>}>
+      <div className="field"><label>Report type</label><input value={reportType} placeholder="Z_REPORT" onChange={(e) => setReportType(e.target.value)} /></div>
+      <div className="field"><label>Source</label>
+        <select value={source} onChange={(e) => setSource(e.target.value)}>
+          <option value="ERP">ERP</option><option value="EFRIS_PORTAL">EFRIS portal</option>
+        </select>
+      </div>
+      <div className="field"><label>Status</label>
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="REQUESTED">Requested</option><option value="RECEIVED">Received</option>
+          <option value="GENERATED">Generated</option><option value="FAILED">Failed</option>
+        </select>
+      </div>
+      <div className="field"><label>Period (YYYY-MM)</label><input value={period} placeholder="2026-10" onChange={(e) => setPeriod(e.target.value)} /></div>
+      <div className="field"><label>Title</label><input value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+      <div className="field"><label>Notes</label><input value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+    </Modal>
   );
 }
 

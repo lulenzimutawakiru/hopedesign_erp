@@ -8,6 +8,7 @@ import { startWorkflow } from '../../services/workflow.js';
 import * as inv from '../../services/inventory.js';
 import * as wh from '../../services/warehouse.js';
 import * as se from '../../services/stockEntries.js';
+import * as puoms from '../../services/productUoms.js';
 
 export const inventoryOpsRouter = Router();
 
@@ -65,6 +66,10 @@ inventoryOpsRouter.get('/stock', ...runGet('inventory.stock.view', (c, ctx, q) =
 inventoryOpsRouter.get('/stock/summary', ...runGet('inventory.stock.view', (c, ctx) => inv.stockSummary(c, ctx)));
 inventoryOpsRouter.get('/warehouses', ...runGet('inventory.warehouses.view', (c, ctx) => inv.warehouseBoard(c, ctx)));
 inventoryOpsRouter.get('/products/:id/stock', ...runGet('inventory.stock.view', (c, ctx, _q, p) => inv.productStock(c, ctx, Number(p.id))));
+// Product units of measure (multi-UOM) — purchase / production / sales / EFRIS conversions
+inventoryOpsRouter.get('/units', ...runGet('inventory.items.view', (c, ctx) => puoms.listUnits(c, ctx)));
+inventoryOpsRouter.get('/products/:id/uoms', ...runGet('inventory.items.view', (c, ctx, _q, p) => puoms.listProductUoms(c, ctx, Number(p.id))));
+inventoryOpsRouter.put('/products/:id/uoms', ...run('inventory.items.edit', (c, ctx, b, p) => puoms.setProductUoms(c, ctx, Number(p.id), Array.isArray(b?.uoms) ? b.uoms : [])));
 inventoryOpsRouter.get('/movements', ...runGet('inventory.movements.view', (c, ctx, q) => inv.listMovements(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   warehouseId: q.warehouseId != null && q.warehouseId !== '' ? Number(q.warehouseId) : null,

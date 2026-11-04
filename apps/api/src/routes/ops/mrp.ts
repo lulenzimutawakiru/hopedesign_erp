@@ -33,3 +33,9 @@ mrpOpsRouter.get('/summary', requirePermission('production.plans.view'), asyncHa
   );
   res.json({ data: out });
 }));
+
+// Reschedule recommendations: open POs/WOs whose date no longer matches MRP need.
+mrpOpsRouter.get('/reschedules', requirePermission('production.plans.view'), asyncHandler(async (req, res) => {
+  const out = await tx((client) => mrp.mrpReschedules(client, req.ctx), req.ctx);
+  res.json({ data: out });
+}));

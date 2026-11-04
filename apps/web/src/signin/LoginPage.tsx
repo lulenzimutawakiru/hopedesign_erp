@@ -103,6 +103,9 @@ export function LoginPage() {
   const adminPhoneHref = adminPhone ? telHref(adminPhone) : '';
   const configuredName = company.legal_name || company.name;
   const legalName = configuredName && configuredName !== 'Company' ? configuredName : 'HOPE DESIGN GROUP LTD';
+  // Product brand shown on the sign-in chrome; config-driven via the company
+  // profile (app_settings general.company_name), never hard-coded.
+  const brandName = company.name && company.name !== 'Company' ? company.name : 'Natex Cloud';
   const resetMail = adminEmail
     ? mailtoHref(
         adminEmail,
@@ -313,8 +316,8 @@ export function LoginPage() {
     <div className="auth-shell">
       <header className="auth-topbar">
         <div className="auth-brand">
-          <BrandGlyph size={26} title="HOPE DESIGN" />
-          <span className="auth-brand-name">HOPE DESIGN</span>
+          <BrandGlyph size={26} title={brandName} />
+          <span className="auth-brand-name">{brandName}</span>
           <span className="auth-brand-sep" aria-hidden />
           <span className="auth-brand-product">ERP</span>
         </div>

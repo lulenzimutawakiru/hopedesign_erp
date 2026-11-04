@@ -3,6 +3,7 @@ import { crudRouter, CrudConfig } from './crudFactory.js';
 import { submitQuotation, submitSalesOrder } from '../services/sales.js';
 import { submitSupplier, submitRequisition, submitPurchaseOrder, submitSupplierInvoice, submitSupplierPayment } from '../services/procurement.js';
 import { submitProductionPlan, submitWorkOrder } from '../services/production.js';
+import { submitProduct } from '../services/productWorkflow.js';
 
 type Handlers = Pick<CrudConfig, 'submit' | 'afterCreate'>;
 
@@ -39,13 +40,13 @@ export const ENTITIES: (CrudConfig & Handlers)[] = [
   { table: 'purchase_returns', module: 'procurement', resource: 'returns', label: 'Purchase Return', codeColumn: 'return_no', statusColumn: 'status', searchable: ['return_no'], defaultOrder: 't.id DESC' },
 
   // ------------------------------------------------ Inventory
-  { table: 'products', module: 'inventory', resource: 'items', label: 'Product', codeColumn: 'code', codePrefix: 'PRD', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.id DESC', qrEntityType: 'PRODUCT' },
+  { table: 'products', module: 'inventory', resource: 'items', label: 'Product', entityType: 'inventory.items', codeColumn: 'code', codePrefix: 'PRD', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.id DESC', qrEntityType: 'PRODUCT', submit: submitProduct },
   // Products catalogue shown in the UI: the produced finished goods only. Raw
   // materials, packaging and consumables keep the unfiltered `items` resource
   // above, which pickers and document lines still rely on.
-  { table: 'products', module: 'inventory', resource: 'products', label: 'Product', permResource: 'items', codeColumn: 'code', codePrefix: 'PRD', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.id DESC', filter: { column: 'type', values: ['REAM', 'FINISHED_GOODS', 'SHEET', 'SECURITY_ITEM'] }, excludeFilter: { column: 'status', values: ['DISCONTINUED'] }, defaults: { type: 'REAM' } },
-  { table: 'products', module: 'inventory', resource: 'materials', label: 'Raw Material', codeColumn: 'code', codePrefix: 'RMW', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.id DESC', qrEntityType: 'RAW_MATERIAL', permResource: 'items', filter: { column: 'type', values: ['JUMBO_ROLL', 'PAPER_BOBBIN', 'PACKAGING'] }, defaults: { type: 'JUMBO_ROLL' } },
-  { table: 'products', module: 'inventory', resource: 'consumables', label: 'Consumable', codeColumn: 'code', codePrefix: 'CNS', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.id DESC', qrEntityType: 'CONSUMABLE', permResource: 'items', filter: { column: 'type', values: ['CONSUMABLE', 'SPARE_PART'] }, defaults: { type: 'CONSUMABLE' } },
+  { table: 'products', module: 'inventory', resource: 'products', label: 'Product', permResource: 'items', entityType: 'inventory.items', codeColumn: 'code', codePrefix: 'PRD', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.id DESC', filter: { column: 'type', values: ['REAM', 'FINISHED_GOODS', 'SHEET', 'SECURITY_ITEM'] }, excludeFilter: { column: 'status', values: ['DISCONTINUED'] }, defaults: { type: 'REAM' }, submit: submitProduct },
+  { table: 'products', module: 'inventory', resource: 'materials', label: 'Raw Material', entityType: 'inventory.items', codeColumn: 'code', codePrefix: 'RMW', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.id DESC', qrEntityType: 'RAW_MATERIAL', permResource: 'items', filter: { column: 'type', values: ['JUMBO_ROLL', 'PAPER_BOBBIN', 'PACKAGING'] }, defaults: { type: 'JUMBO_ROLL' }, submit: submitProduct },
+  { table: 'products', module: 'inventory', resource: 'consumables', label: 'Consumable', entityType: 'inventory.items', codeColumn: 'code', codePrefix: 'CNS', statusColumn: 'status', searchable: ['code', 'name'], defaultOrder: 't.id DESC', qrEntityType: 'CONSUMABLE', permResource: 'items', filter: { column: 'type', values: ['CONSUMABLE', 'SPARE_PART'] }, defaults: { type: 'CONSUMABLE' }, submit: submitProduct },
   { table: 'product_batches', module: 'inventory', resource: 'batches', label: 'Batch', codeColumn: 'batch_no', codePrefix: 'BT', statusColumn: 'status', searchable: ['batch_no', 'lot_no'], defaultOrder: 't.id DESC', qrEntityType: 'BATCH', listSelect: 't.*, COALESCE((SELECT SUM(i.quantity) FROM inventory i WHERE i.batch_id = t.id), 0) AS quantity' },
   { table: 'product_categories', module: 'inventory', resource: 'items', label: 'Product Category', searchable: ['name'], defaultOrder: 't.id DESC' },
   { table: 'units', module: 'inventory', resource: 'items', label: 'Unit', searchable: ['code', 'name'], defaultOrder: 't.id ASC' },

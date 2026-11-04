@@ -48,7 +48,7 @@ const WORKFLOW_SQL = `
 const MATERIAL_EXCLUDED = new Set([
   'id', 'created_at', 'updated_at', 'created_by', 'updated_by',
   'company_id', 'tenant_id', 'branch_id',
-  'status',
+  'status', 'approval_status',
   'approved_by', 'approved_at', 'rejected_by', 'rejected_at',
   'submitted_by', 'submitted_at', 'cancelled_by', 'cancelled_at',
   'voided_by', 'voided_at', 'posted_by', 'posted_at',
