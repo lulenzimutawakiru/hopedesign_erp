@@ -9,6 +9,7 @@ import * as finAdv from '../../services/finance-advanced.js';
 import * as efrisDir from '../../services/efris/directory.js';
 import * as efrisTaxpayer from '../../services/efris/taxpayer.js';
 import * as efrisGoods from '../../services/efris/goods.js';
+import * as efrisStock from '../../services/efris/stock.js';
 import * as taxFilings from '../../services/taxFilings.js';
 import * as reportHistory from '../../services/reportHistory.js';
 import * as finAppr from '../../services/financeApprovals.js';
@@ -435,6 +436,13 @@ financeOpsRouter.post('/efris/errors/:id/archive', ...run('efris.errors.archive'
 
 // ERP vs EFRIS reconciliation (spec 94).
 financeOpsRouter.get('/efris/reconciliation', ...runGet('efris.reconciliation.view', (c, ctx, q) => efrisDir.efrisReconciliation(c, ctx, q.from != null ? String(q.from) : null, q.to != null ? String(q.to) : null)));
+
+// EFRIS stock-movement report (T131 stock-in / stock reconciliation).
+financeOpsRouter.get('/efris/stock-movements', ...runGet(['efris.transactions.view', 'finance.efris.view'], (c, ctx, q) => efrisStock.stockMovementReport(c, ctx, {
+  from: q.from != null ? String(q.from) : null,
+  to: q.to != null ? String(q.to) : null,
+  status: q.status != null ? String(q.status) : null,
+})));
 
 // URA goods catalogue (Part J) — searchable copy + bulk import from the official list.
 financeOpsRouter.get('/efris/goods', ...runGet('efris.configuration.view', (c, ctx, q) => efrisGoods.listGoods(c, ctx, {
