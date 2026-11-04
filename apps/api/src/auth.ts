@@ -48,7 +48,7 @@ export async function totpEnrollmentPayload(email: string, secret: string) {
     width: 200,
     margin: 1,
     errorCorrectionLevel: 'M',
-    color: { dark: '#0B1F33', light: '#FFFFFF' },
+    color: { dark: '#101D35', light: '#FFFFFF' },
   });
   return { secret, otpauthUrl, qrDataUrl };
 }

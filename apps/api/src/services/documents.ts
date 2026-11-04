@@ -4048,8 +4048,8 @@ function htmlEsc(s: unknown): string {
 }
 
 function renderIdCardHtml(data: DocData, opts: DocumentRenderOpts): string {
-  const navy = brandHex(opts.company.brandColor, '#0b1f33');
-  const teal = brandHex(opts.company.brandColorSecondary, '#00a6a6');
+  const navy = brandHex(opts.company.brandColor, '#101d35');
+  const teal = brandHex(opts.company.brandColorSecondary, '#13c8e8');
   const official = factVal(data, 'Official ID');
   const shortId = factVal(data, 'Badge ID');
   const fullName = factVal(data, 'Employee');
@@ -4680,8 +4680,8 @@ async function renderXlsx(data: DocData, opts: DocumentRenderOpts): Promise<Buff
     columns: Math.max(8, data.columns.length + 1),
   }, brandImages);
 
-  const navy = brandHex(opts.company.brandColor, 'FF0B1F33');
-  const teal = brandHex(opts.company.brandColorSecondary, 'FF00A6A6');
+  const navy = brandHex(opts.company.brandColor, 'FF101D35');
+  const teal = brandHex(opts.company.brandColorSecondary, 'FF13C8E8');
 
   if (data.parties?.length) {
     for (const p of data.parties) {

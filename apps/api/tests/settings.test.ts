@@ -45,7 +45,7 @@ describe('app settings: catalogue, upsert, audit, reset and RBAC', () => {
     const general = (res.body.data as SettingPayload[]).find((c) => c.category === 'general');
     expect(general!.settings.brand_color).toMatchObject({
       type: 'color',
-      default: '#1261A0',
+      default: '#1677FF',
       group: 'Company identity',
     });
     expect(general!.settings.brand_color_secondary.type).toBe('color');

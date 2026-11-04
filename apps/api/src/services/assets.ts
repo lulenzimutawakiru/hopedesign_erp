@@ -989,12 +989,12 @@ export function renderAssetLabelSheetHtml(companyName: string, labels: AssetLabe
 <style>
   @page { margin: 8mm; }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: 'Segoe UI', sans-serif; color: #0B1F33; background: #fff; }
+  body { margin: 0; font-family: 'Segoe UI', sans-serif; color: #101D35; background: #fff; }
   .hint { margin: 12px 16px; font-size: 13px; color: #5F6B76; }
   .sheet { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 24px; }
   .label {
     width: 70mm; height: 38mm;
-    border: 1.5px solid #0B1F33;
+    border: 1.5px solid #101D35;
     border-radius: 4px;
     display: grid;
     grid-template-columns: 34mm 1fr;

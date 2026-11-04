@@ -1,15 +1,17 @@
 /**
- * Branded email rendering for all HOPE DESIGN outgoing mail.
+ * Branded email rendering for all NATEX CLOUD outgoing mail.
  * Every email sent through sendEmail() (Resend) is wrapped in this template
- * so recipients always see the HOPE DESIGN GROUP LTD identity.
+ * so recipients always see the Natex Cloud identity (issued by Hope Design Group Ltd).
  *
  * The template is email-client safe: tables + inline styles, no external CSS,
- * no scripts. Brand palette: navy #0F172A, red #FF0000, sky blue #87CEEB,
+ * no scripts. Brand palette: navy #101D35, electric blue #1677FF, cyan #13C8E8,
  * white #FFFFFF.
  */
 
 export interface CompanyBrand {
   name: string;
+  /** Registered legal issuer, shown in the email footer copyright (distinct from the display brand). */
+  legalName?: string;
   tagline?: string;
   address?: string;
   phone?: string;
@@ -23,7 +25,7 @@ export interface CompanyBrand {
   footerLogoUrl?: string;
   /** Primary brand colour for the header band. Falls back to the brand navy. */
   brandColor?: string;
-  /** Secondary brand colour for the header accent rule. Falls back to brand red. */
+  /** Secondary brand colour for the header accent rule. Falls back to electric blue. */
   brandColorSecondary?: string;
   /** Public social profiles, rendered as links in the email footer. */
   socials?: Array<{ label: string; url: string }>;
@@ -35,8 +37,9 @@ export interface EmailActionButton {
 }
 
 export const DEFAULT_COMPANY: CompanyBrand = {
-  name: 'HOPE DESIGN GROUP LTD',
-  tagline: 'Paper Manufacturing & Printing',
+  name: 'Natex Cloud',
+  legalName: 'Hope Design Group Ltd',
+  tagline: 'Streamlining Operations, Empowering Growth.',
   address: '',
   phone: '+256 414 000 000',
   email: 'info@hopedesign.jorlentech.com',
@@ -44,15 +47,16 @@ export const DEFAULT_COMPANY: CompanyBrand = {
 };
 
 export const BRAND_COLORS = {
-  navy: '#0F172A',
-  red: '#FF0000',
-  sky: '#87CEEB',
+  navy: '#101D35',
+  blue: '#1677FF',
+  cyan: '#13C8E8',
   white: '#FFFFFF',
   canvas: '#F4F6FA',
   border: '#E2E8F0',
   muted: '#64748B',
   body: '#1E293B',
   softMuted: '#94A3B8',
+  danger: '#C93636',
 } as const;
 
 const FONT = 'Arial, Helvetica, sans-serif';
@@ -227,6 +231,7 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
   const rawBody = /<\/?[a-z][\s\S]*>/i.test(opts.bodyHtml) ? opts.bodyHtml : textToHtml(opts.bodyHtml);
   const body = styleAnchors(rawBody);
   const name = escapeHtml(company.name || '');
+  const legalName = escapeHtml(company.legalName || company.name || '');
   const tagline = company.tagline ? escapeHtml(company.tagline) : '';
   const preheaderText = opts.preheader
     ? escapeHtml(opts.preheader)
@@ -234,7 +239,7 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
   const button = opts.button && opts.button.label && opts.button.url ? renderButton(opts.button) : '';
   const year = new Date().getFullYear();
   const headerBand = safeHex(company.brandColor, BRAND_COLORS.navy);
-  const accent = safeHex(company.brandColorSecondary, BRAND_COLORS.red);
+  const accent = safeHex(company.brandColorSecondary, BRAND_COLORS.blue);
   const ink = BRAND_COLORS.navy;
   const quiet = '#3D4C5C';
   const headerLogo = emailLogoHtml(company.logoUrl, { height: 42, maxWidth: 168, alt: company.name });
@@ -331,7 +336,7 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td width="50%" bgcolor="${accent}" style="height:4px;font-size:0;line-height:0;background:${accent};">&nbsp;</td>
-                <td width="50%" bgcolor="${BRAND_COLORS.sky}" style="height:4px;font-size:0;line-height:0;background:${BRAND_COLORS.sky};">&nbsp;</td>
+                <td width="50%" bgcolor="${BRAND_COLORS.cyan}" style="height:4px;font-size:0;line-height:0;background:${BRAND_COLORS.cyan};">&nbsp;</td>
               </tr>
             </table>
           </td>
@@ -361,7 +366,7 @@ export function renderBrandedEmailHtml(opts: BrandedEmailOptions): string {
           <td bgcolor="#F7F9FB" style="background:#F7F9FB;padding:8px 32px 22px;font-family:${FONT};">
             <div style="border-top:1px solid ${BRAND_COLORS.border};padding-top:14px;font-size:12px;line-height:1.6;color:${quiet};">
               This is an automated message from <strong style="color:${ink};">${name}</strong>. Please do not reply to this email.<br>
-              &copy; ${year} <strong style="color:${ink};">${name}</strong>. All rights reserved.
+              &copy; ${year} <strong style="color:${ink};">${legalName}</strong>. All rights reserved.
             </div>
           </td>
         </tr>
@@ -396,7 +401,7 @@ export function brandEmailContent(opts: {
   /** Tenant brand assets. Omit to render the shipped default identity. */
   company?: CompanyBrand;
 }): { html: string; text: string } {
-  const subject = String(opts.subject ?? 'HOPE DESIGN');
+  const subject = String(opts.subject ?? 'Natex Cloud');
   const html = opts.html ? String(opts.html) : '';
   const text = opts.text ? String(opts.text) : '';
   if (html && isFullEmailDocument(html)) {

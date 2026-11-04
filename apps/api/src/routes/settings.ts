@@ -128,8 +128,8 @@ export const SETTINGS: Record<string, Record<string, SettingDef>> = {
     favicon_url: { label: 'Favicon URL', help: 'Public URL of the browser tab icon (PNG or ICO).', type: 'url', group: 'Company identity' },
     signature_url: { label: 'Signature image URL', help: 'Public URL of the uploaded signature image used on auto-signed documents.', type: 'url', group: 'Company identity' },
     footer_logo_url: { label: 'Footer logo', help: 'Uploaded logo printed in the footer strip of every page of every branded document and export. This is a separate asset from the two header logos.', type: 'url', group: 'Company identity' },
-    brand_color: { label: 'Primary brand colour', help: 'Accent colour used on branded documents and exports.', type: 'color', default: '#1261A0', group: 'Company identity' },
-    brand_color_secondary: { label: 'Secondary brand colour', help: 'Secondary accent for highlights and supporting elements.', type: 'color', default: '#00A6A6', group: 'Company identity' },
+    brand_color: { label: 'Primary brand colour', help: 'Accent colour used on branded documents and exports.', type: 'color', default: '#1677FF', group: 'Company identity' },
+    brand_color_secondary: { label: 'Secondary brand colour', help: 'Secondary accent for highlights and supporting elements.', type: 'color', default: '#13C8E8', group: 'Company identity' },
 
     contact_email: { label: 'Primary contact email', help: 'Used as the reply-to on generated notifications.', type: 'text', default: '', group: 'Contact & location' },
     support_email: { label: 'Support email', help: 'Shown on reports and public verification pages for customer queries.', type: 'text', group: 'Contact & location' },

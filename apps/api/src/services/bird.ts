@@ -121,6 +121,7 @@ export async function resolveEmailBrand(): Promise<CompanyBrand> {
     );
     const brand: CompanyBrand = {
       name: profile.name || DEFAULT_COMPANY.name,
+      legalName: profile.legalName || undefined,
       tagline: profile.tagline || undefined,
       address: profile.address || undefined,
       phone: profile.phone || undefined,

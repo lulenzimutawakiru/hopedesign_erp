@@ -55,7 +55,7 @@ export function renderCodeEmailHtml(opts: {
     `<td align="center" style="background:${BRAND_COLORS.canvas};border:1px solid ${BRAND_COLORS.border};border-radius:10px;padding:22px 12px;">`,
     `<div style="font-family:'Courier New',Courier,monospace;font-size:34px;font-weight:700;letter-spacing:10px;text-indent:10px;line-height:1.2;color:${BRAND_COLORS.navy};">${escapeHtml(opts.code)}</div>`,
     '</td></tr></table>',
-    `<p style="margin:0 0 14px;font-weight:700;color:${BRAND_COLORS.red};">Do not disclose this code to any person, including members of staff.</p>`,
+    `<p style="margin:0 0 14px;font-weight:700;color:${BRAND_COLORS.danger};">Do not disclose this code to any person, including members of staff.</p>`,
     `<p style="margin:0 0 14px;">This code expires in ${Number(opts.ttlMinutes)} minutes and may be used once only.</p>`,
     `<p style="margin:0;font-size:13.5px;color:${BRAND_COLORS.muted};">If you did not request this code, you may disregard this message. Please do not forward it.</p>`,
   ].join('');

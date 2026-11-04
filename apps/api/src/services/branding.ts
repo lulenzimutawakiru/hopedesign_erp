@@ -12,28 +12,28 @@ import { config } from '../config.js';
  * - Renders a shared branded HTML template (used by reports print view)
  */
 
-// Brand palette - matches the web BrandMark / brand tokens (#0B1F33 navy, #00A6A6 teal, #1261A0 blue).
+// Brand palette - matches the web brand tokens (#101D35 navy, #13C8E8 cyan, #1677FF blue).
 export const BRAND = {
-  navy: [0.043, 0.122, 0.2] as [number, number, number],
-  teal: [0, 0.651, 0.651] as [number, number, number],
-  blue: [0.071, 0.38, 0.627] as [number, number, number],
+  navy: [0.0627, 0.1137, 0.2078] as [number, number, number],
+  teal: [0.0745, 0.7843, 0.9098] as [number, number, number],
+  blue: [0.0863, 0.4667, 1] as [number, number, number],
   gray: [0.373, 0.42, 0.463] as [number, number, number],
   line: [0.851, 0.882, 0.91] as [number, number, number],
   headerFill: [0.957, 0.965, 0.973] as [number, number, number],
   ink: [0.09, 0.168, 0.227] as [number, number, number],
-  paper: [0.961, 0.969, 0.976] as [number, number, number],
+  paper: [0.9686, 0.9765, 0.9882] as [number, number, number],
   zebra: [0.965, 0.972, 0.978] as [number, number, number],
   white: [1, 1, 1] as [number, number, number],
 };
 export const BRAND_HEX = {
-  navy: '#0B1F33',
-  teal: '#00A6A6',
-  blue: '#1261A0',
+  navy: '#101D35',
+  teal: '#13C8E8',
+  blue: '#1677FF',
   gray: '#5F6B76',
   headerFill: '#F4F6F8',
   line: '#D9E1E8',
   ink: '#172B3A',
-  paper: '#F5F7FA',
+  paper: '#F7F9FC',
   zebra: '#F6F8F9',
   white: '#FFFFFF',
 };
@@ -128,14 +128,11 @@ export function companyRegLines(c: CompanyProfile): string[] {
   ].filter(Boolean);
 }
 
-export function brandMarkSvg(size = 40, navy = BRAND_HEX.navy, teal = BRAND_HEX.teal): string {
-  return `<svg class="brand-mark" viewBox="0 0 40 40" width="${size}" height="${size}" aria-hidden="true">
-      <rect width="40" height="40" rx="8" fill="${navy}"/>
-      <rect x="8" y="8" width="6.2" height="24" rx="1.2" fill="#fff"/>
-      <rect x="25.8" y="8" width="6.2" height="24" rx="1.2" fill="#fff"/>
-      <rect x="8" y="17" width="24" height="6" rx="1" fill="${teal}"/>
-      <rect x="18.6" y="14.4" width="2.8" height="11.2" rx="0.4" fill="${navy}"/>
-      <rect x="14.4" y="18.6" width="11.2" height="2.8" rx="0.4" fill="${navy}"/>
+export function brandMarkSvg(size = 40, navy = BRAND_HEX.navy, teal = BRAND_HEX.teal, blue = BRAND_HEX.blue): string {
+  return `<svg class="brand-mark" viewBox="0 0 48 48" width="${size}" height="${size}" aria-hidden="true">
+      <rect width="48" height="48" rx="11" fill="${navy}"/>
+      <path d="M15 33V15l18 18V15" fill="none" stroke="${blue}" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="33" cy="15" r="2.6" fill="${teal}"/>
     </svg>`;
 }
 
@@ -419,7 +416,7 @@ export async function loadCompanyProfile(
 
   const companyName =
     getStr('general.company_name', '') || strOf(row?.name) || 'Company';
-  const tagline = getStr('general.company_tagline', '');
+  const tagline = getStr('general.company_tagline', '') || 'Streamlining Operations, Empowering Growth.';
   const verifyBase = getStr('qr.qr_verify_url', '').replace(/\/+$/, '');
   const fallbackVerify = `${config.webPublicUrl.replace(/\/+$/, '')}/verify`;
   const verifyUrl = verifyBase || fallbackVerify;
@@ -446,8 +443,8 @@ export async function loadCompanyProfile(
     verifyEnabled: getBool('documents.verify_enabled', true),
     pdfStamp: getBool('documents.pdf_stamp', false),
     footerText: getStr('documents.footer_text', ''),
-    brandColor: hexOf('general.brand_color', '#1261A0'),
-    brandColorSecondary: hexOf('general.brand_color_secondary', '#00A6A6'),
+    brandColor: hexOf('general.brand_color', '#1677FF'),
+    brandColorSecondary: hexOf('general.brand_color_secondary', '#13C8E8'),
     logoUrl: getStr('general.logo_url', ''),
     secondaryLogoUrl: getStr('general.secondary_logo_url', ''),
     footerLogoUrl: getStr('general.footer_logo_url', ''),

@@ -609,8 +609,8 @@ export class PdfDoc {
   ): void {
     const size = opts.size ?? 7;
     const color: Rgb = opts.color ?? [0.42, 0.47, 0.52];
-    const navy: Rgb = opts.navy ?? [0.043, 0.122, 0.2];
-    const accent: Rgb = opts.accent ?? [0, 0.651, 0.651];
+    const navy: Rgb = opts.navy ?? [0.0627, 0.1137, 0.2078];
+    const accent: Rgb = opts.accent ?? [0.0745, 0.7843, 0.9098];
     const ruleY = BOTTOM - 6;
     const logo = opts.logoName ? this.images.find((im) => im.name === opts.logoName) : undefined;
     // The footer mark is the dedicated uploaded footer asset (a different
@@ -722,7 +722,7 @@ export class PdfDoc {
     const headerSize = opts.headerSize ?? 8;
     const pad = opts.cellPadding ?? 5.5;
     const lh = 1.32;
-    const headerFill: Rgb = opts.headerFill ?? [0.043, 0.122, 0.2];
+    const headerFill: Rgb = opts.headerFill ?? [0.0627, 0.1137, 0.2078];
     const headerColor: Rgb = opts.headerColor ?? [1, 1, 1];
     const zebra = opts.zebra ?? true;
     const zebraFill: Rgb = opts.zebraFill ?? [0.965, 0.972, 0.978];
@@ -777,7 +777,7 @@ export class PdfDoc {
     if (grid === 'full') {
       this.strokeRect(x, this.y, width, 0.01, lineColor, 0.4);
     }
-    this.line(x, this.y, x + width, this.y, [0.043, 0.122, 0.2], 0.8);
+    this.line(x, this.y, x + width, this.y, [0.0627, 0.1137, 0.2078], 0.8);
     return this.y;
   }
 

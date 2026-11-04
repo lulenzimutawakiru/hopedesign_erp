@@ -90,15 +90,15 @@ describe('branded document exports', () => {
 
     const plain = await api.get('/api/reports/inventory-summary?format=print').set(auth(token));
     expect(plain.status).toBe(200);
-    expect(plain.text).toContain('--navy: #1261A0');
-    expect(plain.text).toContain('--teal: #00A6A6');
+    expect(plain.text).toContain('--navy: #1677FF');
+    expect(plain.text).toContain('--teal: #13C8E8');
     expect(plain.text).not.toContain('class="brand-logo"');
     expect(plain.text).not.toContain('class="secondary-logo"');
     expect(plain.text).not.toContain('class="foot-logo"');
     // Nothing is drawn from built-in artwork: the only vector mark left is the
     // 16px authenticity icon stamped on the verification block.
-    expect(plain.text).not.toContain('<svg class="brand-mark" viewBox="0 0 40 40" width="42"');
-    expect(plain.text).toContain('<svg class="brand-mark" viewBox="0 0 40 40" width="16"');
+    expect(plain.text).not.toContain('<svg class="brand-mark" viewBox="0 0 48 48" width="42"');
+    expect(plain.text).toContain('<svg class="brand-mark" viewBox="0 0 48 48" width="16"');
 
     const set = await api.patch('/api/settings').set(auth(token)).send({
       category: 'general',
