@@ -6960,8 +6960,214 @@ function TaxCompliance() {
         )}
       </section>
 
+      <VatFilingDesk />
+
       {txnOpen && <TaxTxnModal taxes={taxes} busy={busy} onClose={() => setTxnOpen(false)} onSave={save} />}
     </div>
+  );
+}
+
+/**
+ * VAT return filing + report history (Spec 2 tax compliance). Backed by the
+ * /tax/filings and /reports/history endpoints. Prepare is ERP-side only; submit/
+ * file/close/cancel are operator-confirmed manual steps because URA exposes no
+ * authorised filing API.
+ */
+function VatFilingDesk() {
+  const { user } = useAuth();
+  const [filings, setFilings] = useState<Rec[]>([]);
+  const [reports, setReports] = useState<Rec[]>([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [prepareOpen, setPrepareOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+
+  const load = useCallback(() => {
+    setError('');
+    Promise.allSettled([
+      api<{ data: { items: Rec[] } }>('/api/ops/finance/tax/filings').then((r) => setFilings(r.data?.items ?? [])),
+      api<{ data: { items: Rec[] } }>('/api/ops/finance/reports/history').then((r) => setReports(r.data?.items ?? [])),
+    ]).then((results) => {
+      const failed = results
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
+      if (failed.length) setError(failed.join(' · '));
+    }).finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const canManage = can(user, 'finance.tax_filings.manage');
+
+  const transition = async (id: number, action: 'submit' | 'file' | 'close' | 'cancel') => {
+    setBusy(true); setError('');
+    try {
+      await api(`/api/ops/finance/tax/filings/${id}/${action}`, { method: 'POST', body: JSON.stringify({}) });
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+
+  const filingActions = (f: Rec): ReactNode => {
+    if (!canManage) return null;
+    const status = String(f.status ?? '');
+    const btn = (label: string, action: 'submit' | 'file' | 'close' | 'cancel') => (
+      <button key={action} className="btn btn-sm btn-ghost" disabled={busy}
+        onClick={() => void transition(Number(f.id), action)}>{label}</button>
+    );
+    if (status === 'PREPARED') return <>{btn('Submit', 'submit')} {btn('Cancel', 'cancel')}</>;
+    if (status === 'SUBMITTED') return <>{btn('File', 'file')} {btn('Cancel', 'cancel')}</>;
+    if (status === 'FILED') return <>{btn('Close', 'close')}</>;
+    return null;
+  };
+
+  return (
+    <>
+      {error && <ErrorBanner error={error} />}
+
+      <section className="card card-pad" style={{ marginTop: 16 }}>
+        <div className="card-head">
+          <h3>VAT returns ({filings.length.toLocaleString()})</h3>
+          {canManage && <button className="btn btn-sm btn-primary" onClick={() => setPrepareOpen(true)}>Prepare VAT return</button>}
+        </div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          ERP-computed output/input VAT per period. Submit and file record an operator's confirmation on the URA portal — URA exposes no filing API, so these are controlled manual steps.
+        </p>
+        {loading ? <Skeleton rows={4} /> : filings.length === 0 ? (
+          <EmptyState title="No VAT returns yet"
+            body="Prepare a return for a month and the output/input VAT from posted transactions is computed here."
+            action={canManage ? 'Prepare VAT return' : undefined} onAction={() => setPrepareOpen(true)} />
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Period</th><th>Type</th><th>Status</th>
+                  <th className="cell-num">Output VAT</th><th className="cell-num">Input VAT</th>
+                  <th className="cell-num">Net payable</th><th>URA ref</th><th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filings.map((f) => (
+                  <tr key={String(f.id)}>
+                    <td>{String(f.period ?? '')}</td>
+                    <td>{String(f.filingType ?? '').replace(/_/g, ' ')}</td>
+                    <td><Badge value={f.status} /></td>
+                    <td className="cell-num">{fmtMoney(f.outputVat)}</td>
+                    <td className="cell-num">{fmtMoney(f.inputVat)}</td>
+                    <td className="cell-num">{fmtMoney(f.netVatPayable)}</td>
+                    <td className="cell-mono">{String(f.uraReference ?? '—')}</td>
+                    <td>{filingActions(f)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card card-pad" style={{ marginTop: 16 }}>
+        <div className="card-head">
+          <h3>Report history ({reports.length.toLocaleString()})</h3>
+          {canManage && <button className="btn btn-sm btn-primary" onClick={() => setReportOpen(true)}>Record report</button>}
+        </div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Controlled manual trail for portal-only URA reports (Z-report, VAT return, registers). The ERP records that a report was requested or received — it never claims to hold an official report it does not.
+        </p>
+        {loading ? <Skeleton rows={4} /> : reports.length === 0 ? (
+          <EmptyState title="No report history"
+            body="Record a requested or received URA report to keep a manual trail of portal-only reports."
+            action={canManage ? 'Record report' : undefined} onAction={() => setReportOpen(true)} />
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr><th>Type</th><th>Source</th><th>Status</th><th>Period</th><th>Title</th><th>Recorded</th></tr>
+              </thead>
+              <tbody>
+                {reports.map((r) => (
+                  <tr key={String(r.id)}>
+                    <td>{String(r.reportType ?? '').replace(/_/g, ' ')}</td>
+                    <td><Badge value={r.source} /></td>
+                    <td><Badge value={r.status} /></td>
+                    <td>{String(r.period ?? '—')}</td>
+                    <td>{String(r.title ?? '—')}</td>
+                    <td>{String(r.createdAt ?? '').slice(0, 10) || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {prepareOpen && (
+        <PrepareFilingModal busy={busy} onClose={() => setPrepareOpen(false)} onSave={async (p) => {
+          setBusy(true); setError('');
+          try { await api('/api/ops/finance/tax/filings/prepare', { method: 'POST', body: JSON.stringify(p) }); setPrepareOpen(false); load(); }
+          catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+        }} />
+      )}
+      {reportOpen && (
+        <RecordReportModal busy={busy} onClose={() => setReportOpen(false)} onSave={async (p) => {
+          setBusy(true); setError('');
+          try { await api('/api/ops/finance/reports/history', { method: 'POST', body: JSON.stringify(p) }); setReportOpen(false); load(); }
+          catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+        }} />
+      )}
+    </>
+  );
+}
+
+function PrepareFilingModal({ busy, onClose, onSave }: { busy: boolean; onClose: () => void; onSave: (p: Rec) => void }) {
+  const [filingType, setFilingType] = useState('VAT_RETURN');
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
+  const valid = /^\d{4}-\d{2}-\d{2}$/.test(periodStart) && /^\d{4}-\d{2}-\d{2}$/.test(periodEnd) && periodStart <= periodEnd;
+  return (
+    <Modal title="Prepare VAT return" onClose={onClose} footer={<>
+      <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+      <button className="btn btn-primary" disabled={busy || !valid} onClick={() => onSave({ filingType, periodStart, periodEnd })}>{busy ? 'Preparing…' : 'Prepare'}</button>
+    </>}>
+      <div className="field"><label>Filing type</label>
+        <select value={filingType} onChange={(e) => setFilingType(e.target.value)}>
+          <option value="VAT_RETURN">VAT return</option>
+          <option value="WHT_RETURN">Withholding tax return</option>
+        </select>
+      </div>
+      <div className="field"><label>Period start</label><input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} /></div>
+      <div className="field"><label>Period end</label><input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} /></div>
+    </Modal>
+  );
+}
+
+function RecordReportModal({ busy, onClose, onSave }: { busy: boolean; onClose: () => void; onSave: (p: Rec) => void }) {
+  const [reportType, setReportType] = useState('');
+  const [source, setSource] = useState('ERP');
+  const [status, setStatus] = useState('REQUESTED');
+  const [period, setPeriod] = useState('');
+  const [title, setTitle] = useState('');
+  const [notes, setNotes] = useState('');
+  return (
+    <Modal title="Record report" onClose={onClose} footer={<>
+      <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+      <button className="btn btn-primary" disabled={busy || !reportType.trim()} onClick={() => onSave({ reportType, source, status, period: period || null, title: title || null, notes: notes || null })}>{busy ? 'Recording…' : 'Record'}</button>
+    </>}>
+      <div className="field"><label>Report type</label><input value={reportType} placeholder="Z_REPORT" onChange={(e) => setReportType(e.target.value)} /></div>
+      <div className="field"><label>Source</label>
+        <select value={source} onChange={(e) => setSource(e.target.value)}>
+          <option value="ERP">ERP</option><option value="EFRIS_PORTAL">EFRIS portal</option>
+        </select>
+      </div>
+      <div className="field"><label>Status</label>
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="REQUESTED">Requested</option><option value="RECEIVED">Received</option>
+          <option value="GENERATED">Generated</option><option value="FAILED">Failed</option>
+        </select>
+      </div>
+      <div className="field"><label>Period (YYYY-MM)</label><input value={period} placeholder="2026-10" onChange={(e) => setPeriod(e.target.value)} /></div>
+      <div className="field"><label>Title</label><input value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+      <div className="field"><label>Notes</label><input value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+    </Modal>
   );
 }
 
