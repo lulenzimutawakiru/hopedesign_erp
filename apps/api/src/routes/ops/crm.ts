@@ -4,6 +4,7 @@ import { tx, Ctx } from '../../db.js';
 import { requirePermission, can } from '../../middleware/authorize.js';
 import { asyncHandler } from '../../utils.js';
 import * as crm from '../../services/crm.js';
+import * as crmIntel from '../../services/customerIntelligence.js';
 import { AuthUser } from '../../types.js';
 
 export const crmOpsRouter = Router();
@@ -52,8 +53,18 @@ crmOpsRouter.get('/customers', ...runGet('crm.customers.view', (c, ctx, q) => cr
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
 })));
+crmOpsRouter.get('/customers/intelligence/overview', ...runGet('crm.customers.view', (c, ctx) => crmIntel.customerIntelligenceOverview(c, ctx)));
+crmOpsRouter.get('/customers/intelligence', ...runGet('crm.customers.view', (c, ctx, q) => crmIntel.listCustomerIntelligence(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  segment: q.segment != null ? String(q.segment) : undefined,
+  churn: q.churn != null ? String(q.churn) : undefined,
+  credit: q.credit != null ? String(q.credit) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
 crmOpsRouter.get('/customers/:id', ...runGet('crm.customers.view', (c, ctx, _q, p) => crm.getCustomer360(c, ctx, Number(p.id))));
 crmOpsRouter.get('/customers/:id/credit', ...runGet('crm.customers.view', (c, ctx, q, p) => crm.creditCheck(c, ctx, Number(p.id), q.amount != null ? Number(q.amount) : 0)));
+crmOpsRouter.get('/customers/:id/intelligence', ...runGet('crm.customers.view', (c, ctx, _q, p) => crmIntel.customerIntelligence(c, ctx, Number(p.id))));
 crmOpsRouter.post('/customers', ...run('crm.customers.create', (c, ctx, b) => crm.createCustomer(c, ctx, b)));
 crmOpsRouter.post('/customers/:id', ...run('crm.customers.update', (c, ctx, b, p) => crm.updateCustomer(c, ctx, Number(p.id), b)));
 crmOpsRouter.post('/customers/:id/status', ...run(['crm.customers.update', 'crm.customers.block'], (c, ctx, b, p, reqAuth) => crm.setCustomerStatus(
