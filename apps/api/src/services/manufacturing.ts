@@ -2518,6 +2518,7 @@ export async function upsertProductionStandard(client: pg.PoolClient, ctx: Ctx, 
     attributes: b.attributes != null ? JSON.stringify(b.attributes) : '{}',
     is_active: b.isActive !== false,
     notes: b.notes != null ? String(b.notes) : null,
+    spec_group: b.specGroup != null && String(b.specGroup).trim() !== '' ? String(b.specGroup).trim() : null,
     created_by: ctx.userId ?? null,
   };
   await client.query(
@@ -3142,4 +3143,282 @@ export async function deleteRouting(client: pg.PoolClient, ctx: Ctx, id: number,
     }
     throw err;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Parity inquiries & maintenance (legacy manufacturing module coverage)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where-Used: reverse BOM. Given a component product, return the parent BOMs
+ * that consume it. `indented` walks the full ancestor chain (component -> parent
+ * -> grandparent …) so planners can see every higher level affected by a change.
+ * A level cap (20) guards against accidental BOM cycles.
+ */
+export async function whereUsed(client: pg.PoolClient, ctx: Ctx, productId: number, indented: boolean) {
+  if (!productId) throw badRequest('productId is required');
+  const res = await client.query(
+    `WITH RECURSIVE parents AS (
+       SELECT b.id AS bom_id, b.code AS bom_code, b.name AS bom_name, b.version AS bom_version,
+              b.product_id AS parent_id, 1 AS level,
+              bi.product_id AS component_id, bi.quantity, bi.unit_id
+         FROM bom_items bi
+         JOIN boms b ON b.id = bi.bom_id
+        WHERE bi.product_id = $1 AND b.tenant_id = $2
+       UNION ALL
+       SELECT b.id, b.code, b.name, b.version,
+              b.product_id, p.level + 1,
+              bi.product_id, bi.quantity, bi.unit_id
+         FROM bom_items bi
+         JOIN boms b ON b.id = bi.bom_id
+         JOIN parents p ON bi.product_id = p.parent_id
+        WHERE b.tenant_id = $2 AND p.level < 20
+     )
+     SELECT p.*, pp.code AS parent_code, pp.name AS parent_name,
+            cp.code AS component_code, cp.name AS component_name,
+            u.code AS unit_code
+       FROM parents p
+       JOIN products pp ON pp.id = p.parent_id
+       JOIN products cp ON cp.id = p.component_id
+       LEFT JOIN units u ON u.id = p.unit_id
+      WHERE $3::boolean OR p.level = 1
+      ORDER BY p.level, pp.code, p.bom_version DESC`,
+    [productId, ctx.tenantId ?? 0, indented]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Copy a BOM (header + component lines) onto another product. */
+export async function copyBom(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+  const sourceId = Number(b.sourceBomId);
+  const targetProductId = Number(b.targetProductId);
+  if (!sourceId || !targetProductId) throw badRequest('sourceBomId and targetProductId are required');
+
+  const src = await client.query(
+    `SELECT * FROM boms WHERE id = $1 AND tenant_id = $2`,
+    [sourceId, ctx.tenantId ?? 0]
+  );
+  if (src.rows.length === 0) throw notFound('Source BOM not found');
+  const s = src.rows[0];
+
+  const code = b.newCode != null && String(b.newCode).trim() !== '' ? String(b.newCode).trim() : String(s.code);
+  const name = b.newName != null && String(b.newName).trim() !== '' ? String(b.newName).trim() : String(s.name);
+  const version = b.newVersion != null ? Number(b.newVersion) : 1;
+
+  try {
+    const ins = await client.query(
+      `INSERT INTO boms
+         (company_id, tenant_id, product_id, code, name, version, quantity, unit_id, is_active, effective_from, effective_to, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,$9,$10,'DRAFT')
+       RETURNING id, code, name`,
+      [
+        ctx.companyId ?? null,
+        ctx.tenantId ?? null,
+        targetProductId,
+        code,
+        name,
+        version,
+        s.quantity,
+        s.unit_id,
+        s.effective_from,
+        s.effective_to,
+      ]
+    );
+    const newId = Number(ins.rows[0].id);
+
+    const items = await client.query(
+      `SELECT product_id, quantity, unit_id, scrap_percent, is_consumable FROM bom_items WHERE bom_id = $1`,
+      [sourceId]
+    );
+    for (const it of items.rows) {
+      await client.query(
+        `INSERT INTO bom_items (bom_id, product_id, quantity, unit_id, scrap_percent, is_consumable)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [newId, it.product_id, it.quantity, it.unit_id, it.scrap_percent, it.is_consumable]
+      );
+    }
+
+    await logAudit(client, ctx, {
+      action: 'create',
+      resource: 'boms',
+      recordId: newId,
+      recordCode: code,
+      newValues: { copiedFromBomId: sourceId, targetProductId, version, itemsCopied: items.rowCount },
+    });
+    return { id: newId, code, name, version, itemsCopied: items.rowCount };
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === '23505') {
+      throw badRequest(`A BOM with code "${code}" version ${version} already exists for that product.`);
+    }
+    throw err;
+  }
+}
+
+/** Component-type products (raw/packaging/consumable/etc.) not consumed by any BOM. */
+export async function unusedMaterials(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT p.id, p.code, p.name, p.type, u.code AS unit_code, c.name AS category_name
+       FROM products p
+       LEFT JOIN units u ON u.id = p.unit_id
+       LEFT JOIN product_categories c ON c.id = p.category_id
+      WHERE p.tenant_id = $1
+        AND p.status = 'ACTIVE'
+        AND p.type NOT IN ('REAM','FINISHED_GOODS','SERVICE')
+        AND NOT EXISTS (SELECT 1 FROM bom_items bi WHERE bi.product_id = p.id)
+      ORDER BY p.type, p.code`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Released/approved work orders that can be started, with material readiness. */
+export async function readyToProduce(client: pg.PoolClient, ctx: Ctx) {
+  const woRes = await client.query(
+    `SELECT wo.id, wo.wo_no, wo.status, wo.priority, wo.quantity, wo.produced_qty,
+            wo.start_date, wo.due_date, wo.machine_id,
+            p.code AS product_code, p.name AS product_name
+       FROM work_orders wo
+       JOIN products p ON p.id = wo.product_id
+      WHERE wo.tenant_id = $1
+        AND wo.status IN ('APPROVED','RELEASED')
+        AND wo.started_at IS NULL
+      ORDER BY COALESCE(wo.due_date, wo.start_date, 'infinity'::date), wo.id`,
+    [ctx.tenantId ?? 0]
+  );
+
+  const woIds = woRes.rows.map((r) => Number(r.id));
+  const avail = new Map<number, number>();
+  const shortByWo = new Map<number, Array<{ code: string; name: string; remaining: number; available: number }>>();
+
+  if (woIds.length > 0) {
+    const matRes = await client.query(
+      `SELECT wom.work_order_id, wom.product_id, p.code, p.name,
+              (wom.required_qty - COALESCE(wom.issued_qty, 0)) AS remaining
+         FROM work_order_materials wom
+         JOIN products p ON p.id = wom.product_id
+        WHERE wom.work_order_id = ANY($1::bigint[])
+        ORDER BY wom.work_order_id, p.code`,
+      [woIds]
+    );
+    const prodIds = [...new Set(matRes.rows.map((m) => Number(m.product_id)))];
+    if (prodIds.length > 0) {
+      const invRes = await client.query(
+        `SELECT product_id, COALESCE(SUM(quantity - reserved_qty), 0) AS avail
+           FROM inventory WHERE tenant_id = $1 AND product_id = ANY($2::bigint[])
+          GROUP BY product_id`,
+        [ctx.tenantId ?? 0, prodIds]
+      );
+      for (const r of invRes.rows) avail.set(Number(r.product_id), Number(r.avail));
+    }
+    for (const m of matRes.rows) {
+      const remaining = Number(m.remaining);
+      const available = avail.get(Number(m.product_id)) ?? 0;
+      if (remaining > available) {
+        const list = shortByWo.get(Number(m.work_order_id)) ?? [];
+        list.push({ code: String(m.code), name: String(m.name), remaining, available });
+        shortByWo.set(Number(m.work_order_id), list);
+      }
+    }
+  }
+
+  return woRes.rows.map((r) => {
+    const short = shortByWo.get(Number(r.id)) ?? [];
+    return {
+      ...toCamelRow(r),
+      materialReady: short.length === 0,
+      shortMaterials: short,
+    };
+  });
+}
+
+/** Batches (with latest inspection result) for the Certificate of Analysis picker. */
+export async function coaBatchDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT pb.id, pb.batch_no, pb.lot_no, pb.received_at, pb.quantity, pb.status,
+            p.code AS product_code, p.name AS product_name,
+            (SELECT i.result FROM inspections i
+              WHERE i.tenant_id = $1 AND i.batch_id = pb.id
+              ORDER BY i.inspected_at DESC NULLS LAST, i.id DESC LIMIT 1) AS last_result
+       FROM product_batches pb
+       JOIN products p ON p.id = pb.product_id
+      WHERE pb.tenant_id = $1
+      ORDER BY pb.id DESC
+      LIMIT 200`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Certificate of Analysis: batch + product spec + inspection results. */
+export async function certificateOfAnalysis(client: pg.PoolClient, ctx: Ctx, batchId: number) {
+  if (!batchId) throw badRequest('batchId is required');
+  const batchRes = await client.query(
+    `SELECT pb.*, p.code AS product_code, p.name AS product_name, u.code AS unit_code
+       FROM product_batches pb
+       JOIN products p ON p.id = pb.product_id
+       LEFT JOIN units u ON u.id = p.unit_id
+      WHERE pb.id = $1 AND pb.tenant_id = $2`,
+    [batchId, ctx.tenantId ?? 0]
+  );
+  if (batchRes.rows.length === 0) throw notFound('Batch not found');
+  const batch = batchRes.rows[0];
+
+  const specRes = await client.query(
+    `SELECT quality_checkpoints, attributes, spec_group
+       FROM production_standards
+      WHERE tenant_id = $1 AND product_id = $2 AND is_active
+      ORDER BY version DESC LIMIT 1`,
+    [ctx.tenantId ?? 0, batch.product_id]
+  );
+
+  const inspRes = await client.query(
+    `SELECT i.id, i.inspection_no, i.kind, i.result, i.status, i.inspected_at, i.completed_at,
+            ir.parameter, ir.method, ir.standard_value, ir.actual_value, ir.unit, ir.passed
+       FROM inspections i
+       LEFT JOIN inspection_results ir ON ir.inspection_id = i.id
+      WHERE i.tenant_id = $1 AND i.batch_id = $2
+      ORDER BY i.inspected_at DESC NULLS LAST, i.id, ir.id`,
+    [ctx.tenantId ?? 0, batchId]
+  );
+
+  return {
+    batch: toCamelRow(batch),
+    spec: specRes.rows.length ? toCamelRow(specRes.rows[0]) : null,
+    inspections: toCamelRows(inspRes.rows),
+  };
+}
+
+/** Distinct product specification groups with member counts. */
+export async function specGroupsDesk(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `SELECT spec_group, count(*)::int AS n
+       FROM production_standards
+      WHERE tenant_id = $1
+      GROUP BY spec_group
+      ORDER BY spec_group NULLS LAST`,
+    [ctx.tenantId ?? 0]
+  );
+  return toCamelRows(res.rows);
+}
+
+/** Rename (or merge) a product specification group. */
+export async function renameSpecGroup(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+  const fromVal = b.from == null || String(b.from).trim() === '' ? null : String(b.from).trim();
+  const to = b.to != null ? String(b.to).trim() : '';
+  if (!to) throw badRequest('New group name is required');
+  const res = await client.query(
+    `UPDATE production_standards
+        SET spec_group = $1, updated_at = now()
+      WHERE tenant_id = $2 AND spec_group IS NOT DISTINCT FROM $3
+      RETURNING id`,
+    [to, ctx.tenantId ?? 0, fromVal]
+  );
+  await logAudit(client, ctx, {
+    action: 'update',
+    resource: 'production_standards',
+    recordId: 0,
+    recordCode: 'spec_group',
+    newValues: { from: fromVal, to, affected: res.rowCount },
+  });
+  return { renamed: res.rowCount, group: to };
 }

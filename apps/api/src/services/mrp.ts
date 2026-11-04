@@ -218,3 +218,83 @@ export async function getMrpSummary(client: pg.PoolClient, ctx: Ctx, runId?: num
   );
   return { run, requirements: req.rows };
 }
+
+/**
+ * MRP reschedules: open supply (purchase orders and released work orders) whose
+ * current date no longer matches the latest MRP need date. `EXPEDITE` = supply
+ * arrives after it is needed; `DEFER` = supply arrives before it is needed.
+ */
+export async function mrpReschedules(client: pg.PoolClient, ctx: Ctx) {
+  const latest = await client.query(
+    `SELECT id, run_no, horizon_start, horizon_end, completed_at
+       FROM mrp_runs
+      WHERE tenant_id = $1 AND status = 'COMPLETED'
+      ORDER BY id DESC LIMIT 1`,
+    [ctx.tenantId ?? 0]
+  );
+  if (latest.rows.length === 0) return { run: null, reschedules: [] };
+  const run = latest.rows[0];
+
+  const sugRes = await client.query(
+    `SELECT product_id, MIN(suggested_date) AS need_by
+       FROM mrp_requirements
+      WHERE run_id = $1 AND requirement_type = 'SUGGESTION' AND suggested_date IS NOT NULL
+      GROUP BY product_id`,
+    [run.id]
+  );
+  const needBy = new Map<number, string>();
+  for (const r of sugRes.rows) needBy.set(Number(r.product_id), String(r.need_by));
+
+  const mk = (
+    type: 'PO' | 'WO',
+    refNo: string,
+    productCode: string,
+    productName: string,
+    currentDate: string | null,
+    need: string,
+  ) => {
+    const curMs = currentDate ? Date.parse(currentDate) : NaN;
+    const needMs = Date.parse(need);
+    const days = !Number.isNaN(curMs) && !Number.isNaN(needMs) ? Math.round((curMs - needMs) / 86400000) : 0;
+    const action = days < 0 ? 'DEFER' : days > 0 ? 'EXPEDITE' : 'ON_TIME';
+    return { type, refNo, productCode, productName, currentDate, needBy: need, action, days };
+  };
+
+  const reschedules: ReturnType<typeof mk>[] = [];
+
+  const poRes = await client.query(
+    `SELECT po.po_no AS ref_no, poi.product_id, p.code AS product_code, p.name AS product_name,
+            COALESCE(poi.need_by, poi.expected_date, po.expected_date) AS current_date
+       FROM purchase_order_items poi
+       JOIN purchase_orders po ON po.id = poi.order_id
+       JOIN products p ON p.id = poi.product_id
+      WHERE po.tenant_id = $1
+        AND po.status IN ('APPROVED','PARTIALLY_RECEIVED')
+        AND (poi.quantity - poi.received_qty) > 0`,
+    [ctx.tenantId ?? 0]
+  );
+  for (const r of poRes.rows) {
+    const need = needBy.get(Number(r.product_id));
+    if (!need) continue;
+    reschedules.push(mk('PO', String(r.ref_no), String(r.product_code), String(r.product_name), r.current_date ? String(r.current_date) : null, need));
+  }
+
+  const woRes = await client.query(
+    `SELECT wo.wo_no AS ref_no, wo.product_id, p.code AS product_code, p.name AS product_name,
+            COALESCE(wo.due_date, wo.start_date)::text AS current_date
+       FROM work_orders wo
+       JOIN products p ON p.id = wo.product_id
+      WHERE wo.tenant_id = $1
+        AND wo.status IN ('RELEASED','IN_PROGRESS')
+        AND wo.produced_qty < wo.quantity`,
+    [ctx.tenantId ?? 0]
+  );
+  for (const r of woRes.rows) {
+    const need = needBy.get(Number(r.product_id));
+    if (!need) continue;
+    reschedules.push(mk('WO', String(r.ref_no), String(r.product_code), String(r.product_name), r.current_date ? String(r.current_date) : null, need));
+  }
+
+  reschedules.sort((a, b) => a.type.localeCompare(b.type) || a.refNo.localeCompare(b.refNo));
+  return { run, reschedules };
+}
