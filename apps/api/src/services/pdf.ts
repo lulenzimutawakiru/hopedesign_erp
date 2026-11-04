@@ -41,6 +41,8 @@ export interface PdfTableOptions {
   cellPadding?: number;
   headerFill?: Rgb;
   headerColor?: Rgb;
+  /** Brand accent used for the header's left bar and bottom rule. */
+  accent?: Rgb;
   zebra?: boolean;
   zebraFill?: Rgb;
   grid?: 'none' | 'horizontal' | 'full';
@@ -724,6 +726,7 @@ export class PdfDoc {
     const lh = 1.32;
     const headerFill: Rgb = opts.headerFill ?? [0.0627, 0.1137, 0.2078];
     const headerColor: Rgb = opts.headerColor ?? [1, 1, 1];
+    const accent: Rgb | undefined = opts.accent;
     const zebra = opts.zebra ?? true;
     const zebraFill: Rgb = opts.zebraFill ?? [0.965, 0.972, 0.978];
     const grid = opts.grid ?? 'horizontal';
@@ -737,6 +740,12 @@ export class PdfDoc {
     const paintHeader = (): void => {
       this.ensure(headerH + 4);
       this.rect(x, this.y - headerH, width, headerH, headerFill);
+      if (accent) {
+        // Echo the brand accent bar + underline used by every sibling box
+        // (facts, parties, totals) so the data table reads as one system.
+        this.rect(x, this.y - headerH, 2.6, headerH, accent);
+        this.line(x, this.y - headerH, x + width, this.y - headerH, accent, 0.7);
+      }
       for (let i = 0; i < columns.length; i++) {
         let cy = this.y - pad - headerSize;
         for (const ln of headerLines[i]) {

@@ -592,6 +592,7 @@ export async function renderTablePdf(opts: BrandedTableOpts): Promise<Buffer> {
       columns,
       rows,
       headerFill: brand.navy,
+      accent: brand.teal,
       headerColor: BRAND.white,
       zebra: true,
       zebraFill: BRAND.zebra,
