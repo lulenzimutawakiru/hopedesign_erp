@@ -1703,7 +1703,7 @@ export async function customer360(client: pg.PoolClient, ctx: Ctx, customerId: n
 export async function listQuotations(
   client: pg.PoolClient,
   ctx: Ctx,
-  filters: { q?: string; status?: string; page?: number; pageSize?: number }
+  filters: { q?: string; status?: string; page?: number; pageSize?: number; customerId?: number }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 40));
@@ -1716,6 +1716,10 @@ export async function listQuotations(
   if (filters.status) {
     params.push(filters.status);
     where.push(`q.status = $${params.length}`);
+  }
+  if (filters.customerId) {
+    params.push(filters.customerId);
+    where.push(`q.customer_id = $${params.length}`);
   }
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
@@ -1733,7 +1737,7 @@ export async function listQuotations(
 export async function listOrders(
   client: pg.PoolClient,
   ctx: Ctx,
-  filters: { q?: string; status?: string; page?: number; pageSize?: number }
+  filters: { q?: string; status?: string; page?: number; pageSize?: number; customerId?: number }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 40));
@@ -1746,6 +1750,10 @@ export async function listOrders(
   if (filters.status) {
     params.push(filters.status);
     where.push(`so.status = $${params.length}`);
+  }
+  if (filters.customerId) {
+    params.push(filters.customerId);
+    where.push(`so.customer_id = $${params.length}`);
   }
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
@@ -1794,7 +1802,7 @@ export async function listDispatchableOrders(
   return toCamelRows(res.rows);
 }
 
-export async function listInvoices(client: pg.PoolClient, ctx: Ctx, filters: { q?: string; status?: string } = {}) {
+export async function listInvoices(client: pg.PoolClient, ctx: Ctx, filters: { q?: string; status?: string; customerId?: number } = {}) {
   const params: unknown[] = [ctx.tenantId, ctx.companyId];
   const where = ['inv.tenant_id = $1', 'inv.company_id = $2'];
   if (filters.q?.trim()) {
@@ -1804,6 +1812,10 @@ export async function listInvoices(client: pg.PoolClient, ctx: Ctx, filters: { q
   if (filters.status) {
     params.push(filters.status);
     where.push(`inv.status = $${params.length}`);
+  }
+  if (filters.customerId) {
+    params.push(filters.customerId);
+    where.push(`inv.customer_id = $${params.length}`);
   }
   const res = await client.query(
     `SELECT inv.id, inv.invoice_no, inv.status, inv.invoice_date, inv.due_date, inv.total, inv.amount_paid, inv.gl_posted,
@@ -1818,16 +1830,22 @@ export async function listInvoices(client: pg.PoolClient, ctx: Ctx, filters: { q
   return toCamelRows(res.rows);
 }
 
-export async function listReceipts(client: pg.PoolClient, ctx: Ctx) {
+export async function listReceipts(client: pg.PoolClient, ctx: Ctx, filters: { customerId?: number } = {}) {
+  const params: unknown[] = [ctx.tenantId, ctx.companyId];
+  const where = ['r.tenant_id = $1', 'r.company_id = $2'];
+  if (filters.customerId) {
+    params.push(filters.customerId);
+    where.push(`r.customer_id = $${params.length}`);
+  }
   const res = await client.query(
     `SELECT r.id, r.receipt_no, r.status, r.receipt_date, r.amount, r.method, r.gl_posted, r.unallocated_amount,
             c.code AS customer_code, c.name AS customer_name, inv.invoice_no
      FROM receipts r
      JOIN customers c ON c.id = r.customer_id
      LEFT JOIN customer_invoices inv ON inv.id = r.invoice_id
-     WHERE r.tenant_id = $1 AND r.company_id = $2
+     WHERE ${where.join(' AND ')}
      ORDER BY r.id DESC LIMIT 80`,
-    [ctx.tenantId, ctx.companyId]
+    params
   );
   return toCamelRows(res.rows);
 }
