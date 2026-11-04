@@ -29,6 +29,7 @@ export default function CrmFlow({ path }: { path: string }) {
   else if (view === 'complaints') body = <ComplaintList />;
   else if (view === 'contacts') body = <ContactList />;
   else if (view === 'analytics') body = <CrmAnalytics />;
+  else if (view === 'intelligence') body = <CustomerIntelligence />;
   else if (view === 'mine') body = <MyDesk />;
   else body = <CrmBoard />;
   return <div className="crm-shell">{body}</div>;
@@ -407,6 +408,7 @@ function CustomerDesk({ id }: { id: number }) {
   const [lookup, setLookup] = useState<TinLookup | null>(null);
   const [lookingUp, setLookingUp] = useState(false);
   const [lookupError, setLookupError] = useState('');
+  const [intel, setIntel] = useState<Rec | null>(null);
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/crm/customers/${id}`)
       .then((r) => setDoc(r.data))
@@ -416,6 +418,9 @@ function CustomerDesk({ id }: { id: number }) {
   useEffect(() => {
     api<{ data: Rec[] }>('/api/ops/crm/owners').then((r) => setOwners(r.data ?? [])).catch(() => undefined);
   }, []);
+  useEffect(() => {
+    api<{ data: Rec }>(`/api/ops/crm/customers/${id}/intelligence`).then((r) => setIntel(r.data)).catch(() => undefined);
+  }, [id]);
   if (error && !doc) return <ErrorBanner error={error} />;
   if (!doc) return <PageLoader variant="page" label="Opening account…" />;
   const c = doc.customer as Rec;
@@ -625,6 +630,37 @@ function CustomerDesk({ id }: { id: number }) {
       {tab === 'Summary' && (
         <div className="crm-split">
           <div>
+            {intel && (() => {
+              const creditReasons = (intel.creditReasons as string[] ?? []);
+              const actions = (intel.actions as Rec[] ?? []);
+              const rfm = intel.recencyScore == null ? null : `R${intel.recencyScore}·F${intel.frequencyScore}·M${intel.monetaryScore}`;
+              return (
+                <section className="card" style={{ marginBottom: 16 }}>
+                  <div className="card-head"><h3>Intelligence</h3></div>
+                  <div className="card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {chip(TONE_CHIP[String(intel.segmentTone)] ?? 'badge-neutral', String(intel.segmentLabel))}
+                      {chip(RISK_CHIP[String(intel.churnLevel)] ?? 'badge-neutral', `Churn: ${String(intel.churnLabel)}`)}
+                      {chip(RISK_CHIP[String(intel.creditLevel)] ?? 'badge-neutral', `Credit: ${String(intel.creditLabel)}`)}
+                      {rfm && <span className="cell-mono muted">{rfm}</span>}
+                    </div>
+                    {(intel.churnReason || creditReasons.length > 0) && (
+                      <div className="muted" style={{ fontSize: 13, lineHeight: 1.6 }}>
+                        {intel.churnReason ? <div>· {String(intel.churnReason)}</div> : null}
+                        {creditReasons.map((r) => <div key={r}>· {r}</div>)}
+                      </div>
+                    )}
+                    {actions.length > 0 && (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {actions.map((a) => (
+                          <button key={String(a.title)} type="button" className="btn btn-sm" onClick={() => navigate(String(a.href))}>{String(a.title)}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </section>
+              );
+            })()}
             <div className="aging-row" style={{ marginBottom: 16 }}>
               {([
                 ['Current', aging.current],
@@ -1831,6 +1867,144 @@ function CrmAnalytics() {
                   <td className="cell-num">{fmtNum(o.wonDeals)} · {fmtMoney(o.wonValue)}</td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+const RISK_CHIP: Record<string, string> = {
+  LOW: 'badge-green',
+  MEDIUM: 'badge-amber',
+  HIGH: 'badge-red',
+  CRITICAL: 'badge-critical',
+};
+const TONE_CHIP: Record<string, string> = {
+  positive: 'badge-green',
+  neutral: 'badge-blue',
+  warning: 'badge-amber',
+  danger: 'badge-red',
+  muted: 'badge-neutral',
+};
+const SEGMENT_OPTIONS = ['CHAMPION', 'LOYAL', 'POTENTIAL_LOYALIST', 'PROMISING', 'NEEDS_ATTENTION', 'AT_RISK', 'HIBERNATING', 'LOST', 'NEW', 'INACTIVE'];
+
+function chip(tone: string, label: string) {
+  return <span className={`badge ${tone}`}><span className="badge-icon" aria-hidden>●</span>{label}</span>;
+}
+
+function CustomerIntelligence() {
+  const [overview, setOverview] = useState<Rec | null>(null);
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [q, setQ] = useState('');
+  const [segment, setSegment] = useState('');
+  const [churn, setChurn] = useState('');
+  const [credit, setCredit] = useState('');
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => {
+    const p = new URLSearchParams();
+    if (q.trim()) p.set('q', q.trim());
+    if (segment) p.set('segment', segment);
+    if (churn) p.set('churn', churn);
+    if (credit) p.set('credit', credit);
+    api<{ data: Rec }>(`/api/ops/crm/customers/intelligence?${p}`)
+      .then((r) => setRows((r.data.items as Rec[]) ?? []))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Customer intelligence failed'));
+  }, [q, segment, churn, credit]);
+
+  useEffect(() => {
+    api<{ data: Rec }>('/api/ops/crm/customers/intelligence/overview')
+      .then((r) => setOverview(r.data))
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  if (error && rows.length === 0) return <ErrorBanner error={error} />;
+  if (!overview) return <PageLoader variant="page" label="Opening customer intelligence…" />;
+
+  const kpis = (overview.kpis ?? {}) as Rec;
+  const segments = (overview.segments as Rec[]) ?? [];
+  const rfm = (row: Rec) => row.recencyScore == null
+    ? '—'
+    : `R${row.recencyScore}·F${row.frequencyScore}·M${row.monetaryScore}`;
+  const daysAgo = (row: Rec) => row.recencyDays == null ? '—' : row.recencyDays === 0 ? 'today' : `${row.recencyDays}d`;
+
+  return (
+    <div className="page">
+      <CrmCommandBar entity="Intelligence" actions={[{ label: 'Dashboards', onClick: () => navigate('/crm/analytics') }, { label: 'Accounts', onClick: () => navigate('/crm/customers') }]} />
+      <CrmViewBar title="Customer intelligence" view="RFM · churn · credit" count={Number(kpis.totalCustomers)} search={q} onSearch={setQ} placeholder="Filter customers" />
+      <p className="muted" style={{ margin: '-4px 0 12px' }}>
+        Segments and risk are computed live from invoice and AR history — no manual tagging.
+      </p>
+
+      <div className="crm-insight">
+        <div className="crm-insight-card"><span className="k">Trading</span><span className="v">{fmtNum(kpis.tradingCustomers)}</span><span className="s">of {fmtNum(kpis.totalCustomers)} customers</span></div>
+        <div className="crm-insight-card"><span className="k">Revenue · 12m</span><span className="v">{fmtMoney(kpis.revenue12m)}</span></div>
+        <div className="crm-insight-card"><span className="k">Churn at risk</span><span className="v">{fmtNum(kpis.churnAtRisk)}</span><span className="s">past expected reorder</span></div>
+        <div className="crm-insight-card"><span className="k">Credit at risk</span><span className="v">{fmtNum(kpis.creditAtRisk)}</span><span className="s">{fmtNum(kpis.atRiskSegments)} in lapsing segments</span></div>
+        <div className="crm-insight-card"><span className="k">Open AR</span><span className="v">{fmtMoney(kpis.openAr)}</span></div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+        <select className="cell-input" value={segment} onChange={(e) => setSegment(e.target.value)}>
+          <option value="">All segments</option>
+          {SEGMENT_OPTIONS.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+        </select>
+        <select className="cell-input" value={churn} onChange={(e) => setChurn(e.target.value)}>
+          <option value="">Any churn risk</option>
+          <option value="LOW">Churn · low</option>
+          <option value="MEDIUM">Churn · medium</option>
+          <option value="HIGH">Churn · high</option>
+        </select>
+        <select className="cell-input" value={credit} onChange={(e) => setCredit(e.target.value)}>
+          <option value="">Any credit risk</option>
+          <option value="LOW">Credit · healthy</option>
+          <option value="MEDIUM">Credit · watch</option>
+          <option value="HIGH">Credit · high</option>
+          <option value="CRITICAL">Credit · critical</option>
+        </select>
+      </div>
+
+      <section className="card" style={{ marginBottom: 16 }}>
+        <div className="card-head"><h3>Segments</h3></div>
+        <div className="card-pad" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {segments.length === 0 && <p className="muted">No customers yet.</p>}
+          {segments.map((s) => (
+            <button key={String(s.segment)} type="button" className="aging-cell" style={{ textAlign: 'left', border: 'none', cursor: 'pointer' }} onClick={() => setSegment(String(s.segment))}>
+              <span className="muted">{String(s.segmentLabel)} · {fmtNum(s.count)}</span>
+              <strong>{fmtMoney(s.revenue)}</strong>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-head"><h3>Customers</h3></div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr><th>Customer</th><th>Segment</th><th>RFM</th><th className="cell-num">Last order</th><th>Credit</th><th>Churn</th><th className="cell-num">Open AR</th><th>Next best action</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const actions = (r.actions as Rec[]) ?? [];
+                const top = actions[0];
+                return (
+                  <tr key={String(r.customerId)} className="row-click" onClick={() => navigate(`/crm/customers/${r.customerId}`)}>
+                    <td><strong>{String(r.name)}</strong><div className="muted" style={{ fontSize: 12 }}>{String(r.code)}</div></td>
+                    <td>{chip(TONE_CHIP[String(r.segmentTone)] ?? 'badge-neutral', String(r.segmentLabel))}</td>
+                    <td className="cell-mono">{rfm(r)}</td>
+                    <td className="cell-num">{daysAgo(r)}</td>
+                    <td>{chip(RISK_CHIP[String(r.creditLevel)] ?? 'badge-neutral', String(r.creditLabel))}</td>
+                    <td>{chip(RISK_CHIP[String(r.churnLevel)] ?? 'badge-neutral', String(r.churnLabel))}</td>
+                    <td className="cell-num">{fmtMoney(r.openAr)}</td>
+                    <td>{top ? <span title={String(top.detail)}>{String(top.title)}</span> : <span className="muted">—</span>}</td>
+                  </tr>
+                );
+              })}
+              {rows.length === 0 && <tr><td colSpan={8} className="muted" style={{ padding: 16 }}>No customers match these filters.</td></tr>}
             </tbody>
           </table>
         </div>

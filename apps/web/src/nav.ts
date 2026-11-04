@@ -66,6 +66,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'activities', label: 'Activities', href: '/crm/activities', perm: 'crm.activities.view' , group: 'Accounts'},
           { id: 'complaints', label: 'Cases', href: '/crm/complaints', perm: 'crm.complaints.view' , group: 'Accounts'},
           { id: 'analytics', label: 'Dashboards', href: '/crm/analytics', perm: 'crm.customers.view' , group: 'Insights'},
+          { id: 'intelligence', label: 'Customer intelligence', href: '/crm/intelligence', perm: 'crm.customers.view' , group: 'Insights'},
         ],
       },
       {
