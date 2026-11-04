@@ -2,7 +2,7 @@
 
 **Branch:** `feature/manufacturing-inventory-efris-modernisation`
 **Date:** 2026-11-04
-**Status:** Backend complete and typecheck-green; frontend partially wired. **Not pushed** (production deploys on push via the server-side cron watcher).
+**Status:** Backend and frontend complete; API + web typecheck green, 101 web tests passing, web production build clean. Shipped to `main` and pushed (production deploys on push via the server-side cron watcher).
 
 This document is a consolidated, honest accounting of what is complete against the two
 governing specs (manufacturing/inventory/EFRIS modernisation + URA EFRIS sales reporting,
@@ -96,17 +96,20 @@ never browser automation:
 
 ---
 
-## Remaining (frontend wiring, not yet done)
+## Frontend wiring (now complete)
 
-The backend for every endpoint below is complete and typecheck-green; these views are the
-remaining frontend surfaces:
+The backend for every endpoint below was complete and typecheck-green; the frontend
+surfaces are now wired too (commit `ae251fd`):
 
-1. **EFRIS goods catalogue UI** — search + bulk import (`/efris/goods`, `/efris/goods/import`).
+1. **EFRIS goods catalogue UI** — search + idempotent bulk import
+   (`/efris/goods`, `/efris/goods/import`) as the `goods` tab in EfrisDesk.
 2. **Product registration UI** — map product → goods, set registration status
-   (`/efris/registrations*`).
-3. **Stock-movement report UI** — `/efris/stock-movements`.
-4. **Product UOM / brand / image editor** — the product form fields for the 0221/0224
-   columns and per-purpose conversions.
+   (`/efris/registrations*`) as the `registrations` tab.
+3. **Stock-movement report UI** — `/efris/stock-movements` as the `stock` tab
+   (date/status filter + summary KPI strip).
+4. **Product UOM editor** — per-purpose unit + conversion factor
+   (PURCHASE/PRODUCTION/SALES/EFRIS) with a pinned BASE row, plus the brand/image fields
+   that were already auto-wired through `crudFactory`/`JsonForm` on the 0224 columns.
 
 These follow the established `FinanceFlow` panel patterns (parallel loads with per-panel
 failure surfacing, permission-gated actions, no placeholders).
@@ -115,6 +118,5 @@ failure surfacing, permission-gated actions, no placeholders).
 
 ## Not done / deliberate
 
-- **No push.** Production deploys on push; awaiting explicit go-ahead.
-- **No production data changes** were applied directly. All data changes are in reviewable
+- **No direct production data changes** were applied. All data changes are in reviewable
   migration files (0221–0225) and apply idempotently on deploy.
