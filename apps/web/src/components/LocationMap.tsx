@@ -80,7 +80,7 @@ export function LocationPicker({
       return;
     }
     if (!markerRef.current) {
-      markerRef.current = L.marker([la, ln], { icon: pinIcon('#0f172a'), draggable: true, autoPan: true }).addTo(map);
+      markerRef.current = L.marker([la, ln], { icon: pinIcon('#101D35'), draggable: true, autoPan: true }).addTo(map);
       markerRef.current.on('dragend', () => {
         const p = markerRef.current?.getLatLng();
         if (!p) return;
@@ -132,13 +132,13 @@ export function RouteMap({
     const d = destination && Number.isFinite(num(destination.lat)) && Number.isFinite(num(destination.lng)) ? destination : null;
     if (o) {
       points.push([o.lat, o.lng]);
-      L.marker([o.lat, o.lng], { icon: pinIcon('#0f172a') }).addTo(map).bindPopup(o.label ?? 'Origin');
+      L.marker([o.lat, o.lng], { icon: pinIcon('#101D35') }).addTo(map).bindPopup(o.label ?? 'Origin');
     }
     if (d) {
       points.push([d.lat, d.lng]);
       L.marker([d.lat, d.lng], { icon: pinIcon('#dc2626') }).addTo(map).bindPopup(d.label ?? 'Destination');
     }
-    if (o && d) L.polyline([[o.lat, o.lng], [d.lat, d.lng]], { color: '#0f172a', weight: 3, dashArray: '6 6' }).addTo(map);
+    if (o && d) L.polyline([[o.lat, o.lng], [d.lat, d.lng]], { color: '#101D35', weight: 3, dashArray: '6 6' }).addTo(map);
     if (points.length) map.fitBounds(L.latLngBounds(points), { padding: [24, 24] });
     else map.setView([0.35, 32.6], 8);
     // eslint-disable-next-line react-hooks/exhaustive-deps

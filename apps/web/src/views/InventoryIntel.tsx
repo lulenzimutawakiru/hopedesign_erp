@@ -1456,7 +1456,7 @@ function MapView() {
                           key={String(bin.id)}
                           onClick={() => setSelected(bin)}
                           style={{
-                            minWidth: 64, padding: '6px 8px', borderRadius: 6, border: selected && num(selected.id) === num(bin.id) ? '2px solid #0f172a' : '1px solid #e2e8f0',
+                            minWidth: 64, padding: '6px 8px', borderRadius: 6, border: selected && num(selected.id) === num(bin.id) ? '2px solid var(--navy)' : '1px solid #e2e8f0',
                             background: binTone(bin), color: num(bin.isBlocked) ? '#fff' : '#fff', cursor: 'pointer', fontSize: 11,
                           }}
                           title={str(bin.code)}

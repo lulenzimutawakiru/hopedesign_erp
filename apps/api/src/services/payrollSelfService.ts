@@ -1,5 +1,5 @@
 /**
- * HOPE DESIGN ERP - EMPLOYEE PAYROLL SELF-SERVICE (spec 21, 33, 34).
+ * Natex Cloud - EMPLOYEE PAYROLL SELF-SERVICE (spec 21, 33, 34).
  *
  * "My Payroll" answers for the authenticated caller and for nobody else. The
  * employee is resolved from the user-to-employee link the identity module

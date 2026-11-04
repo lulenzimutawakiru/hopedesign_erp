@@ -1,5 +1,5 @@
 /* ============================================================================
-   HOPE DESIGN ERP — enterprise sign-in surface
+   Natex Cloud — enterprise sign-in surface
    ----------------------------------------------------------------------------
    Loaded after `styles.css`, so anything here layers on top of the existing
    `.login-page` / `.login-hero` / `.login-card` composition rather than
@@ -11,8 +11,8 @@
         do not reuse `.field` / `.btn` / `.alert`, so every one of their rules
         has to exist here — including the ones the old `.login-card .field`
         selectors used to supply.
-     3. Hold the sign-in surface to the brand: white panel, sky-blue structure,
-        a single controlled red used only for security and refusal.
+     3. Hold the sign-in surface to the brand: white panel, cyan structure,
+        a single controlled danger tone used only for security and refusal.
 
    Palette comes from the `:root` tokens in `styles.css`. Nothing is invented.
    ========================================================================= */

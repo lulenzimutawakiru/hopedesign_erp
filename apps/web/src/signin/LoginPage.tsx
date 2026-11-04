@@ -1,12 +1,12 @@
 /**
- * HOPE DESIGN ERP sign-in gateway.
+ * Natex Cloud sign-in gateway.
  *
  * Composition follows the enterprise teller pattern the brief asked for -- a
  * full-bleed industrial visual with the authentication surface sitting over it
- * as an independent, quiet panel -- built entirely from HOPE DESIGN's own
+ * as an independent, quiet panel -- built entirely from Natex Cloud's own
  * identity. Nothing here is a bank clone: the visual is the plant's own press
- * hall, the structure is the navy/sky palette the rest of the ERP already uses,
- * and the red accent is reserved for refusal states rather than decoration.
+ * hall, the structure is the navy/cyan palette the rest of the ERP already uses,
+ * and the danger accent is reserved for refusal states rather than decoration.
  *
  * This file owns the flow and nothing else. It holds the auth session state, the
  * requests and the outcome copy; `LoginForm` and `MfaForm` own layout. Every
@@ -102,7 +102,7 @@ export function LoginPage() {
   const adminPhone = (company.phone || company.branch_phone).trim();
   const adminPhoneHref = adminPhone ? telHref(adminPhone) : '';
   const configuredName = company.legal_name || company.name;
-  const legalName = configuredName && configuredName !== 'Company' ? configuredName : 'HOPE DESIGN GROUP LTD';
+  const legalName = configuredName && configuredName !== 'Company' ? configuredName : 'Hope Design Group Ltd';
   // Product brand shown on the sign-in chrome; config-driven via the company
   // profile (app_settings general.company_name), never hard-coded.
   const brandName = company.name && company.name !== 'Company' ? company.name : 'Natex Cloud';

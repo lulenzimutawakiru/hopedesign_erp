@@ -46,7 +46,7 @@ export function HcmBoard() {
       <div className="kpi-grid--tiles kpi-grid--4">
         {[
           { label: 'Headcount', value: fmtNum(kpis.headcount), sub: fmtNum(kpis.onLeave) + ' on leave · ' + fmtNum(kpis.probation) + ' probation', href: '/people/employees', icon: '👥', accent: '#8B5CF6', tint: 'rgba(139,92,246,0.12)' },
-          { label: 'Positions gap', value: fmtNum(kpis.headcountGap), sub: fmtNum(kpis.occupiedHeadcount) + ' of ' + fmtNum(kpis.approvedHeadcount) + ' filled', href: '/people/positions', icon: '⊞', accent: 'var(--hope)', tint: 'rgba(18,97,160,0.12)' },
+          { label: 'Positions gap', value: fmtNum(kpis.headcountGap), sub: fmtNum(kpis.occupiedHeadcount) + ' of ' + fmtNum(kpis.approvedHeadcount) + ' filled', href: '/people/positions', icon: '⊞', accent: 'var(--hope)', tint: 'rgba(22,119,255,0.12)' },
           { label: 'Open requisitions', value: fmtNum(kpis.openRequisitions), sub: fmtNum(kpis.publishedVacancies) + ' published', href: '/people/requisitions', icon: '📋', accent: '#7C3AED', tint: 'rgba(124,58,237,0.12)' },
           { label: 'In pipeline', value: fmtNum(kpis.applicationsInPipeline), sub: 'candidate applications', href: '/people/recruitment', icon: '◎', accent: 'var(--info)', tint: 'rgba(40,120,208,0.12)' },
           { label: 'Pending leave', value: fmtNum(kpis.pendingLeave), sub: fmtNum(kpis.pendingTraining) + ' training requests', href: '/people/leave', icon: '⛱', accent: 'var(--warning)', tint: 'rgba(217,154,0,0.12)' },

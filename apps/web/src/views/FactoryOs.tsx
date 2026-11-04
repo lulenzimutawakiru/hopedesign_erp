@@ -1,4 +1,4 @@
-﻿// FactoryOS — premium Factory Operating System UX for HOPE DESIGN GROUP LTD.
+﻿// FactoryOS — premium Factory Operating System UX for Natex Cloud (Hope Design Group Ltd).
 // See -> Understand -> Decide -> Act -> Confirm.
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -147,7 +147,7 @@ export function FactoryDashboard() {
         <div>
           <p className="mod-kicker" data-mod="mfg">Manufacturing · Command Center</p>
           <h1>{greeting}, {firstName}</h1>
-          <p className="muted">{todayStr} · HOPE DESIGN FACTORY</p>
+          <p className="muted">{todayStr} · NATEX CLOUD FACTORY</p>
         </div>
         <div className="head-actions fos-pills">
           <span className="fos-pill">Factory · Main</span>

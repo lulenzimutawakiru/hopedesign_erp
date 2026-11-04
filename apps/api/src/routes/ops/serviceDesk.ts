@@ -1,5 +1,5 @@
 /**
- * HOPE DESIGN SERVICE DESK - operational API (spec sections 30, 10, 13, 17).
+ * Natex Cloud Service Desk - operational API (spec sections 30, 10, 13, 17).
  *
  * Mounted at both /api/service-desk (spec 30 literal) and /api/ops/service-desk
  * (repository convention). Every endpoint executes the mandated chain:

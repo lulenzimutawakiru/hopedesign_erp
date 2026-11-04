@@ -3793,7 +3793,7 @@ function renderIdCardPdf(data: DocData, opts: DocumentRenderOpts): Buffer {
     author: company,
     subject: 'Employee identity card',
     keywords: [official, shortId, fullName, cardNo].filter(Boolean).join(', '),
-    creator: 'HOPE DESIGN ERP',
+    creator: 'Natex Cloud',
   });
 
   // --------------------------------------------------------------- page head

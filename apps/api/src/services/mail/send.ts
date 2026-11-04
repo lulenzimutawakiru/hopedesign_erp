@@ -541,7 +541,7 @@ export async function sendStoredEmail(
     : await defaultSignature(client, ctx, access.mailboxId);
 
   const companyName = String(
-    access.mailbox.display_name ?? email.from_name ?? 'HOPE DESIGN GROUP LTD'
+    access.mailbox.display_name ?? email.from_name ?? 'Natex Cloud'
   );
   const applied = applySignature(
     signature,

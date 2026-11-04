@@ -1248,7 +1248,7 @@ communicationOpsRouter.post(
       if (!rows[0]) throw notFound('Email delivery not found');
       const to = String(rows[0].email ?? '').trim();
       if (!to) throw badRequest('Recipient email is missing');
-      const subject = String(rows[0].subject ?? 'Hope Design');
+      const subject = String(rows[0].subject ?? 'Natex Cloud');
       const body = String(rows[0].body ?? '');
       const result = await sendEmail({ to: [to], subject, html: body, text: body });
       await c.query(
@@ -1348,8 +1348,8 @@ communicationOpsRouter.post(
     const to = String(b.to ?? '').trim();
     if (!['EMAIL', 'SMS', 'WHATSAPP'].includes(channel)) throw badRequest('channel must be EMAIL, SMS or WHATSAPP');
     if (!to) throw badRequest('to is required (email address or E.164 phone number)');
-    const subject = String(b.subject ?? 'HOPE DESIGN test email');
-    const body = String(b.body ?? 'This is a test message from the HOPE DESIGN communication center.');
+    const subject = String(b.subject ?? 'Natex Cloud test email');
+    const body = String(b.body ?? 'This is a test message from the Natex Cloud communication center.');
     const provider = String(b.provider ?? 'auto').toLowerCase();
     if (!['auto', 'africastalking', 'resend', 'meta'].includes(provider)) {
       throw badRequest('provider must be auto, africastalking, resend or meta');

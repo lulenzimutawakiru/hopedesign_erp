@@ -1,0 +1,15 @@
+{
+  "name": "Natex Cloud",
+  "short_name": "Natex Cloud",
+  "description": "Natex Cloud by Hope Design — integrated enterprise ERP for manufacturing, CRM, finance, inventory, HR, payroll and EFRIS.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F7F9FC",
+  "theme_color": "#101D35",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

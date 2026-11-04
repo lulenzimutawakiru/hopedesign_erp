@@ -27,7 +27,7 @@ import {
 } from './serviceDeskCommon.js';
 
 /**
- * HOPE DESIGN Service Desk - Problem management (spec section 18).
+ * Natex Cloud Service Desk - Problem management (spec section 18).
  *
  * Multiple incidents -> pattern detected -> problem created -> root cause
  * investigation -> known error -> permanent fix -> problem closed.

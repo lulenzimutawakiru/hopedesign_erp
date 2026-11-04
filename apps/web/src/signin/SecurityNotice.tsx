@@ -7,7 +7,7 @@
  * notice therefore sits on every sign-in view rather than behind a link, but it
  * stays compact -- it is a warning, not the page.
  *
- * The wording makes only claims the platform actually honours: HOPE DESIGN has
+ * The wording makes only claims the platform actually honours: Natex Cloud has
  * no outbound channel that asks for credentials, and the official address is the
  * only address this application is served from.
  */

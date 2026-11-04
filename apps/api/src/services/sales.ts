@@ -279,7 +279,7 @@ export async function sendQuotationToCustomer(
     })
     .join('\n');
   const extra = opts?.message ? `\n\n${opts.message.trim()}\n` : '';
-  const title = `Quotation ${quoteNo} from Hope Design`;
+  const title = `Quotation ${quoteNo} from Natex Cloud`;
   const body =
     `Dear ${customerName},\n\nPlease find quotation ${quoteNo}.\nValid until: ${validUntil}\nTotal: ${money(q.total, currency)}\n\n${lines}${extra}\n\nReply to this message or call us to proceed.`;
 

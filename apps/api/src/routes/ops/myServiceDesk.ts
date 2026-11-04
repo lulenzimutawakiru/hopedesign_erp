@@ -1,7 +1,7 @@
 /**
- * HOPE DESIGN SERVICE DESK - employee self-service API (spec 2, 3, 16, 27, 30).
+ * Natex Cloud Service Desk - employee self-service API (spec 2, 3, 16, 27, 30).
  *
- * Mounted at /api/my/service-desk. This is the MY HOPE DESIGN surface: it
+ * Mounted at /api/my/service-desk. This is the My Natex Cloud surface: it
  * answers only for the authenticated caller and never for anybody else.
  *
  * Every endpoint executes the mandated chain:

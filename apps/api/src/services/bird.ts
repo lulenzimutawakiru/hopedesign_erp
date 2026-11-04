@@ -54,7 +54,7 @@ export interface BirdEmailInput {
   /** Reply-To address. */
   replyTo?: string;
   /**
-   * Explicit RFC 5322 sender, e.g. `HOPE DESIGN HR <hr@hopedesign.jorlentech.com>`.
+   * Explicit RFC 5322 sender, e.g. `Natex Cloud HR <hr@hopedesign.jorlentech.com>`.
    * Set when the message is sent from a company mailbox rather than the
    * platform default sender. Falls back to the configured Resend identity.
    */
@@ -258,7 +258,7 @@ export async function dispatchBird(
   if (ch === 'EMAIL') {
     return sendEmail({
       to: [to],
-      subject: payload.title ?? 'HOPE DESIGN',
+      subject: payload.title ?? 'Natex Cloud',
       text: body,
       button: payload.button ?? undefined,
     });

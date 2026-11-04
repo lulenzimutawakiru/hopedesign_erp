@@ -645,7 +645,7 @@ function PerformanceDesk() {
 
       <HrKpiGrid>
         <HrKpi label="Open goals" value={fmtNum(openGoals.length)} sub={`${fmtNum(goals.rows.length)} tracked`} />
-        <HrKpi label="Average progress" value={`${fmtNum(avgProgress)}%`} sub="across all goals" accent="var(--hope)" tint="rgba(18, 97, 160, 0.12)" />
+        <HrKpi label="Average progress" value={`${fmtNum(avgProgress)}%`} sub="across all goals" accent="var(--hope)" tint="rgba(22, 119, 255, 0.12)" />
         <HrKpi label="Reviews running" value={fmtNum(reviewsRunning)} sub={`${fmtNum(reviews.rows.length)} total`} accent="#D97706" tint="rgba(217, 119, 6, 0.12)" />
         <HrKpi label="Open PIPs" value={fmtNum(pipsOpen)} sub={`${fmtNum(pips.rows.length)} on record`} accent="var(--danger)" tint="rgba(201, 54, 54, 0.12)" />
       </HrKpiGrid>
@@ -1106,7 +1106,7 @@ function BenefitsDesk() {
 
       <HrKpiGrid>
         <HrKpi label="Active plans" value={fmtNum(activePlans.length)} sub={`${fmtNum(plans.rows.length)} in catalogue`} />
-        <HrKpi label="Enrolled" value={fmtNum(activeEnroll.length)} sub="active enrolments" accent="var(--hope)" tint="rgba(18, 97, 160, 0.12)" />
+        <HrKpi label="Enrolled" value={fmtNum(activeEnroll.length)} sub="active enrolments" accent="var(--hope)" tint="rgba(22, 119, 255, 0.12)" />
         <HrKpi label="Monthly cost" value={fmtMoney(monthly)} sub="active enrolments" accent="var(--success)" tint="rgba(22, 138, 91, 0.12)" />
         <HrKpi label="Expiring" value={fmtNum(expiring.length)} sub={`next ${meta.expiryDays} days`} accent="#D97706" tint="rgba(217, 119, 6, 0.12)" />
       </HrKpiGrid>

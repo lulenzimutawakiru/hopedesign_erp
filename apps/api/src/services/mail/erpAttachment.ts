@@ -214,7 +214,7 @@ async function issuerName(client: pg.PoolClient, ctx: Ctx): Promise<string> {
       : '';
     if (name) return name;
   }
-  return 'HOPE DESIGN ERP';
+  return 'Natex Cloud';
 }
 
 /**

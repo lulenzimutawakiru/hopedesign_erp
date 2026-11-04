@@ -21,7 +21,7 @@ import {
 } from './serviceDeskCommon.js';
 
 /**
- * HOPE DESIGN Service Desk - configuration surface (spec 7, 10, 17).
+ * Natex Cloud Service Desk - configuration surface (spec 7, 10, 17).
  *
  * SLA policies, business calendars and holidays, teams, skills and the
  * skill routing tables. These are the knobs an administrator turns to make the

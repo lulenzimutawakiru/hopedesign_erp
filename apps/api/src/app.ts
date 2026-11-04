@@ -137,7 +137,7 @@ app.use(contextMiddleware);
 app.get('/', (_req, res) => {
   res.json({
     service: 'hopedesign-erp-api',
-    name: 'Hope Design API',
+    name: 'Natex Cloud API',
     status: 'ok',
     version: '1.0.0',
     endpoints: {

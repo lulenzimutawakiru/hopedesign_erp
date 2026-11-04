@@ -1,5 +1,5 @@
 /**
- * Internal ISO alignment register for Hope Design ERP.
+ * Internal ISO alignment register for Natex Cloud.
  *
  * Control titles identify ISO/IEC 27001:2022 Annex A and the ISO 9001:2015
  * clauses this product already operates. The implementation notes are an
@@ -10,14 +10,14 @@
 export const ISO_ASSESSED_ON = '2026-10-26';
 
 export const ISO_DISCLAIMER =
-  'Internal alignment register for Hope Design ERP. It records what this system implements against ISO/IEC 27001:2022 Annex A and the ISO 9001:2015 clauses already operated here. It is not a certificate, not a signed Statement of Applicability, and not a copy of the standards.';
+  'Internal alignment register for Natex Cloud. It records what this system implements against ISO/IEC 27001:2022 Annex A and the ISO 9001:2015 clauses already operated here. It is not a certificate, not a signed Statement of Applicability, and not a copy of the standards.';
 
 export type IsoFramework = 'ISO/IEC 27001:2022' | 'ISO 9001:2015';
 
 export type IsoStatus = 'implemented' | 'partial' | 'planned';
 
 export type IsoEvidence = {
-  /** Path relative to the Hope Design ERP repository root. */
+  /** Path relative to the Natex Cloud repository root. */
   path: string;
   note: string;
 };

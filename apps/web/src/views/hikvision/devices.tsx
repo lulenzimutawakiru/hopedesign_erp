@@ -430,7 +430,7 @@ export default function DevicesView() {
     <div className="page">
       <HikHead
         title="Hikvision Devices"
-        subtitle="Face recognition and access-control terminals registered to HOPE DESIGN."
+        subtitle="Face recognition and access-control terminals registered to Natex Cloud."
         actions={
           canCreate ? (
             <button type="button" className="btn btn-primary btn-sm" onClick={() => { setFormMode('create'); setFormDevice(null); setFormCfg(null); }}>

@@ -1,5 +1,5 @@
 ﻿/**
- * HOPE DESIGN SERVICE DESK - reporting (spec 25).
+ * Natex Cloud Service Desk - reporting (spec 25).
  *
  * All eleven reports come from one server-side endpoint that returns `columns`
  * next to `rows`. This view therefore never hard-codes a shape: it formats each
@@ -295,7 +295,7 @@ export default function ServiceDeskReports() {
   };
 
   const subtitle =
-    'HOPE DESIGN SERVICE DESK - ' +
+    'Natex Cloud Service Desk - ' +
     (result?.title ?? code) +
     ' - ' +
     (from ? 'from ' + from : 'last ' + days + ' days') +

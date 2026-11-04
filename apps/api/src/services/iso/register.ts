@@ -141,12 +141,12 @@ function evidenceLine(control: IsoControl): string {
 export function renderRegisterMarkdown(): string {
   const summary = summariseRegister();
   const lines: string[] = [
-    '# Hope Design ERP — ISO control register',
+    '# Natex Cloud — ISO control register',
     '',
     '| Field | Value |',
     '|---|---|',
     `| Assessed | ${ISO_ASSESSED_ON} |`,
-    '| Subject | Hope Design ERP (API, web, database, deploy kit) |',
+    '| Subject | Natex Cloud (API, web, database, deploy kit) |',
     '| Frameworks | ISO/IEC 27001:2022 Annex A (93 controls); ISO 9001:2015 clauses this product operates |',
     '| Status | Internal alignment register |',
     '',
@@ -185,7 +185,7 @@ export function renderRegisterMarkdown(): string {
     lines.push('');
   }
   lines.push('## What this register does not do', '');
-  lines.push('- It does not certify Hope Design ERP.');
+  lines.push('- It does not certify Natex Cloud.');
   lines.push('- It does not replace a management-signed Statement of Applicability.');
   lines.push('- It does not close the partial and planned rows. Those rows are the remaining work.');
   lines.push('');

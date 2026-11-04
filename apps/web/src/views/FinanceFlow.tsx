@@ -6839,7 +6839,7 @@ function EfrisTaxpayerModal({ row, busy, error, onClose, onSave }: { row: Rec | 
       {error ? <ErrorBanner error={error} /> : null}
       <div className="form-grid">
         <label>Taxpayer code <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="HDG-UG" /></label>
-        <label>Legal name <input value={legalName} onChange={(e) => setLegalName(e.target.value)} placeholder="HOPE DESIGN GROUP LTD" /></label>
+        <label>Legal name <input value={legalName} onChange={(e) => setLegalName(e.target.value)} placeholder="Hope Design Group Ltd" /></label>
         <label>Trading name <input value={tradingName} onChange={(e) => setTradingName(e.target.value)} /></label>
         <label>TIN <input value={tin} onChange={(e) => setTin(e.target.value)} placeholder="1000000000" /></label>
         <label>Taxpayer type

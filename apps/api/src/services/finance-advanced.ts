@@ -1,5 +1,5 @@
 // ============================================================
-// Advanced Finance & Accounting - HOPE DESIGN GROUP LTD
+// Advanced Finance & Accounting - Natex Cloud (Hope Design Group Ltd)
 // Journal workflow lifecycle, configurable posting rules engine,
 // Uganda tax engine + URA EFRIS adapter, budget control,
 // manufacturing costing, intercompany / consolidation,

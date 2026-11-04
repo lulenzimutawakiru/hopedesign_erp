@@ -22,7 +22,7 @@ import {
 } from './serviceDeskSla.js';
 
 /**
- * HOPE DESIGN Service Desk - ticket service (spec sections 1-23, 29-31).
+ * Natex Cloud Service Desk - ticket service (spec sections 1-23, 29-31).
  *
  * One module owns the ticket aggregate: numbering, classification, priority,
  * queuing and assignment, the comment stream, attachments, the status

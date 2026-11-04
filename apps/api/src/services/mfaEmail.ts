@@ -27,7 +27,7 @@ export interface EmailCodeDelivery {
 export type EmailCodeSender = (delivery: EmailCodeDelivery) => Promise<{ ok: boolean; error?: string }>;
 
 const PURPOSE_COPY: Record<EmailCodePurpose, string> = {
-  LOGIN: 'sign in to HOPE DESIGN',
+  LOGIN: 'sign in to Natex Cloud',
   ENROLL: 'confirm this address and finish setting up two-step verification',
   CHANGE_EMAIL: 'confirm your new sign-in email address',
 };
@@ -36,7 +36,7 @@ const PURPOSE_COPY: Record<EmailCodePurpose, string> = {
  * Inner body of the verification-code mail.
  *
  * Only the body is rendered here: sendEmail() wraps every message in the
- * HOPE DESIGN shell (logo, header band, contact block, copyright) through
+ * Natex Cloud shell (logo, header band, contact block, copyright) through
  * brandEmailContent(), so a full document here would double that up.
  * Email-client safe - tables and inline styles only.
  */
@@ -79,11 +79,11 @@ const defaultSender: EmailCodeSender = async ({ to, name, code, purpose, ttlMinu
     `This code expires in ${ttlMinutes} minutes and may be used once only.`,
     'If you did not request this code, you may disregard this message. Please do not forward it.',
     '',
-    'HOPE DESIGN GROUP LTD',
+    'Natex Cloud',
   ].join('\n');
   const res = await sendEmail({
     to: [to],
-    subject: 'Your HOPE DESIGN verification code',
+    subject: 'Your Natex Cloud verification code',
     html: renderCodeEmailHtml({ greeting, code, purpose, ttlMinutes }),
     text,
     preheader: `Your one-time code expires in ${ttlMinutes} minutes.`,
@@ -137,7 +137,7 @@ function codeTemplateSender(tpl: CodeTemplate): EmailCodeSender {
       CODE: code,
       PURPOSE: PURPOSE_COPY[purpose],
       TTL_MINUTES: ttlMinutes,
-      COMPANY_NAME: 'HOPE DESIGN GROUP LTD',
+      COMPANY_NAME: 'Natex Cloud',
     });
     const res = await sendEmail({
       to: [to],

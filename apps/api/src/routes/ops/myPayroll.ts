@@ -1,5 +1,5 @@
 /**
- * HOPE DESIGN ERP - MY PAYROLL (spec 33, 34).
+ * Natex Cloud - MY PAYROLL (spec 33, 34).
  *
  * Mounted at /api/my/payroll. Employee self-service for payslips: the caller
  * sees their own payroll and nobody else. The employee is resolved from the

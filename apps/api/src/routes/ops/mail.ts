@@ -1,5 +1,5 @@
 ﻿/**
- * HOPE DESIGN ERP - Company Mailing System (ops router).
+ * Natex Cloud - Company Mailing System (ops router).
  *
  * Mounted at `/api/ops/mail` as a sibling of the legacy `/api/ops/communication`
  * router. RBAC only: the module gate is applied by the navigation/permission

@@ -266,7 +266,7 @@ function lifecycleTerminal(status: string): { kind: 'ended' | 'archived' | 'reje
 
 
 const AUDIT_EVENTS: Array<{ key: string; icon: string; color: string }> = [
-  { key: 'create', icon: '📄', color: '#1261A0' },
+  { key: 'create', icon: '📄', color: '#1677FF' },
   { key: 'validate', icon: '🛡️', color: '#0891B2' },
   { key: 'submit', icon: '🚀', color: '#2878D0' },
   { key: 'send_for_signature', icon: '✉️', color: '#D97706' },
@@ -3440,7 +3440,7 @@ function MyContracts() {
       )}
       <div className="self-stats">
         <div className="self-stat">
-          <span className="self-stat-icon" style={tileStyle('var(--hope)', 'rgba(18,97,160,0.12)')} aria-hidden>📄</span>
+          <span className="self-stat-icon" style={tileStyle('var(--hope)', 'rgba(22,119,255,0.12)')} aria-hidden>📄</span>
           <div>
             <span className="self-stat-num">{fmtNum(items.length)}</span>
             <span className="self-stat-k">Contracts on file</span>

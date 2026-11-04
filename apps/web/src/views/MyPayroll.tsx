@@ -426,7 +426,7 @@ export default function MyPayroll() {
 
           {ytd && (
             <HrKpiGrid>
-              <HrKpi label={'Gross ' + ytd.year + ' to date'} value={money(ytd.gross)} sub={fmtNum(ytd.periods) + ' payslip(s) this year'} accent="var(--hope)" tint="rgba(18, 97, 160, 0.12)" />
+              <HrKpi label={'Gross ' + ytd.year + ' to date'} value={money(ytd.gross)} sub={fmtNum(ytd.periods) + ' payslip(s) this year'} accent="var(--hope)" tint="rgba(22, 119, 255, 0.12)" />
               <HrKpi label="PAYE paid to date" value={money(ytd.paye)} sub="Income tax withheld and remitted" accent="var(--clay)" tint="rgba(201, 54, 54, 0.12)" />
               <HrKpi label="NSSF (your share)" value={money(ytd.nssfEmployee)} sub="5% employee contribution" />
               <HrKpi label="NSSF (employer share)" value={money(ytd.nssfEmployer)} sub="Paid by the employer, not deducted from you" />

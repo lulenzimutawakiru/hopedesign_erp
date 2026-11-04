@@ -1323,7 +1323,7 @@ export function AccessEditDlg({ request, onClose, onSaved }: AccDlgProps) {
       disabled={systemName.trim().length === 0 || justification.trim().length === 0 || (dateBounded && !expiresAt)}
     >
       <Field label="System / service" req>
-        <Inp value={systemName} onChange={setSystemName} placeholder="HOPE DESIGN ERP" />
+        <Inp value={systemName} onChange={setSystemName} placeholder="Natex Cloud" />
       </Field>
       <Field label="Access type" req>
         <Sel
@@ -1819,7 +1819,7 @@ function NewAccessDlg({
       disabled={systemName.trim().length === 0 || justification.trim().length === 0 || (dateBounded && !expiresAt)}
     >
       <Field label="System or service" req hint="The ERP, mailbox, folder or database the access concerns.">
-        <Inp value={systemName} onChange={setSystemName} placeholder="HOPE DESIGN ERP" />
+        <Inp value={systemName} onChange={setSystemName} placeholder="Natex Cloud" />
       </Field>
       <Field label="Access type" req>
         <Sel value={accessType} onChange={setAccessType} options={ACCESS_TYPE_OPTS} />

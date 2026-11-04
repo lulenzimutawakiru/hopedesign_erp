@@ -487,7 +487,7 @@ authRouter.post(
       const text = [
         greeting ? `Hello ${greeting},` : 'Hello,',
         '',
-        'We received a request to reset the password for your HOPE DESIGN account.',
+        'We received a request to reset the password for your Natex Cloud account.',
         '',
         `Choose a new password here. The link works once and expires in ${RESET_TOKEN_TTL_MINUTES} minutes:`,
         link,
@@ -496,11 +496,11 @@ authRouter.post(
         '',
         'If you did not ask for this you can ignore this email - your current password still works.',
         '',
-        'HOPE DESIGN GROUP LTD',
+        'Hope Design Group Ltd',
       ].join('\n');
       const result = await sendEmail({
         to: [to],
-        subject: 'Reset your HOPE DESIGN password',
+        subject: 'Reset your Natex Cloud password',
         text,
         preheader: `Your reset link expires in ${RESET_TOKEN_TTL_MINUTES} minutes.`,
         button: { label: 'Choose a new password', url: link },

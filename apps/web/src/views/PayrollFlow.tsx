@@ -2360,7 +2360,7 @@ export function StatutoryCompliance() {
           value={money(filingsDeclaredTotal)}
           sub={filingsCurrency + ' across the filtered returns'}
           accent="var(--hope)"
-          tint="rgba(18, 97, 160, 0.12)"
+          tint="rgba(22, 119, 255, 0.12)"
         />
         <HrKpi
           label="Settled"

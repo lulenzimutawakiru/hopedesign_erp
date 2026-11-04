@@ -1,5 +1,5 @@
 ﻿/**
- * HOPE DESIGN SERVICE DESK - dashboards (spec 24).
+ * Natex Cloud Service Desk - dashboards (spec 24).
  *
  * Four audiences, four payloads. The employee sees only their own tickets and
  * the knowledge meant for them. The agent sees their assignment, the unassigned

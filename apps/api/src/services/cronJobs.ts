@@ -921,7 +921,7 @@ async function attendanceSummaryEmail(
     kicker: 'Workforce attendance',
     docNo: `ATT-${day}`,
     company,
-    issuedBy: 'HOPE DESIGN ERP - scheduled report',
+    issuedBy: 'Natex Cloud - scheduled report',
     issuedAt,
     facts,
     columns,

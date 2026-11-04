@@ -1115,9 +1115,9 @@ describe('mail: outbox drain and system-generated mail', () => {
     const values: Record<string, string> = {
       RECIPIENT_NAME: 'Lulenzi',
       CODE: 'VNWE34KV',
-      PURPOSE: 'sign in to HOPE DESIGN',
+      PURPOSE: 'sign in to Natex Cloud',
       TTL_MINUTES: '10',
-      COMPANY_NAME: 'HOPE DESIGN GROUP LTD',
+      COMPANY_NAME: 'Natex Cloud',
     };
 
     // The template is only adopted if the live renderer can fill it, so every

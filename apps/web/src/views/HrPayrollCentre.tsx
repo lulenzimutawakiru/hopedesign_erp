@@ -87,7 +87,7 @@ export function PayrollCommandCentre() {
       {error && <ErrorBanner error={error} />}
       <HrKpiGrid>
         <HrKpi label="Headcount" value={fmtNum(totals.headcount)} sub={current ? String(current.status ?? '') : 'No open run'} />
-        <HrKpi label="Gross payroll" value={fmtMoney(totals.gross)} sub={'Taxable ' + fmtMoney(totals.taxable)} accent="var(--hope)" tint="rgba(18, 97, 160, 0.12)" />
+        <HrKpi label="Gross payroll" value={fmtMoney(totals.gross)} sub={'Taxable ' + fmtMoney(totals.taxable)} accent="var(--hope)" tint="rgba(22, 119, 255, 0.12)" />
         <HrKpi label="Net payroll" value={fmtMoney(totals.net)} sub={'Deductions ' + fmtMoney(totals.deductions)} accent="var(--success)" tint="rgba(22, 138, 91, 0.12)" />
         <HrKpi label="PAYE" value={fmtMoney(totals.paye)} sub={'LST ' + fmtMoney(totals.lst)} />
         <HrKpi label="NSSF" value={fmtMoney(nssfTotal)} sub={'Employee ' + fmtMoney(totals.employeeNssf) + ' - Employer ' + fmtMoney(totals.employerNssf)} />
@@ -315,7 +315,7 @@ export function PayrollList() {
         <HrKpi label="Payroll runs" value={fmtNum(rows.length)} sub={fmtNum(openCount) + ' open - ' + fmtNum(paidCount) + ' paid'} />
         <HrKpi label="Net this month" value={fmtMoney(netThisMonth)} sub="Approved, released or paid this period" accent="var(--success)" tint="rgba(22, 138, 91, 0.12)" />
         <HrKpi label="Approval queue" value={fmtNum(queueCount)} sub="Submitted or approved, not yet released" accent="var(--warning)" tint="rgba(217, 154, 0, 0.12)" />
-        <HrKpi label="Latest validation" value={latestScored ? String(latestScored.validationScore) + '%' : '-'} sub={latestScored ? 'Run ' + String(latestScored.payrollNo ?? '') : 'Validate a run to score readiness'} accent="var(--hope)" tint="rgba(18, 97, 160, 0.12)" />
+        <HrKpi label="Latest validation" value={latestScored ? String(latestScored.validationScore) + '%' : '-'} sub={latestScored ? 'Run ' + String(latestScored.payrollNo ?? '') : 'Validate a run to score readiness'} accent="var(--hope)" tint="rgba(22, 119, 255, 0.12)" />
       </HrKpiGrid>
       <HrToolbar>
         <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search run number, reason, period..." aria-label="Search payroll runs" />

@@ -27,7 +27,7 @@ import {
 } from './serviceDeskCommon.js';
 
 /**
- * HOPE DESIGN Service Desk - Change management (spec section 19).
+ * Natex Cloud Service Desk - Change management (spec section 19).
  *
  *   CHANGE REQUEST -> RISK ASSESSMENT -> IMPACT ANALYSIS -> APPROVAL ->
  *   IMPLEMENTATION -> VALIDATION -> CLOSURE

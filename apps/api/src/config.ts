@@ -145,7 +145,7 @@ export const config = {
   resend: {
     apiKey: process.env.RESEND_API_KEY ?? '',
     fromEmail: process.env.RESEND_FROM_EMAIL ?? '',
-    fromName: process.env.RESEND_FROM_NAME ?? 'HOPE DESIGN',
+    fromName: process.env.RESEND_FROM_NAME ?? 'Natex Cloud',
     // Svix signing secret for the inbound `email.received` webhook. Absent
     // means the inbound endpoint refuses everything rather than trusting it.
     webhookSecret: process.env.RESEND_WEBHOOK_SECRET ?? '',

@@ -732,10 +732,10 @@ export async function renderEmailForSend(
       );
       if (rows[0]) vars.COMPANY_NAME = String(rows[0].legal_name || rows[0].name || '').trim();
     }
-    if (!vars.COMPANY_NAME) vars.COMPANY_NAME = 'HOPE DESIGN GROUP LTD';
+    if (!vars.COMPANY_NAME) vars.COMPANY_NAME = 'Natex Cloud';
   }
   return renderTemplate(
-    String(email.subject ?? 'HOPE DESIGN'),
+    String(email.subject ?? 'Natex Cloud'),
     String(email.body ?? ''),
     vars
   );

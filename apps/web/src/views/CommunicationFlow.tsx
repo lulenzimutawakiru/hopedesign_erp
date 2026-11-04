@@ -214,7 +214,7 @@ function CommandCenter() {
     <div className="page">
       <ComHead
         title={`${greet}, ${name}`}
-        subtitle="HOPE DESIGN communication center — emails, messages, notifications and approvals in one place."
+        subtitle="Natex Cloud communication center — emails, messages, notifications and approvals in one place."
       />
       <ComTabs active="center" />
       <div className="kpi-grid kpi-grid--5">

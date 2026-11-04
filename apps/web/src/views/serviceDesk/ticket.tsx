@@ -1464,7 +1464,7 @@ export default function TicketDetail({
           {panel === 'asset' && (
             <SecCard
               title="Affected asset"
-              sub="Linked from the HOPE DESIGN Asset Register"
+              sub="Linked from the Natex Cloud Asset Register"
               pad
               actions={
                 asset ? (

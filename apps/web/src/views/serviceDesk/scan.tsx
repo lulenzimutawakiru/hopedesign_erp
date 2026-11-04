@@ -1,5 +1,5 @@
 ﻿/**
- * HOPE DESIGN SERVICE DESK - QR asset service desk (spec 13, 12, 27).
+ * Natex Cloud Service Desk - QR asset service desk (spec 13, 12, 27).
  *
  * The scan flow the spec demands:
  *

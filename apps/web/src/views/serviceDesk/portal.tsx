@@ -97,8 +97,8 @@ export default function ServiceDeskPortal() {
     <div className="page sd-portal" style={modStyle()}>
       <SdHead
         title="My Service Desk"
-        kicker="My HOPE DESIGN"
-        sub="Report a fault, request a service or follow up on something you already raised. Requests are triaged by the HOPE DESIGN service desk and tracked against an SLA."
+        kicker="My Natex Cloud"
+        sub="Report a fault, request a service or follow up on something you already raised. Requests are triaged by the Natex Cloud service desk and tracked against an SLA."
         actions={
           <>
             <button className="btn btn-primary sd-primary" onClick={() => navigate('/service-desk/new')}>

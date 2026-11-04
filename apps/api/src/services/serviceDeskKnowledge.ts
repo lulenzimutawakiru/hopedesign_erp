@@ -23,7 +23,7 @@ import {
 } from './serviceDeskCommon.js';
 
 /**
- * HOPE DESIGN Service Desk - Knowledge Base (spec section 16).
+ * Natex Cloud Service Desk - Knowledge Base (spec section 16).
  *
  * Articles move through DRAFT -> REVIEW -> APPROVED -> PUBLISHED -> ARCHIVED.
  * Only PUBLISHED articles are ever visible to ordinary employees; the other

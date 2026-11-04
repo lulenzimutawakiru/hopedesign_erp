@@ -167,7 +167,7 @@ function valueProblem(def: SettingDef, draft: Draft | undefined): string | null 
   const raw = draft === undefined ? '' : String(draft);
   if (def.required === true && raw.trim() === '') return 'This field is required.';
   if (!raw) return null;
-  if (def.type === 'color' && !HEX_RE.test(raw)) return 'Use a hex colour such as #1261A0.';
+  if (def.type === 'color' && !HEX_RE.test(raw)) return 'Use a hex colour such as #1677FF.';
   if (def.type === 'email' && !EMAIL_RE.test(raw)) return 'Enter a valid email address.';
   if (def.type === 'url' && !URL_RE.test(raw)) return 'Enter a full URL starting with http:// or https://.';
   if (def.type === 'tel' && !PHONE_RE.test(raw)) return 'Enter a valid phone number.';
@@ -257,7 +257,7 @@ function FieldInput({
         <input
           type="color"
           className="setting-swatch"
-          value={HEX_RE.test(v) ? v : '#1261A0'}
+          value={HEX_RE.test(v) ? v : '#1677FF'}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
         />
@@ -266,7 +266,7 @@ function FieldInput({
           className="setting-color-text"
           value={v}
           disabled={disabled}
-          placeholder="#1261A0"
+          placeholder="#1677FF"
           onChange={(e) => onChange(e.target.value)}
         />
       </div>
@@ -510,7 +510,7 @@ function PremisesMap({
     }
     const icon = L.divIcon({
       className: '',
-      html: '<div style="width:18px;height:18px;border-radius:50%;background:#0f172a;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)"></div>',
+      html: '<div style="width:18px;height:18px;border-radius:50%;background:#101D35;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)"></div>',
       iconSize: [18, 18],
       iconAnchor: [9, 9],
     });
@@ -531,9 +531,9 @@ function PremisesMap({
     if (!circleRef.current) {
       circleRef.current = L.circle([la, ln], {
         radius: metres,
-        color: '#0f172a',
+        color: '#101D35',
         weight: 1,
-        fillColor: '#0f172a',
+        fillColor: '#101D35',
         fillOpacity: 0.12,
       }).addTo(map);
     } else {

@@ -28,7 +28,7 @@ import {
 import { createTicket } from './serviceDesk.js';
 
 /**
- * HOPE DESIGN Service Desk - Access requests (spec section 15).
+ * Natex Cloud Service Desk - Access requests (spec section 15).
  *
  *   EMPLOYEE -> REQUEST ERP ACCESS -> MANAGER APPROVAL ->
  *   SYSTEM / DATA OWNER APPROVAL -> RBAC ROLE ASSIGNMENT ->

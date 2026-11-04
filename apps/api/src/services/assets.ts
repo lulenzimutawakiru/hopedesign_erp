@@ -17,7 +17,7 @@ import { renderDocument } from './documents.js';
 import { assertDisposalCertified, assertMaintenanceReleased } from './iso/gates.js';
 
 // ============================================================
-// Hope Design ERP - Enterprise Asset Management service
+// Natex Cloud - Enterprise Asset Management service
 // Asset Register, Tagging, Tracking and full lifecycle:
 // PROCUREMENT -> RECEIVING -> REGISTRATION -> TAGGING ->
 // ASSIGNMENT -> LOCATION -> USE -> TRANSFER -> MAINTENANCE ->
@@ -1052,7 +1052,7 @@ export async function printAssetLabelSheet(
   const labels: AssetLabel[] = [];
   for (const id of assetIds) labels.push(await loadAssetLabel(client, ctx, id));
   const company = await loadCompanyProfile(client, ctx);
-  const html = renderAssetLabelSheetHtml(company.name || 'Hope Design', labels);
+  const html = renderAssetLabelSheetHtml(company.name || 'Natex Cloud', labels);
   return { jobId: Number(job.jobId), jobNo: String(job.jobNo), quantity: labels.length, html, labels };
 }
 

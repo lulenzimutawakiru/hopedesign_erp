@@ -395,7 +395,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     party: 'supplier',
     external: {
       title: 'Purchase order {{ENTITY_CODE}}',
-      body: 'Dear {{PARTY_NAME}}, Hope Design has created purchase order {{ENTITY_CODE}}.',
+      body: 'Dear {{PARTY_NAME}}, Natex Cloud has created purchase order {{ENTITY_CODE}}.',
     },
   },
   PROCUREMENTPOAPPROVED: {
@@ -409,7 +409,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     party: 'supplier',
     external: {
       title: 'Purchase order {{ENTITY_CODE}} approved',
-      body: 'Dear {{PARTY_NAME}}, purchase order {{ENTITY_CODE}} from Hope Design has been approved.',
+      body: 'Dear {{PARTY_NAME}}, purchase order {{ENTITY_CODE}} from Natex Cloud has been approved.',
     },
   },
   PROCUREMENTPOAMENDED: {
@@ -429,7 +429,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     party: 'supplier',
     external: {
       title: 'Goods received — {{ENTITY_CODE}}',
-      body: 'Dear {{PARTY_NAME}}, Hope Design has received goods against {{ENTITY_CODE}}.',
+      body: 'Dear {{PARTY_NAME}}, Natex Cloud has received goods against {{ENTITY_CODE}}.',
     },
   },
   PROCUREMENTQUOTATIONRECEIVED: {
@@ -446,7 +446,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     party: 'supplier',
     external: {
       title: 'Request for quotation {{ENTITY_CODE}}',
-      body: 'Dear {{PARTY_NAME}}, Hope Design invites you to quote on RFQ {{ENTITY_CODE}}.',
+      body: 'Dear {{PARTY_NAME}}, Natex Cloud invites you to quote on RFQ {{ENTITY_CODE}}.',
     },
   },
   PROCUREMENTRFQAWARDED: {
@@ -475,7 +475,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     party: 'supplier',
     external: {
       title: 'Payment {{ENTITY_CODE}}',
-      body: 'Dear {{PARTY_NAME}}, Hope Design has recorded payment {{ENTITY_CODE}}.',
+      body: 'Dear {{PARTY_NAME}}, Natex Cloud has recorded payment {{ENTITY_CODE}}.',
     },
   },
   PROCUREMENTSUPPLIERINVOICECREATED: {
@@ -497,7 +497,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     actionTarget: '/sales/orders/{{entityId}}',
     customer: {
       title: 'Your order {{ENTITY_CODE}}',
-      body: 'Dear {{CUSTOMER_NAME}}, Hope Design has recorded sales order {{ENTITY_CODE}}. We will update you as it is allocated and dispatched.',
+      body: 'Dear {{CUSTOMER_NAME}}, Natex Cloud has recorded sales order {{ENTITY_CODE}}. We will update you as it is allocated and dispatched.',
     },
   },
   SALESORDERALLOCATED: {
@@ -537,7 +537,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     actionTarget: '/sales/invoices/{{entityId}}',
     customer: {
       title: 'Invoice {{ENTITY_CODE}}',
-      body: 'Dear {{CUSTOMER_NAME}}, Hope Design has issued invoice {{ENTITY_CODE}}. Please arrange payment per the agreed terms.',
+      body: 'Dear {{CUSTOMER_NAME}}, Natex Cloud has issued invoice {{ENTITY_CODE}}. Please arrange payment per the agreed terms.',
     },
   },
   SALESRECEIPTPOSTED: {
@@ -559,7 +559,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     actionTarget: '/logistics/deliveries/{{entityId}}',
     customer: {
       title: 'Your delivery {{ENTITY_CODE}} is on the way',
-      body: 'Dear {{CUSTOMER_NAME}}, Hope Design has dispatched delivery {{ENTITY_CODE}}.',
+      body: 'Dear {{CUSTOMER_NAME}}, Natex Cloud has dispatched delivery {{ENTITY_CODE}}.',
     },
   },
   SALESDELIVERYDELIVERED: {
@@ -569,7 +569,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     roleCodes: SALES,
     customer: {
       title: 'Delivered — {{ENTITY_CODE}}',
-      body: 'Dear {{CUSTOMER_NAME}}, Hope Design has completed delivery {{ENTITY_CODE}}. Thank you.',
+      body: 'Dear {{CUSTOMER_NAME}}, Natex Cloud has completed delivery {{ENTITY_CODE}}. Thank you.',
     },
   },
   SALESRETURNCREATED: {
@@ -822,7 +822,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     party: 'candidate',
     external: {
       title: 'Application received',
-      body: 'Dear {{PARTY_NAME}}, Hope Design has received your application {{ENTITY_CODE}}.',
+      body: 'Dear {{PARTY_NAME}}, Natex Cloud has received your application {{ENTITY_CODE}}.',
     },
   },
   HRWORKFORCEPLANCREATED: {
@@ -937,7 +937,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     party: 'employee',
     external: {
       title: 'Your grievance was resolved',
-      body: 'Dear {{PARTY_NAME}}, Hope Design has resolved grievance {{ENTITY_CODE}}.',
+      body: 'Dear {{PARTY_NAME}}, Natex Cloud has resolved grievance {{ENTITY_CODE}}.',
     },
   },
   HRWARNINGISSUED: {
@@ -978,8 +978,8 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     priority: 'HIGH',
     party: 'candidate',
     external: {
-      title: 'Job offer from Hope Design',
-      body: 'Dear {{PARTY_NAME}}, Hope Design has sent you offer {{ENTITY_CODE}}. Please respond by the stated expiry.',
+      title: 'Job offer from Natex Cloud',
+      body: 'Dear {{PARTY_NAME}}, Natex Cloud has sent you offer {{ENTITY_CODE}}. Please respond by the stated expiry.',
     },
   },
   HRREQUISITIONCREATED: {
@@ -1420,7 +1420,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     roleCodes: SALES,
     customer: {
       title: 'Update on {{ENTITY_CODE}}',
-      body: 'Dear {{CUSTOMER_NAME}}, your enquiry "{{ENTITY_CODE}}" is now at {{STAGE}} with Hope Design.',
+      body: 'Dear {{CUSTOMER_NAME}}, your enquiry "{{ENTITY_CODE}}" is now at {{STAGE}} with Natex Cloud.',
     },
   },
   CRMOPPORTUNITYWON: {
@@ -1431,7 +1431,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     priority: 'HIGH',
     customer: {
       title: 'Thank you — {{ENTITY_CODE}}',
-      body: 'Dear {{CUSTOMER_NAME}}, Hope Design is pleased to confirm we will proceed with {{ENTITY_CODE}}.',
+      body: 'Dear {{CUSTOMER_NAME}}, Natex Cloud is pleased to confirm we will proceed with {{ENTITY_CODE}}.',
     },
   },
   CRMOPPORTUNITYLOST: {
@@ -1455,7 +1455,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     priority: 'HIGH',
     customer: {
       title: 'We received your complaint {{ENTITY_CODE}}',
-      body: 'Dear {{CUSTOMER_NAME}}, Hope Design has logged complaint {{ENTITY_CODE}}. Our team will follow up.',
+      body: 'Dear {{CUSTOMER_NAME}}, Natex Cloud has logged complaint {{ENTITY_CODE}}. Our team will follow up.',
     },
   },
   CRMCOMPLAINTRESOLVED: {
@@ -1465,7 +1465,7 @@ export const EVENT_NOTIFY_MAP: Record<string, EventSpec> = {
     roleCodes: SALES,
     customer: {
       title: 'Complaint {{ENTITY_CODE}} resolved',
-      body: 'Dear {{CUSTOMER_NAME}}, Hope Design has resolved complaint {{ENTITY_CODE}}. Thank you for your patience.',
+      body: 'Dear {{CUSTOMER_NAME}}, Natex Cloud has resolved complaint {{ENTITY_CODE}}. Thank you for your patience.',
     },
   },
 

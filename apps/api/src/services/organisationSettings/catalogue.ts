@@ -112,9 +112,9 @@ export const ORG_CATEGORIES: OrgCategory[] = [
     manage: ORG_SETTINGS_WRITE,
     blurb: 'The identity every document, receipt, payslip and report carries. Changing the legal name here changes it everywhere.',
     settings: {
-      legal_name: f('Legal Name', 'text', { group: 'Identity', default: 'HOPE DESIGN GROUP LTD' }),
+      legal_name: f('Legal Name', 'text', { group: 'Identity', default: 'Hope Design Group Ltd' }),
       trading_name: f('Trading Name', 'text', {
-        group: 'Identity', default: 'HOPE DESIGN GROUP LTD', required: true,
+        group: 'Identity', default: 'Natex Cloud', required: true,
       }),
       trading_as: f('Trading As', 'text', { group: 'Identity' }),
       registration_number: f('Registration Number', 'text', { group: 'Registration' }),
@@ -719,7 +719,7 @@ export const ORG_CATEGORIES: OrgCategory[] = [
       smtp_username: f('SMTP Username', 'text', { group: 'Email' }),
       smtp_password: f('SMTP Password', 'text', { group: 'Email', secret: true }),
       smtp_secure: sel('SMTP Security', ['NONE', 'STARTTLS', 'TLS'], { group: 'Email', default: 'STARTTLS' }),
-      mail_from_name: f('From Name', 'text', { group: 'Email', default: 'HOPE DESIGN GROUP LTD' }),
+      mail_from_name: f('From Name', 'text', { group: 'Email', default: 'Natex Cloud' }),
       mail_from_address: f('From Address', 'email', { group: 'Email', default: 'info@hopedesigngroup.com' }),
       mail_reply_to: f('Reply To', 'email', { group: 'Email', default: 'info@hopedesigngroup.com' }),
       sms_provider: sel('SMS Provider', ['NONE', 'AFRICASTALKING', 'TWILIO', 'LOCAL_GATEWAY'], { group: 'SMS', default: 'NONE' }),

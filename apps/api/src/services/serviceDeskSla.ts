@@ -5,7 +5,7 @@ import { createNotification } from './notifications.js';
 import { emitEvent } from './events.js';
 
 /**
- * HOPE DESIGN Service Desk - SLA and escalation engine (spec sections 7 and 17).
+ * Natex Cloud Service Desk - SLA and escalation engine (spec sections 7 and 17).
  *
  * Two responsibilities:
  *
