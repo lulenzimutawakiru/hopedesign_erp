@@ -17,9 +17,9 @@ const INVALID_CREDENTIALS =
 const SESSION_ENDED = 'Your verification session has ended. Sign in again to continue.';
 const LOCKED =
   'Your account has been temporarily locked after repeated unsuccessful attempts. Contact your administrator or support team.';
-const UNAVAILABLE = 'HOPE DESIGN ERP is temporarily unavailable. Please try again shortly.';
+const UNAVAILABLE = 'Natex Cloud is temporarily unavailable. Please try again shortly.';
 const OFFLINE =
-  "We couldn't connect to HOPE DESIGN ERP. Check your network connection and try again.";
+  "We couldn't connect to Natex Cloud. Check your network connection and try again.";
 const FORBIDDEN =
   'You do not have clearance for this action. Contact your system administrator if you believe this is a mistake.';
 

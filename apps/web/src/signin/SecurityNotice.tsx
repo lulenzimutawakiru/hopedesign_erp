@@ -23,11 +23,11 @@ export function SecurityNotice({ id = 'auth-security-notice' }: { id?: string })
         <span>Security notice</span>
       </h2>
       <p className="auth-security-text">
-        HOPE DESIGN will never ask you to disclose your password, verification code or
+        Natex Cloud will never ask you to disclose your password, verification code or
         authentication credentials through email, phone calls, pop-ups or chat.
       </p>
       <p className="auth-security-text">
-        Always verify that you are using the official HOPE DESIGN ERP address before signing in.
+        Always verify that you are using the official Natex Cloud address before signing in.
       </p>
     </section>
   );
