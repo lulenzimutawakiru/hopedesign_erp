@@ -257,6 +257,12 @@ function uraCreditNoteReason(
   return { reasonCode, reason: reasonText };
 }
 
+/** URA's registered goods NAME for a line (T109 `item`), falling back to the invoice line description. */
+function goodsName(item: Record<string, unknown>): string {
+  const name = item.efris_goods_name != null ? String(item.efris_goods_name).trim() : '';
+  return name || String(item.description ?? '');
+}
+
 /** Buyer, lines and the original FDN for a credit or debit note. Missing rows fall back to the transaction totals. */
 async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransaction): Promise<FiscalSource> {
   const empty: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, oriInvoiceId: null, remarks: null, reasonCode: null, reason: null, stock: null };
@@ -273,7 +279,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
       const items = await client.query(
         `SELECT ii.description, ii.quantity, ii.unit_price, ii.tax_percent, ii.line_total,
                 p.code AS product_code,
-                p.efris_goods_code, p.efris_unit_of_measure,
+                p.efris_goods_code, p.efris_goods_name, p.efris_unit_of_measure,
                 p.efris_goods_category_id, p.efris_goods_category_name
            FROM invoice_items ii
            LEFT JOIN products p ON p.id = ii.product_id
@@ -297,7 +303,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
             // prefer the URA goods code and fall back to the product code.
             itemCode: item.efris_goods_code != null ? String(item.efris_goods_code)
               : (item.product_code != null ? String(item.product_code) : null),
-            description: String(item.description ?? ''),
+            description: goodsName(item),
             quantity: Number(item.quantity ?? 0),
             unitPrice: Number(item.unit_price ?? 0),
             taxPercent,
@@ -336,7 +342,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
       const items = await client.query(
         `SELECT ii.description, ii.tax_percent,
                 p.code AS product_code,
-                p.efris_goods_code, p.efris_unit_of_measure,
+                p.efris_goods_code, p.efris_goods_name, p.efris_unit_of_measure,
                 p.efris_goods_category_id, p.efris_goods_category_name
            FROM invoice_items ii
            LEFT JOIN products p ON p.id = ii.product_id
@@ -351,7 +357,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
       const lines: FiscalLine[] = item != null ? [{
         itemCode: item.efris_goods_code != null ? String(item.efris_goods_code)
           : (item.product_code != null ? String(item.product_code) : null),
-        description: String(item.description ?? ''),
+        description: goodsName(item),
         quantity: 1,
         unitPrice: Number(row.gross_amount) || 0,
         taxPercent,
@@ -526,7 +532,7 @@ async function loadReceiptFiscalSource(client: pg.PoolClient, row: ClaimedFiscal
   if (Number.isFinite(invoiceId) && invoiceId > 0) {
     const items = await client.query(
       `SELECT ii.description, ii.quantity, ii.unit_price, ii.tax_percent, ii.line_total,
-              p.code AS product_code, p.efris_goods_code, p.efris_unit_of_measure,
+              p.code AS product_code, p.efris_goods_code, p.efris_goods_name, p.efris_unit_of_measure,
               p.efris_goods_category_id, p.efris_goods_category_name
          FROM invoice_items ii
          LEFT JOIN products p ON p.id = ii.product_id
@@ -539,7 +545,7 @@ async function loadReceiptFiscalSource(client: pg.PoolClient, row: ClaimedFiscal
       return {
         itemCode: item.efris_goods_code != null ? String(item.efris_goods_code)
           : (item.product_code != null ? String(item.product_code) : null),
-        description: String(item.description ?? ''),
+        description: goodsName(item),
         quantity: Number(item.quantity ?? 0),
         unitPrice: Number(item.unit_price ?? 0),
         taxPercent,
