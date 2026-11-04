@@ -8,6 +8,7 @@ import * as fin from '../../services/finance.js';
 import * as finAdv from '../../services/finance-advanced.js';
 import * as efrisDir from '../../services/efris/directory.js';
 import * as efrisTaxpayer from '../../services/efris/taxpayer.js';
+import * as efrisGoods from '../../services/efris/goods.js';
 import * as finAppr from '../../services/financeApprovals.js';
 import * as kcbOps from '../../services/kcb/ops.js';
 import * as equityOps from '../../services/equity/ops.js';
@@ -432,6 +433,24 @@ financeOpsRouter.post('/efris/errors/:id/archive', ...run('efris.errors.archive'
 
 // ERP vs EFRIS reconciliation (spec 94).
 financeOpsRouter.get('/efris/reconciliation', ...runGet('efris.reconciliation.view', (c, ctx, q) => efrisDir.efrisReconciliation(c, ctx, q.from != null ? String(q.from) : null, q.to != null ? String(q.to) : null)));
+
+// URA goods catalogue (Part J) — searchable copy + bulk import from the official list.
+financeOpsRouter.get('/efris/goods', ...runGet('efris.configuration.view', (c, ctx, q) => efrisGoods.listGoods(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+financeOpsRouter.post('/efris/goods/import', ...run('efris.configuration.manage', (c, ctx, b) => efrisGoods.importGoods(c, ctx, Array.isArray(b?.items) ? b.items : [])));
+
+// Product -> goods registration lifecycle (Part J). REGISTERED is operator-confirmed.
+financeOpsRouter.get('/efris/registrations', ...runGet('efris.configuration.view', (c, ctx, q) => efrisGoods.listProductRegistrations(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  status: q.status != null ? String(q.status) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+financeOpsRouter.post('/efris/registrations/:productId/map', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisGoods.mapProductToGoods(c, ctx, Number(p.productId), { goodsCode: String(b.goodsCode ?? '') })));
+financeOpsRouter.post('/efris/registrations/:productId/status', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisGoods.setRegistrationStatus(c, ctx, Number(p.productId), { status: String(b.status ?? '') })));
 // ---- Budget control: revisions, commitments, availability ----
 financeOpsRouter.get('/budget/revisions', ...runGet('finance.budget_revisions.view', (c, ctx, q) => finAdv.listBudgetRevisions(c, ctx, q.budgetId != null ? Number(q.budgetId) : undefined)));
 financeOpsRouter.post('/budget/revisions', ...run('finance.budget_revisions.create', (c, ctx, b) => finAdv.createBudgetRevision(c, ctx, {
