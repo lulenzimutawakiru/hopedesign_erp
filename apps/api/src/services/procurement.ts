@@ -1095,7 +1095,7 @@ export async function createGoodsReceipt(
       refType: 'goods_receipts',
       refId: grnId,
       refCode: grnNo,
-      contraAccountCode: '2210', // GR/IR accrual, cleared on supplier invoice
+      contraAccountCode: '10121300', // GR/IR accrual, cleared on supplier invoice
     });
     await client.query(
       `UPDATE purchase_order_items SET received_qty = received_qty + $1 WHERE id = $2`,
@@ -1957,7 +1957,7 @@ export async function createPurchaseReturn(
       refType: 'purchase_returns',
       refId: returnId,
       refCode: returnNo,
-      contraAccountCode: '2210',
+      contraAccountCode: '10121300',
     });
   }
   await emitEvent(client, ctx, {

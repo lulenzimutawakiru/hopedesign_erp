@@ -5259,7 +5259,7 @@ function PostingRuleModal({ busy, onClose, onSave }: { busy: boolean; onClose: (
         <label>Name <input value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label>Journal type <input value={journalType} onChange={(e) => setJournalType(e.target.value)} /></label>
         <label style={{ gridColumn: '1 / -1' }}>
-          Lines (JSON) <textarea rows={6} value={lines} onChange={(e) => setLines(e.target.value)} placeholder='[{"accountCode":"1200","debit":"{{amount}}","credit":0}]' />
+          Lines (JSON) <textarea rows={6} value={lines} onChange={(e) => setLines(e.target.value)} placeholder='[{"accountCode":"10111200","debit":"{{amount}}","credit":0}]' />
         </label>
       </div>
     </Modal>

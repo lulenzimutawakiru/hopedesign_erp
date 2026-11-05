@@ -3104,64 +3104,38 @@ async function seedAll(pool) {
     await bulkInsert(client, "financial_periods", periodRows);
     bump("financial_periods", periodRows.length);
 
-    // Chart of accounts (is_posting=false only for parent headings)
-    const coaRows = [
-      { code: "1000", name: "Cash & Bank", account_type: "ASSET", is_posting: true, parent: null, currency: "UGX" },
-      { code: "1100", name: "Stanbic Bank UGX", account_type: "ASSET", is_posting: true, parent: "1000", currency: "UGX" },
-      { code: "1110", name: "Stanbic Bank USD", account_type: "ASSET", is_posting: true, parent: "1000", currency: "USD" },
-      { code: "1120", name: "Bank of Baroda UGX", account_type: "ASSET", is_posting: true, parent: "1000", currency: "UGX" },
-      { code: "1200", name: "Petty Cash", account_type: "ASSET", is_posting: true, parent: "1000", currency: "UGX" },
-      { code: "1300", name: "Inventory", account_type: "ASSET", is_posting: false, parent: null, currency: "UGX" },
-      { code: "1310", name: "Raw Materials Inventory", account_type: "ASSET", is_posting: true, parent: "1300", currency: "UGX" },
-      { code: "1320", name: "Finished Goods Inventory", account_type: "ASSET", is_posting: true, parent: "1300", currency: "UGX" },
-      { code: "1330", name: "Work In Progress", account_type: "ASSET", is_posting: true, parent: "1300", currency: "UGX" },
-      { code: "1400", name: "Accounts Receivable", account_type: "ASSET", is_posting: true, parent: null, currency: "UGX" },
-      { code: "1500", name: "Prepayments", account_type: "ASSET", is_posting: true, parent: null, currency: "UGX" },
-      { code: "1510", name: "Other Receivables", account_type: "ASSET", is_posting: true, parent: null, currency: "UGX" },
-      { code: "2000", name: "Liabilities", account_type: "LIABILITY", is_posting: true, parent: null, currency: "UGX" },
-      { code: "2100", name: "Accounts Payable", account_type: "LIABILITY", is_posting: true, parent: "2000", currency: "UGX" },
-      { code: "2110", name: "VAT Payable", account_type: "LIABILITY", is_posting: true, parent: "2000", currency: "UGX" },
-      { code: "2120", name: "PAYE Payable", account_type: "LIABILITY", is_posting: true, parent: "2000", currency: "UGX" },
-      { code: "2200", name: "Loans & Borrowings", account_type: "LIABILITY", is_posting: true, parent: "2000", currency: "UGX" },
-      { code: "2210", name: "Accruals", account_type: "LIABILITY", is_posting: true, parent: "2000", currency: "UGX" },
-      { code: "3000", name: "Equity", account_type: "EQUITY", is_posting: true, parent: null, currency: "UGX" },
-      { code: "3100", name: "Retained Earnings", account_type: "EQUITY", is_posting: true, parent: "3000", currency: "UGX" },
-      { code: "4000", name: "Revenue", account_type: "REVENUE", is_posting: true, parent: null, currency: "UGX" },
-      { code: "4100", name: "Other Income", account_type: "REVENUE", is_posting: true, parent: "4000", currency: "UGX" },
-      { code: "5000", name: "Cost of Goods Sold", account_type: "EXPENSE", is_posting: true, parent: null, currency: "UGX" },
-      { code: "5100", name: "Direct Production Costs", account_type: "EXPENSE", is_posting: true, parent: "5000", currency: "UGX" },
-      { code: "6000", name: "Expenses", account_type: "EXPENSE", is_posting: false, parent: null, currency: "UGX" },
-      { code: "6100", name: "Administration Expenses", account_type: "EXPENSE", is_posting: true, parent: "6000", currency: "UGX" },
-      { code: "6200", name: "Sales & Marketing Expenses", account_type: "EXPENSE", is_posting: true, parent: "6000", currency: "UGX" },
-      { code: "6300", name: "Production Overheads", account_type: "EXPENSE", is_posting: true, parent: "6000", currency: "UGX" },
-      { code: "6400", name: "Maintenance Expenses", account_type: "EXPENSE", is_posting: true, parent: "6000", currency: "UGX" },
-      { code: "6500", name: "Depreciation", account_type: "EXPENSE", is_posting: true, parent: "6000", currency: "UGX" },
-    ];
+    // Hope Design chart. Migration 0226 inserts the same rows; skip codes already present.
+    const hopeChart = require("./hope-design-chart");
     const coaId = {};
-    for (const row of coaRows) {
-      const { parent, ...rest } = row;
+    const { rows: existingCoa } = await client.query(
+      "SELECT id, code FROM chart_of_accounts WHERE company_id = $1",
+      [companyId]
+    );
+    for (const existing of existingCoa) coaId[existing.code] = existing.id;
+    for (const row of hopeChart.accounts) {
+      if (coaId[row.code]) continue;
       coaId[row.code] = await insertOne(client, "chart_of_accounts", {
         company_id: companyId,
         tenant_id: tenantId,
-        code: rest.code,
-        name: rest.name,
-        account_type: rest.account_type,
-        subtype: rest.account_type,
-        parent_id: parent ? coaId[parent] : null,
-        is_posting: rest.is_posting,
+        code: row.code,
+        name: row.name,
+        account_type: row.account_type,
+        subtype: row.subtype,
+        parent_id: row.parent ? coaId[row.parent] : null,
+        is_posting: row.is_posting,
         is_active: true,
-        currency: rest.currency,
+        currency: row.currency,
         opening_balance: 0,
-        attributes: {},
+        attributes: row.attributes,
       });
       bump("chart_of_accounts");
     }
 
     const bankAccounts = [
-      ["STANBIC-UGX", "Stanbic Bank UGX", "Stanbic Bank", "9030012345678", "CURRENT", "UGX", "1100"],
-      ["STANBIC-USD", "Stanbic Bank USD", "Stanbic Bank", "9030012345685", "CURRENT", "USD", "1110"],
-      ["BOB-UGX", "Bank of Baroda UGX", "Bank of Baroda", "902011234567", "CURRENT", "UGX", "1120"],
-      ["CASH-01", "Main Cashier", "Petty Cash", "CASH-01", "CASH", "UGX", "1200"],
+      ["STANBIC-UGX", "Stanbic Bank UGX", "Stanbic Bank", "9030012345678", "CURRENT", "UGX", "10111300"],
+      ["STANBIC-USD", "Stanbic Bank USD", "Stanbic Bank", "9030012345685", "CURRENT", "USD", "10111300"],
+      ["BOB-UGX", "Bank of Baroda UGX", "Bank of Baroda", "902011234567", "CURRENT", "UGX", "10111300"],
+      ["CASH-01", "Main Cashier", "Petty Cash", "CASH-01", "CASH", "UGX", "10111200"],
     ];
     for (const [code, name, bank, accNo, type, currency, gl] of bankAccounts) {
       await insertOne(client, "bank_accounts", {

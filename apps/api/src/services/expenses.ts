@@ -412,13 +412,13 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
 /** Map a payment method type to the credit side of the expense journal. */
 function creditAccountForMethod(methodType: string | null | undefined, paymentMethodId: number | null): string {
   const t = String(methodType ?? '').toUpperCase();
-  if (t.includes('BANK') || t.includes('CARD')) return '1100';
-  if (t.includes('CREDIT') || t.includes('DIRECT_SUPPLIER')) return '2100';
-  if (t.includes('MOBILE')) return '1200';
-  if (t.includes('PETTY')) return '1200';
-  if (t.includes('REIMBURS')) return '1200';
-  if (paymentMethodId != null) return '1200';
-  return '1200';
+  if (t.includes('BANK') || t.includes('CARD')) return '10111300';
+  if (t.includes('CREDIT') || t.includes('DIRECT_SUPPLIER')) return '10121100';
+  if (t.includes('MOBILE')) return '10111200';
+  if (t.includes('PETTY')) return '10111200';
+  if (t.includes('REIMBURS')) return '10111200';
+  if (paymentMethodId != null) return '10111200';
+  return '10111200';
 }
 
 export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
@@ -430,7 +430,7 @@ export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
   const amount = num0(cur.amount);
   const taxAmount = round2(num0(cur.taxAmount));
   const expenseAccountId = cur.accountId != null ? Number(cur.accountId) : cur.categoryAccountId != null ? Number(cur.categoryAccountId) : null;
-  const expenseAccount = expenseAccountId ?? (await finance.getAccountId(client, ctx, '6100'));
+  const expenseAccount = expenseAccountId ?? (await finance.getAccountId(client, ctx, '10254500'));
   const creditCode = creditAccountForMethod(String(cur.paymentMethodType ?? ''), cur.paymentMethodId != null ? Number(cur.paymentMethodId) : null);
   const creditAccount = await finance.getAccountId(client, ctx, creditCode);
   const lines: finance.JournalLine[] = [
@@ -441,7 +441,7 @@ export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
     },
   ];
   if (taxAmount > 0) {
-    const vat = await finance.getAccountId(client, ctx, '2110');
+    const vat = await finance.getAccountId(client, ctx, '10111900');
     lines.push({ account_id: vat, debit: taxAmount, credit: 0, description: `Input VAT ${cur.expNo}` });
   }
   lines.push({ account_id: creditAccount, debit: 0, credit: round2(amount), description: `Payment ${cur.expNo}` });
@@ -1056,8 +1056,8 @@ export async function reimburseClaim(client: pg.PoolClient, ctx: Ctx, id: number
     journalType: 'EXPENSE',
     description: `Employee claim reimbursement ${cur.claimNo}`,
     lines: [
-      { account_id: await finance.getAccountId(client, ctx, '6100'), debit: num0(cur.amount), credit: 0, description: `Claim ${cur.claimNo}` },
-      { account_id: await finance.getAccountId(client, ctx, '1200'), debit: 0, credit: num0(cur.amount), description: `Reimbursement ${cur.claimNo}` },
+      { account_id: await finance.getAccountId(client, ctx, '10254500'), debit: num0(cur.amount), credit: 0, description: `Claim ${cur.claimNo}` },
+      { account_id: await finance.getAccountId(client, ctx, '10111200'), debit: 0, credit: num0(cur.amount), description: `Reimbursement ${cur.claimNo}` },
     ],
     refType: 'claim', refId: id, refCode: String(cur.claimNo),
   });

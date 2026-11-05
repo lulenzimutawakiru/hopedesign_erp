@@ -13,21 +13,24 @@ export interface JournalLine {
   description?: string;
 }
 
+// Hope Design chart (8-digit). One inventory account, one bank account, output VAT separate from input VAT.
 const COA = {
-  AR: '1400',
-  AP: '2100',
-  VAT: '2110',
-  REVENUE: '4000',
-  RAW_INV: '1310',
-  FG_INV: '1320',
-  WIP: '1330',
-  COGS: '5000',
-  DIRECT_PROD: '5100',
-  ADMIN_EXP: '6100',
-  DEFAULT_BANK: '1100',
-  ACCRUAL: '2210',
-  PAYE: '2120',
-  OTHER_RECV: '1510',
+  AR: '10111500',
+  AP: '10121100',
+  VAT: '10121700',
+  VAT_INPUT: '10111900',
+  REVENUE: '10241200',
+  RAW_INV: '10111400',
+  FG_INV: '10111400',
+  WIP: '10111400',
+  COGS: '10251100',
+  DIRECT_PROD: '10251200',
+  ADMIN_EXP: '10254500',
+  DEFAULT_BANK: '10111300',
+  PETTY: '10111200',
+  ACCRUAL: '10121300',
+  PAYE: '10121400',
+  OTHER_RECV: '10111700',
 } as const;
 
 /** Map a product to its inventory GL account by product type. */
@@ -681,7 +684,7 @@ export async function postSupplierInvoice(client: pg.PoolClient, ctx: Ctx, siId:
     [siId]
   );
   const apId = await getAccountId(client, ctx, COA.AP);
-  const vatId = await getAccountId(client, ctx, COA.VAT);
+  const vatId = await getAccountId(client, ctx, COA.VAT_INPUT);
   const accrualId = await getAccountId(client, ctx, COA.ACCRUAL);
   const lines: JournalLine[] = [];
   const viaGrn = si.grn_id != null;
@@ -1028,6 +1031,8 @@ export async function postInventoryValueChange(client: pg.PoolClient, ctx: Ctx, 
   const stockId = await getAccountId(client, ctx, inventoryAccountForType(input.productType));
   const contraCode = input.contraAccountCode ?? (input.journalType === 'PRODUCTION' ? COA.WIP : COA.ADMIN_EXP);
   const contraId = await getAccountId(client, ctx, contraCode);
+  // The chart has one inventory account, so a production move would debit and credit it and disappear.
+  if (stockId === contraId) return null;
   const abs = Math.abs(input.amount);
   const lines: JournalLine[] =
     input.amount > 0
@@ -1319,8 +1324,9 @@ export async function profitAndLoss(client: pg.PoolClient, ctx: Ctx, from: strin
     [ctx.tenantId, ctx.companyId, from, to]
   );
   const rows = toCamelRows(res.rows);
-  const revenue = rows.filter((r) => String(r.accountType) === 'REVENUE').reduce((s, r) => s + n(r.amount), 0);
-  const expense = rows.filter((r) => String(r.accountType) === 'EXPENSE').reduce((s, r) => s + n(r.amount), 0);
+  const sumType = (type: string) => rows.filter((r) => String(r.accountType) === type).reduce((s, r) => s + n(r.amount), 0);
+  const revenue = sumType('REVENUE') - sumType('CONTRA_REVENUE');
+  const expense = sumType('EXPENSE') + sumType('CONTRA_EXPENSE');
   return { rows, revenue, expense, profit: revenue - expense, from, to };
 }
 
@@ -1488,15 +1494,16 @@ export async function bankPosition(client: pg.PoolClient, ctx: Ctx) {
 }
 
 export async function taxSummary(client: pg.PoolClient, ctx: Ctx, from: string, to: string) {
-  const vat = await getAccountId(client, ctx, COA.VAT);
+  const outputAccount = await getAccountId(client, ctx, COA.VAT);
+  const inputAccount = await getAccountId(client, ctx, COA.VAT_INPUT);
   const res = await client.query(
-    `SELECT COALESCE(sum(jl.credit),0)::numeric AS output_vat,
-            COALESCE(sum(jl.debit),0)::numeric AS input_vat
+    `SELECT COALESCE(sum(jl.credit - jl.debit) FILTER (WHERE jl.account_id = $1),0)::numeric AS output_vat,
+            COALESCE(sum(jl.debit - jl.credit) FILTER (WHERE jl.account_id = $2),0)::numeric AS input_vat
      FROM journal_lines jl
      JOIN journal_entries je ON je.id = jl.entry_id AND je.status = 'POSTED'
-     WHERE jl.account_id = $1 AND je.tenant_id = $2
-       AND je.entry_date BETWEEN $3::date AND $4::date`,
-    [vat, ctx.tenantId, from, to]
+     WHERE jl.account_id IN ($1, $2) AND je.tenant_id = $3
+       AND je.entry_date BETWEEN $4::date AND $5::date`,
+    [outputAccount, inputAccount, ctx.tenantId, from, to]
   );
   const outputVat = n(res.rows[0].output_vat);
   const inputVat = n(res.rows[0].input_vat);
@@ -1782,11 +1789,11 @@ export async function postExpense(
     ]
   );
   const expenseId = Number(ins.rows[0].id);
-  const bankId = await getAccountId(client, ctx, input.method === 'BANK' ? COA.DEFAULT_BANK : '1200');
+  const bankId = await getAccountId(client, ctx, input.method === 'BANK' ? COA.DEFAULT_BANK : COA.PETTY);
   const desc = input.description ?? `Expense ${no.rows[0].code}`;
   const fromRule = await resolveEventLines(
     client, ctx, 'EXPENSE', { amount: input.amount },
-    { substitute: { EXPENSE: Number(input.accountId), '6100': Number(input.accountId) }, description: desc }
+    { substitute: { EXPENSE: Number(input.accountId), '6100': Number(input.accountId), [COA.ADMIN_EXP]: Number(input.accountId) }, description: desc }
   );
   const entryId = await postJournalLines(client, ctx, {
     entryDate: input.expenseDate,

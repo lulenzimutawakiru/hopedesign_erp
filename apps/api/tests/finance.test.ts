@@ -6,8 +6,8 @@ describe('Finance double-entry ledger', () => {
     const { token } = await loginAs('admin');
     const accts = await api.get('/api/ops/finance/accounts').set(auth(token));
     expect(accts.status).toBe(200);
-    const bank = accts.body.data.find((a: { code: string }) => a.code === '1100');
-    const cash = accts.body.data.find((a: { code: string }) => a.code === '1200');
+    const bank = accts.body.data.find((a: { code: string }) => a.code === '10111300');
+    const cash = accts.body.data.find((a: { code: string }) => a.code === '10111200');
     expect(bank && cash).toBeTruthy();
 
     const bad = await api.post('/api/ops/finance/journals').set(auth(token)).send({
@@ -80,8 +80,8 @@ describe('Finance double-entry ledger', () => {
     expect(lock.body.data.status).toBe('LOCKED');
 
     const accts = await api.get('/api/ops/finance/accounts').set(auth(token));
-    const bank = accts.body.data.find((a: { code: string }) => a.code === '1100');
-    const cash = accts.body.data.find((a: { code: string }) => a.code === '1200');
+    const bank = accts.body.data.find((a: { code: string }) => a.code === '10111300');
+    const cash = accts.body.data.find((a: { code: string }) => a.code === '10111200');
     const blocked = await api.post('/api/ops/finance/journals').set(auth(token)).send({
       entryDate: '2026-08-18',
       description: 'Should fail in locked period',
@@ -288,7 +288,7 @@ describe('Finance CRUD+ workflows', () => {
     const { token } = await loginAs('admin');
     const ref = `EXP-${uniqueSuffix()}`;
     const accts = await api.get('/api/ops/finance/accounts').set(auth(token));
-    const expAcct = accts.body.data.find((a: { code: string }) => a.code === '6100');
+    const expAcct = accts.body.data.find((a: { code: string }) => a.code === '10254500');
     expect(expAcct).toBeTruthy();
 
     const res = await api.post('/api/ops/finance/expenses').set(auth(token)).send({
@@ -326,8 +326,8 @@ describe('Finance CRUD+ workflows', () => {
   it('creates a draft journal, edits it, and posts it', async () => {
     const { token } = await loginAs('admin');
     const accts = await api.get('/api/ops/finance/accounts').set(auth(token));
-    const bank = accts.body.data.find((a: { code: string }) => a.code === '1100');
-    const cash = accts.body.data.find((a: { code: string }) => a.code === '1200');
+    const bank = accts.body.data.find((a: { code: string }) => a.code === '10111300');
+    const cash = accts.body.data.find((a: { code: string }) => a.code === '10111200');
     expect(bank && cash).toBeTruthy();
 
     const draft = await api.post('/api/ops/finance/journals').set(auth(token)).send({
@@ -607,8 +607,8 @@ describe('Finance AR/AP aging and bank match', () => {
     const suffix = uniqueSuffix();
     const amount = 87654.12;
     const accts = await api.get('/api/ops/finance/accounts').set(auth(token));
-    const bankGl = accts.body.data.find((a: { code: string }) => a.code === '1100');
-    const cashGl = accts.body.data.find((a: { code: string }) => a.code === '1200');
+    const bankGl = accts.body.data.find((a: { code: string }) => a.code === '10111300');
+    const cashGl = accts.body.data.find((a: { code: string }) => a.code === '10111200');
     expect(bankGl && cashGl).toBeTruthy();
     const day = '2026-08-18';
 
