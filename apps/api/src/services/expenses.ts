@@ -418,7 +418,7 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
     [companyId(ctx), ctx.tenantId, id]
   );
   const outstanding = round2(num0(cur.amount) - num0(paidRes.rows[0]?.paid));
-  const requestAmount = round2(num0(b.amount) || outstanding);
+  const requestAmount = b.amount === undefined || b.amount === null || b.amount === '' ? outstanding : round2(num0(b.amount));
   if (requestAmount <= 0 || requestAmount > outstanding) {
     throw badRequest(`Payment request must be greater than zero and no more than the outstanding balance (${outstanding}).`);
   }
@@ -632,7 +632,7 @@ export async function listExpensePayments(client: pg.PoolClient, ctx: Ctx, q: Re
             epr.statement_reference, epr.statement_date, epr.statement_amount, epr.variance
        FROM payment_requests pr
        LEFT JOIN payment_methods pm ON pm.id = pr.payment_method_id
-       LEFT JOIN expense_transactions et ON et.id = pr.ref_id
+       LEFT JOIN expense_transactions et ON et.id = pr.ref_id AND et.company_id = pr.company_id AND et.tenant_id = pr.tenant_id
        LEFT JOIN expense_payment_reconciliations epr ON epr.payment_request_id = pr.id
       WHERE ${where.join(' AND ')}
       ORDER BY pr.created_at DESC, pr.id DESC LIMIT 200`,
@@ -698,10 +698,11 @@ export async function reconcileExpensePayment(client: pg.PoolClient, ctx: Ctx, p
   }
   const existing = await client.query(
     `SELECT id FROM expense_payment_reconciliations
-      WHERE company_id = $1 AND tenant_id = $2 AND payment_request_id = $3`,
-    [companyId(ctx), ctx.tenantId, paymentId]
+      WHERE company_id = $1 AND tenant_id = $2
+        AND (payment_request_id = $3 OR statement_reference = $4)`,
+    [companyId(ctx), ctx.tenantId, paymentId, statementReference]
   );
-  if (existing.rows.length) throw badRequest('This payment voucher already has a reconciliation record.');
+  if (existing.rows.length) throw badRequest('This payment voucher or statement reference is already reconciled.');
   const inserted = await client.query(
     `INSERT INTO expense_payment_reconciliations
        (company_id, tenant_id, payment_request_id, statement_date, statement_reference,
