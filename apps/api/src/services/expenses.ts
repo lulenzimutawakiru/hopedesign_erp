@@ -576,10 +576,13 @@ export async function listExpensePayments(client: pg.PoolClient, ctx: Ctx, q: Re
             pr.payee, pr.amount, pr.currency, pr.status, pr.reference,
             pr.requested_by, pr.approved_by, pr.approved_at, pr.paid_by, pr.paid_at,
             pr.payment_method_id, pm.name AS payment_method_name, pr.gl_posted,
-            pr.gl_journal_id, et.description AS expense_description
+            pr.gl_journal_id, et.description AS expense_description,
+            epr.id AS reconciliation_id, epr.status AS reconciliation_status,
+            epr.statement_reference, epr.statement_date, epr.statement_amount, epr.variance
        FROM payment_requests pr
        LEFT JOIN payment_methods pm ON pm.id = pr.payment_method_id
        LEFT JOIN expense_transactions et ON et.id = pr.ref_id
+       LEFT JOIN expense_payment_reconciliations epr ON epr.payment_request_id = pr.id
       WHERE ${where.join(' AND ')}
       ORDER BY pr.created_at DESC, pr.id DESC LIMIT 200`,
     params
@@ -613,6 +616,80 @@ export async function rejectExpensePayment(client: pg.PoolClient, ctx: Ctx, paym
     [companyId(ctx), ctx.tenantId, paymentId, String(p.payNo), ctx.userId ?? null, reason.trim()]
   );
   return { id: paymentId, status: 'REJECTED' };
+}
+
+/** Match an executed voucher to a bank/mobile-money statement line. */
+export async function reconcileExpensePayment(client: pg.PoolClient, ctx: Ctx, paymentId: number, b: Record<string, unknown>) {
+  const pRes = await client.query(
+    `SELECT * FROM payment_requests
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND ref_type = 'EXPENSE'
+      FOR UPDATE`,
+    [paymentId, companyId(ctx), ctx.tenantId]
+  );
+  if (!pRes.rows.length) throw notFound('Payment request not found');
+  const p = toCamelRow(pRes.rows[0]);
+  if (p.status !== 'PAID' || p.glPosted !== true) {
+    throw badRequest('Only executed payments with a posted settlement journal can be reconciled.');
+  }
+  const statementReference = s(b.statementReference)?.trim();
+  if (!statementReference) throw badRequest('Bank or mobile-money statement reference is required.');
+  const statementAmount = round2(num0(b.statementAmount));
+  if (statementAmount < 0) throw badRequest('Statement amount cannot be negative.');
+  const currency = s(b.currency) ?? String(p.currency ?? 'UGX');
+  if (currency !== String(p.currency ?? 'UGX')) throw badRequest('Statement currency must match the payment voucher currency.');
+  const variance = round2(statementAmount - num0(p.amount));
+  const explanation = s(b.varianceExplanation)?.trim() ?? null;
+  if (Math.abs(variance) > 0.01 && !explanation) {
+    throw badRequest('A variance explanation is required when the statement amount differs from the payment voucher.');
+  }
+  const existing = await client.query(
+    `SELECT id FROM expense_payment_reconciliations
+      WHERE company_id = $1 AND tenant_id = $2 AND payment_request_id = $3`,
+    [companyId(ctx), ctx.tenantId, paymentId]
+  );
+  if (existing.rows.length) throw badRequest('This payment voucher already has a reconciliation record.');
+  const inserted = await client.query(
+    `INSERT INTO expense_payment_reconciliations
+       (company_id, tenant_id, payment_request_id, statement_date, statement_reference,
+        statement_amount, currency, matched_amount, variance, variance_explanation,
+        status, reconciled_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     RETURNING id, status, variance`,
+    [companyId(ctx), ctx.tenantId, paymentId, isoDate(b.statementDate), statementReference,
+     statementAmount, currency, Math.min(statementAmount, num0(p.amount)), variance,
+     explanation, Math.abs(variance) <= 0.01 ? 'MATCHED' : 'VARIANCE', ctx.userId ?? null]
+  );
+  await logAudit(client, ctx, { action: 'payment_reconcile', resource: 'expenses', recordId: Number(p.refId),
+    recordCode: String(p.refCode), newValues: { paymentId, statementReference, statementAmount, variance } });
+  return toCamelRow(inserted.rows[0]);
+}
+
+/** Independent sign-off of a bank-statement reconciliation. */
+export async function approveExpensePaymentReconciliation(client: pg.PoolClient, ctx: Ctx, reconciliationId: number, reason?: string) {
+  if (!reason?.trim()) throw badRequest('A reconciliation approval comment is required.');
+  const r = await client.query(
+    `SELECT * FROM expense_payment_reconciliations
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3
+      FOR UPDATE`,
+    [reconciliationId, companyId(ctx), ctx.tenantId]
+  );
+  if (!r.rows.length) throw notFound('Payment reconciliation not found');
+  const row = toCamelRow(r.rows[0]);
+  if (!['MATCHED','VARIANCE'].includes(String(row.status))) {
+    throw badRequest(`Only unreleased reconciliations can be approved (current: ${row.status}).`);
+  }
+  if (row.reconciledBy != null && Number(row.reconciledBy) === Number(ctx.userId)) {
+    throw forbidden('The user who performed the reconciliation cannot approve it.');
+  }
+  await client.query(
+    `UPDATE expense_payment_reconciliations
+        SET status = 'APPROVED', approved_by = $1, approved_at = now(), approval_comment = $2
+      WHERE id = $3 AND company_id = $4 AND tenant_id = $5`,
+    [ctx.userId ?? null, reason.trim(), reconciliationId, companyId(ctx), ctx.tenantId]
+  );
+  await logAudit(client, ctx, { action: 'payment_reconciliation_approve', resource: 'expenses',
+    recordId: Number(row.paymentRequestId), newValues: { reconciliationId, status: 'APPROVED', reason: reason.trim() } });
+  return { id: reconciliationId, status: 'APPROVED' };
 }
 
 /** Map a payment method type to the credit side of the expense journal. */
