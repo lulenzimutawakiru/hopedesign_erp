@@ -105,7 +105,10 @@ describe('Ops daily expenditure module', () => {
     expect(request1.body.data.status).toBe('SUBMITTED');
     expect(request1.body.data.payNo).toMatch(/^PAY-/);
 
-    // Four-eyes: requester cannot approve their own payment voucher.
+    // Neither the expense creator nor payment requester may approve the voucher.
+    const creatorApprove = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/approve`)
+      .set(auth(expenseCreatorToken)).send({ reason: 'Creator approval must fail' });
+    expect(creatorApprove.status).toBe(403);
     const selfApprove = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/approve`)
       .set(auth(finToken)).send({ reason: 'Self-approval must fail' });
     expect(selfApprove.status).toBe(403);
