@@ -6,6 +6,7 @@ import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler } from '../../utils.js';
 import * as exp from '../../services/expenses.js';
 import * as expenseControls from '../../services/expenseValidation.js';
+import * as claimControls from '../../services/claimValidation.js';
 import * as expenseExport from '../../services/expenseExport.js';
 import * as proc from '../../services/procurement.js';
 
@@ -126,8 +127,8 @@ expenditureOpsRouter.get('/claims', ...runGet('expenditure.claims.view', (c, ctx
   employeeId: q.employeeId != null ? Number(q.employeeId) : undefined,
 })));
 expenditureOpsRouter.get('/claims/:id', ...runGet('expenditure.claims.view', (c, ctx, _q, p) => exp.getClaim(c, ctx, Number(p.id))));
-expenditureOpsRouter.post('/claims', ...run('expenditure.claims.create', (c, ctx, b) => exp.createClaim(c, ctx, b)));
-expenditureOpsRouter.post('/claims/:id/submit', ...run('expenditure.claims.create', (c, ctx, _b, p) => exp.submitClaim(c, ctx, Number(p.id))));
+expenditureOpsRouter.post('/claims', ...run('expenditure.claims.create', (c, ctx, b) => claimControls.createClaim(c, ctx, b)));
+expenditureOpsRouter.post('/claims/:id/submit', ...run('expenditure.claims.create', (c, ctx, _b, p) => claimControls.submitClaim(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/claims/:id/reimburse', ...run('expenditure.claims.reimburse', (c, ctx, b, p) => exp.reimburseClaim(c, ctx, Number(p.id), b)));
 
 // Daily close
