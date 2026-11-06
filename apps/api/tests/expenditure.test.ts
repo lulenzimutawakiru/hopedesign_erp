@@ -115,7 +115,7 @@ describe('Ops daily expenditure module', () => {
     expect(afterPartial.status).toBe(200);
     expect(afterPartial.body.data.paymentStatus).toBe('PARTIALLY_PAID');
 
-    const request2 = await api.post(`/api/ops/expenditure/expenses/${id}/pay`).set(auth(finToken)).send({
+    const request2 = await api.post(`/api/ops/expenditure/expenses/${id}/pay`).set(auth(opsToken)).send({
       amount: 150000, paymentMethodId,
     });
     expect(request2.status).toBe(200);
