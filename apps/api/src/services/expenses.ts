@@ -377,38 +377,46 @@ export async function submitExpense(client: pg.PoolClient, ctx: Ctx, id: number)
   const cur = await getExpense(client, ctx, id, true);
   if (cur.status !== 'DRAFT') throw badRequest(`Only your own draft expenses can be submitted (current: ${cur.status})`);
   const amount = num0(cur.amount);
-  const accountId = cur.accountId != null ? Number(cur.accountId) :
-    cur.categoryAccountId != null ? Number(cur.categoryAccountId) : null;
-  if (cur.budgetId != null) {
+  const effectiveAccountId = cur.accountId != null ? Number(cur.accountId) :
+    cur.categoryAccountId != null ? Number(cur.categoryAccountId) :
+      await finance.getAccountId(client, ctx, '10254500');
+  const pos = await finance.budgetPosition(client, ctx, effectiveAccountId);
+  if (pos.result !== 'NONE') {
+    if (pos.available + 0.005 < amount) {
+      throw badRequest(
+        `Expense exceeds available budget (available ${pos.available.toLocaleString()}, amount ${amount.toLocaleString()})`,
+        pos
+      );
+    }
+    const budgetId = cur.budgetId != null ? Number(cur.budgetId) : pos.budgetId;
+    if (budgetId == null) throw badRequest('No active budget is available for this expense GL account.');
     const budget = await client.query(
       `SELECT id FROM budgets
         WHERE id = $1 AND company_id = $2 AND tenant_id = $3
-          AND status IN ('APPROVED','ACTIVE') AND period_start <= $4 AND period_end >= $4
+          AND status IN ('APPROVED','ACTIVE')
+          AND period_start <= CURRENT_DATE AND period_end >= CURRENT_DATE
         FOR UPDATE`,
-      [Number(cur.budgetId), companyId(ctx), ctx.tenantId, isoDate(cur.expDate)]
+      [budgetId, companyId(ctx), ctx.tenantId]
     );
-    if (!budget.rows.length) throw badRequest('Select an active budget that covers the expense date.');
-    const effectiveAccountId = accountId ?? await finance.getAccountId(client, ctx, '10254500');
+    if (!budget.rows.length) throw badRequest('Select an active budget for the current financial period.');
     const budgetLine = await client.query(
       `SELECT 1 FROM budget_lines WHERE budget_id = $1 AND account_id = $2 LIMIT 1`,
-      [Number(cur.budgetId), effectiveAccountId]
+      [budgetId, effectiveAccountId]
     );
     if (!budgetLine.rows.length) throw badRequest('The selected budget has no line for this expense GL account.');
+    // Serialize expense submissions for this account so two requests cannot
+    // both consume the same remaining budget at the same time.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`,
+      [`expense-budget:${companyId(ctx)}:${ctx.tenantId}:${effectiveAccountId}`]
+    );
     const commitment = await financeAdvanced.createBudgetCommitment(client, ctx, {
-      budgetId: Number(cur.budgetId), accountId: effectiveAccountId,
+      budgetId, accountId: effectiveAccountId,
       docType: 'EXPENSE', docRefType: 'ops.expenses', docRefId: id,
       docRefCode: String(cur.expNo), amount,
     });
     if (commitment.warning) {
       throw badRequest('Expense would exceed the remaining budget balance. Reduce the amount or request a formal budget revision.');
-    }
-  } else if (accountId) {
-    const pos = await finance.budgetPosition(client, ctx, accountId);
-    if (pos.available < amount) {
-      throw badRequest(
-        `Expense exceeds available budget (available ${pos.available.toLocaleString()}, amount ${amount.toLocaleString()})`,
-        pos
-      );
     }
   }
   await client.query(
