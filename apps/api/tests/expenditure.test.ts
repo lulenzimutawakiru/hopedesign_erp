@@ -54,7 +54,8 @@ describe('Ops daily expenditure module', () => {
   });
 
   it('records, approves, pays and posts an expense', async () => {
-    const create = await api.post('/api/ops/expenditure/expenses').set(auth(opsToken)).send({
+    const { token: expenseCreatorToken } = await loginAs('hr.hannah');
+    const create = await api.post('/api/ops/expenditure/expenses').set(auth(expenseCreatorToken)).send({
       description: `Integration test fuel ${Date.now()}`,
       amount: 250000,
       categoryId,
@@ -68,7 +69,7 @@ describe('Ops daily expenditure module', () => {
     expect(create.body.data.expNo).toMatch(/^EXP-/);
     expect(create.body.data.status).toBe('DRAFT');
 
-    const submit = await api.post(`/api/ops/expenditure/expenses/${id}/submit`).set(auth(opsToken)).send({});
+    const submit = await api.post(`/api/ops/expenditure/expenses/${id}/submit`).set(auth(expenseCreatorToken)).send({});
     expect(submit.status).toBe(200);
     expect(submit.body.data.status).toBe('SUBMITTED');
 
