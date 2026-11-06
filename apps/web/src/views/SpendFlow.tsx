@@ -1469,6 +1469,8 @@ function ExpensePaymentsDesk() {
   const [message, setMessage] = useState('');
   const canApprove = can(user, 'expenditure.payments.approve');
   const canExecute = can(user, 'expenditure.payments.post');
+  const canReconcile = can(user, 'expenditure.payments.reconcile');
+  const canApproveReconciliation = can(user, 'expenditure.payments.reconcile_approve');
   const load = useCallback(() => {
     const qs = status ? `?status=${encodeURIComponent(status)}` : '';
     api<{ data: Rec[] }>(`/api/ops/expenditure/payments${qs}`)
@@ -1476,18 +1478,31 @@ function ExpensePaymentsDesk() {
       .catch((e) => setError(e.message));
   }, [status]);
   useEffect(load, [load]);
-  const act = async (id: number, action: 'approve' | 'reject' | 'execute') => {
+  const act = async (id: number, action: 'approve' | 'reject' | 'execute' | 'reconcile' | 'approve-reconciliation') => {
     setBusy(id); setMessage(''); setError('');
     try {
       if (action === 'approve' || action === 'reject') {
         const reason = window.prompt(action === 'approve' ? 'Enter approval comment / payment verification reference:' : 'Enter reason for rejection:');
         if (!reason?.trim()) return;
         await api(`/api/ops/expenditure/payments/${id}/${action}`, { method: 'POST', body: JSON.stringify({ reason }) });
-      } else {
+      } else if (action === 'execute') {
         const reference = window.prompt('Enter bank, mobile-money, cheque or cash transaction reference (if available):') ?? '';
         await api(`/api/ops/expenditure/payments/${id}/execute`, { method: 'POST', body: JSON.stringify({ reference: reference || undefined, paymentDate: todayIso() }) });
+      } else if (action === 'reconcile') {
+        const statementReference = window.prompt('Enter the bank/mobile-money statement transaction reference:');
+        if (!statementReference?.trim()) return;
+        const statementAmount = window.prompt('Enter the amount shown on the statement:');
+        if (statementAmount === null || statementAmount.trim() === '' || !Number.isFinite(Number(statementAmount))) return;
+        const statementDate = window.prompt('Enter statement date (YYYY-MM-DD):', todayIso());
+        if (!statementDate?.trim()) return;
+        const varianceExplanation = window.prompt('If the statement amount differs from the voucher, explain the variance (otherwise leave blank):') ?? '';
+        await api(`/api/ops/expenditure/payments/${id}/reconcile`, { method: 'POST', body: JSON.stringify({ statementReference, statementAmount: Number(statementAmount), statementDate, varianceExplanation: varianceExplanation || undefined }) });
+      } else {
+        const reason = window.prompt('Enter reconciliation approval comment:');
+        if (!reason?.trim()) return;
+        await api(`/api/ops/expenditure/payment-reconciliations/${id}/approve`, { method: 'POST', body: JSON.stringify({ reason }) });
       }
-      setMessage(`Payment request ${action === 'execute' ? 'executed' : action === 'approve' ? 'approved' : 'rejected'}.`);
+      setMessage(`Payment action ${action} completed.`);
       load();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
@@ -1503,7 +1518,7 @@ function ExpensePaymentsDesk() {
       <section className="card">
         <div className="table-wrap">
           <table className="data">
-            <thead><tr><th>Voucher</th><th>Expense</th><th>Payee</th><th>Method</th><th>Amount</th><th>Status</th><th>GL</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Voucher</th><th>Expense</th><th>Payee</th><th>Method</th><th>Amount</th><th>Status</th><th>GL</th><th>Reconciliation</th><th>Actions</th></tr></thead>
             <tbody>
               {items.map((p) => (
                 <tr key={s(p.id)}>
@@ -1512,13 +1527,16 @@ function ExpensePaymentsDesk() {
                   <td>{s(p.payee) || '—'}</td><td>{s(p.paymentMethodName) || '—'}</td>
                   <td>{fmtMoney(num(p.amount))} {s(p.currency)}</td><td><Badge value={p.status} /></td>
                   <td>{p.glPosted ? <Badge value="POSTED" /> : '—'}</td>
+                  <td>{p.reconciliationStatus ? <Badge value={p.reconciliationStatus} /> : 'Not reconciled'}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     {p.status === 'SUBMITTED' && canApprove && <>
                       <button className="btn btn-sm btn-primary" disabled={busy === num(p.id)} onClick={() => void act(num(p.id), 'approve')}>Approve</button>{' '}
                       <button className="btn btn-sm btn-ghost-danger" disabled={busy === num(p.id)} onClick={() => void act(num(p.id), 'reject')}>Reject</button>
                     </>}
                     {p.status === 'APPROVED' && canExecute && <button className="btn btn-sm btn-primary" disabled={busy === num(p.id)} onClick={() => void act(num(p.id), 'execute')}>Execute</button>}
-                    {p.status === 'PAID' && <span className="muted">Executed</span>}
+                    {p.status === 'PAID' && !p.reconciliationId && canReconcile && <button className="btn btn-sm btn-ghost" disabled={busy === num(p.id)} onClick={() => void act(num(p.id), 'reconcile')}>Reconcile</button>}
+                    {p.reconciliationId && ['MATCHED','VARIANCE'].includes(s(p.reconciliationStatus)) && canApproveReconciliation && <button className="btn btn-sm btn-primary" disabled={busy === num(p.id)} onClick={() => void act(num(p.reconciliationId), 'approve-reconciliation')}>Approve reconciliation</button>}
+                    {p.status === 'PAID' && p.reconciliationStatus === 'APPROVED' && <span className="muted">Reconciled</span>}
                   </td>
                 </tr>
               ))}
