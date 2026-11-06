@@ -76,6 +76,7 @@ expenditureOpsRouter.post('/payments/:id/reject', ...run('expenditure.payments.a
 expenditureOpsRouter.post('/payments/:id/execute', ...run('expenditure.payments.post', (c, ctx, b, p) => exp.executeExpensePayment(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/payments/:id/reconcile', ...run('expenditure.payments.reconcile', (c, ctx, b, p) => exp.reconcileExpensePayment(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/payment-reconciliations/:id/approve', ...run('expenditure.payments.reconcile_approve', (c, ctx, b, p) => exp.approveExpensePaymentReconciliation(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : undefined)));
+expenditureOpsRouter.post('/expenses/:id/verify', ...run('expenditure.expenses.verify', (c, ctx, b, p) => exp.verifyExpenseForPosting(c, ctx, Number(p.id), b.comment != null ? String(b.comment) : undefined)));
 expenditureOpsRouter.post('/expenses/:id/post', ...run('expenditure.expenses.post', (c, ctx, _b, p) => exp.postExpense(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/expenses/:id/void', ...run('expenditure.expenses.void', (c, ctx, b, p) => exp.voidExpense(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : null)));
 expenditureOpsRouter.get('/board', ...runGet('expenditure.expenses.view', (c, ctx) => exp.expenseBoard(c, ctx)));
