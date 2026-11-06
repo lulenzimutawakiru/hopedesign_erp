@@ -29,6 +29,16 @@ Employee expense reads are scoped to `created_by = authenticated user`.
 Existing holders of `expenditure.expenses.view` retain organisation-wide
 visibility. Draft edits and submission are restricted to the expense creator.
 
+### Accounting correction included in this branch
+
+- Approved unpaid expenses now post the expense debit and input-tax debit (where applicable) against Accounts Payable (GL 10121100), rather than treating an unpaid invoice as a bank payment.
+- If an expense has already been accrued to Accounts Payable, recording its settlement generates a separate SUPPLIER_PAYMENT journal to debit AP and credit the configured payment-method ledger account.
+- Payment execution now requires the dedicated `expenditure.payments.post` permission rather than the expense-approval permission.
+- Inactive or invalid payment methods are rejected; the CREDIT method type cannot be used to falsely mark a supplier-credit expense as paid.
+- If an expense is marked paid before its first GL posting, the expense journal credits the payment-method ledger account instead of creating an AP balance.
+
+This is an incremental correction using existing chart-of-accounts mappings. It is not a replacement for the planned full payment authorisation, bank integration, partial-payment allocation or bank reconciliation lifecycle.
+
 ### Follow-on implementation work
 
 1. Add evidence upload to the employee-owned expense lifecycle, with strict
