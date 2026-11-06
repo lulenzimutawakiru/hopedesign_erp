@@ -781,7 +781,7 @@ export async function reconcileExpensePayment(client: pg.PoolClient, ctx: Ctx, p
   );
   if (existing.rows.length) throw badRequest('This payment voucher or statement reference is already reconciled.');
   let bankTransactionId: number | null = null;
-  if (p.bankAccountId != null && Math.abs(variance) <= 0.01) {
+  if (p.bankAccountId != null && variance === 0) {
     const statementLine = await client.query(
       `SELECT bt.id, bt.debit, bt.credit, bt.reconciled, ba.gl_account_id
          FROM bank_transactions bt
@@ -825,7 +825,7 @@ export async function reconcileExpensePayment(client: pg.PoolClient, ctx: Ctx, p
      RETURNING id, status, variance, bank_transaction_id`,
     [companyId(ctx), ctx.tenantId, paymentId, bankTransactionId, isoDate(b.statementDate), statementReference,
      statementAmount, currency, Math.min(statementAmount, num0(p.amount)), variance,
-     explanation, Math.abs(variance) <= 0.01 ? 'MATCHED' : 'VARIANCE', ctx.userId ?? null]
+     explanation, variance === 0 ? 'MATCHED' : 'VARIANCE', ctx.userId ?? null]
   );
   await logAudit(client, ctx, { action: 'payment_reconcile', resource: 'expenses', recordId: Number(p.refId),
     recordCode: String(p.refCode), newValues: { paymentId, statementReference, statementAmount, variance } });
