@@ -3,7 +3,7 @@
 // Permission codes: {module}.{resource}.{action}
 // ============================================================
 
-const ACTIONS = ["view","create","update","delete","submit","approve","reject","cancel","void","archive","restore","print","export","import","scan","transfer","assign","release","convert","verify","post","generate","complete","admit","discharge","dispense","settle","terminate","delete_draft","manage_templates","manage_clauses","manage_versions","manage_legal_rules","view_audit","validate","sign","download","renew","vary","issue","manage","dispose","audit","depreciate","impair","capitalize","maintain","inspect","checkin","checkout","replace","activate","investigate","resolve","comment","reprint","perform","close","return","send","suspend","resume","revoke","expire","upload","reconcile","reconcile_approve"];
+const ACTIONS = ["view","view_own","create","update","delete","submit","approve","reject","cancel","void","archive","restore","print","export","import","scan","transfer","assign","release","convert","verify","post","generate","complete","admit","discharge","dispense","settle","terminate","delete_draft","manage_templates","manage_clauses","manage_versions","manage_legal_rules","view_audit","validate","sign","download","renew","vary","issue","manage","dispose","audit","depreciate","impair","capitalize","maintain","inspect","checkin","checkout","replace","activate","investigate","resolve","comment","reprint","perform","close","return","send","suspend","resume","revoke","expire","upload","reconcile","reconcile_approve"];
 
 const MODULES = {
   dashboard: { overview: ["view"], kpis: ["view"] },
