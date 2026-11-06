@@ -374,75 +374,188 @@ export async function submitExpense(client: pg.PoolClient, ctx: Ctx, id: number)
 }
 
 export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown> = {}) {
-  const cur = await getExpense(client, ctx, id);
+  // Stage 1: request payment only. No cash movement, GL posting or paid status
+  // is recorded until an independent approver authorises and executes it.
+  const locked = await client.query(
+    `SELECT id, status, payment_status, accounting_status, amount, currency, exp_no,
+            supplier_id, employee_id, payee, payment_method_id
+       FROM expense_transactions
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3
+      FOR UPDATE`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
+  if (!locked.rows.length) throw notFound('Expense not found');
+  const cur = toCamelRow(locked.rows[0]);
   if (!['APPROVED', 'POSTED'].includes(String(cur.status))) {
-    throw badRequest(`Only approved expenses can be paid (current: ${cur.status})`);
+    throw badRequest(`Only approved and accounting-posted expenses can be requested for payment (current: ${cur.status})`);
   }
-  if (String(cur.paymentStatus) === 'PAID') throw badRequest('Expense is already paid');
+  if (String(cur.accountingStatus) !== 'POSTED') {
+    throw badRequest('Post the approved expense to Accounts Payable before requesting settlement.');
+  }
+  const paidRes = await client.query(
+    `SELECT COALESCE(SUM(amount),0)::numeric AS paid
+       FROM payment_requests
+      WHERE company_id = $1 AND tenant_id = $2 AND ref_type = 'EXPENSE'
+        AND ref_id = $3 AND status = 'PAID'`,
+    [companyId(ctx), ctx.tenantId, id]
+  );
+  const outstanding = round2(num0(cur.amount) - num0(paidRes.rows[0]?.paid));
+  const requestAmount = round2(num0(b.amount) || outstanding);
+  if (requestAmount <= 0 || requestAmount > outstanding) {
+    throw badRequest(`Payment request must be greater than zero and no more than the outstanding balance (${outstanding}).`);
+  }
+  const paymentMethodId = n(b.paymentMethodId) ?? n(cur.paymentMethodId);
+  if (paymentMethodId == null) throw badRequest('Select a payment method.');
+  const methodRes = await client.query(
+    `SELECT method_type FROM payment_methods
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
+    [paymentMethodId, companyId(ctx), ctx.tenantId]
+  );
+  if (!methodRes.rows.length) throw badRequest('Select an active payment method.');
+  const methodType = String(methodRes.rows[0].method_type ?? '').toUpperCase();
+  if (methodType === 'CREDIT') throw badRequest('Credit terms are not a payment execution method.');
   const payNo = await nextDoc(client, ctx, 'PAY');
   const payeeType = cur.supplierId != null ? 'SUPPLIER' : cur.employeeId != null ? 'EMPLOYEE' : 'OTHER';
-  const paymentMethodId = n(b.paymentMethodId) ?? n(cur.paymentMethodId);
-  const methodRes = paymentMethodId == null
-    ? { rows: [] }
-    : await client.query(
-        `SELECT method_type FROM payment_methods
-         WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
-        [paymentMethodId, companyId(ctx), ctx.tenantId]
-      );
-  if (paymentMethodId != null && !methodRes.rows.length) throw badRequest('Select an active payment method');
-  const paymentMethodType = String(methodRes.rows[0]?.method_type ?? cur.paymentMethodType ?? '').toUpperCase();
-  if (paymentMethodType === 'CREDIT') {
-    throw badRequest('Credit terms are not a payment execution method. Keep the expense unpaid until settlement.');
-  }
   const payRes = await client.query(
     `INSERT INTO payment_requests
        (company_id, tenant_id, branch_id, pay_no, ref_type, ref_id, ref_code, payee, payee_type,
-        amount, currency, payment_method_id, bank_account_id, reference, status, requested_by, paid_by, paid_at, gl_posted)
-     VALUES ($1,$2,$3,$4,'EXPENSE',$5,$6,$7,$8,$9,$10,$11,$12,$13,'PAID',$14,$15,now(),false)
+        amount, currency, payment_method_id, bank_account_id, reference, status, requested_by)
+     VALUES ($1,$2,$3,$4,'EXPENSE',$5,$6,$7,$8,$9,$10,$11,$12,$13,'SUBMITTED',$14)
      RETURNING id`,
     [companyId(ctx), ctx.tenantId, ctx.branchId ?? null, payNo, id, String(cur.expNo),
-     s(b.payee) ?? s(cur.payee) ?? s(cur.payee) ?? null, payeeType, round2(num0(cur.amount)),
-     s(cur.currency) ?? 'UGX', paymentMethodId, n(b.bankAccountId) ?? n(cur.bankAccountId) ?? null,
-     s(b.reference) ?? s(cur.reference), ctx.userId ?? null, ctx.userId ?? null]
+     s(b.payee) ?? s(cur.payee), payeeType, requestAmount, s(cur.currency) ?? 'UGX',
+     paymentMethodId, n(b.bankAccountId), s(b.reference), ctx.userId ?? null]
   );
-  // If the expense was already accrued to Accounts Payable, record the
-  // settlement as a separate journal: Dr AP / Cr the actual payment account.
-  // If it has not yet been posted, the later expense posting will recognise
-  // the expense and credit the payment account in one balanced journal.
-  if (String(cur.accountingStatus) === 'POSTED') {
-    const payable = await finance.getAccountId(client, ctx, '10121100');
-    const creditCode = creditAccountForMethod(paymentMethodType, paymentMethodId);
-    const cashBank = await finance.getAccountId(client, ctx, creditCode);
-    const paymentJournalId = await finance.postJournalLines(client, ctx, {
-      entryDate: isoDate(cur.expDate),
-      journalType: 'SUPPLIER_PAYMENT',
-      description: `Settlement of expense ${cur.expNo}`,
-      lines: [
-        { account_id: payable, debit: round2(num0(cur.amount)), credit: 0, description: `Clear AP ${cur.expNo}` },
-        { account_id: cashBank, debit: 0, credit: round2(num0(cur.amount)), description: `Payment ${cur.expNo}` },
-      ],
-      refType: 'expense_payment', refId: Number(payRes.rows[0].id), refCode: payNo,
-      currency: s(cur.currency) ?? 'UGX',
-    });
-    await client.query(
-      `UPDATE payment_requests SET gl_posted = true, gl_journal_id = $1 WHERE id = $2`,
-      [paymentJournalId, Number(payRes.rows[0].id)]
-    );
+  await client.query(
+    `INSERT INTO approval_actions (company_id, tenant_id, entity_type, entity_id, entity_code, action, actor_user_id, metadata)
+     VALUES ($1,$2,'ops.expense_payments',$3,$4,'SUBMIT',$5,$6::jsonb)`,
+    [companyId(ctx), ctx.tenantId, Number(payRes.rows[0].id), payNo, ctx.userId ?? null,
+     JSON.stringify({ expenseId: id, amount: requestAmount, currency: cur.currency })]
+  );
+  await logAudit(client, ctx, { action: 'payment_request', resource: 'expenses', recordId: id,
+    recordCode: String(cur.expNo), newValues: { payNo, amount: requestAmount, status: 'SUBMITTED' } });
+  return { payId: Number(payRes.rows[0].id), payNo, amount: requestAmount, outstandingAfterRequest: round2(outstanding - requestAmount), status: 'SUBMITTED' };
+}
+
+/** Stage 2: authorise a submitted payment request. Requesters cannot approve themselves. */
+export async function approveExpensePayment(client: pg.PoolClient, ctx: Ctx, paymentId: number, reason?: string) {
+  const res = await client.query(
+    `SELECT * FROM payment_requests
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND ref_type = 'EXPENSE'
+      FOR UPDATE`,
+    [paymentId, companyId(ctx), ctx.tenantId]
+  );
+  if (!res.rows.length) throw notFound('Payment request not found');
+  const p = toCamelRow(res.rows[0]);
+  if (p.status !== 'SUBMITTED') throw badRequest(`Only submitted payment requests can be approved (current: ${p.status}).`);
+  if (p.requestedBy != null && Number(p.requestedBy) === Number(ctx.userId)) {
+    throw forbidden('The payment requester cannot approve their own payment.');
   }
+  if (!reason?.trim()) throw badRequest('Approval comment or reference is required.');
+  await client.query(
+    `UPDATE payment_requests SET status = 'APPROVED', approved_by = $1, approved_at = now(), reference = COALESCE(reference, $2), updated_at = now()
+      WHERE id = $3 AND company_id = $4 AND tenant_id = $5`,
+    [ctx.userId ?? null, reason.trim(), paymentId, companyId(ctx), ctx.tenantId]
+  );
+  await client.query(
+    `INSERT INTO approval_actions (company_id, tenant_id, entity_type, entity_id, entity_code, action, actor_user_id, comment)
+     VALUES ($1,$2,'ops.expense_payments',$3,$4,'APPROVE',$5,$6)`,
+    [companyId(ctx), ctx.tenantId, paymentId, String(p.payNo), ctx.userId ?? null, reason.trim()]
+  );
+  return { id: paymentId, status: 'APPROVED' };
+}
+
+/** Stage 3: execute an approved payment and post the AP settlement journal atomically. */
+export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, paymentId: number, b: Record<string, unknown> = {}) {
+  const pRes = await client.query(
+    `SELECT * FROM payment_requests
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND ref_type = 'EXPENSE'
+      FOR UPDATE`,
+    [paymentId, companyId(ctx), ctx.tenantId]
+  );
+  if (!pRes.rows.length) throw notFound('Payment request not found');
+  const p = toCamelRow(pRes.rows[0]);
+  if (p.status !== 'APPROVED') throw badRequest(`Only approved payment requests can be executed (current: ${p.status}).`);
+  if (p.approvedBy != null && Number(p.approvedBy) === Number(ctx.userId)) {
+    throw forbidden('The payment approver cannot execute the same payment.');
+  }
+  const eRes = await client.query(
+    `SELECT * FROM expense_transactions
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3
+      FOR UPDATE`,
+    [Number(p.refId), companyId(ctx), ctx.tenantId]
+  );
+  if (!eRes.rows.length) throw notFound('Linked expense not found');
+  const expense = toCamelRow(eRes.rows[0]);
+  if (expense.accountingStatus !== 'POSTED' || expense.glPosted !== true) {
+    throw badRequest('The expense must be posted to Accounts Payable before settlement.');
+  }
+  const prior = await client.query(
+    `SELECT COALESCE(SUM(amount),0)::numeric AS paid
+       FROM payment_requests
+      WHERE company_id = $1 AND tenant_id = $2 AND ref_type = 'EXPENSE'
+        AND ref_id = $3 AND status = 'PAID' AND id <> $4`,
+    [companyId(ctx), ctx.tenantId, Number(p.refId), paymentId]
+  );
+  const paidBefore = num0(prior.rows[0]?.paid);
+  const paymentAmount = round2(num0(p.amount));
+  const remaining = round2(num0(expense.amount) - paidBefore);
+  if (paymentAmount <= 0 || paymentAmount > remaining) {
+    throw badRequest(`Payment exceeds the remaining expense balance (${remaining}).`);
+  }
+  const method = await client.query(
+    `SELECT method_type FROM payment_methods
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
+    [Number(p.paymentMethodId), companyId(ctx), ctx.tenantId]
+  );
+  if (!method.rows.length) throw badRequest('The payment method is no longer active.');
+  const methodType = String(method.rows[0].method_type ?? '').toUpperCase();
+  if (methodType === 'CREDIT') throw badRequest('Credit terms cannot execute a payment.');
+  const payable = await finance.getAccountId(client, ctx, '10121100');
+  const creditCode = creditAccountForMethod(methodType, Number(p.paymentMethodId));
+  const cashBank = await finance.getAccountId(client, ctx, creditCode);
+  const paymentJournalId = await finance.postJournalLines(client, ctx, {
+    entryDate: isoDate(b.paymentDate ?? new Date()),
+    journalType: 'SUPPLIER_PAYMENT',
+    description: `Settlement ${p.payNo} for expense ${expense.expNo}`,
+    lines: [
+      { account_id: payable, debit: paymentAmount, credit: 0, description: `Clear AP ${expense.expNo}` },
+      { account_id: cashBank, debit: 0, credit: paymentAmount, description: `Payment ${p.payNo}` },
+    ],
+    refType: 'expense_payment', refId: paymentId, refCode: String(p.payNo),
+    currency: String(p.currency ?? expense.currency ?? 'UGX'),
+  });
+  await client.query(
+    `UPDATE payment_requests SET status = 'PAID', paid_by = $1, paid_at = now(),
+            gl_posted = true, gl_journal_id = $2, reference = COALESCE($3, reference), updated_at = now()
+      WHERE id = $4 AND company_id = $5 AND tenant_id = $6`,
+    [ctx.userId ?? null, paymentJournalId, s(b.reference), paymentId, companyId(ctx), ctx.tenantId]
+  );
+  await client.query(
+    `INSERT INTO financial_postings (company_id, tenant_id, ref_type, ref_id, ref_code, journal_id, posting_type, amount, posted_by)
+     VALUES ($1,$2,'EXPENSE_PAYMENT',$3,$4,$5,'PAYMENT',$6,$7)`,
+    [companyId(ctx), ctx.tenantId, paymentId, String(p.payNo), paymentJournalId, paymentAmount, ctx.userId ?? null]
+  );
+  const paidTotal = round2(paidBefore + paymentAmount);
+  const fullyPaid = paidTotal >= round2(num0(expense.amount));
   await client.query(
     `UPDATE expense_transactions
-        SET payment_status = 'PAID', status = 'PAID', paid_by = $1, paid_at = now(), payment_method_id = COALESCE($2, payment_method_id), updated_by = $1
-      WHERE id = $3`,
-    [ctx.userId ?? null, paymentMethodId, id]
+        SET payment_status = $1, updated_by = $2
+      WHERE id = $3 AND company_id = $4 AND tenant_id = $5`,
+    [fullyPaid ? 'PAID' : 'PARTIALLY_PAID', ctx.userId ?? null, Number(p.refId), companyId(ctx), ctx.tenantId]
   );
-  await logAudit(client, ctx, { action: 'pay', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), newValues: { payNo, status: 'PAID', paymentStatus: 'PAID' } });
-  await emitEvent(client, ctx, { eventType: 'expense.paid', entityType: 'ops.expenses', entityId: id, entityCode: String(cur.expNo), payload: { payNo, amount: num0(cur.amount) } });
-  await notifyUserAdvanced(client, ctx, cur.createdBy != null ? Number(cur.createdBy) : 0, {
-    type: 'PAYMENT_CONFIRMED',
-    title: `Payment recorded ${cur.expNo}`, body: `${cur.expNo} paid ${num0(cur.amount).toLocaleString()}`,
-    entityType: 'ops.expenses', entityId: id, actionRequired: false, severity: 'SUCCESS',
-  });
-  return { payId: Number(payRes.rows[0].id), payNo, status: 'PAID' };
+  await client.query(
+    `INSERT INTO approval_actions (company_id, tenant_id, entity_type, entity_id, entity_code, action, actor_user_id, metadata)
+     VALUES ($1,$2,'ops.expense_payments',$3,$4,'COMMENT',$5,$6::jsonb)`,
+    [companyId(ctx), ctx.tenantId, paymentId, String(p.payNo), ctx.userId ?? null,
+     JSON.stringify({ executed: true, journalId: paymentJournalId, amount: paymentAmount, paidTotal, fullyPaid })]
+  );
+  await logAudit(client, ctx, { action: 'payment_execute', resource: 'expenses', recordId: Number(p.refId),
+    recordCode: String(expense.expNo), newValues: { payNo: p.payNo, paymentJournalId, paymentAmount, paidTotal, paymentStatus: fullyPaid ? 'PAID' : 'PARTIALLY_PAID' } });
+  await emitEvent(client, ctx, { eventType: 'expense.payment_executed', entityType: 'ops.expenses',
+    entityId: Number(p.refId), entityCode: String(expense.expNo), payload: { payNo: p.payNo, paymentAmount, paidTotal } });
+  return { payId: paymentId, payNo: p.payNo, journalId: paymentJournalId, amount: paymentAmount,
+    paidTotal, outstanding: round2(num0(expense.amount) - paidTotal), paymentStatus: fullyPaid ? 'PAID' : 'PARTIALLY_PAID' };
 }
 
 /** Map a payment method type to the credit side of the expense journal. */
