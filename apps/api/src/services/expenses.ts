@@ -546,6 +546,9 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   if (expense.createdBy != null && Number(expense.createdBy) === Number(ctx.userId)) {
     throw forbidden('The expense creator cannot execute its payment.');
   }
+  if (expense.verifiedBy != null && Number(expense.verifiedBy) === Number(ctx.userId)) {
+    throw forbidden('The accounting verifier cannot execute the expense payment.');
+  }
   const expenseApprover = await client.query(
     `SELECT 1
        FROM approval_tasks t
