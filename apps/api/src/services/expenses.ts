@@ -637,13 +637,17 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
     throw badRequest(`Payment exceeds the remaining expense balance (${remaining}).`);
   }
   const method = await client.query(
-    `SELECT method_type FROM payment_methods
+    `SELECT method_type, bank_account_id FROM payment_methods
       WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
     [Number(p.paymentMethodId), companyId(ctx), ctx.tenantId]
   );
   if (!method.rows.length) throw badRequest('The payment method is no longer active.');
   const methodType = String(method.rows[0].method_type ?? '').toUpperCase();
   if (methodType === 'CREDIT') throw badRequest('Credit terms cannot execute a payment.');
+  const methodBankId = n(method.rows[0].bank_account_id);
+  if (methodBankId != null && methodBankId !== n(p.bankAccountId)) {
+    throw badRequest('The payment method bank account changed after the voucher was requested. Cancel and reissue the voucher using the current mapping.');
+  }
   let configuredBankGl: number | null = null;
   if (p.bankAccountId != null) {
     const bank = await client.query(
@@ -981,13 +985,16 @@ export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, i
     [accountId, companyId(ctx), ctx.tenantId]
   );
   if (!account.rows.length) throw badRequest('The selected expense GL account is inactive or outside the current company.');
-  await client.query(
+  const verified = await client.query(
     `UPDATE expense_transactions
         SET accounting_verified = true, verified_by = $1, verified_at = now(),
             verification_comment = $2, updated_by = $1
-      WHERE id = $3 AND company_id = $4 AND tenant_id = $5 AND status = 'APPROVED' AND accounting_verified = false`,
+      WHERE id = $3 AND company_id = $4 AND tenant_id = $5
+        AND status IN ('APPROVED','PAID') AND accounting_verified = false
+      RETURNING id`,
     [ctx.userId ?? null, comment.trim(), id, companyId(ctx), ctx.tenantId]
   );
+  if (!verified.rows.length) throw badRequest('Expense changed while accounting verification was being recorded. Reload and try again.');
   await logAudit(client, ctx, { action: 'accounting_verify', resource: 'expenses',
     recordId: id, recordCode: String(cur.expNo),
     newValues: { accountingVerified: true, accountId, amount, taxAmount, comment: comment.trim() } });
