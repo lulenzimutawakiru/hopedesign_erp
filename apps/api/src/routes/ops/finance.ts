@@ -7,6 +7,7 @@ import { asyncHandler } from '../../utils.js';
 import * as fin from '../../services/finance.js';
 import * as finAdv from '../../services/finance-advanced.js';
 import * as efrisDir from '../../services/efris/directory.js';
+import * as efrisHealth from '../../services/efris/health.js';
 import * as efrisTaxpayer from '../../services/efris/taxpayer.js';
 import * as efrisGoods from '../../services/efris/goods.js';
 import * as efrisStock from '../../services/efris/stock.js';
@@ -394,6 +395,10 @@ financeOpsRouter.get('/efris', ...runGet(['efris.transactions.view', 'finance.ef
   to: q.to != null ? String(q.to) : undefined,
 })));
 financeOpsRouter.get('/efris/status', ...runGet('efris.configuration.view', (c, ctx) => efrisDir.efrisIntegrationStatus(c, ctx)));
+financeOpsRouter.get('/efris/health', ...runGet('efris.configuration.view', (c, ctx, q) => efrisHealth.listEfrisHealthChecks(c, ctx, {
+  configId: q.configId != null ? Number(q.configId) : undefined,
+  limit: q.limit != null ? Number(q.limit) : undefined,
+})));
 financeOpsRouter.post('/efris/customer-lookup', customerLookupLimiter, ...run(['crm.customers.create', 'crm.customers.update'], (c, ctx, b) => efrisTaxpayer.lookupCustomerTin(c, ctx, { tin: b.tin })));
 financeOpsRouter.post('/efris', ...run(['efris.transactions.submit', 'finance.efris.create'], (c, ctx, b) => finAdv.registerEfrisDocument(c, ctx, {
   docType: String(b.docType),
