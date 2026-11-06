@@ -631,6 +631,9 @@ export async function reconcileExpensePayment(client: pg.PoolClient, ctx: Ctx, p
   if (p.status !== 'PAID' || p.glPosted !== true) {
     throw badRequest('Only executed payments with a posted settlement journal can be reconciled.');
   }
+  if (p.paidBy != null && Number(p.paidBy) === Number(ctx.userId)) {
+    throw forbidden('The payment executor cannot reconcile the same payment.');
+  }
   const statementReference = s(b.statementReference)?.trim();
   if (!statementReference) throw badRequest('Bank or mobile-money statement reference is required.');
   const statementAmount = round2(num0(b.statementAmount));
