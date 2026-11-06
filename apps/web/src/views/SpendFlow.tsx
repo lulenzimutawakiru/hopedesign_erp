@@ -1572,7 +1572,8 @@ function ExpenseDesk({ id }: { id: number }) {
   useEffect(load, [load]);
   useEffect(() => {
     let alive = true;
-    api<{ data: Rec }>('/api/ops/expenditure/meta')
+    if (!can(user, 'expenditure.payments.create')) return () => { alive = false; };
+    api<{ data: Rec }>('/api/ops/expenditure/payments/meta')
       .then((r) => { if (!alive) return; setMethods((r.data.paymentMethods as Rec[] | undefined) ?? []); setBankAccounts((r.data.bankAccounts as Rec[] | undefined) ?? []); })
       .catch(() => undefined);
     return () => { alive = false; };
