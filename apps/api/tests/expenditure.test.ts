@@ -87,7 +87,7 @@ describe('Ops daily expenditure module', () => {
     expect(post.body.data.accountingStatus).toBe('POSTED');
     expect(post.body.data.glPosted).toBe(true);
 
-    const request1 = await api.post(`/api/ops/expenditure/expenses/${id}/pay`).set(auth(finToken)).send({
+    const request1 = await api.post(`/api/ops/expenditure/expenses/${id}/pay`).set(auth(opsToken)).send({
       amount: 100000, paymentMethodId,
     });
     expect(request1.status).toBe(200);
@@ -96,7 +96,7 @@ describe('Ops daily expenditure module', () => {
 
     // Four-eyes: requester cannot approve their own payment voucher.
     const selfApprove = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/approve`)
-      .set(auth(finToken)).send({ reason: 'Self-approval must fail' });
+      .set(auth(opsToken)).send({ reason: 'Self-approval must fail' });
     expect(selfApprove.status).toBe(403);
 
     const { token: adminToken } = await loginAs('admin');
@@ -106,7 +106,7 @@ describe('Ops daily expenditure module', () => {
     expect(approve1.body.data.status).toBe('APPROVED');
 
     const execute1 = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/execute`)
-      .set(auth(opsToken)).send({ reference: `BANK-TEST-${Date.now()}`, paymentDate: '2026-11-06' });
+      .set(auth(finToken)).send({ reference: `BANK-TEST-${Date.now()}`, paymentDate: '2026-11-06' });
     expect(execute1.status).toBe(200);
     expect(execute1.body.data.paymentStatus).toBe('PARTIALLY_PAID');
     expect(Number(execute1.body.data.paidTotal)).toBe(100000);
@@ -123,7 +123,7 @@ describe('Ops daily expenditure module', () => {
       .set(auth(adminToken)).send({ reason: 'Second instalment verified' });
     expect(approve2.status).toBe(200);
     const execute2 = await api.post(`/api/ops/expenditure/payments/${request2.body.data.payId}/execute`)
-      .set(auth(opsToken)).send({ reference: `BANK-TEST-2-${Date.now()}`, paymentDate: '2026-11-06' });
+      .set(auth(finToken)).send({ reference: `BANK-TEST-2-${Date.now()}`, paymentDate: '2026-11-06' });
     expect(execute2.status).toBe(200);
     expect(execute2.body.data.paymentStatus).toBe('PAID');
     expect(Number(execute2.body.data.paidTotal)).toBe(250000);
@@ -134,7 +134,7 @@ describe('Ops daily expenditure module', () => {
     expect(history.body.data.payments.every((p: { glPosted: boolean }) => p.glPosted)).toBe(true);
 
     const reconcile = await api.post(`/api/ops/expenditure/payments/${request2.body.data.payId}/reconcile`)
-      .set(auth(finToken)).send({
+      .set(auth(opsToken)).send({
         statementReference: `BANK-STATEMENT-${Date.now()}`,
         statementAmount: 150000,
         statementDate: '2026-11-06',
@@ -142,7 +142,7 @@ describe('Ops daily expenditure module', () => {
     expect(reconcile.status).toBe(200);
     expect(reconcile.body.data.status).toBe('MATCHED');
     const selfApproveRecon = await api.post(`/api/ops/expenditure/payment-reconciliations/${reconcile.body.data.id}/approve`)
-      .set(auth(finToken)).send({ reason: 'Self-approval must fail' });
+      .set(auth(opsToken)).send({ reason: 'Self-approval must fail' });
     expect(selfApproveRecon.status).toBe(403);
     const approveRecon = await api.post(`/api/ops/expenditure/payment-reconciliations/${reconcile.body.data.id}/approve`)
       .set(auth(adminToken)).send({ reason: 'Bank statement independently checked' });
