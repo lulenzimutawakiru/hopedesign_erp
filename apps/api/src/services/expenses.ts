@@ -755,7 +755,18 @@ export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, i
   if (cur.createdBy != null && Number(cur.createdBy) === Number(ctx.userId)) {
     throw forbidden('The expense creator cannot perform accounting verification.');
   }
-  if (cur.approvedBy != null && Number(cur.approvedBy) === Number(ctx.userId)) {
+  const approvalActor = await client.query(
+    `SELECT t.decided_by
+       FROM approval_tasks t
+       JOIN workflow_instances i ON i.id = t.instance_id
+      WHERE i.entity_type = 'ops.expenses' AND i.entity_id = $1
+        AND i.company_id = $2 AND i.tenant_id = $3
+        AND t.status = 'APPROVED' AND t.decided_by IS NOT NULL
+      ORDER BY t.decided_at DESC LIMIT 1`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
+  if (approvalActor.rows[0]?.decided_by != null &&
+      Number(approvalActor.rows[0].decided_by) === Number(ctx.userId)) {
     throw forbidden('The expense approver cannot perform accounting verification.');
   }
   const amount = round2(num0(cur.amount));
@@ -781,11 +792,11 @@ export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, i
   );
   if (!category.rows.length) throw badRequest('The expense category is inactive or outside the current company.');
   const accountId = cur.accountId != null ? Number(cur.accountId) :
-    category.rows[0].account_id != null ? Number(category.rows[0].account_id) : null;
-  if (accountId == null) throw badRequest('Assign an expense GL account before accounting verification.');
+    category.rows[0].account_id != null ? Number(category.rows[0].account_id) :
+      await finance.getAccountId(client, ctx, '10254500');
   const account = await client.query(
     `SELECT id FROM chart_of_accounts
-      WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true AND is_posting = true`,
     [accountId, companyId(ctx), ctx.tenantId]
   );
   if (!account.rows.length) throw badRequest('The selected expense GL account is inactive or outside the current company.');
