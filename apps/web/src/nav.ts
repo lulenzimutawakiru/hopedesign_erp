@@ -300,12 +300,12 @@ export const NAV_GROUPS: NavGroup[] = [
         ],
       },
       {
-        id: 'spend', label: 'Requisitions & Spend', href: '/spend', perm: 'expenditure.dashboards.view', module: 'expenditure', accent: 'fin',
+        id: 'spend', label: 'Requisitions & Spend', href: '/spend', perm: 'expenditure.expenses.create', module: 'expenditure', accent: 'fin',
         keywords: 'requisition expenditure petty cash expense claim budget approval',
         children: [
           { id: 'board', label: 'Command Center', href: '/spend', perm: 'expenditure.dashboards.view' , group: 'Command Center'},
           { id: 'requisitions', label: 'Requisitions', href: '/spend/requisitions', perm: 'expenditure.requisitions.view' , group: 'Requests'},
-          { id: 'expenses', label: 'Daily Expenditure', href: '/spend/expenses', perm: 'expenditure.expenses.view' , group: 'Requests'},
+          { id: 'expenses', label: 'My Expenses', href: '/spend/expenses', perm: 'expenditure.expenses.view_own' , group: 'Requests'},
           { id: 'petty-cash', label: 'Petty Cash', href: '/spend/petty-cash', perm: 'expenditure.petty_cash.view' , group: 'Requests'},
           { id: 'claims', label: 'Expense Claims', href: '/spend/claims', perm: 'expenditure.claims.view' , group: 'Requests'},
           { id: 'close', label: 'Daily Close', href: '/spend/close', perm: 'expenditure.daily_close.view' , group: 'Close'},
