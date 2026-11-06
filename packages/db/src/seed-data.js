@@ -7,6 +7,42 @@ const bcrypt = require("bcryptjs");
 const { buildPermissions, expandGrants, ROLES } = require("./catalogue");
 const { resolveSeedPassword } = require("./seed-password");
 
+const UNIVERSAL_EXPENSE_GRANTS = [
+  "expenditure.expenses.create",
+  "expenditure.expenses.update",
+  "expenditure.expenses.submit",
+  "expenditure.expenses.view_own",
+];
+const PAYMENT_OPERATIONS_ROLES = new Set([
+  "super_administrator", "system_administrator", "cfo", "finance_manager",
+  "chief_accountant", "managing_director", "executive_director",
+  "general_manager", "operations_director", "procurement_manager", "commercial_director",
+]);
+const PAYMENT_APPROVER_ROLES = new Set([
+  "super_administrator", "system_administrator", "cfo", "finance_manager",
+  "chief_accountant", "managing_director", "executive_director",
+]);
+const RECONCILIATION_ROLES = new Set([
+  "super_administrator", "system_administrator", "chief_accountant",
+  "finance_manager", "cfo", "managing_director", "executive_director",
+]);
+const ACCOUNTING_VERIFIER_ROLES = new Set([
+  "super_administrator", "system_administrator", "chief_accountant", "finance_manager", "cfo",
+]);
+
+function seedRolePermissionCodes(role) {
+  const codes = [...expandGrants(role.grants), ...UNIVERSAL_EXPENSE_GRANTS];
+  if (PAYMENT_OPERATIONS_ROLES.has(role.code)) {
+    codes.push("expenditure.payments.view", "expenditure.payments.create", "expenditure.payments.post");
+  }
+  if (PAYMENT_APPROVER_ROLES.has(role.code)) codes.push("expenditure.payments.approve");
+  if (RECONCILIATION_ROLES.has(role.code)) {
+    codes.push("expenditure.payments.reconcile", "expenditure.payments.reconcile_approve");
+  }
+  if (ACCOUNTING_VERIFIER_ROLES.has(role.code)) codes.push("expenditure.expenses.verify");
+  return [...new Set(codes)];
+}
+
 // ---------- helpers ----------
 function json(v) {
   if (v === undefined) return undefined;
@@ -99,7 +135,7 @@ async function reconcileRbac(client, tenantId) {
   for (const role of ROLES) {
     const roleId = roleIdByCode[role.code];
     if (!roleId) continue;
-    const codes = [...new Set([...expandGrants(role.grants), 'expenditure.expenses.create', 'expenditure.expenses.update', 'expenditure.expenses.submit', 'expenditure.expenses.view_own'])].filter((c) => permIdByCode[c]);
+    const codes = seedRolePermissionCodes(role).filter((c) => permIdByCode[c]);
     await client.query("DELETE FROM role_permissions WHERE role_id = $1", [roleId]);
     if (codes.length) {
       const rolePermRows = codes.map((c) => ({
@@ -1665,7 +1701,7 @@ async function ensureAssetModuleSeed(client, tenantId, companyId = null) {
   for (const roleCode of assetRoleCodes) {
     const role = ROLES.find((r) => r.code === roleCode);
     if (!role) continue;
-    const codes = [...new Set([...expandGrants(role.grants), 'expenditure.expenses.create', 'expenditure.expenses.update', 'expenditure.expenses.submit', 'expenditure.expenses.view_own'])].filter((c) => permIdByCode[c]);
+    const codes = seedRolePermissionCodes(role).filter((c) => permIdByCode[c]);
     const roleId = await upsert("roles", ["tenant_id", "company_id", "code"], {
       tenant_id: tenantId, company_id: companyId, code: role.code,
       name: role.name, description: role.description,
@@ -3188,7 +3224,7 @@ async function seedAll(pool) {
 
     const roleIdByCode = {};
     for (const role of ROLES) {
-      const codes = [...new Set([...expandGrants(role.grants), 'expenditure.expenses.create', 'expenditure.expenses.update', 'expenditure.expenses.submit', 'expenditure.expenses.view_own'])];
+      const codes = seedRolePermissionCodes(role);
       const roleId = await insertOne(client, "roles", {
         tenant_id: tenantId,
         company_id: companyId,
