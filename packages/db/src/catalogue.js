@@ -3,7 +3,7 @@
 // Permission codes: {module}.{resource}.{action}
 // ============================================================
 
-const ACTIONS = ["view","create","update","delete","submit","approve","reject","cancel","void","archive","restore","print","export","import","scan","transfer","assign","release","convert","verify","post","generate","complete","admit","discharge","dispense","settle","terminate","delete_draft","manage_templates","manage_clauses","manage_versions","manage_legal_rules","view_audit","validate","sign","download","renew","vary","issue","manage","dispose","audit","depreciate","impair","capitalize","maintain","inspect","checkin","checkout","replace","activate","investigate","resolve","comment","reprint","perform","close","return","send","suspend","resume","revoke","expire","upload"];
+const ACTIONS = ["view","view_own","create","update","delete","submit","approve","reject","cancel","void","archive","restore","print","export","import","scan","transfer","assign","release","convert","verify","post","generate","complete","admit","discharge","dispense","settle","terminate","delete_draft","manage_templates","manage_clauses","manage_versions","manage_legal_rules","view_audit","validate","sign","download","renew","vary","issue","manage","dispose","audit","depreciate","impair","capitalize","maintain","inspect","checkin","checkout","replace","activate","investigate","resolve","comment","reprint","perform","close","return","send","suspend","resume","revoke","expire","upload","reconcile","reconcile_approve"];
 
 const MODULES = {
   dashboard: { overview: ["view"], kpis: ["view"] },
@@ -174,7 +174,7 @@ const MODULES = {
     kcb: ["view","manage","test"],
     equity: ["view","manage","test"],
     budgets: ["view","create","update","submit","approve","close"],
-    expenses: ["view","create","update","submit","approve","post","void"],
+    expenses: ["view","view_own","create","update","submit","approve","post","void"],
     advances: ["view","create","settle","void"],
     taxes: ["view","create","update"],
     reports: ["view","print","export"],
@@ -199,11 +199,11 @@ const MODULES = {
   expenditure: {
     dashboards: ["view"],
     requisitions: ["view","create","update","submit","approve","fulfill","cancel"],
-    expenses: ["view","create","update","submit","approve","post","void"],
+    expenses: ["view","view_own","create","update","submit","approve","verify","post","void"],
     petty_cash: ["view","create","update","replenish","reconcile"],
     claims: ["view","create","approve","reimburse"],
     receipts: ["view","upload","verify"],
-    payments: ["view","create","approve","post"],
+    payments: ["view","create","approve","post","reconcile","reconcile_approve"],
     daily_close: ["view","create","approve"],
     reports: ["view"],
     settings: ["manage"],
