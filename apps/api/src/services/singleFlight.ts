@@ -26,6 +26,7 @@ export const WORKER_LOCKS = {
   EFRIS_WORKER: 88105,
   SERVICE_DESK_SLA: 88106,
   EFRIS_CREDIT_NOTE_POLL: 88107,
+  EFRIS_HEALTH_CHECK: 88108,
 } as const;
 
 type Release = () => Promise<void>;

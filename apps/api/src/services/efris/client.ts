@@ -71,6 +71,8 @@ export interface SubmitFiscalOptions {
   docType?: string;
   tin?: string | null;
   securityFlags?: Record<string, unknown> | null;
+  /** Stable data-exchange id; retries of one document reuse it (GAP-4). */
+  exchangeId?: string | null;
 }
 
 export interface FiscalIdentifiers {
@@ -377,6 +379,7 @@ async function submitUra(opts: SubmitFiscalOptions, endpoint: string): Promise<u
     tin: identity.tin,
     deviceNo: identity.deviceNo,
     flags: identity.flags,
+    exchangeId: opts.exchangeId ?? null,
   };
   const aesKey = await fetchAesKey(opts, endpoint, global, identity.privateKey);
   let envelope: Record<string, unknown>;
@@ -429,6 +432,7 @@ async function submitViaOfflineEnabler(opts: SubmitFiscalOptions, endpoint: stri
     tin,
     deviceNo: resolveDeviceNo(flags, opts.clientId) ?? '',
     flags,
+    exchangeId: opts.exchangeId ?? null,
   };
   // No private key is passed: buildUnencryptedEnvelope leaves the signature empty
   // and the content plaintext, exactly the offline-mode request the TCS expects.
@@ -599,6 +603,7 @@ async function postUraContent(
       tin,
       deviceNo: resolveDeviceNo(flags, opts.clientId) ?? '',
       flags,
+      exchangeId: opts.exchangeId ?? null,
     };
     const envelope = buildUnencryptedEnvelope(content, global, undefined, { offlineEnabler: true });
     const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
@@ -615,7 +620,7 @@ async function postUraContent(
   }
 
   const identity = s2sIdentity(opts);
-  const global: UraGlobalOptions = { interfaceCode, tin: identity.tin, deviceNo: identity.deviceNo, flags };
+  const global: UraGlobalOptions = { interfaceCode, tin: identity.tin, deviceNo: identity.deviceNo, flags, exchangeId: opts.exchangeId ?? null };
   const aesKey = await fetchAesKey(opts, endpoint, global, identity.privateKey);
   const envelope = buildEncryptedEnvelope(content, aesKey, global, identity.privateKey);
   const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);

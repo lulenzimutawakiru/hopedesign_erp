@@ -55,6 +55,7 @@ import { hikvisionOpsRouter, hikvisionAttendanceOpsRouter } from './routes/ops/h
 import { runHikvisionWorkerTick } from './services/hikvision/processor.js';
 import { isQueueEnabled } from './services/queue/connection.js';
 import { runEfrisWorkerTick, runEfrisCreditNotePollTick } from './services/efris/processor.js';
+import { runEfrisHealthCheckTick } from './services/efris/health.js';
 import { requisitionsOpsRouter } from './routes/ops/requisitions.js';
 import { expenditureOpsRouter } from './routes/ops/expenditure.js';
 import { communicationOpsRouter } from './routes/ops/communication.js';
@@ -308,6 +309,15 @@ if (isQueueEnabled()) {
       console.error('[efrisCreditNotePoll]', err instanceof Error ? err.message : err);
     });
   }, 60_000);
+
+  // EFRIS health monitor: probe every active TEST/ACTIVE configuration with a
+  // read-only T101/token call every 5 minutes and record the outcome. Surfaces
+  // device-registration and credential failures before a live submission does.
+  setInterval(() => {
+    singleFlight(WORKER_LOCKS.EFRIS_HEALTH_CHECK, runEfrisHealthCheckTick).catch((err: unknown) => {
+      console.error('[efrisHealthCheck]', err instanceof Error ? err.message : err);
+    });
+  }, 300_000);
 
   // Service Desk SLA worker: re-evaluate response/resolution timers and raise
   // escalations every minute. Single-flight so a breach is never escalated by

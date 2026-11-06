@@ -283,6 +283,13 @@ export interface UraGlobalOptions {
   tin: string;
   deviceNo: string;
   flags?: Record<string, unknown> | null;
+  /**
+   * Stable data-exchange id carried in globalInfo.dataExchangeId. When omitted,
+   * a random id is generated per envelope. Callers that replay the same logical
+   * submission (a retry of one document) pass the same id so URA can deduplicate
+   * on the exchange id rather than seeing a fresh one each attempt.
+   */
+  exchangeId?: string | null;
 }
 
 export function buildGlobalInfo(opts: UraGlobalOptions, now = new Date()): Record<string, unknown> {
@@ -291,7 +298,7 @@ export function buildGlobalInfo(opts: UraGlobalOptions, now = new Date()): Recor
   return {
     appId: flagString(flags, 'appId', 'app_id') || 'AP04',
     version: flagString(flags, 'clientVersion', 'client_version', 'version') || DEFAULT_CLIENT_VERSION,
-    dataExchangeId: crypto.randomBytes(16).toString('hex').toUpperCase(),
+    dataExchangeId: opts.exchangeId ?? crypto.randomBytes(16).toString('hex').toUpperCase(),
     interfaceCode: opts.interfaceCode,
     requestCode: 'TP',
     requestTime: ugandaTimestamp(now),
@@ -561,6 +568,8 @@ export interface UraLine {
   goodsCategoryName?: string | null;
   /** 1 when the line is VAT-applicable, 0 otherwise. */
   vatApplicableFlag?: string | null;
+  /** True when this line is an exempt supply (URA distinguishes exempt from zero-rated). */
+  exempt?: boolean;
 }
 
 export interface UraParty {
@@ -596,6 +605,10 @@ export interface UraInvoiceInput {
   applicationTime?: string | null;
   /** T110 credit note application: seller's reference for the original sale. */
   sellersReferenceNo?: string | null;
+  /** Config-driven URA tax-category mapping (security_flags.taxCategories). */
+  taxCategories?: TaxCategoryMapping | null;
+  /** Config-driven URA buyer-type mapping (security_flags.buyerTypes). */
+  buyerTypes?: BuyerTypeMapping | null;
 }
 
 interface PreparedLine {
@@ -610,6 +623,7 @@ interface PreparedLine {
   goodsCategoryId: string;
   goodsCategoryName: string;
   vatApplicableFlag: string;
+  exempt: boolean;
 }
 
 function prepareLines(input: UraInvoiceInput): PreparedLine[] {
@@ -640,6 +654,7 @@ function prepareLines(input: UraInvoiceInput): PreparedLine[] {
       goodsCategoryId: compact(line.goodsCategoryId) || '',
       goodsCategoryName: compact(line.goodsCategoryName) || '',
       vatApplicableFlag: compact(line.vatApplicableFlag) || '',
+      exempt: line.exempt === true,
     };
   });
   const netTarget = Math.max(input.grossAmount - input.taxAmount, 0);
@@ -655,10 +670,104 @@ function prepareLines(input: UraInvoiceInput): PreparedLine[] {
   return prepared;
 }
 
-function taxCategory(rate: number): { code: string; name: string } {
-  if (rate >= 0.17 && rate <= 0.19) return { code: '01', name: 'Standard' };
-  if (rate === 0) return { code: '02', name: 'Zero' };
-  return { code: '01', name: 'Standard' };
+export interface TaxCategoryMapping {
+  /** Override for the standard-rated category (default '01' / "Standard"). */
+  standard?: { code: string; name?: string } | null;
+  /** Override for the zero-rated category (default '02' / "Zero"). */
+  zero?: { code: string; name?: string } | null;
+  /**
+   * URA tax-category code for exempt supplies. REQUIRED before an exempt line is
+   * emitted: URA treats exempt and zero-rated as distinct categories, and the
+   * exempt code must come from the official specification, not be guessed here.
+   */
+  exempt?: { code: string; name?: string } | null;
+  /** Explicit rate → category overrides, keyed by tax percent as a string ("0.12"). */
+  rates?: Record<string, { code: string; name?: string }> | null;
+}
+
+export interface TaxCategoryOptions {
+  exempt?: boolean;
+  categories?: TaxCategoryMapping | null;
+}
+
+/**
+ * Resolve the URA tax-category code for a line, fail-closed (GAP-2).
+ *
+ * Standard (18%) and zero (0%) are the two categories this integration has
+ * historically proven against the sandbox, so they keep those defaults. Every
+ * other rate, and every exempt line, must be mapped explicitly in the
+ * configuration (`security_flags.taxCategories`) — otherwise the build throws
+ * rather than silently labelling a non-standard rate "Standard" or conflating an
+ * exempt supply with a zero-rated one.
+ */
+export function taxCategory(rate: number, opts: TaxCategoryOptions = {}): { code: string; name: string } {
+  const cats = opts.categories ?? {};
+  if (opts.exempt) {
+    const code = cats.exempt?.code?.trim();
+    if (code) return { code, name: cats.exempt?.name?.trim() || '' };
+    throw new EfrisProtocolError(
+      'EFRIS_EXEMPT_CATEGORY_UNMAPPED',
+      'An exempt supply was detected but no URA exempt tax-category code is configured ' +
+        '(security_flags.taxCategories.exempt). URA treats exempt and zero-rated as distinct ' +
+        'categories, so refusing rather than mislabelling the line as zero-rated.'
+    );
+  }
+  if (rate >= 0.17 && rate <= 0.19) {
+    const code = cats.standard?.code?.trim();
+    return code ? { code, name: cats.standard?.name?.trim() || 'Standard' } : { code: '01', name: 'Standard' };
+  }
+  if (rate === 0) {
+    const code = cats.zero?.code?.trim();
+    return code ? { code, name: cats.zero?.name?.trim() || 'Zero' } : { code: '02', name: 'Zero' };
+  }
+  const key = Number.isFinite(rate) ? String(rate) : '';
+  const explicit = cats.rates?.[key];
+  if (explicit?.code?.trim()) {
+    return { code: explicit.code.trim(), name: explicit.name?.trim() || '' };
+  }
+  throw new EfrisProtocolError(
+    'EFRIS_TAX_CATEGORY_UNMAPPED',
+    `No URA tax category is mapped for a ${(rate * 100).toFixed(2)}% rate. ` +
+      'Add it to security_flags.taxCategories.rates (or correct the line rate) rather than labelling it Standard.'
+  );
+}
+
+export interface BuyerTypeMapping {
+  /** Registered-business buyer-type code (default '0'). */
+  business?: string | null;
+  /** Consumer / final-customer buyer-type code (default '1'). */
+  consumer?: string | null;
+  /**
+   * Government-buyer (B2G) code. REQUIRED before a government sale is emitted:
+   * the URA B2G classification must come from the official specification.
+   */
+  government?: string | null;
+}
+
+/**
+ * Resolve `buyerDetails.buyerType`, fail-closed for government buyers (GAP-3).
+ *
+ * The presence of a buyer TIN has historically decided business ('0') vs
+ * consumer ('1'). A government buyer is a distinct classification that URA does
+ * not document by default, so when the ERP marks the buyer as government the
+ * build requires an explicit `security_flags.buyerTypes.government` code and
+ * refuses otherwise, rather than silently classifying a government sale as a
+ * business buyer.
+ */
+export function buyerTypeCode(buyer: UraParty | null | undefined, mapping?: BuyerTypeMapping | null): string {
+  const map = mapping ?? {};
+  const kind = (buyer?.buyerKind ?? '').trim().toLowerCase();
+  if (kind === 'government' || kind === 'gov' || kind === 'b2g') {
+    const code = map.government?.trim();
+    if (code) return code;
+    throw new EfrisProtocolError(
+      'EFRIS_B2G_BUYER_TYPE_UNMAPPED',
+      'A government buyer was detected but no URA government buyer-type code is configured ' +
+        '(security_flags.buyerTypes.government). Refusing rather than misclassifying the sale as a business buyer.'
+    );
+  }
+  if (buyer?.tin) return map.business?.trim() || '0';
+  return map.consumer?.trim() || '1';
 }
 
 /** Inner T109 (or T110) content. Amounts are strings, which is what URA parses. */
@@ -702,7 +811,7 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
   }));
   const byCategory = new Map<string, { code: string; name: string; net: number; tax: number; gross: number; rate: number }>();
   for (const line of lines) {
-    const category = taxCategory(line.rate);
+    const category = taxCategory(line.rate, { exempt: line.exempt, categories: input.taxCategories });
     const current = byCategory.get(category.code) ?? { ...category, net: 0, tax: 0, gross: 0, rate: line.rate };
     current.net += line.net;
     current.tax += line.tax;
@@ -763,7 +872,7 @@ export function buildT109Content(input: UraInvoiceInput): Record<string, unknown
       buyerMobilePhone: compact(buyer?.phone),
       buyerLinePhone: '',
       buyerPlaceOfBusi: '',
-      buyerType: buyerTin ? '0' : '1',
+      buyerType: buyerTypeCode(buyer, input.buyerTypes),
       buyerCitizenship: '',
       buyerSector: '',
       buyerReferenceNo: '',
@@ -859,7 +968,7 @@ export function buildT110Content(input: UraInvoiceInput): Record<string, unknown
   }));
   const byCategory = new Map<string, { code: string; name: string; net: number; tax: number; gross: number; rate: number }>();
   for (const line of lines) {
-    const category = taxCategory(line.rate);
+    const category = taxCategory(line.rate, { exempt: line.exempt, categories: input.taxCategories });
     const current = byCategory.get(category.code) ?? { ...category, net: 0, tax: 0, gross: 0, rate: line.rate };
     current.net += line.net;
     current.tax += line.tax;
@@ -915,7 +1024,7 @@ export function buildT110Content(input: UraInvoiceInput): Record<string, unknown
       buyerMobilePhone: compact(buyer?.phone),
       buyerLinePhone: '',
       buyerPlaceOfBusi: '',
-      buyerType: buyerTin ? '0' : '1',
+      buyerType: buyerTypeCode(buyer, input.buyerTypes),
       buyerCitizenship: '1',
       buyerSector: '1',
       buyerReferenceNo: '',
