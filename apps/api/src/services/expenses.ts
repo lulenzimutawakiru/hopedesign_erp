@@ -476,6 +476,9 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   if (!pRes.rows.length) throw notFound('Payment request not found');
   const p = toCamelRow(pRes.rows[0]);
   if (p.status !== 'APPROVED') throw badRequest(`Only approved payment requests can be executed (current: ${p.status}).`);
+  if (p.requestedBy != null && Number(p.requestedBy) === Number(ctx.userId)) {
+    throw forbidden('The payment requester cannot execute their own payment.');
+  }
   if (p.approvedBy != null && Number(p.approvedBy) === Number(ctx.userId)) {
     throw forbidden('The payment approver cannot execute the same payment.');
   }
