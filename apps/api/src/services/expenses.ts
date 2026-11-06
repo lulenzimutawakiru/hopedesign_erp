@@ -305,8 +305,8 @@ const EXPENSE_EDIT = {
 } as const;
 
 export async function updateExpense(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown>) {
-  const cur = await getExpense(client, ctx, id);
-  if (cur.status !== 'DRAFT') throw badRequest(`Only draft expenses can be edited (current: ${cur.status})`);
+  const cur = await getExpense(client, ctx, id, true);
+  if (cur.status !== 'DRAFT') throw badRequest(`Only your own draft expenses can be edited (current: ${cur.status})`);
   const sets: string[] = [];
   const params: unknown[] = [];
   const changes: Record<string, unknown> = {};
@@ -342,8 +342,8 @@ export async function updateExpense(client: pg.PoolClient, ctx: Ctx, id: number,
 }
 
 export async function submitExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
-  const cur = await getExpense(client, ctx, id);
-  if (cur.status !== 'DRAFT') throw badRequest(`Only draft expenses can be submitted (current: ${cur.status})`);
+  const cur = await getExpense(client, ctx, id, true);
+  if (cur.status !== 'DRAFT') throw badRequest(`Only your own draft expenses can be submitted (current: ${cur.status})`);
   const amount = num0(cur.amount);
   const accountId = cur.accountId != null ? Number(cur.accountId) : null;
   if (accountId) {
@@ -525,10 +525,12 @@ const EXPENSE_SELECT = `
   LEFT JOIN users u ON u.id = et.created_by
 `;
 
-export async function getExpense(client: pg.PoolClient, ctx: Ctx, id: number): Promise<Record<string, unknown>> {
-  const res = await client.query(`${EXPENSE_SELECT} WHERE et.id = $1 AND et.tenant_id = $2 AND et.company_id = $3`, [
-    id, ctx.tenantId, companyId(ctx),
-  ]);
+export async function getExpense(client: pg.PoolClient, ctx: Ctx, id: number, ownOnly = false): Promise<Record<string, unknown>> {
+  const res = await client.query(
+    `${EXPENSE_SELECT} WHERE et.id = $1 AND et.tenant_id = $2 AND et.company_id = $3
+      AND ($4::boolean = false OR et.created_by = $5)`,
+    [id, ctx.tenantId, companyId(ctx), ownOnly, ctx.userId ?? null]
+  );
   if (!res.rows.length) throw notFound('Expense not found');
   const header = toCamelRow(res.rows[0]);
   const lines = await client.query(
@@ -547,13 +549,20 @@ export async function getExpense(client: pg.PoolClient, ctx: Ctx, id: number): P
      WHERE aa.entity_type = 'ops.expenses' AND aa.entity_id = $1 ORDER BY aa.id`,
     [id]
   );
-  const dup = header.duplicateOfId != null ? await getExpense(client, ctx, Number(header.duplicateOfId)) : null;
+  const dupRes = header.duplicateOfId != null
+    ? await client.query(
+        `SELECT id, exp_no, amount, status FROM expense_transactions
+         WHERE id = $1 AND tenant_id = $2 AND company_id = $3
+           AND ($4::boolean = false OR created_by = $5)`,
+        [Number(header.duplicateOfId), ctx.tenantId, companyId(ctx), ownOnly, ctx.userId ?? null]
+      )
+    : { rows: [] };
   return {
     ...header,
     lines: toCamelRows(lines.rows),
     receipts: toCamelRows(receipts.rows),
     timeline: toCamelRows(actions.rows),
-    duplicateOf: dup ? { id: dup.id, expNo: dup.expNo, amount: dup.amount, status: dup.status } : null,
+    duplicateOf: dupRes.rows.length ? toCamelRow(dupRes.rows[0]) : null,
   };
 }
 
@@ -562,6 +571,10 @@ export async function listExpenses(client: pg.PoolClient, ctx: Ctx, q: Record<st
   const pageSize = Math.min(100, Math.max(1, num0(q.pageSize) || 30));
   const params: unknown[] = [ctx.tenantId, companyId(ctx)];
   const where = ['et.tenant_id = $1', 'et.company_id = $2'];
+  if (q.ownOnly === true && ctx.userId != null) {
+    params.push(ctx.userId);
+    where.push(`et.created_by = ${params.length}`);
+  }
   if (s(q.status)) { params.push(s(q.status)); where.push(`et.status = $${params.length}`); }
   if (s(q.paymentStatus)) { params.push(s(q.paymentStatus)); where.push(`et.payment_status = $${params.length}`); }
   if (n(q.departmentId) != null) { params.push(n(q.departmentId)); where.push(`et.department_id = $${params.length}`); }
