@@ -23,11 +23,55 @@ async function nextDoc(client: pg.PoolClient, ctx: Ctx, prefix: string): Promise
   return String(res.rows[0].code);
 }
 
-function inclusiveDays(start: string, end: string): number {
-  const s = Date.parse(`${start.slice(0, 10)}T00:00:00Z`);
-  const e = Date.parse(`${end.slice(0, 10)}T00:00:00Z`);
-  if (!Number.isFinite(s) || !Number.isFinite(e) || e < s) throw badRequest('Leave dates are invalid');
-  return Math.floor((e - s) / 86400000) + 1;
+const LEAVE_TYPES = ['ANNUAL', 'SICK', 'MATERNITY', 'PATERNITY', 'UNPAID', 'STUDY', 'COMPASSIONATE'];
+
+function parseLeaveDay(value: string): number {
+  const t = Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(t)) throw badRequest('Leave dates are invalid');
+  return t;
+}
+
+/** Working days, skipping Saturday, Sunday and company public holidays. */
+async function workingDays(client: pg.PoolClient, ctx: Ctx, start: string, end: string): Promise<number> {
+  const s = parseLeaveDay(start);
+  const e = parseLeaveDay(end);
+  if (e < s) throw badRequest('Leave dates are invalid');
+  const hol = await client.query(
+    `SELECT to_char(holiday_date, 'YYYY-MM-DD') AS d, is_recurring
+     FROM holidays
+     WHERE tenant_id = $1 AND company_id = $2 AND country = 'UG'`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  const exact = new Set<string>();
+  const recurring = new Set<string>();
+  for (const row of hol.rows) {
+    const d = String(row.d);
+    if (row.is_recurring) recurring.add(d.slice(5, 10));
+    else exact.add(d);
+  }
+  let days = 0;
+  for (let t = s; t <= e; t += 86400000) {
+    const dt = new Date(t);
+    const dow = dt.getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    const iso = dt.toISOString().slice(0, 10);
+    if (exact.has(iso) || recurring.has(iso.slice(5, 10))) continue;
+    days += 1;
+  }
+  if (days <= 0) throw badRequest('The request covers no working days');
+  return days;
+}
+
+async function leaveDaysInYear(client: pg.PoolClient, employeeId: number, leaveType: string, year: number): Promise<number> {
+  const res = await client.query(
+    `SELECT COALESCE(SUM(days), 0)::numeric AS days
+     FROM leave_requests
+     WHERE employee_id = $1 AND leave_type = $2
+       AND status IN ('SUBMITTED','APPROVED')
+       AND EXTRACT(YEAR FROM start_date) = $3`,
+    [employeeId, leaveType, year]
+  );
+  return Number(res.rows[0].days) || 0;
 }
 
 function sumAllowances(raw: unknown): number {
@@ -859,7 +903,7 @@ export async function createLeave(
 ) {
   const emp = await client.query(`SELECT id FROM employees WHERE id = $1 AND tenant_id = $2`, [input.employeeId, ctx.tenantId]);
   if (emp.rows.length === 0) throw notFound('Employee not found');
-  const days = inclusiveDays(input.startDate, input.endDate);
+  const days = await workingDays(client, ctx, input.startDate, input.endDate);
   const overlap = await client.query(
     `SELECT id FROM leave_requests
      WHERE employee_id = $1 AND status IN ('SUBMITTED','APPROVED')
@@ -867,24 +911,42 @@ export async function createLeave(
     [input.employeeId, input.startDate, input.endDate]
   );
   if (overlap.rows.length) throw badRequest('Overlaps an existing leave request');
-  const leaveType = input.leaveType ?? 'ANNUAL';
+  const leaveType = String(input.leaveType ?? 'ANNUAL').toUpperCase();
+  if (!LEAVE_TYPES.includes(leaveType)) throw badRequest('Leave type is not recognised');
+  const year = Number(String(input.startDate).slice(0, 4));
+  if (leaveType === 'MATERNITY' && days > 60) {
+    throw badRequest('Maternity leave is 60 working days on full pay');
+  }
+  if (leaveType === 'PATERNITY') {
+    if (days > 4) throw badRequest('Paternity leave is 4 working days a year');
+    const used = await leaveDaysInYear(client, input.employeeId, 'PATERNITY', year);
+    if (used + days > 4) throw badRequest('Paternity leave is 4 working days a year');
+  }
+  if (leaveType === 'COMPASSIONATE') {
+    if (days > 3) throw badRequest('Compassionate leave is 3 working days on one occasion');
+    const used = await leaveDaysInYear(client, input.employeeId, 'COMPASSIONATE', year);
+    if (used + days > 6) throw badRequest('Compassionate leave is 6 working days a year');
+  }
   // Link the request to the configured leave type, balance and policy when present.
   const typeRes = await client.query(
     `SELECT id FROM leave_types WHERE tenant_id = $1 AND company_id = $2 AND code = $3 AND status = 'ACTIVE' ORDER BY id LIMIT 1`,
     [ctx.tenantId, ctx.companyId, leaveType]
   );
   const leaveTypeId = typeRes.rows.length ? Number(typeRes.rows[0].id) : null;
-  const year = Number(String(input.startDate).slice(0, 4));
   let balanceId: number | null = null;
   let policyId: number | null = null;
   if (leaveTypeId) {
     const balRes = await client.query(
-      `SELECT id FROM leave_balances
+      `SELECT id, available FROM leave_balances
        WHERE tenant_id = $1 AND company_id = $2 AND employee_id = $3 AND leave_type_id = $4 AND year = $5
        ORDER BY year DESC LIMIT 1`,
       [ctx.tenantId, ctx.companyId, input.employeeId, leaveTypeId, year]
     );
-    if (balRes.rows.length) balanceId = Number(balRes.rows[0].id);
+    if (balRes.rows.length) {
+      balanceId = Number(balRes.rows[0].id);
+      const available = Number(balRes.rows[0].available);
+      if (available < days) throw badRequest(`Leave balance has ${available} working day(s) left, short of ${days}`);
+    }
     const polRes = await client.query(
       `SELECT id FROM leave_policies
        WHERE tenant_id = $1 AND company_id = $2 AND leave_type_id = $3 AND status = 'ACTIVE'
@@ -894,9 +956,9 @@ export async function createLeave(
     if (polRes.rows.length) policyId = Number(polRes.rows[0].id);
   }
   const ins = await client.query(
-    `INSERT INTO leave_requests (employee_id, leave_type, leave_type_id, balance_id, policy_id, start_date, end_date, days, reason, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SUBMITTED') RETURNING id`,
-    [input.employeeId, leaveType, leaveTypeId, balanceId, policyId, input.startDate, input.endDate, days, input.reason ?? null]
+    `INSERT INTO leave_requests (employee_id, leave_type, leave_type_id, balance_id, policy_id, start_date, end_date, days, reason, status, requested_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SUBMITTED',$10) RETURNING id`,
+    [input.employeeId, leaveType, leaveTypeId, balanceId, policyId, input.startDate, input.endDate, days, input.reason ?? null, ctx.userId ?? null]
   );
   const leaveId = Number(ins.rows[0].id);
   await emitEvent(client, ctx, {
@@ -921,6 +983,32 @@ export async function decideLeave(client: pg.PoolClient, ctx: Ctx, leaveId: numb
   );
   if (res.rows.length === 0) throw notFound('Leave request not found');
   if (String(res.rows[0].status) !== 'SUBMITTED') throw badRequest(`Leave is ${res.rows[0].status}`);
+  if (decision === 'APPROVED' && ctx.userId != null && res.rows[0].requested_by != null && Number(res.rows[0].requested_by) === Number(ctx.userId)) {
+    throw badRequest('You cannot approve leave you submitted');
+  }
+  if (decision === 'APPROVED' && ctx.userId != null) {
+    const own = await client.query(
+      `SELECT id FROM employees WHERE id = $1 AND user_id = $2`,
+      [res.rows[0].employee_id, ctx.userId]
+    );
+    if (own.rows.length) throw badRequest('You cannot approve your own leave');
+  }
+  const year = Number(String(res.rows[0].start_date_iso).slice(0, 4));
+  let balanceRowId: number | null = null;
+  if (decision === 'APPROVED' && res.rows[0].leave_type_id != null) {
+    const balanceRes = await client.query(
+      `SELECT id, available FROM leave_balances
+       WHERE tenant_id = $1 AND company_id = $2 AND employee_id = $3 AND leave_type_id = $4 AND year = $5
+       FOR UPDATE`,
+      [ctx.tenantId, res.rows[0].company_id, res.rows[0].employee_id, Number(res.rows[0].leave_type_id), year]
+    );
+    if (balanceRes.rows.length) {
+      const available = Number(balanceRes.rows[0].available);
+      const days = Number(res.rows[0].days ?? 0);
+      if (available < days) throw badRequest(`Leave balance has ${available} working day(s) left, short of ${days}`);
+      balanceRowId = Number(balanceRes.rows[0].id);
+    }
+  }
   await client.query(
     `UPDATE leave_requests SET status = $2, approved_by = $3, approved_at = now() WHERE id = $1`,
     [leaveId, decision, ctx.userId ?? null]
@@ -931,23 +1019,14 @@ export async function decideLeave(client: pg.PoolClient, ctx: Ctx, leaveId: numb
   if (decision === 'APPROVED' && startDate <= today && endDate >= today) {
     await client.query(`UPDATE employees SET status = 'ON_LEAVE' WHERE id = $1 AND status = 'ACTIVE'`, [res.rows[0].employee_id]);
   }
-  // Consume the leave balance when the request is linked to a leave type and a balance row exists.
-  if (decision === 'APPROVED' && res.rows[0].leave_type_id != null) {
-    const year = Number(startDate.slice(0, 4));
-    const balanceRes = await client.query(
-      `SELECT id FROM leave_balances
-       WHERE tenant_id = $1 AND company_id = $2 AND employee_id = $3 AND leave_type_id = $4 AND year = $5`,
-      [ctx.tenantId, res.rows[0].company_id, res.rows[0].employee_id, Number(res.rows[0].leave_type_id), year]
+  if (balanceRowId != null) {
+    await client.query(
+      `UPDATE leave_balances
+       SET used = used + $2,
+           available = opening_balance + accrued - used - $2 + adjusted
+       WHERE id = $1`,
+      [balanceRowId, Number(res.rows[0].days ?? 0)]
     );
-    if (balanceRes.rows.length) {
-      await client.query(
-        `UPDATE leave_balances
-         SET used = used + $2,
-             available = opening_balance + accrued - used - $2 + adjusted
-         WHERE id = $1`,
-        [Number(balanceRes.rows[0].id), Number(res.rows[0].days ?? 0)]
-      );
-    }
   }
   await emitEvent(client, ctx, {
     eventType: decision === 'APPROVED' ? 'hr.leave.approved' : 'hr.leave.rejected',
@@ -958,6 +1037,47 @@ export async function decideLeave(client: pg.PoolClient, ctx: Ctx, leaveId: numb
     severity: decision === 'REJECTED' ? 'WARN' : 'INFO',
   });
   return { leaveId, status: decision };
+}
+
+export async function cancelLeave(client: pg.PoolClient, ctx: Ctx, leaveId: number) {
+  const res = await client.query(
+    `SELECT l.*, e.company_id,
+            to_char(l.start_date, 'YYYY-MM-DD') AS start_date_iso,
+            to_char(l.end_date, 'YYYY-MM-DD') AS end_date_iso
+     FROM leave_requests l
+     JOIN employees e ON e.id = l.employee_id
+     WHERE l.id = $1 AND e.tenant_id = $2 FOR UPDATE OF l`,
+    [leaveId, ctx.tenantId]
+  );
+  if (res.rows.length === 0) throw notFound('Leave request not found');
+  const row = res.rows[0];
+  if (!['SUBMITTED', 'APPROVED'].includes(String(row.status))) throw badRequest(`Leave is ${row.status}`);
+  if (String(row.status) === 'APPROVED' && row.leave_type_id != null) {
+    const year = Number(String(row.start_date_iso).slice(0, 4));
+    const days = Number(row.days ?? 0);
+    await client.query(
+      `UPDATE leave_balances
+       SET used = GREATEST(0, used - $6),
+           available = opening_balance + accrued - GREATEST(0, used - $6) + adjusted
+       WHERE tenant_id = $1 AND company_id = $2 AND employee_id = $3 AND leave_type_id = $4 AND year = $5`,
+      [ctx.tenantId, row.company_id, row.employee_id, Number(row.leave_type_id), year, days]
+    );
+    const today = new Date().toISOString().slice(0, 10);
+    const startDate = String(row.start_date_iso).slice(0, 10);
+    const endDate = String(row.end_date_iso).slice(0, 10);
+    if (startDate <= today && endDate >= today) {
+      await client.query(`UPDATE employees SET status = 'ACTIVE' WHERE id = $1 AND status = 'ON_LEAVE'`, [row.employee_id]);
+    }
+  }
+  await client.query(`UPDATE leave_requests SET status = 'CANCELLED' WHERE id = $1`, [leaveId]);
+  await emitEvent(client, ctx, {
+    eventType: 'hr.leave.cancelled',
+    entityType: 'leave_requests',
+    entityId: leaveId,
+    entityCode: `${row.leave_type}-${leaveId}`,
+    payload: { employeeId: Number(row.employee_id) },
+  });
+  return { leaveId, status: 'CANCELLED' };
 }
 
 export async function listLeave(client: pg.PoolClient, ctx: Ctx, filters: { status?: string } = {}) {
@@ -1314,10 +1434,17 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
        WHERE employee_id = $1 AND status = 'ACTIVE' AND balance > 0`,
       [emp.id]
     );
+    // Employment Act attachment limit: recoveries together stay within two-thirds of gross,
+    // and also within what remains after PAYE, NSSF and LST.
+    const recoveryCap = round2((gross * 2) / 3);
+    const roomFor = (taken: number) => round2(Math.max(0, Math.min(
+      gross - paye - nssf.employee - lst - taken,
+      recoveryCap - taken,
+    )));
     let loans = 0;
     if (deductLoans) {
       for (const ln of loanRows.rows) {
-        const take = Math.min(Number(ln.monthly_deduction), Number(ln.balance), Math.max(0, gross - paye - nssf.employee - lst - loans));
+        const take = Math.min(Number(ln.monthly_deduction), Number(ln.balance), roomFor(loans));
         if (take <= 0) continue;
         loans = round2(loans + take);
       }
@@ -1330,17 +1457,25 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     let advances = 0;
     if (deductAdvances) {
       for (const av of advanceRows.rows) {
-        const take = Math.min(
-          Number(av.monthly_deduction),
-          Number(av.outstanding_balance),
-          Math.max(0, gross - paye - nssf.employee - lst - loans - advances)
-        );
+        const take = Math.min(Number(av.monthly_deduction), Number(av.outstanding_balance), roomFor(loans + advances));
         if (take <= 0) continue;
         advances = round2(advances + take);
       }
     }
+    const fineRows = await client.query(
+      `SELECT id, outstanding_balance, monthly_deduction FROM employee_fines
+       WHERE employee_id = $1 AND status = 'ACTIVE' AND outstanding_balance > 0
+       ORDER BY id`,
+      [emp.id]
+    );
+    let fines = 0;
+    for (const fn of fineRows.rows) {
+      const take = Math.min(Number(fn.monthly_deduction), Number(fn.outstanding_balance), roomFor(loans + advances + fines));
+      if (take <= 0) continue;
+      fines = round2(fines + take);
+    }
     const otherDeductions = round2(extraDeductions + componentDeductions + employeeDeductions + benefitsEmployee);
-    const totalDeductions = round2(paye + nssf.employee + lst + loans + advances + otherDeductions);
+    const totalDeductions = round2(paye + nssf.employee + lst + loans + advances + fines + otherDeductions);
     const net = round2(gross - totalDeductions);
     const slip = await nextDoc(client, ctx, await payrollSettings.getPayslipPrefix(client, ctx));
     const breakdown = {
@@ -1366,10 +1501,10 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     };
     await client.query(
       `INSERT INTO payroll_items
-         (payroll_id, employee_id, basic_pay, allowances, gross_pay, paye, nssf, loans, advances, other_deductions, net_pay, payslip_no,
+         (payroll_id, employee_id, basic_pay, allowances, gross_pay, paye, nssf, loans, advances, fines, other_deductions, net_pay, payslip_no,
           taxable_income, employer_nssf, lst, total_deductions, currency, breakdown)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-      [payrollId, employeeId, basic, allowances, gross, paye, nssf.employee, loans, advances, otherDeductions, net, slip, taxableIncome, nssf.employer, lst, totalDeductions, currency, JSON.stringify(breakdown)]
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+      [payrollId, employeeId, basic, allowances, gross, paye, nssf.employee, loans, advances, fines, otherDeductions, net, slip, taxableIncome, nssf.employer, lst, totalDeductions, currency, JSON.stringify(breakdown)]
     );
     grossTotal += gross;
     deductionTotal += totalDeductions;
@@ -1442,7 +1577,7 @@ export async function postPayrollRun(client: pg.PoolClient, ctx: Ctx, payrollId:
     if (Number(it.loans) <= 0) continue;
     let remaining = Number(it.loans);
     const loans = await client.query(
-      `SELECT id, balance, outstanding_balance FROM employee_loans
+      `SELECT id, balance, outstanding_balance, interest_outstanding FROM employee_loans
        WHERE employee_id = $1 AND status = 'ACTIVE' AND balance > 0 ORDER BY id`,
       [it.employee_id]
     );
@@ -1450,21 +1585,25 @@ export async function postPayrollRun(client: pg.PoolClient, ctx: Ctx, payrollId:
       if (remaining <= 0) break;
       const take = Math.min(Number(ln.balance), remaining);
       const next = round2(Number(ln.balance) - take);
+      const interestDue = round2(Number(ln.interest_outstanding ?? 0));
+      const interestTake = round2(Math.min(Math.max(0, interestDue), take));
+      const principalTake = round2(take - interestTake);
       await client.query(
         `UPDATE employee_loans
          SET balance = $2::numeric,
              outstanding_balance = $2::numeric,
+             interest_outstanding = GREATEST(0, COALESCE(interest_outstanding, 0) - $4::numeric),
              status = CASE WHEN $2::numeric <= 0 THEN 'PAID' ELSE status END,
              period_code = $3
          WHERE id = $1`,
-        [ln.id, next, periodCode]
+        [ln.id, next, periodCode, interestTake]
       );
       await client.query(
         `INSERT INTO loan_repayments
            (company_id, tenant_id, loan_id, payroll_run_id, period_code, amount,
             principal_component, interest_component, paid_at, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$6,0,now(),$7)`,
-        [ctx.companyId, ctx.tenantId, ln.id, payrollId, periodCode, take, ctx.userId ?? null]
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),$9)`,
+        [ctx.companyId, ctx.tenantId, ln.id, payrollId, periodCode, take, principalTake, interestTake, ctx.userId ?? null]
       );
       remaining = round2(remaining - take);
     }
@@ -1494,6 +1633,34 @@ export async function postPayrollRun(client: pg.PoolClient, ctx: Ctx, payrollId:
            (company_id, tenant_id, advance_id, payroll_run_id, amount, paid_at, created_by)
          VALUES ($1,$2,$3,$4,$5,now(),$6)`,
         [ctx.companyId, ctx.tenantId, av.id, payrollId, take, ctx.userId ?? null]
+      );
+      remaining = round2(remaining - take);
+    }
+  }
+  for (const it of items.rows) {
+    if (Number(it.fines) <= 0) continue;
+    let remaining = Number(it.fines);
+    const fines = await client.query(
+      `SELECT id, outstanding_balance FROM employee_fines
+       WHERE employee_id = $1 AND status = 'ACTIVE' AND outstanding_balance > 0 ORDER BY id`,
+      [it.employee_id]
+    );
+    for (const fn of fines.rows) {
+      if (remaining <= 0) break;
+      const take = Math.min(Number(fn.outstanding_balance), remaining);
+      const next = round2(Number(fn.outstanding_balance) - take);
+      await client.query(
+        `UPDATE employee_fines
+         SET outstanding_balance = $2::numeric,
+             status = CASE WHEN $2::numeric <= 0 THEN 'PAID' ELSE status END
+         WHERE id = $1`,
+        [fn.id, next]
+      );
+      await client.query(
+        `INSERT INTO fine_recoveries
+           (company_id, tenant_id, fine_id, payroll_run_id, amount, paid_at, created_by)
+         VALUES ($1,$2,$3,$4,$5,now(),$6)`,
+        [ctx.companyId, ctx.tenantId, fn.id, payrollId, take, ctx.userId ?? null]
       );
       remaining = round2(remaining - take);
     }

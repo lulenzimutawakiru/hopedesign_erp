@@ -81,14 +81,22 @@ describe('Payroll loans and salary advances', () => {
     expect(denied.status).toBe(403);
     expect(String(denied.body.error.message)).toMatch(/Missing permission/i);
 
-    // 7. Payroll manager (holds hr.loans.approve + hr.advances.approve) approves both.
+    // 7. The requester cannot approve. Payroll manager approves; HR pays out.
+    const selfLoan = await api.post(`/api/ops/hr/loans/${loanId}/approve`).set(auth(token)).send({});
+    expect(selfLoan.status).toBe(400);
     const { token: manager } = await loginAs('pay.manager');
     const approvedLoan = await api.post(`/api/ops/hr/loans/${loanId}/approve`).set(auth(manager)).send({});
     expect(approvedLoan.status).toBe(200);
-    expect(approvedLoan.body.data.status).toBe('ACTIVE');
+    expect(approvedLoan.body.data.status).toBe('APPROVED');
     const approvedAdv = await api.post(`/api/ops/hr/advances/${advanceId}/approve`).set(auth(manager)).send({});
     expect(approvedAdv.status).toBe(200);
-    expect(approvedAdv.body.data.status).toBe('ACTIVE');
+    expect(approvedAdv.body.data.status).toBe('APPROVED');
+    const paidLoan = await api.post(`/api/ops/hr/loans/${loanId}/disburse`).set(auth(token)).send({ paymentMethod: 'BANK' });
+    expect(paidLoan.status).toBe(200);
+    expect(paidLoan.body.data.status).toBe('ACTIVE');
+    const paidAdv = await api.post(`/api/ops/hr/advances/${advanceId}/disburse`).set(auth(token)).send({ paymentMethod: 'CASH' });
+    expect(paidAdv.status).toBe(200);
+    expect(paidAdv.body.data.status).toBe('ACTIVE');
 
     // 8. Group-scoped single-day payroll run inside FY2026-P12.
     const run = await api.post('/api/ops/hr/payrolls').set(auth(token)).send({
@@ -169,10 +177,83 @@ describe('Payroll loans and salary advances', () => {
     expect(advances.body.data.total).toBeGreaterThanOrEqual(1);
 
     // Self-clean in FK order so re-runs never collide.
-    await db(`DELETE FROM journal_lines WHERE entry_id = $1`, [journalId]);
-    await db(`DELETE FROM journal_entries WHERE id = $1`, [journalId]);
+    const journalIds = [journalId, Number(paidLoan.body.data.journalId), Number(paidAdv.body.data.journalId)];
+    await db(`DELETE FROM journal_lines WHERE entry_id = ANY($1::bigint[])`, [journalIds]);
+    await db(`DELETE FROM journal_entries WHERE id = ANY($1::bigint[])`, [journalIds]);
     await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
     await db(`DELETE FROM employee_loans WHERE employee_id = $1`, [employeeId]);
+    await deleteEmployees([employeeId]);
+    await db(`DELETE FROM employee_payroll_profiles WHERE payroll_group_id = $1`, [groupId]);
+    await db(`DELETE FROM payroll_groups WHERE id = $1`, [groupId]);
+  }, 30_000);
+
+  it('approves a staff fine onto the receivable and recovers it on payroll', async () => {
+    const { token } = await loginAs('hr.hannah');
+    const emp = await api.post('/api/ops/hr/employees').set(auth(token)).send({
+      firstName: 'Fine',
+      lastName: `Tester${Date.now()}`,
+      position: 'Clerk',
+      baseSalary: 3000000,
+      bankName: 'Stanbic',
+      bankAccountNo: '0987654321',
+      phone: '+256700000001',
+      tin: '1234567895',
+    });
+    expect(emp.status).toBe(200);
+    const employeeId = Number(emp.body.data.employeeId);
+    const groupId = await createGroupFor(employeeId);
+
+    const raised = await api.post(`/api/ops/hr/employees/${employeeId}/fines`).set(auth(token)).send({
+      amount: 100000,
+      reason: 'Damage to a company tool, agreed in writing',
+    });
+    expect(raised.status).toBe(200);
+    const fineId = Number(raised.body.data.fineId);
+    expect(raised.body.data.status).toBe('PENDING');
+
+    const self = await api.post(`/api/ops/hr/fines/${fineId}/approve`).set(auth(token)).send({});
+    expect(self.status).toBe(400);
+
+    const { token: manager } = await loginAs('pay.manager');
+    const approved = await api.post(`/api/ops/hr/fines/${fineId}/approve`).set(auth(manager)).send({});
+    expect(approved.status).toBe(200);
+    expect(approved.body.data.status).toBe('ACTIVE');
+    const fineJournal = Number(approved.body.data.journalId);
+    expect(fineJournal).toBeGreaterThan(0);
+
+    const run = await api.post('/api/ops/hr/payrolls').set(auth(token)).send({
+      periodStart: '2027-06-08',
+      periodEnd: '2027-06-08',
+      payrollGroupId: groupId,
+    });
+    expect(run.status).toBe(200);
+    const payrollId = Number(run.body.data.payrollId);
+    const detail = await api.get(`/api/ops/hr/payrolls/${payrollId}`).set(auth(token));
+    const items = detail.body.data.items as { employeeId: string; fines: string; netPay: string; grossPay: string }[];
+    const mine = items.find((i) => Number(i.employeeId) === employeeId);
+    expect(Number(mine!.grossPay)).toBe(3000000);
+    expect(Number(mine!.fines)).toBe(100000);
+    // 3,000,000 - 743,250 PAYE - 150,000 NSSF - 100,000 fine = 2,006,750
+    expect(Number(mine!.netPay)).toBe(2006750);
+
+    await db(`UPDATE payrolls SET status = 'APPROVED' WHERE id = $1`, [payrollId]);
+    const { token: admin } = await loginAs('admin');
+    const posted = await api.post(`/api/ops/hr/payrolls/${payrollId}/post`).set(auth(admin)).send({});
+    expect(posted.status).toBe(200);
+    const payrollJournal = Number(posted.body.data.journalId);
+
+    const fineRow = await db(`SELECT outstanding_balance, status FROM employee_fines WHERE id = $1`, [fineId]);
+    expect(Number(fineRow.rows[0].outstanding_balance)).toBe(0);
+    expect(fineRow.rows[0].status).toBe('PAID');
+    const reps = await db(`SELECT amount FROM fine_recoveries WHERE fine_id = $1`, [fineId]);
+    expect(reps.rows).toHaveLength(1);
+    expect(Number(reps.rows[0].amount)).toBe(100000);
+
+    const journalIds = [fineJournal, payrollJournal];
+    await db(`DELETE FROM journal_lines WHERE entry_id = ANY($1::bigint[])`, [journalIds]);
+    await db(`DELETE FROM journal_entries WHERE id = ANY($1::bigint[])`, [journalIds]);
+    await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
+    await db(`DELETE FROM employee_fines WHERE id = $1`, [fineId]);
     await deleteEmployees([employeeId]);
     await db(`DELETE FROM employee_payroll_profiles WHERE payroll_group_id = $1`, [groupId]);
     await db(`DELETE FROM payroll_groups WHERE id = $1`, [groupId]);

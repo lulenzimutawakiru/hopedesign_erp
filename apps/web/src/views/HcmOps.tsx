@@ -85,6 +85,8 @@ export default function HcmOps({ path }: { path: string }) {
   if (view === 'loans') return <LoansList />;
   if (view === 'advances' && id) return <AdvanceDesk id={id} />;
   if (view === 'advances') return <AdvancesList />;
+  if (view === 'fines' && id) return <FineDesk id={id} />;
+  if (view === 'fines') return <FinesList />;
   if (view === 'payments' && id) return <PaymentDesk id={id} />;
   if (view === 'payments') return <PaymentsList />;
   if (view === 'performance') return <PerformanceDesk />;
@@ -269,12 +271,14 @@ function MyHr() {
 // LOANS / ADVANCES / PAYMENTS
 // ============================================================
 
+const PAYOUT_METHODS: Array<[string, string]> = [['BANK', 'Bank'], ['CASH', 'Cash'], ['MOBILE_MONEY', 'Mobile money']];
+
 function LoansList() {
   const { user } = useAuth();
   const { rows, error, setError, load } = useList('/api/ops/hr/loans?pageSize=50');
   const [open, setOpen] = useState(false);
   return (
-    <Page kicker="Payroll deductions" title="Staff loans" sub="Book, approve and recover loans on the next payroll." back="/people"
+    <Page kicker="Payroll deductions" title="Staff loans" sub="Request, approve, pay out, then recover on payroll. The person who approves does not pay it out." back="/people"
       actions={can(user, 'hr.loans.create') ? <button className="btn btn-primary" onClick={() => setOpen(true)}>New loan</button> : undefined}>
       {error && <ErrorBanner error={error} />}
       <div className="table-wrap card">
@@ -303,22 +307,41 @@ function LoanComposer({ onClose, onSaved, onError }: { onClose: () => void; onSa
   const [employeeId, setEmployeeId] = useState('');
   const [amount, setAmount] = useState('500000');
   const [monthly, setMonthly] = useState('50000');
+  const [tenure, setTenure] = useState('6');
+  const [rate, setRate] = useState('0');
+  const [reason, setReason] = useState('');
+  const [startDate, setStartDate] = useState(today());
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
     try {
-      await api(`/api/ops/hr/employees/${employeeId}/loans`, { method: 'POST', body: JSON.stringify({ amount: Number(amount), monthlyDeduction: Number(monthly) }) });
+      await api(`/api/ops/hr/employees/${employeeId}/loans`, {
+        method: 'POST',
+        body: JSON.stringify({
+          amount: Number(amount),
+          monthlyDeduction: Number(monthly),
+          tenureMonths: Number(tenure),
+          interestRate: Number(rate),
+          startDate,
+          reason: reason.trim() || null,
+        }),
+      });
       onSaved();
     } catch (e) { onError(e instanceof Error ? e.message : 'Could not book loan'); }
     finally { setBusy(false); }
   };
   return (
-    <Modal title="New staff loan" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={busy || !employeeId} onClick={save}>Book</button></>}>
+    <Modal title="New staff loan" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={busy || !employeeId} onClick={save}>Request</button></>}>
       <div className="form-grid">
         <Field label="Employee"><EmpSelect value={employeeId} onChange={setEmployeeId} /></Field>
-        <Field label="Amount"><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
-        <Field label="Monthly deduction"><input inputMode="decimal" value={monthly} onChange={(e) => setMonthly(e.target.value)} /></Field>
+        <Field label="Principal (UGX)"><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
+        <Field label="Monthly recovery"><input inputMode="decimal" value={monthly} onChange={(e) => setMonthly(e.target.value)} /></Field>
+        <Field label="Term (months)"><input inputMode="numeric" value={tenure} onChange={(e) => setTenure(e.target.value)} /></Field>
+        <Field label="Simple interest % a year"><input inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} /></Field>
+        <Field label="First deduction"><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
       </div>
+      <div className="field" style={{ marginTop: 12 }}><label>Reason</label><textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+      <p className="muted" style={{ marginTop: 8 }}>Interest is simple interest for the term, in whole shillings. A stated monthly recovery is kept.</p>
     </Modal>
   );
 }
@@ -328,34 +351,55 @@ function LoanDesk({ id }: { id: number }) {
   const [doc, setDoc] = useState<Rec | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [method, setMethod] = useState('BANK');
+  const [reason, setReason] = useState('');
   const load = () => { api<{ data: Rec }>(`/api/ops/hr/loans/${id}`).then((r) => setDoc(r.data)).catch((e) => setError(e instanceof Error ? e.message : 'Loan failed')); };
   useEffect(() => { load(); }, [id]);
-  const act = async (path: string, ok: string) => {
-    try { await api(path, { method: 'POST', body: '{}' }); setNotice(ok); load(); }
+  const act = async (path: string, ok: string, body: Rec = {}) => {
+    try { await api(path, { method: 'POST', body: JSON.stringify(body) }); setNotice(ok); load(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
   if (!doc && !error) return <PageLoader variant="page" label="Opening loan…" />;
   const loan = ((doc?.loan ?? doc) ?? {}) as Rec;
+  const status = String(loan.status ?? '');
   return (
     <Page kicker="Staff loan" title={String(loan.loanNo ?? 'Loan')} back="/people/loans">
       {error && <ErrorBanner error={error} />}
       {notice && <div className="alert alert-success">{notice}</div>}
       <dl className="def-list card card-pad">
         <div><dt>Employee</dt><dd>{nameOf(loan)} · {String(loan.employeeNo)}</dd></div>
-        <div><dt>Amount</dt><dd>{fmtMoney(loan.amount)}</dd></div>
+        <div><dt>Principal</dt><dd>{fmtMoney(loan.amount)}</dd></div>
+        <div><dt>Interest</dt><dd>{fmtMoney(loan.interestOutstanding)} at {fmtNum(loan.interestRate)}% simple</dd></div>
+        <div><dt>Monthly recovery</dt><dd>{fmtMoney(loan.monthlyDeduction)} over {fmtNum(loan.tenureMonths)} months</dd></div>
         <div><dt>Outstanding</dt><dd>{fmtMoney(loan.outstandingBalance ?? loan.balance)}</dd></div>
+        <div><dt>Reason</dt><dd>{String(loan.reason ?? '—')}</dd></div>
+        <div><dt>Paid from</dt><dd>{loan.paymentMethod ? pretty(loan.paymentMethod) : '—'}</dd></div>
         <div><dt>Status</dt><dd><Badge value={loan.status} /></dd></div>
       </dl>
       <div className="action-group" style={{ marginTop: 12 }}>
-        {String(loan.status) === 'PENDING' && can(user, 'hr.loans.approve') && (
+        {status === 'PENDING' && can(user, 'hr.loans.approve') && (
           <>
             <button className="btn btn-primary" onClick={() => act(`/api/ops/hr/loans/${id}/approve`, 'Approved')}>Approve</button>
             <button className="btn" onClick={() => act(`/api/ops/hr/loans/${id}/reject`, 'Rejected')}>Reject</button>
           </>
         )}
-        {String(loan.status) === 'ACTIVE' && can(user, 'hr.loans.update') && <button className="btn" onClick={() => act(`/api/ops/hr/loans/${id}/pause`, 'Paused')}>Pause</button>}
-        {['ACTIVE', 'PAUSED'].includes(String(loan.status)) && can(user, 'hr.loans.write_off') && <button className="btn btn-warning" onClick={() => act(`/api/ops/hr/loans/${id}/write-off`, 'Written off')}>Write off</button>}
+        {status === 'APPROVED' && can(user, 'hr.loans.update') && (
+          <>
+            <select aria-label="Payout method" value={method} onChange={(e) => setMethod(e.target.value)}>
+              {PAYOUT_METHODS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </select>
+            <button className="btn btn-primary" onClick={() => act(`/api/ops/hr/loans/${id}/disburse`, 'Paid out', { paymentMethod: method })}>Pay out</button>
+          </>
+        )}
+        {status === 'ACTIVE' && can(user, 'hr.loans.update') && <button className="btn" onClick={() => act(`/api/ops/hr/loans/${id}/pause`, 'Paused')}>Pause</button>}
+        {status === 'PAUSED' && can(user, 'hr.loans.update') && <button className="btn" onClick={() => act(`/api/ops/hr/loans/${id}/resume`, 'Resumed')}>Resume</button>}
       </div>
+      {['ACTIVE', 'PAUSED'].includes(status) && can(user, 'hr.loans.write_off') && (
+        <div className="action-group" style={{ marginTop: 12 }}>
+          <input aria-label="Write-off reason" placeholder="Reason for the write-off" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <button className="btn btn-warning" disabled={!reason.trim()} onClick={() => act(`/api/ops/hr/loans/${id}/write-off`, 'Written off', { reason: reason.trim() })}>Write off</button>
+        </div>
+      )}
     </Page>
   );
 }
@@ -366,8 +410,11 @@ function AdvancesList() {
   const [open, setOpen] = useState(false);
   const [employeeId, setEmployeeId] = useState('');
   const [amount, setAmount] = useState('300000');
+  const [monthly, setMonthly] = useState('300000');
+  const [reason, setReason] = useState('');
+  const [startDate, setStartDate] = useState(today());
   return (
-    <Page kicker="Payroll deductions" title="Salary advances" sub="Recovered on the next payroll, subject to the advance ceiling." back="/people"
+    <Page kicker="Payroll deductions" title="Salary advances" sub="One open advance at a time, within the salary ceiling. Approve, pay out, then recover on payroll." back="/people"
       actions={can(user, 'hr.advances.create') ? <button className="btn btn-primary" onClick={() => setOpen(true)}>New advance</button> : undefined}>
       {error && <ErrorBanner error={error} />}
       <div className="table-wrap card">
@@ -392,15 +439,21 @@ function AdvancesList() {
           <button className="btn" onClick={() => setOpen(false)}>Cancel</button>
           <button className="btn btn-primary" disabled={!employeeId} onClick={async () => {
             try {
-              await api(`/api/ops/hr/employees/${employeeId}/advances`, { method: 'POST', body: JSON.stringify({ amount: Number(amount) }) });
+              await api(`/api/ops/hr/employees/${employeeId}/advances`, {
+                method: 'POST',
+                body: JSON.stringify({ amount: Number(amount), monthlyDeduction: Number(monthly), startDate, reason: reason.trim() || null }),
+              });
               setOpen(false); load();
             } catch (e) { setError(e instanceof Error ? e.message : 'Advance failed'); }
-          }}>Issue</button>
+          }}>Request</button>
         </>}>
           <div className="form-grid">
             <Field label="Employee"><EmpSelect value={employeeId} onChange={setEmployeeId} /></Field>
             <Field label="Amount"><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
+            <Field label="Monthly recovery"><input inputMode="decimal" value={monthly} onChange={(e) => setMonthly(e.target.value)} /></Field>
+            <Field label="Start"><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
           </div>
+          <div className="field" style={{ marginTop: 12 }}><label>Reason</label><textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></div>
         </Modal>
       )}
     </Page>
@@ -412,14 +465,18 @@ function AdvanceDesk({ id }: { id: number }) {
   const [doc, setDoc] = useState<Rec | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [method, setMethod] = useState('BANK');
+  const [reason, setReason] = useState('');
   const load = () => { api<{ data: Rec }>(`/api/ops/hr/advances/${id}`).then((r) => setDoc(r.data)).catch((e) => setError(e instanceof Error ? e.message : 'Advance failed')); };
   useEffect(() => { load(); }, [id]);
-  const act = async (path: string, ok: string) => {
-    try { await api(path, { method: 'POST', body: '{}' }); setNotice(ok); load(); }
+  const act = async (path: string, ok: string, body: Rec = {}) => {
+    try { await api(path, { method: 'POST', body: JSON.stringify(body) }); setNotice(ok); load(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
   if (!doc && !error) return <PageLoader variant="page" label="Opening advance…" />;
   const a = ((doc?.advance ?? doc) ?? {}) as Rec;
+  const status = String(a.status ?? '');
+  const outstanding = Number(a.outstandingBalance ?? 0);
   return (
     <Page kicker="Salary advance" title={String(a.advanceNo ?? 'Advance')} back="/people/advances">
       {error && <ErrorBanner error={error} />}
@@ -427,18 +484,138 @@ function AdvanceDesk({ id }: { id: number }) {
       <dl className="def-list card card-pad">
         <div><dt>Employee</dt><dd>{nameOf(a)} · {String(a.employeeNo)}</dd></div>
         <div><dt>Amount</dt><dd>{fmtMoney(a.amount)}</dd></div>
+        <div><dt>Monthly recovery</dt><dd>{fmtMoney(a.monthlyDeduction)}</dd></div>
         <div><dt>Outstanding</dt><dd>{fmtMoney(a.outstandingBalance)}</dd></div>
+        <div><dt>Reason</dt><dd>{String(a.reason ?? '—')}</dd></div>
+        <div><dt>Paid from</dt><dd>{a.paymentMethod ? pretty(a.paymentMethod) : '—'}</dd></div>
         <div><dt>Status</dt><dd><Badge value={a.status} /></dd></div>
       </dl>
       <div className="action-group" style={{ marginTop: 12 }}>
-        {String(a.status) === 'PENDING' && can(user, 'hr.advances.approve') && (
+        {status === 'PENDING' && can(user, 'hr.advances.approve') && (
           <>
             <button className="btn btn-primary" onClick={() => act(`/api/ops/hr/advances/${id}/approve`, 'Approved')}>Approve</button>
             <button className="btn" onClick={() => act(`/api/ops/hr/advances/${id}/reject`, 'Rejected')}>Reject</button>
           </>
         )}
-        {String(a.status) === 'ACTIVE' && can(user, 'hr.advances.update') && <button className="btn" onClick={() => act(`/api/ops/hr/advances/${id}/close`, 'Closed')}>Close</button>}
+        {status === 'APPROVED' && can(user, 'hr.advances.update') && (
+          <>
+            <select aria-label="Payout method" value={method} onChange={(e) => setMethod(e.target.value)}>
+              {PAYOUT_METHODS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </select>
+            <button className="btn btn-primary" onClick={() => act(`/api/ops/hr/advances/${id}/disburse`, 'Paid out', { paymentMethod: method })}>Pay out</button>
+          </>
+        )}
+        {status === 'ACTIVE' && outstanding <= 0 && can(user, 'hr.advances.update') && <button className="btn" onClick={() => act(`/api/ops/hr/advances/${id}/close`, 'Closed')}>Close</button>}
       </div>
+      {status === 'ACTIVE' && outstanding > 0 && can(user, 'hr.advances.update') && (
+        <div className="action-group" style={{ marginTop: 12 }}>
+          <input aria-label="Waiver reason" placeholder="Reason for the waiver" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <button className="btn btn-warning" disabled={!reason.trim()} onClick={() => act(`/api/ops/hr/advances/${id}/waive`, 'Waived', { reason: reason.trim() })}>Waive balance</button>
+        </div>
+      )}
+    </Page>
+  );
+}
+
+function FinesList() {
+  const { user } = useAuth();
+  const { rows, error, setError, load } = useList('/api/ops/hr/fines?pageSize=50');
+  const [open, setOpen] = useState(false);
+  const [employeeId, setEmployeeId] = useState('');
+  const [amount, setAmount] = useState('50000');
+  const [monthly, setMonthly] = useState('50000');
+  const [reason, setReason] = useState('');
+  const [incidentDate, setIncidentDate] = useState(today());
+  return (
+    <Page kicker="Payroll deductions" title="Staff fines" sub="An authorised recovery with a written reason. Someone else approves it, then payroll deducts it. This is not a disciplinary penalty under the Employment Act." back="/people"
+      actions={can(user, 'hr.fines.create') ? <button className="btn btn-primary" onClick={() => setOpen(true)}>New fine</button> : undefined}>
+      {error && <ErrorBanner error={error} />}
+      <div className="table-wrap card">
+        <table className="data">
+          <thead><tr><th>No</th><th>Employee</th><th>Reason</th><th className="cell-num">Amount</th><th className="cell-num">Outstanding</th><th>Status</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/people/fines/${r.id}`)}>
+                <td className="cell-mono">{String(r.fineNo)}</td>
+                <td>{nameOf(r)} <span className="cell-mono">{String(r.employeeNo)}</span></td>
+                <td className="muted">{String(r.reason ?? '—')}</td>
+                <td className="cell-num">{fmtMoney(r.amount)}</td>
+                <td className="cell-num">{fmtMoney(r.outstandingBalance)}</td>
+                <td><Badge value={r.status} /></td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={6} className="muted">No staff fines.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {open && (
+        <Modal title="New staff fine" onClose={() => setOpen(false)} footer={<>
+          <button className="btn" onClick={() => setOpen(false)}>Cancel</button>
+          <button className="btn btn-primary" disabled={!employeeId || !reason.trim()} onClick={async () => {
+            try {
+              await api(`/api/ops/hr/employees/${employeeId}/fines`, {
+                method: 'POST',
+                body: JSON.stringify({ amount: Number(amount), monthlyDeduction: Number(monthly), reason: reason.trim(), incidentDate }),
+              });
+              setOpen(false); load();
+            } catch (e) { setError(e instanceof Error ? e.message : 'Fine failed'); }
+          }}>Request</button>
+        </>}>
+          <div className="form-grid">
+            <Field label="Employee"><EmpSelect value={employeeId} onChange={setEmployeeId} /></Field>
+            <Field label="Amount"><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
+            <Field label="Monthly recovery"><input inputMode="decimal" value={monthly} onChange={(e) => setMonthly(e.target.value)} /></Field>
+            <Field label="Incident date"><input type="date" value={incidentDate} onChange={(e) => setIncidentDate(e.target.value)} /></Field>
+          </div>
+          <div className="field field-required" style={{ marginTop: 12 }}><label>Reason</label><textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+        </Modal>
+      )}
+    </Page>
+  );
+}
+
+function FineDesk({ id }: { id: number }) {
+  const { user } = useAuth();
+  const [doc, setDoc] = useState<Rec | null>(null);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [reason, setReason] = useState('');
+  const load = () => { api<{ data: Rec }>(`/api/ops/hr/fines/${id}`).then((r) => setDoc(r.data)).catch((e) => setError(e instanceof Error ? e.message : 'Fine failed')); };
+  useEffect(() => { load(); }, [id]);
+  const act = async (path: string, ok: string, body: Rec = {}) => {
+    try { await api(path, { method: 'POST', body: JSON.stringify(body) }); setNotice(ok); load(); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
+  if (!doc && !error) return <PageLoader variant="page" label="Opening fine…" />;
+  const fine = ((doc?.fine ?? doc) ?? {}) as Rec;
+  const status = String(fine.status ?? '');
+  return (
+    <Page kicker="Staff fine" title={String(fine.fineNo ?? 'Fine')} back="/people/fines">
+      {error && <ErrorBanner error={error} />}
+      {notice && <div className="alert alert-success">{notice}</div>}
+      <dl className="def-list card card-pad">
+        <div><dt>Employee</dt><dd>{nameOf(fine)} · {String(fine.employeeNo)}</dd></div>
+        <div><dt>Amount</dt><dd>{fmtMoney(fine.amount)}</dd></div>
+        <div><dt>Monthly recovery</dt><dd>{fmtMoney(fine.monthlyDeduction)}</dd></div>
+        <div><dt>Outstanding</dt><dd>{fmtMoney(fine.outstandingBalance)}</dd></div>
+        <div><dt>Reason</dt><dd>{String(fine.reason ?? '—')}</dd></div>
+        <div><dt>Incident</dt><dd>{fine.incidentDate ? fmtDate(fine.incidentDate) : '—'}</dd></div>
+        <div><dt>Status</dt><dd><Badge value={fine.status} /></dd></div>
+      </dl>
+      <div className="action-group" style={{ marginTop: 12 }}>
+        {status === 'PENDING' && can(user, 'hr.fines.approve') && (
+          <>
+            <button className="btn btn-primary" onClick={() => act(`/api/ops/hr/fines/${id}/approve`, 'Approved and charged')}>Approve</button>
+            <button className="btn" onClick={() => act(`/api/ops/hr/fines/${id}/reject`, 'Rejected')}>Reject</button>
+          </>
+        )}
+      </div>
+      {status === 'ACTIVE' && can(user, 'hr.fines.waive') && (
+        <div className="action-group" style={{ marginTop: 12 }}>
+          <input aria-label="Waiver reason" placeholder="Reason for the waiver" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <button className="btn btn-warning" disabled={!reason.trim()} onClick={() => act(`/api/ops/hr/fines/${id}/waive`, 'Waived', { reason: reason.trim() })}>Waive</button>
+        </div>
+      )}
     </Page>
   );
 }

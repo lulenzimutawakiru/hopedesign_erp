@@ -26,8 +26,15 @@ describe('HR and payroll', () => {
       monthlyDeduction: 100000,
     });
     expect(loan.status).toBe(200);
-    const approvedLoan = await api.post(`/api/ops/hr/loans/${loan.body.data.loanId}/approve`).set(auth(token)).send({});
+    const selfApproved = await api.post(`/api/ops/hr/loans/${loan.body.data.loanId}/approve`).set(auth(token)).send({});
+    expect(selfApproved.status).toBe(400);
+    const { token: manager } = await loginAs('pay.manager');
+    const approvedLoan = await api.post(`/api/ops/hr/loans/${loan.body.data.loanId}/approve`).set(auth(manager)).send({});
     expect(approvedLoan.status).toBe(200);
+    expect(approvedLoan.body.data.status).toBe('APPROVED');
+    const paidLoan = await api.post(`/api/ops/hr/loans/${loan.body.data.loanId}/disburse`).set(auth(token)).send({ paymentMethod: 'BANK' });
+    expect(paidLoan.status).toBe(200);
+    expect(paidLoan.body.data.status).toBe('ACTIVE');
 
     const day = String(10 + Math.floor(Math.random() * 18)).padStart(2, '0');
     const run = await api.post('/api/ops/hr/payrolls').set(auth(token)).send({
@@ -71,8 +78,8 @@ describe('HR and payroll', () => {
     expect(Math.round(Number(tb.body.data.totals.debit) * 100)).toBe(Math.round(Number(tb.body.data.totals.credit) * 100));
 
     // Self-clean so re-runs never collide with the single-day period overlap guard.
-    await db(`DELETE FROM journal_lines WHERE entry_id = $1`, [Number(posted.body.data.journalId)]);
-    await db(`DELETE FROM journal_entries WHERE id = $1`, [Number(posted.body.data.journalId)]);
+    await db(`DELETE FROM journal_lines WHERE entry_id = ANY($1::bigint[])`, [[Number(posted.body.data.journalId), Number(paidLoan.body.data.journalId)]]);
+    await db(`DELETE FROM journal_entries WHERE id = ANY($1::bigint[])`, [[Number(posted.body.data.journalId), Number(paidLoan.body.data.journalId)]]);
     await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
     await db(`DELETE FROM employee_loans WHERE employee_id IN ($1,$2)`, [seniorId, juniorId]);
     await deleteEmployees([seniorId, juniorId]);
@@ -96,8 +103,12 @@ describe('HR and payroll', () => {
       monthlyDeduction: 100000,
     });
     expect(loan.status).toBe(200);
-    const approvedLoan = await api.post(`/api/ops/hr/loans/${loan.body.data.loanId}/approve`).set(auth(token)).send({});
+    const { token: manager } = await loginAs('pay.manager');
+    const approvedLoan = await api.post(`/api/ops/hr/loans/${loan.body.data.loanId}/approve`).set(auth(manager)).send({});
     expect(approvedLoan.status).toBe(200);
+    expect(approvedLoan.body.data.status).toBe('APPROVED');
+    const paidLoan = await api.post(`/api/ops/hr/loans/${loan.body.data.loanId}/disburse`).set(auth(token)).send({ paymentMethod: 'BANK' });
+    expect(paidLoan.status).toBe(200);
 
     const created = await api.post('/api/ops/hr/off-cycle').set(auth(token)).send({
       periodStart: '2027-04-20',
@@ -168,8 +179,8 @@ describe('HR and payroll', () => {
     expect(Number(loanRow.rows[0].balance)).toBe(300000);
 
     // Self-clean so re-runs never collide.
-    await db(`DELETE FROM journal_lines WHERE entry_id = $1`, [Number(posted.body.data.journalId)]);
-    await db(`DELETE FROM journal_entries WHERE id = $1`, [Number(posted.body.data.journalId)]);
+    await db(`DELETE FROM journal_lines WHERE entry_id = ANY($1::bigint[])`, [[Number(posted.body.data.journalId), Number(paidLoan.body.data.journalId)]]);
+    await db(`DELETE FROM journal_entries WHERE id = ANY($1::bigint[])`, [[Number(posted.body.data.journalId), Number(paidLoan.body.data.journalId)]]);
     await db(`DELETE FROM payrolls WHERE id = $1`, [payrollId]);
     await db(`DELETE FROM employee_loans WHERE employee_id = $1`, [employeeId]);
     await deleteEmployees([employeeId]);
@@ -421,9 +432,13 @@ describe('HR and payroll', () => {
       reason: 'Family',
     });
     expect(leave.status).toBe(200);
-    expect(Number(leave.body.data.days)).toBe(5);
+    // Tue 1 Sep 2026 through Sat 5 Sep 2026 is four working days.
+    expect(Number(leave.body.data.days)).toBe(4);
 
-    const ok = await api.post(`/api/ops/hr/leave/${leave.body.data.leaveId}/approve`).set(auth(token)).send({});
+    const self = await api.post(`/api/ops/hr/leave/${leave.body.data.leaveId}/approve`).set(auth(token)).send({});
+    expect(self.status).toBe(400);
+    const { token: admin } = await loginAs('admin');
+    const ok = await api.post(`/api/ops/hr/leave/${leave.body.data.leaveId}/approve`).set(auth(admin)).send({});
     expect(ok.status).toBe(200);
     expect(ok.body.data.status).toBe('APPROVED');
 

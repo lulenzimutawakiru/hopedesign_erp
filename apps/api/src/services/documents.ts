@@ -1715,6 +1715,7 @@ async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise
   addLine('Deduction', 'Local Service Tax', 'Local Service Tax for the period', pick(r, 'lst'));
   addLine('Deduction', 'Staff loan', 'Monthly loan recovery', pick(r, 'loans'));
   addLine('Deduction', 'Salary advance', 'Advance recovery', pick(r, 'advances'));
+  addLine('Deduction', 'Staff fine', 'Authorised fine recovered on this payslip', pick(r, 'fines'));
   addLine('Deduction', 'Other deductions', 'Other authorised deductions', pick(r, 'other_deductions'));
   const payBreakdown: Array<[string, string]> = [['Gross Pay', moneyCcy(pick(r, 'gross_pay'), currency)]];
   const deductionLines: Array<[string, string]> = [];
@@ -1726,6 +1727,7 @@ async function loadPayslip(client: pg.PoolClient, ctx: Ctx, id: number): Promise
   addDeduction('Less: Local Service Tax', pick(r, 'lst'));
   addDeduction('Less: Staff loan recovery', pick(r, 'loans'));
   addDeduction('Less: Salary advance recovery', pick(r, 'advances'));
+  addDeduction('Less: Staff fine', pick(r, 'fines'));
   addDeduction('Less: Other deductions', pick(r, 'other_deductions'));
   payBreakdown.push(...deductionLines);
   payBreakdown.push(['Net Pay', moneyCcy(pick(r, 'net_pay'), currency)]);
@@ -1861,6 +1863,7 @@ async function loadPayrollRegister(client: pg.PoolClient, ctx: Ctx, id: number):
             COALESCE(sum(i.employer_nssf), 0) AS employer_nssf_total,
             COALESCE(sum(i.loans), 0) AS loans_total,
             COALESCE(sum(i.advances), 0) AS advances_total,
+            COALESCE(sum(i.fines), 0) AS fines_total,
             COALESCE(sum(i.other_deductions), 0) AS other_deductions_total,
             COALESCE(sum(i.total_deductions), 0) AS deduction_total,
             COALESCE(sum(i.net_pay), 0) AS net_total
@@ -1898,6 +1901,7 @@ async function loadPayrollRegister(client: pg.PoolClient, ctx: Ctx, id: number):
       employerNssf: money(pick(r, 'employer_nssf')),
       loans: money(pick(r, 'loans')),
       advances: money(pick(r, 'advances')),
+      fines: money(pick(r, 'fines')),
       otherDeductions: money(pick(r, 'other_deductions')),
       totalDeductions: money(pick(r, 'total_deductions')),
       netPay: money(pick(r, 'net_pay')),
@@ -1973,6 +1977,7 @@ async function loadPayrollRegister(client: pg.PoolClient, ctx: Ctx, id: number):
       { key: 'employerNssf', label: 'Er NSSF', align: 'right', weight: 0.9 },
       { key: 'loans', label: 'Loans', align: 'right', weight: 0.9 },
       { key: 'advances', label: 'Advances', align: 'right', weight: 0.9 },
+      { key: 'fines', label: 'Fines', align: 'right', weight: 0.8 },
       { key: 'otherDeductions', label: 'Other', align: 'right', weight: 0.9 },
       { key: 'totalDeductions', label: 'Total Ded.', align: 'right', weight: 1.0 },
       { key: 'netPay', label: 'Net', align: 'right', weight: 1.1 },
@@ -1990,6 +1995,7 @@ async function loadPayrollRegister(client: pg.PoolClient, ctx: Ctx, id: number):
       ['Employer NSSF', moneyCcy(pick(s, 'employer_nssf_total'), currency)],
       ['Staff loans', moneyCcy(pick(s, 'loans_total'), currency)],
       ['Salary advances', moneyCcy(pick(s, 'advances_total'), currency)],
+      ['Staff fines', moneyCcy(pick(s, 'fines_total'), currency)],
       ['Other deductions', moneyCcy(pick(s, 'other_deductions_total'), currency)],
       ['Total Deductions', moneyCcy(pick(s, 'deduction_total'), currency)],
       ['Net Pay', moneyCcy(pick(s, 'net_total'), currency)],

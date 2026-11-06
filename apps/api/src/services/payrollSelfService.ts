@@ -103,6 +103,7 @@ export async function myPayroll(
             COALESCE(SUM(i.lst),0) AS lst,
             COALESCE(SUM(i.loans),0) AS loans,
             COALESCE(SUM(i.advances),0) AS advances,
+            COALESCE(SUM(i.fines),0) AS fines,
             COALESCE(SUM(i.other_deductions),0) AS other_deductions
        FROM payslips s
        LEFT JOIN payroll_items i ON i.payroll_id = s.payroll_id AND i.employee_id = s.employee_id
@@ -132,6 +133,13 @@ export async function myPayroll(
   const advances = await client.query(
     `SELECT id, advance_no, amount, monthly_deduction, outstanding_balance, start_date, status
        FROM salary_advances
+      WHERE tenant_id = $1 AND employee_id = $2 AND status = 'ACTIVE' AND outstanding_balance > 0
+      ORDER BY id`,
+    [ctx.tenantId, employeeId]
+  );
+  const fines = await client.query(
+    `SELECT id, fine_no, amount, monthly_deduction, outstanding_balance, reason, status
+       FROM employee_fines
       WHERE tenant_id = $1 AND employee_id = $2 AND status = 'ACTIVE' AND outstanding_balance > 0
       ORDER BY id`,
     [ctx.tenantId, employeeId]
@@ -179,6 +187,7 @@ export async function myPayroll(
       lst: num(t.lst),
       loans: num(t.loans),
       advances: num(t.advances),
+      fines: num(t.fines),
       otherDeductions: num(t.other_deductions),
     },
     trend: toCamelRows(trend.rows).map((r) => ({
@@ -190,6 +199,7 @@ export async function myPayroll(
     })).reverse(),
     loans: toCamelRows(loans.rows),
     advances: toCamelRows(advances.rows),
+    fines: toCamelRows(fines.rows),
   };
 }
 
@@ -276,6 +286,9 @@ function buildCalculationTrace(item: Record<string, unknown>) {
   }
   if (num(item.advances) !== 0) {
     deductions.push({ label: 'Salary advance', detail: 'Recovery of an approved salary advance', amount: num(item.advances) });
+  }
+  if (num(item.fines) !== 0) {
+    deductions.push({ label: 'Staff fine', detail: 'Authorised fine recovered on this payslip', amount: num(item.fines) });
   }
   const itemDeductions = asArray(b.deductions);
   let itemisedDeductions = 0;
