@@ -37,13 +37,13 @@ visibility. Draft edits and submission are restricted to the expense creator.
 - Inactive or invalid payment methods are rejected; the CREDIT method type cannot be used to falsely mark a supplier-credit expense as paid.
 - If an expense is marked paid before its first GL posting, the expense journal credits the payment-method ledger account instead of creating an AP balance.
 
-This is an incremental correction using existing chart-of-accounts mappings. Payment is now a staged lifecycle: request (SUBMITTED), independent approval (APPROVED), then execution (PAID) with a separate AP settlement journal. The requester cannot approve their own request, and the approver cannot execute that same request. Partial settlement is supported by multiple payment vouchers against one posted expense; pending and approved vouchers reserve the outstanding balance. Rejected requests release their reservation. The payment worklist exposes status and GL posting evidence.
+This is an incremental correction using existing chart-of-accounts mappings. Payment is now a staged lifecycle: request (SUBMITTED), independent approval (APPROVED), then execution (PAID) with a separate AP settlement journal. The requester cannot approve or execute their own request, and the approver cannot execute that same request. Partial settlement is supported by multiple payment vouchers against one posted expense; pending and approved vouchers reserve the outstanding balance. Rejected requests release their reservation and retain a separate rejection reason/audit identity. Executed vouchers can be matched to bank/mobile-money statement lines; mismatches require an explanation and reconciliation sign-off is independent of the reconciler. The payment worklist exposes status, GL posting and reconciliation evidence.
 
 ### Follow-on implementation work
 
 1. Add evidence upload to the employee-owned expense lifecycle, with strict
    ownership validation for expense attachments.
-2. Complete bank-statement import/matching and independent reconciliation approval; the payment execution lifecycle is now separated from approval.
+2. Add automated bank-statement import and provider integrations; manual statement matching and independent reconciliation approval are implemented.
 3. Review expense-line/header/tax reconciliation and accrual accounting.
 4. Integrate budget commitments and release/conversion semantics.
 5. Add policy-driven category requirements, approval thresholds and
