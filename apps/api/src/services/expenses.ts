@@ -483,6 +483,27 @@ export async function approveExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   if (p.requestedBy != null && Number(p.requestedBy) === Number(ctx.userId)) {
     throw forbidden('The payment requester cannot approve their own payment.');
   }
+  const expenseControl = await client.query(
+    `SELECT et.created_by,
+            (SELECT t.decided_by
+               FROM approval_tasks t
+               JOIN workflow_instances i ON i.id = t.instance_id
+              WHERE i.entity_type = 'ops.expenses' AND i.entity_id = et.id
+                AND i.company_id = et.company_id AND i.tenant_id = et.tenant_id
+                AND t.status = 'APPROVED' AND t.decided_by IS NOT NULL
+              ORDER BY t.decided_at DESC LIMIT 1) AS expense_approver
+       FROM expense_transactions et
+      WHERE et.id = $1 AND et.company_id = $2 AND et.tenant_id = $3`,
+    [Number(p.refId), companyId(ctx), ctx.tenantId]
+  );
+  if (!expenseControl.rows.length) throw notFound('Linked expense not found');
+  if (Number(expenseControl.rows[0].created_by) === Number(ctx.userId)) {
+    throw forbidden('The expense creator cannot approve its payment.');
+  }
+  if (expenseControl.rows[0].expense_approver != null &&
+      Number(expenseControl.rows[0].expense_approver) === Number(ctx.userId)) {
+    throw forbidden('The expense approver cannot approve its payment voucher.');
+  }
   if (!reason?.trim()) throw badRequest('Approval comment or reference is required.');
   await client.query(
     `UPDATE payment_requests SET status = 'APPROVED', approved_by = $1, approved_at = now(), approval_comment = $2, updated_at = now()
@@ -525,6 +546,20 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   if (expense.status === 'VOID') throw badRequest('A voided expense cannot be settled.');
   if (expense.createdBy != null && Number(expense.createdBy) === Number(ctx.userId)) {
     throw forbidden('The expense creator cannot execute its payment.');
+  }
+  const expenseApprover = await client.query(
+    `SELECT t.decided_by
+       FROM approval_tasks t
+       JOIN workflow_instances i ON i.id = t.instance_id
+      WHERE i.entity_type = 'ops.expenses' AND i.entity_id = $1
+        AND i.company_id = $2 AND i.tenant_id = $3
+        AND t.status = 'APPROVED' AND t.decided_by IS NOT NULL
+      ORDER BY t.decided_at DESC LIMIT 1`,
+    [Number(p.refId), companyId(ctx), ctx.tenantId]
+  );
+  if (expenseApprover.rows[0]?.decided_by != null &&
+      Number(expenseApprover.rows[0].decided_by) === Number(ctx.userId)) {
+    throw forbidden('The expense approver cannot execute its payment.');
   }
   if (expense.accountingStatus !== 'POSTED' || expense.glPosted !== true) {
     throw badRequest('The expense must be posted to Accounts Payable before settlement.');
