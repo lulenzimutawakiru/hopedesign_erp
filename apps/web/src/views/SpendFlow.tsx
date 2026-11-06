@@ -1496,7 +1496,7 @@ function ExpensePaymentsDesk() {
         const statementDate = window.prompt('Enter statement date (YYYY-MM-DD):', todayIso());
         if (!statementDate?.trim()) return;
         const varianceExplanation = window.prompt('If the statement amount differs from the voucher, explain the variance (otherwise leave blank):') ?? '';
-        await api(`/api/ops/expenditure/payments/${id}/reconcile`, { method: 'POST', body: JSON.stringify({ statementReference, statementAmount: Number(statementAmount), statementDate, varianceExplanation: varianceExplanation || undefined }) });
+        await api(`/api/ops/expenditure/payments/${id}/reconcile`, { method: 'POST', body: JSON.stringify({ statementReference, statementAmount: Number(statementAmount), statementDate, bankAccountId: p.bankAccountId ?? undefined, varianceExplanation: varianceExplanation || undefined }) });
       } else {
         const reason = window.prompt('Enter reconciliation approval comment:');
         if (!reason?.trim()) return;
