@@ -313,6 +313,10 @@ const EXPENSE_EDIT = {
 } as const;
 
 export async function updateExpense(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown>) {
+  await client.query(
+    `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
   const cur = await getExpense(client, ctx, id, true);
   if (cur.status !== 'DRAFT') throw badRequest(`Only your own draft expenses can be edited (current: ${cur.status})`);
   const sets: string[] = [];
@@ -350,6 +354,10 @@ export async function updateExpense(client: pg.PoolClient, ctx: Ctx, id: number,
 }
 
 export async function submitExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
+  await client.query(
+    `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
   const cur = await getExpense(client, ctx, id, true);
   if (cur.status !== 'DRAFT') throw badRequest(`Only your own draft expenses can be submitted (current: ${cur.status})`);
   const amount = num0(cur.amount);
