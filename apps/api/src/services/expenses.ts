@@ -752,7 +752,12 @@ function creditAccountForMethod(methodType: string | null | undefined, paymentMe
 /** Independent accounting review before any expense GL posting. */
 export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, id: number, comment?: string) {
   if (!comment?.trim()) throw badRequest('Accounting verification comment is required.');
+  await client.query(
+    `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
   const cur = await getExpense(client, ctx, id);
+  if (cur.accountingVerified === true) throw badRequest('Expense accounting has already been verified.');
   if (cur.status !== 'APPROVED') throw badRequest(`Only approved expenses can be accounting-verified (current: ${cur.status}).`);
   if (cur.accountingStatus === 'POSTED') throw badRequest('The expense is already posted.');
   if (cur.createdBy != null && Number(cur.createdBy) === Number(ctx.userId)) {
@@ -807,7 +812,7 @@ export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, i
     `UPDATE expense_transactions
         SET accounting_verified = true, verified_by = $1, verified_at = now(),
             verification_comment = $2, updated_by = $1
-      WHERE id = $3 AND company_id = $4 AND tenant_id = $5 AND status = 'APPROVED'`,
+      WHERE id = $3 AND company_id = $4 AND tenant_id = $5 AND status = 'APPROVED' AND accounting_verified = false`,
     [ctx.userId ?? null, comment.trim(), id, companyId(ctx), ctx.tenantId]
   );
   await logAudit(client, ctx, { action: 'accounting_verify', resource: 'expenses',
@@ -817,6 +822,10 @@ export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, i
 }
 
 export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
+  await client.query(
+    `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
   const cur = await getExpense(client, ctx, id);
   if (!['APPROVED', 'PAID'].includes(String(cur.status))) {
     throw badRequest(`Only approved/paid expenses can be posted (current: ${cur.status})`);
@@ -881,6 +890,10 @@ export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
 }
 
 export async function voidExpense(client: pg.PoolClient, ctx: Ctx, id: number, reason?: string | null) {
+  await client.query(
+    `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
   const cur = await getExpense(client, ctx, id);
   if (String(cur.status) === 'VOID') throw badRequest('Expense is already void');
   if (!reason) throw badRequest('A void reason is required');
