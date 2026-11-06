@@ -758,6 +758,18 @@ export async function getExpense(client: pg.PoolClient, ctx: Ctx, id: number, ow
      WHERE aa.entity_type = 'ops.expenses' AND aa.entity_id = $1 ORDER BY aa.id`,
     [id]
   );
+  const payments = await client.query(
+    `SELECT pr.id, pr.pay_no, pr.amount, pr.currency, pr.status, pr.reference,
+            pr.execution_reference, pr.payment_date, pr.requested_by, pr.approved_by,
+            pr.approved_at, pr.paid_by, pr.paid_at, pr.gl_posted, pr.gl_journal_id,
+            pm.name AS payment_method_name
+       FROM payment_requests pr
+       LEFT JOIN payment_methods pm ON pm.id = pr.payment_method_id
+      WHERE pr.company_id = $1 AND pr.tenant_id = $2
+        AND pr.ref_type = 'EXPENSE' AND pr.ref_id = $3
+      ORDER BY pr.id DESC`,
+    [companyId(ctx), ctx.tenantId, id]
+  );
   const dupRes = header.duplicateOfId != null
     ? await client.query(
         `SELECT id, exp_no, amount, status FROM expense_transactions
@@ -771,6 +783,7 @@ export async function getExpense(client: pg.PoolClient, ctx: Ctx, id: number, ow
     lines: toCamelRows(lines.rows),
     receipts: toCamelRows(receipts.rows),
     timeline: toCamelRows(actions.rows),
+    payments: toCamelRows(payments.rows),
     duplicateOf: dupRes.rows.length ? toCamelRow(dupRes.rows[0]) : null,
   };
 }
