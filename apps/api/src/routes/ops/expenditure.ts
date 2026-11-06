@@ -39,10 +39,28 @@ expenditureOpsRouter.get('/meta', ...runGet('expenditure.expenses.view', (c, ctx
 expenditureOpsRouter.post('/duplicate-scan', ...run('expenditure.expenses.create', (c, ctx, b) => exp.duplicateScan(c, ctx, b)));
 
 // Expenses
-expenditureOpsRouter.get('/expenses/export', ...runGet('expenditure.expenses.view', async (c, ctx, q, _p) => {
-  const out = await expenseExport.exportExpenses(c, ctx, q);
-  return out.format === 'csv' ? { ...out, downloadName: `expenses_${new Date().toISOString().slice(0, 10)}.csv` } : out;
-}));
+expenditureOpsRouter.get(
+  '/expenses/export',
+  requirePermission('expenditure.expenses.view'),
+  asyncHandler(async (req, res) => {
+    const result = await tx(
+      (client) => expenseExport.exportExpenses(client, req.ctx, req.query as Record<string, unknown>),
+      req.ctx
+    );
+    const date = new Date().toISOString().slice(0, 10);
+    if (result.format === 'csv') {
+      res.status(200)
+        .type('text/csv; charset=utf-8')
+        .set('Content-Disposition', `attachment; filename="expenses_${date}.csv"`)
+        .send('\uFEFF' + result.content);
+      return;
+    }
+    res.status(200)
+      .type('application/json; charset=utf-8')
+      .set('Content-Disposition', `attachment; filename="expenses_${date}.json"`)
+      .send(JSON.stringify({ data: result.rows, meta: { rowCount: result.rowCount, limit: result.limit, exportedAt: new Date().toISOString() } }));
+  })
+);
 expenditureOpsRouter.get('/expenses', ...runGet('expenditure.expenses.view', (c, ctx, q) => exp.listExpenses(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
