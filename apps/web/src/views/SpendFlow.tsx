@@ -197,6 +197,7 @@ function parseSpend(path: string): { view: string; id: string | null; action: st
 }
 
 export default function SpendFlow({ path }: { path: string }) {
+  const { user } = useAuth();
   const { view, id, action } = parseSpend(path);
   if (view === 'requisitions' && id === 'new') return <RequisitionComposer />;
   if (view === 'requisitions' && id && action === 'edit') return <RequisitionComposer editId={Number(id)} />;
@@ -211,6 +212,9 @@ export default function SpendFlow({ path }: { path: string }) {
   if (view === 'claims' && id) return <ClaimDesk id={Number(id)} />;
   if (view === 'claims') return <ClaimsList />;
   if (view === 'close') return <DailyCloseDesk />;
+  // Employees with universal expense-initiation access land on their own
+  // expense register, not the organisation-wide finance command centre.
+  if (!can(user, 'expenditure.dashboards.view')) return <ExpenseList />;
   return <SpendBoard />;
 }function SpendBoard() {
   const { user } = useAuth();
