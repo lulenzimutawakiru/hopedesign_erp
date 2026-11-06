@@ -70,6 +70,8 @@ expenditureOpsRouter.post('/expenses', ...run('expenditure.expenses.create', (c,
 expenditureOpsRouter.post('/expenses/:id/update', ...run('expenditure.expenses.update', (c, ctx, b, p) => exp.updateExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/expenses/:id/submit', ...run('expenditure.expenses.submit', (c, ctx, _b, p) => exp.submitExpense(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/expenses/:id/pay', ...run('expenditure.payments.post', (c, ctx, b, p) => exp.payExpense(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/payments/:id/approve', ...run('expenditure.payments.approve', (c, ctx, b, p) => exp.approveExpensePayment(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : undefined)));
+expenditureOpsRouter.post('/payments/:id/execute', ...run('expenditure.payments.post', (c, ctx, b, p) => exp.executeExpensePayment(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/expenses/:id/post', ...run('expenditure.expenses.post', (c, ctx, _b, p) => exp.postExpense(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/expenses/:id/void', ...run('expenditure.expenses.void', (c, ctx, b, p) => exp.voidExpense(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : null)));
 expenditureOpsRouter.get('/board', ...runGet('expenditure.expenses.view', (c, ctx) => exp.expenseBoard(c, ctx)));
