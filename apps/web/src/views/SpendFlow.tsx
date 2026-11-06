@@ -1496,7 +1496,8 @@ function ExpensePaymentsDesk() {
         const statementDate = window.prompt('Enter statement date (YYYY-MM-DD):', todayIso());
         if (!statementDate?.trim()) return;
         const varianceExplanation = window.prompt('If the statement amount differs from the voucher, explain the variance (otherwise leave blank):') ?? '';
-        await api(`/api/ops/expenditure/payments/${id}/reconcile`, { method: 'POST', body: JSON.stringify({ statementReference, statementAmount: Number(statementAmount), statementDate, bankAccountId: p.bankAccountId ?? undefined, varianceExplanation: varianceExplanation || undefined }) });
+        const item = items.find((x) => num(x.id) === id);
+        await api(`/api/ops/expenditure/payments/${id}/reconcile`, { method: 'POST', body: JSON.stringify({ statementReference, statementAmount: Number(statementAmount), statementDate, bankAccountId: item?.bankAccountId ?? undefined, varianceExplanation: varianceExplanation || undefined }) });
       } else {
         const reason = window.prompt('Enter reconciliation approval comment:');
         if (!reason?.trim()) return;
@@ -1535,7 +1536,7 @@ function ExpensePaymentsDesk() {
                     </>}
                     {p.status === 'APPROVED' && canExecute && <button className="btn btn-sm btn-primary" disabled={busy === num(p.id)} onClick={() => void act(num(p.id), 'execute')}>Execute</button>}
                     {p.status === 'PAID' && !p.reconciliationId && canReconcile && <button className="btn btn-sm btn-ghost" disabled={busy === num(p.id)} onClick={() => void act(num(p.id), 'reconcile')}>Reconcile</button>}
-                    {p.reconciliationId && ['MATCHED','VARIANCE'].includes(s(p.reconciliationStatus)) && canApproveReconciliation && <button className="btn btn-sm btn-primary" disabled={busy === num(p.id)} onClick={() => void act(num(p.reconciliationId), 'approve-reconciliation')}>Approve reconciliation</button>}
+                    {!!p.reconciliationId && ['MATCHED','VARIANCE'].includes(s(p.reconciliationStatus)) && canApproveReconciliation && <button className="btn btn-sm btn-primary" disabled={busy === num(p.id)} onClick={() => void act(num(p.reconciliationId), 'approve-reconciliation')}>Approve reconciliation</button>}
                     {p.status === 'PAID' && p.reconciliationStatus === 'APPROVED' && <span className="muted">Reconciled</span>}
                   </td>
                 </tr>

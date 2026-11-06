@@ -17,7 +17,7 @@ payment services.
 
 ### Initial implementation slice: universal expense initiation
 
-Migration `0208_universal_expense_initiation.sql` grants every existing role
+Migration `0229_universal_expense_initiation.sql` grants every existing role
 the minimum permissions to create, submit and view its own expense records.
 A role-insert trigger applies the same minimum grant to future roles.
 

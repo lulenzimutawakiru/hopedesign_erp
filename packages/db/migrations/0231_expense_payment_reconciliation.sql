@@ -1,4 +1,4 @@
--- 0210 - Bank-statement reconciliation for executed expense payments
+-- 0231 - Bank-statement reconciliation for executed expense payments
 -- A reconciliation record is evidence of an external statement match, not a
 -- replacement for the immutable general-ledger settlement journal.
 

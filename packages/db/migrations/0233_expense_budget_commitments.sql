@@ -1,4 +1,4 @@
--- 0212 - Reserve expense budgets at submission and release on terminal transitions
+-- 0233 - Reserve expense budgets at submission and release on terminal transitions
 ALTER TABLE budget_commitments ADD COLUMN IF NOT EXISTS release_reason TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_budget_commitments_expense_ref

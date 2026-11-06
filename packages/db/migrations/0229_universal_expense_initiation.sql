@@ -1,4 +1,4 @@
--- 0208 - Universal expense initiation for all ERP user roles
+-- 0229 - Universal expense initiation for all ERP user roles
 --
 -- Every active account with an assigned role may initiate and submit an
 -- expense. Read access is deliberately limited to the user's own expenses;

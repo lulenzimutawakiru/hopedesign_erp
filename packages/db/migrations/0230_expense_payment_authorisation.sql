@@ -1,4 +1,4 @@
--- 0209 - Expense payment authorisation, execution and partial settlement controls
+-- 0230 - Expense payment authorisation, execution and partial settlement controls
 -- Additive: preserves existing payment_requests records and status vocabulary.
 -- Existing direct-paid legacy rows remain historical; new requests use SUBMITTED -> APPROVED -> PAID.
 

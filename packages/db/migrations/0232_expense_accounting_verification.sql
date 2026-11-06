@@ -1,4 +1,4 @@
--- 0211 - Independent accounting verification before expense posting
+-- 0232 - Independent accounting verification before expense posting
 ALTER TABLE expense_transactions
   ADD COLUMN IF NOT EXISTS accounting_verified BOOLEAN NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS verified_by BIGINT REFERENCES users(id),

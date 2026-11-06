@@ -13,7 +13,7 @@ const expUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 
 type OpFn = (client: pg.PoolClient, ctx: Ctx, body: any, params: Record<string, string>) => Promise<unknown>;
 type QueryFn = (client: pg.PoolClient, ctx: Ctx, query: Record<string, unknown>, params: Record<string, string>) => Promise<unknown>;
 
-const run = (permission: string, fn: OpFn) => [
+const run = (permission: string | string[], fn: OpFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
     const out = await tx((client) => fn(client, req.ctx, req.body ?? {}, req.params as Record<string, string>), req.ctx);
@@ -21,7 +21,7 @@ const run = (permission: string, fn: OpFn) => [
   }),
 ];
 
-const runGet = (permission: string, fn: QueryFn) => [
+const runGet = (permission: string | string[], fn: QueryFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
     const out = await tx(
