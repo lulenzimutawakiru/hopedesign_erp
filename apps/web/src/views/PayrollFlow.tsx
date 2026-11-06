@@ -334,7 +334,7 @@ function EmployeesTab({
               <th>Gross</th>
               <th>PAYE</th>
               <th>NSSF</th>
-              <th>Loans/adv.</th>
+              <th>Recoveries</th>
               <th>Other ded.</th>
               <th>Net</th>
               <th />
@@ -353,7 +353,7 @@ function EmployeesTab({
                 <td className="cell-num">{money(i.grossPay)}</td>
                 <td className="cell-num">{money(i.paye)}</td>
                 <td className="cell-num">{money(i.nssf)}</td>
-                <td className="cell-num">{money(i.advances)}</td>
+                <td className="cell-num">{money(Number(i.loans || 0) + Number(i.advances || 0) + Number(i.fines || 0))}</td>
                 <td className="cell-num">{money(i.otherDeductions)}</td>
                 <td className="cell-num"><strong>{money(i.netPay)}</strong></td>
                 <td>
@@ -382,7 +382,7 @@ function EmployeesTab({
                 <td className="cell-num">{money(total('grossPay'))}</td>
                 <td className="cell-num">{money(total('paye'))}</td>
                 <td className="cell-num">{money(total('nssf'))}</td>
-                <td className="cell-num">{money(total('advances'))}</td>
+                <td className="cell-num">{money(items.reduce((s, row) => s + Number(row.loans || 0) + Number(row.advances || 0) + Number(row.fines || 0), 0))}</td>
                 <td className="cell-num">{money(total('otherDeductions'))}</td>
                 <td className="cell-num"><strong>{money(total('netPay'))}</strong></td>
                 <td />

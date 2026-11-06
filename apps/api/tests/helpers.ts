@@ -105,6 +105,7 @@ const EMPLOYEE_CHILD_TABLES = [
   'bonus_records',
   'commission_records',
   'disciplinary_actions',
+  'employee_fines',
   'disciplinary_cases',
   'employee_benefits',
   'employee_certifications',

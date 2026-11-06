@@ -188,7 +188,9 @@ hrOpsRouter.get('/loans/:id', ...runGet('hr.loans.view', (c, ctx, _q, p) => loan
 hrOpsRouter.post('/loans/:id/approve', ...run('hr.loans.approve', (c, ctx, _b, p) => loansService.approveLoan(c, ctx, Number(p.id))));
 hrOpsRouter.post('/loans/:id/reject', ...run('hr.loans.approve', (c, ctx, _b, p) => loansService.rejectLoan(c, ctx, Number(p.id))));
 hrOpsRouter.post('/loans/:id/pause', ...run('hr.loans.update', (c, ctx, _b, p) => loansService.pauseLoan(c, ctx, Number(p.id))));
-hrOpsRouter.post('/loans/:id/write-off', ...run('hr.loans.write_off', (c, ctx, _b, p) => loansService.writeOffLoan(c, ctx, Number(p.id))));
+hrOpsRouter.post('/loans/:id/resume', ...run('hr.loans.update', (c, ctx, _b, p) => loansService.resumeLoan(c, ctx, Number(p.id))));
+hrOpsRouter.post('/loans/:id/disburse', ...run('hr.loans.update', (c, ctx, b, p) => loansService.disburseLoan(c, ctx, Number(p.id), b.paymentMethod != null ? String(b.paymentMethod) : null)));
+hrOpsRouter.post('/loans/:id/write-off', ...run('hr.loans.write_off', (c, ctx, b, p) => loansService.writeOffLoan(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : null)));
 hrOpsRouter.get('/advances', ...runGet('hr.advances.view', (c, ctx, q) => loansService.listAdvances(c, ctx, {
   employeeId: q.employeeId != null ? Number(q.employeeId) : undefined,
   status: q.status != null && q.status !== '' ? String(q.status) : undefined,
@@ -206,7 +208,29 @@ hrOpsRouter.post('/employees/:id/advances', ...run('hr.advances.create', (c, ctx
 })));
 hrOpsRouter.post('/advances/:id/approve', ...run('hr.advances.approve', (c, ctx, _b, p) => loansService.approveAdvance(c, ctx, Number(p.id))));
 hrOpsRouter.post('/advances/:id/reject', ...run('hr.advances.approve', (c, ctx, _b, p) => loansService.rejectAdvance(c, ctx, Number(p.id))));
+hrOpsRouter.post('/advances/:id/disburse', ...run('hr.advances.update', (c, ctx, b, p) => loansService.disburseAdvance(c, ctx, Number(p.id), b.paymentMethod != null ? String(b.paymentMethod) : null)));
 hrOpsRouter.post('/advances/:id/close', ...run('hr.advances.update', (c, ctx, _b, p) => loansService.closeAdvance(c, ctx, Number(p.id))));
+hrOpsRouter.post('/advances/:id/waive', ...run('hr.advances.update', (c, ctx, b, p) => loansService.waiveAdvance(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : null)));
+
+hrOpsRouter.get('/fines', ...runGet('hr.fines.view', (c, ctx, q) => loansService.listFines(c, ctx, {
+  employeeId: q.employeeId != null ? Number(q.employeeId) : undefined,
+  status: q.status != null && q.status !== '' ? String(q.status) : undefined,
+  q: q.q != null && q.q !== '' ? String(q.q) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+hrOpsRouter.get('/fines/:id', ...runGet('hr.fines.view', (c, ctx, _q, p) => loansService.getFine(c, ctx, Number(p.id))));
+hrOpsRouter.post('/employees/:id/fines', ...run('hr.fines.create', (c, ctx, b, p) => loansService.createFine(c, ctx, {
+  employeeId: Number(p.id),
+  amount: Number(b.amount),
+  monthlyDeduction: b.monthlyDeduction != null ? Number(b.monthlyDeduction) : undefined,
+  reason: b.reason != null ? String(b.reason) : null,
+  incidentDate: b.incidentDate != null ? String(b.incidentDate) : null,
+  disciplinaryCaseId: b.disciplinaryCaseId != null ? Number(b.disciplinaryCaseId) : null,
+})));
+hrOpsRouter.post('/fines/:id/approve', ...run('hr.fines.approve', (c, ctx, _b, p) => loansService.approveFine(c, ctx, Number(p.id))));
+hrOpsRouter.post('/fines/:id/reject', ...run('hr.fines.approve', (c, ctx, _b, p) => loansService.rejectFine(c, ctx, Number(p.id))));
+hrOpsRouter.post('/fines/:id/waive', ...run('hr.fines.waive', (c, ctx, b, p) => loansService.waiveFine(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : null)));
 
 hrOpsRouter.get('/attendance', ...runGet('hr.attendance.view', (c, ctx, q) => hr.listAttendance(c, ctx, q.date != null ? String(q.date) : undefined)));
 
@@ -222,6 +246,7 @@ hrOpsRouter.post('/leave', ...run('hr.leave.create', (c, ctx, b) => hr.createLea
 })));
 hrOpsRouter.post('/leave/:id/approve', ...run('hr.leave.approve', (c, ctx, _b, p) => hr.decideLeave(c, ctx, Number(p.id), 'APPROVED')));
 hrOpsRouter.post('/leave/:id/reject', ...run('hr.leave.approve', (c, ctx, _b, p) => hr.decideLeave(c, ctx, Number(p.id), 'REJECTED')));
+hrOpsRouter.post('/leave/:id/cancel', ...run('hr.leave.approve', (c, ctx, _b, p) => hr.cancelLeave(c, ctx, Number(p.id))));
 
 hrOpsRouter.get('/payrolls', ...runGet('hr.payrolls.view', (c, ctx) => hr.listPayrolls(c, ctx)));
 

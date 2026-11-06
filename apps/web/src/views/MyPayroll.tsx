@@ -71,6 +71,7 @@ interface YearToDate {
   lst: number;
   loans: number;
   advances: number;
+  fines: number;
   otherDeductions: number;
 }
 
@@ -96,6 +97,7 @@ interface Home {
   trend: TrendPoint[];
   loans: Rec[];
   advances: Rec[];
+  fines: Rec[];
 }
 
 interface TraceLine {
@@ -515,7 +517,7 @@ export default function MyPayroll() {
             </div>
           </section>
 
-          {((home?.loans ?? []).length > 0 || (home?.advances ?? []).length > 0) && (
+          {((home?.loans ?? []).length > 0 || (home?.advances ?? []).length > 0 || (home?.fines ?? []).length > 0) && (
             <div className="grid-2">
               <Panel title="Staff loans in recovery" sub="Recovered from your pay each period">
                 <div className="table-wrap">
@@ -557,6 +559,27 @@ export default function MyPayroll() {
                   </table>
                 </div>
               </Panel>
+              {(home?.fines ?? []).length > 0 && (
+                <Panel title="Staff fines in recovery" sub="Authorised amounts recovered from your pay">
+                  <div className="table-wrap">
+                    <table className="data">
+                      <thead>
+                        <tr><th>Fine</th><th className="cell-num">Monthly</th><th className="cell-num">Outstanding</th><th>Reason</th></tr>
+                      </thead>
+                      <tbody>
+                        {(home?.fines ?? []).map((f) => (
+                          <tr key={str(f.id)}>
+                            <td className="cell-mono">{str(f.fineNo) || str(f.id)}</td>
+                            <td className="cell-num">{money(f.monthlyDeduction)}</td>
+                            <td className="cell-num">{money(f.outstandingBalance)}</td>
+                            <td>{str(f.reason) || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Panel>
+              )}
             </div>
           )}
         </>
