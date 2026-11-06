@@ -92,9 +92,10 @@ const SPEND_TABS: [string, string][] = [
 ];
 
 function SpendTabs({ active }: { active: string }) {
+  const { user } = useAuth();
   return (
     <nav className="spend-tabs" aria-label="Spend sections">
-      {SPEND_TABS.map(([key, label]) => (
+      {SPEND_TABS.filter(([key]) => key !== 'payments' || can(user, 'expenditure.payments.view')).map(([key, label]) => (
         <button
           key={key}
           type="button"
@@ -1537,6 +1538,7 @@ function ExpenseDesk({ id }: { id: number }) {
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
   const [payMethod, setPayMethod] = useState('');
+  const [payAmount, setPayAmount] = useState('');
   const [showPay, setShowPay] = useState(false);
   const [voidReason, setVoidReason] = useState('');
   const [showVoid, setShowVoid] = useState(false);
@@ -1730,11 +1732,14 @@ function ExpenseDesk({ id }: { id: number }) {
         <Modal title={`Request payment for ${s(e.expNo)}` onClose={() => setShowPay(false)}
           footer={<>
             <button className="btn btn-ghost" onClick={() => setShowPay(false)}>Cancel</button>
-            <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('pay', 'Payment request submitted', { paymentMethodId: num(payMethod) || undefined })}>
+            <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('pay', 'Payment request submitted', { paymentMethodId: num(payMethod) || undefined, amount: num(payAmount) || undefined })}>
               {busy === 'pay' ? 'Working…' : 'Submit Payment Request'}
             </button>
           </>}>
           <div className="form-grid">
+            <label className="field">Request amount (leave blank for full outstanding balance)
+              <input type="number" min="1" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder={fmtMoney(num(e.amount))} />
+            </label>
             <label className="field">Payment method
               <select value={payMethod} onChange={(e) => setPayMethod(e.target.value)}>
                 <option value="">Use default ({s(e.paymentMethodName) || 'not set'})</option>
