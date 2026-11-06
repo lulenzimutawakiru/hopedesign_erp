@@ -33,6 +33,8 @@ visibility. Draft edits and submission are restricted to the expense creator.
 
 - Approved unpaid expenses now post the expense debit and input-tax debit (where applicable) against Accounts Payable (GL 10121100), rather than treating an unpaid invoice as a bank payment.
 - If an expense has already been accrued to Accounts Payable, recording its settlement generates a separate SUPPLIER_PAYMENT journal to debit AP and credit the configured payment-method ledger account.
+- Accounting verification is a separate permission and gate before posting: the verifier checks the active posting account, tax bounds and line/header totals, records a reason, and cannot be the expense creator or workflow approver. The verifier cannot post the same expense.
+- Payment request creation, approval, execution and reconciliation each use distinct permissions and recorded lifecycle transitions.
 - Payment execution now requires the dedicated `expenditure.payments.post` permission rather than the expense-approval permission.
 - Inactive or invalid payment methods are rejected; the CREDIT method type cannot be used to falsely mark a supplier-credit expense as paid.
 - If an expense is marked paid before its first GL posting, the expense journal credits the payment-method ledger account instead of creating an AP balance.
