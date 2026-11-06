@@ -1713,7 +1713,7 @@ function ExpenseDesk({ id }: { id: number }) {
         {paymentRows.length > 0 && (
           <div className="table-wrap">
             <table className="data">
-              <thead><tr><th>Voucher</th><th>Amount</th><th>Method</th><th>Status</th><th>Payment date</th><th>GL journal</th></tr></thead>
+              <thead><tr><th>Voucher</th><th>Amount</th><th>Method</th><th>Status</th><th>Payment date</th><th>Execution reference</th><th>GL journal</th><th>Bank line</th></tr></thead>
               <tbody>{paymentRows.map((p) => (
                 <tr key={s(p.id)}>
                   <td className="cell-mono">{s(p.payNo)}</td>
@@ -1721,7 +1721,9 @@ function ExpenseDesk({ id }: { id: number }) {
                   <td>{s(p.paymentMethodName) || '—'}</td>
                   <td><Badge value={p.status} /></td>
                   <td>{p.paymentDate ? fmtDay(p.paymentDate) : '—'}</td>
+                  <td className="cell-mono">{s(p.executionReference) || '—'}</td>
                   <td className="cell-mono">{p.glPosted ? s(p.glJournalId) : 'Not posted'}</td>
+                  <td className="cell-mono">{s(p.bankTransactionId) || '—'}</td>
                 </tr>
               ))}</tbody>
             </table>
