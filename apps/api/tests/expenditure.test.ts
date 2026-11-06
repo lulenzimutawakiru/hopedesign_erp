@@ -81,6 +81,16 @@ describe('Ops daily expenditure module', () => {
     expect(decide.status).toBe(200);
     expect(decide.body.data.status).toBe('APPROVED');
 
+    // Accounting verification is an independent control between approval and GL posting.
+    const selfVerify = await api.post(`/api/ops/expenditure/expenses/${id}/verify`)
+      .set(auth(finToken)).send({ comment: 'Approver cannot verify own approval' });
+    expect(selfVerify.status).toBe(403);
+    const { token: adminToken } = await loginAs('admin');
+    const verified = await api.post(`/api/ops/expenditure/expenses/${id}/verify`)
+      .set(auth(adminToken)).send({ comment: 'Checked account coding, tax, supporting evidence and totals' });
+    expect(verified.status).toBe(200);
+    expect(verified.body.data.accountingVerified).toBe(true);
+
     // Accounting verification/posting is distinct from settlement.
     const post = await api.post(`/api/ops/expenditure/expenses/${id}/post`).set(auth(finToken)).send({});
     expect(post.status).toBe(200);
@@ -99,7 +109,6 @@ describe('Ops daily expenditure module', () => {
       .set(auth(finToken)).send({ reason: 'Self-approval must fail' });
     expect(selfApprove.status).toBe(403);
 
-    const { token: adminToken } = await loginAs('admin');
     const approve1 = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/approve`)
       .set(auth(adminToken)).send({ reason: 'Verified supporting documents' });
     expect(approve1.status).toBe(200);
