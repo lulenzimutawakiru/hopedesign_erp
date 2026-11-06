@@ -2,7 +2,7 @@ import { Router } from 'express';
 import pg from 'pg';
 import multer from 'multer';
 import { tx, Ctx } from '../../db.js';
-import { requirePermission } from '../../middleware/authorize.js';
+import { can, requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest } from '../../utils.js';
 import * as exp from '../../services/expenses.js';
 import * as proc from '../../services/procurement.js';
@@ -32,12 +32,24 @@ const runGet = (permission: string, fn: QueryFn) => [
   }),
 ];
 
+const runExpenseGet = (fn: (client: pg.PoolClient, ctx: Ctx, query: Record<string, unknown>, params: Record<string, string>, viewAll: boolean) => Promise<unknown>) => [
+  requirePermission(['expenditure.expenses.view', 'expenditure.expenses.view_own']),
+  asyncHandler(async (req, res) => {
+    const viewAll = can(req.auth, 'expenditure.expenses.view');
+    const out = await tx(
+      (client) => fn(client, req.ctx, req.query as Record<string, unknown>, req.params as Record<string, string>, viewAll),
+      req.ctx
+    );
+    res.json({ data: out });
+  }),
+];
+
 // Meta + fraud guard
-expenditureOpsRouter.get('/meta', ...runGet('expenditure.expenses.view', (c, ctx) => exp.expenseMeta(c, ctx)));
+expenditureOpsRouter.get('/meta', ...runGet(['expenditure.expenses.view', 'expenditure.expenses.create'], (c, ctx) => exp.expenseMeta(c, ctx)));
 expenditureOpsRouter.post('/duplicate-scan', ...run('expenditure.expenses.create', (c, ctx, b) => exp.duplicateScan(c, ctx, b)));
 
 // Expenses
-expenditureOpsRouter.get('/expenses', ...runGet('expenditure.expenses.view', (c, ctx, q) => exp.listExpenses(c, ctx, {
+expenditureOpsRouter.get('/expenses', ...runExpenseGet((c, ctx, q, _p, viewAll) => exp.listExpenses(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
   paymentStatus: q.paymentStatus != null ? String(q.paymentStatus) : undefined,
@@ -51,8 +63,9 @@ expenditureOpsRouter.get('/expenses', ...runGet('expenditure.expenses.view', (c,
   to: q.to != null ? String(q.to) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  ownOnly: !viewAll,
 })));
-expenditureOpsRouter.get('/expenses/:id', ...runGet('expenditure.expenses.view', (c, ctx, _q, p) => exp.getExpense(c, ctx, Number(p.id))));
+expenditureOpsRouter.get('/expenses/:id', ...runExpenseGet((c, ctx, _q, p, viewAll) => exp.getExpense(c, ctx, Number(p.id), !viewAll)));
 expenditureOpsRouter.post('/expenses', ...run('expenditure.expenses.create', (c, ctx, b) => exp.createExpense(c, ctx, b)));
 expenditureOpsRouter.post('/expenses/:id/update', ...run('expenditure.expenses.update', (c, ctx, b, p) => exp.updateExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/expenses/:id/submit', ...run('expenditure.expenses.submit', (c, ctx, _b, p) => exp.submitExpense(c, ctx, Number(p.id))));
