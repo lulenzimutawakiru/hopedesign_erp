@@ -485,23 +485,22 @@ export async function approveExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   }
   const expenseControl = await client.query(
     `SELECT et.created_by,
-            (SELECT t.decided_by
-               FROM approval_tasks t
-               JOIN workflow_instances i ON i.id = t.instance_id
+            EXISTS (
+              SELECT 1 FROM approval_tasks t
+              JOIN workflow_instances i ON i.id = t.instance_id
               WHERE i.entity_type = 'ops.expenses' AND i.entity_id = et.id
                 AND i.company_id = et.company_id AND i.tenant_id = et.tenant_id
-                AND t.status = 'APPROVED' AND t.decided_by IS NOT NULL
-              ORDER BY t.decided_at DESC LIMIT 1) AS expense_approver
+                AND t.status = 'APPROVED' AND t.decided_by = $4
+            ) AS is_expense_approver
        FROM expense_transactions et
       WHERE et.id = $1 AND et.company_id = $2 AND et.tenant_id = $3`,
-    [Number(p.refId), companyId(ctx), ctx.tenantId]
+    [Number(p.refId), companyId(ctx), ctx.tenantId, ctx.userId ?? null]
   );
   if (!expenseControl.rows.length) throw notFound('Linked expense not found');
   if (Number(expenseControl.rows[0].created_by) === Number(ctx.userId)) {
     throw forbidden('The expense creator cannot approve its payment.');
   }
-  if (expenseControl.rows[0].expense_approver != null &&
-      Number(expenseControl.rows[0].expense_approver) === Number(ctx.userId)) {
+  if (expenseControl.rows[0].is_expense_approver === true) {
     throw forbidden('The expense approver cannot approve its payment voucher.');
   }
   if (!reason?.trim()) throw badRequest('Approval comment or reference is required.');
@@ -548,17 +547,16 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
     throw forbidden('The expense creator cannot execute its payment.');
   }
   const expenseApprover = await client.query(
-    `SELECT t.decided_by
+    `SELECT 1
        FROM approval_tasks t
        JOIN workflow_instances i ON i.id = t.instance_id
       WHERE i.entity_type = 'ops.expenses' AND i.entity_id = $1
         AND i.company_id = $2 AND i.tenant_id = $3
-        AND t.status = 'APPROVED' AND t.decided_by IS NOT NULL
-      ORDER BY t.decided_at DESC LIMIT 1`,
-    [Number(p.refId), companyId(ctx), ctx.tenantId]
+        AND t.status = 'APPROVED' AND t.decided_by = $4
+      LIMIT 1`,
+    [Number(p.refId), companyId(ctx), ctx.tenantId, ctx.userId ?? null]
   );
-  if (expenseApprover.rows[0]?.decided_by != null &&
-      Number(expenseApprover.rows[0].decided_by) === Number(ctx.userId)) {
+  if (expenseApprover.rows.length) {
     throw forbidden('The expense approver cannot execute its payment.');
   }
   if (expense.accountingStatus !== 'POSTED' || expense.glPosted !== true) {
@@ -810,17 +808,16 @@ export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, i
     throw forbidden('The expense creator cannot perform accounting verification.');
   }
   const approvalActor = await client.query(
-    `SELECT t.decided_by
+    `SELECT 1
        FROM approval_tasks t
        JOIN workflow_instances i ON i.id = t.instance_id
       WHERE i.entity_type = 'ops.expenses' AND i.entity_id = $1
         AND i.company_id = $2 AND i.tenant_id = $3
-        AND t.status = 'APPROVED' AND t.decided_by IS NOT NULL
-      ORDER BY t.decided_at DESC LIMIT 1`,
-    [id, companyId(ctx), ctx.tenantId]
+        AND t.status = 'APPROVED' AND t.decided_by = $4
+      LIMIT 1`,
+    [id, companyId(ctx), ctx.tenantId, ctx.userId ?? null]
   );
-  if (approvalActor.rows[0]?.decided_by != null &&
-      Number(approvalActor.rows[0].decided_by) === Number(ctx.userId)) {
+  if (approvalActor.rows.length) {
     throw forbidden('The expense approver cannot perform accounting verification.');
   }
   const amount = round2(num0(cur.amount));
