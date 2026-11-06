@@ -132,6 +132,22 @@ describe('Ops daily expenditure module', () => {
     expect(history.status).toBe(200);
     expect(history.body.data.payments).toHaveLength(2);
     expect(history.body.data.payments.every((p: { glPosted: boolean }) => p.glPosted)).toBe(true);
+
+    const reconcile = await api.post(`/api/ops/expenditure/payments/${request2.body.data.payId}/reconcile`)
+      .set(auth(finToken)).send({
+        statementReference: `BANK-STATEMENT-${Date.now()}`,
+        statementAmount: 150000,
+        statementDate: '2026-11-06',
+      });
+    expect(reconcile.status).toBe(200);
+    expect(reconcile.body.data.status).toBe('MATCHED');
+    const selfApproveRecon = await api.post(`/api/ops/expenditure/payment-reconciliations/${reconcile.body.data.id}/approve`)
+      .set(auth(finToken)).send({ reason: 'Self-approval must fail' });
+    expect(selfApproveRecon.status).toBe(403);
+    const approveRecon = await api.post(`/api/ops/expenditure/payment-reconciliations/${reconcile.body.data.id}/approve`)
+      .set(auth(adminToken)).send({ reason: 'Bank statement independently checked' });
+    expect(approveRecon.status).toBe(200);
+    expect(approveRecon.body.data.status).toBe('APPROVED');
   });
 
   it('blocks the creator from approving their own expense (segregation of duties)', async () => {
