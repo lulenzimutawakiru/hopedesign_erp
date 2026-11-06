@@ -772,14 +772,50 @@ export async function reconcileExpensePayment(client: pg.PoolClient, ctx: Ctx, p
     [companyId(ctx), ctx.tenantId, paymentId, statementReference]
   );
   if (existing.rows.length) throw badRequest('This payment voucher or statement reference is already reconciled.');
+  let bankTransactionId: number | null = null;
+  if (p.bankAccountId != null && Math.abs(variance) <= 0.01) {
+    const statementLine = await client.query(
+      `SELECT bt.id, bt.debit, bt.credit, bt.reconciled, ba.gl_account_id
+         FROM bank_transactions bt
+         JOIN bank_accounts ba ON ba.id = bt.bank_account_id
+        WHERE bt.bank_account_id = $1 AND ba.company_id = $2 AND ba.tenant_id = $3
+          AND (bt.reference = $4 OR bt.statement_ref = $4) AND bt.txn_date = $5
+        ORDER BY bt.id DESC LIMIT 1`,
+      [Number(p.bankAccountId), companyId(ctx), ctx.tenantId, statementReference, isoDate(b.statementDate)]
+    );
+    if (!statementLine.rows.length) {
+      throw badRequest('Import the matching bank statement line first, then reconcile this payment voucher.');
+    }
+    const bankLine = statementLine.rows[0];
+    if (bankLine.reconciled) throw badRequest('The imported bank statement line has already been reconciled.');
+    const statementLineAmount = round2(num0(bankLine.debit) || num0(bankLine.credit));
+    if (Math.abs(statementLineAmount - statementAmount) > 0.01) {
+      throw badRequest('The imported bank statement line amount differs from the amount entered.');
+    }
+    const journalLine = await client.query(
+      `SELECT jl.id
+         FROM journal_lines jl
+         JOIN journal_entries je ON je.id = jl.entry_id AND je.status = 'POSTED'
+         JOIN bank_accounts ba ON ba.gl_account_id = jl.account_id
+        WHERE je.id = $1 AND ba.id = $2 AND je.tenant_id = $3
+          AND (jl.credit = $4 OR jl.debit = $4)
+        ORDER BY jl.id LIMIT 1`,
+      [Number(p.glJournalId), Number(p.bankAccountId), ctx.tenantId, num0(p.amount)]
+    );
+    if (!journalLine.rows.length) throw badRequest('The settlement journal does not contain a matching line for the selected bank account.');
+    await finance.matchBankRecon(client, ctx, Number(p.bankAccountId), {
+      statementId: Number(bankLine.id), journalLineId: Number(journalLine.rows[0].id),
+    });
+    bankTransactionId = Number(bankLine.id);
+  }
   const inserted = await client.query(
     `INSERT INTO expense_payment_reconciliations
-       (company_id, tenant_id, payment_request_id, statement_date, statement_reference,
+       (company_id, tenant_id, payment_request_id, bank_transaction_id, statement_date, statement_reference,
         statement_amount, currency, matched_amount, variance, variance_explanation,
         status, reconciled_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     RETURNING id, status, variance`,
-    [companyId(ctx), ctx.tenantId, paymentId, isoDate(b.statementDate), statementReference,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     RETURNING id, status, variance, bank_transaction_id`,
+    [companyId(ctx), ctx.tenantId, paymentId, bankTransactionId, isoDate(b.statementDate), statementReference,
      statementAmount, currency, Math.min(statementAmount, num0(p.amount)), variance,
      explanation, Math.abs(variance) <= 0.01 ? 'MATCHED' : 'VARIANCE', ctx.userId ?? null]
   );
