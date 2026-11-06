@@ -69,7 +69,7 @@ expenditureOpsRouter.get('/expenses/:id', ...runExpenseGet((c, ctx, _q, p, viewA
 expenditureOpsRouter.post('/expenses', ...run('expenditure.expenses.create', (c, ctx, b) => exp.createExpense(c, ctx, b)));
 expenditureOpsRouter.post('/expenses/:id/update', ...run('expenditure.expenses.update', (c, ctx, b, p) => exp.updateExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/expenses/:id/submit', ...run('expenditure.expenses.submit', (c, ctx, _b, p) => exp.submitExpense(c, ctx, Number(p.id))));
-expenditureOpsRouter.post('/expenses/:id/pay', ...run('expenditure.payments.post', (c, ctx, b, p) => exp.payExpense(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/expenses/:id/pay', ...run('expenditure.payments.create', (c, ctx, b, p) => exp.payExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/payments/:id/approve', ...run('expenditure.payments.approve', (c, ctx, b, p) => exp.approveExpensePayment(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : undefined)));
 expenditureOpsRouter.get('/payments', ...runGet('expenditure.payments.view', (c, ctx, q) => exp.listExpensePayments(c, ctx, q)));
 expenditureOpsRouter.post('/payments/:id/reject', ...run('expenditure.payments.approve', (c, ctx, b, p) => exp.rejectExpensePayment(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : undefined)));
