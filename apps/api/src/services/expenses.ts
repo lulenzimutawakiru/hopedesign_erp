@@ -381,6 +381,9 @@ export async function submitExpense(client: pg.PoolClient, ctx: Ctx, id: number)
     cur.categoryAccountId != null ? Number(cur.categoryAccountId) :
       await finance.getAccountId(client, ctx, '10254500');
   const pos = await finance.budgetPosition(client, ctx, effectiveAccountId);
+  if (cur.budgetId != null && pos.result === 'NONE') {
+    throw badRequest('The selected budget has no approved allocation for this expense GL account in the current period.');
+  }
   if (pos.result !== 'NONE') {
     if (pos.available + 0.005 < amount) {
       throw badRequest(
