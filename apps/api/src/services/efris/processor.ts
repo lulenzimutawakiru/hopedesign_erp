@@ -9,6 +9,7 @@
  * recorded in efris_integration_errors and retried with backoff (or marked
  * FAILED once the configured attempt budget is exhausted).
  */
+import crypto from 'node:crypto';
 import pg from 'pg';
 import { pool } from '../../db.js';
 import { toISODate } from '../../utils.js';
@@ -60,6 +61,27 @@ interface WorkerRowMeta {
 }
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** Map a customer_type onto the buyerKind hint the protocol reads (GAP-3 B2G). */
+function buyerKindFor(customerType: unknown): string | null {
+  const kind = String(customerType ?? '').trim().toUpperCase();
+  return kind === 'GOVERNMENT' ? 'government' : null;
+}
+
+/**
+ * Deterministic data-exchange id for one fiscal transaction (GAP-4). Retries of
+ * the same row (same doc identity) replay the same id, so URA can deduplicate on
+ * the exchange id instead of seeing a fresh random value on every attempt.
+ */
+function stableExchangeId(row: ClaimedFiscalTransaction): string {
+  return crypto
+    .createHash('sha256')
+    .update(`${row.doc_type}\u0000${row.doc_ref_type}\u0000${row.doc_ref_id}\u0000${row.doc_ref_code}`)
+    .digest()
+    .subarray(0, 16)
+    .toString('hex')
+    .toUpperCase();
+}
 
 async function applyWorkerContext(client: pg.PoolClient, row: WorkerRowMeta): Promise<void> {
   await client.query('SELECT set_app_context($1,$2,$3,$4)', [
@@ -285,7 +307,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
     if (row.doc_ref_type === 'customer_invoices') {
       const inv = await client.query(
         `SELECT c.name AS customer_name, c.tin AS customer_tin, c.address AS customer_address,
-                c.email AS customer_email, c.phone AS customer_phone, i.notes
+                c.email AS customer_email, c.phone AS customer_phone, c.customer_type AS customer_type, i.notes
            FROM customer_invoices i
            JOIN customers c ON c.id = i.customer_id
           WHERE i.id = $1 AND i.tenant_id = $2`,
@@ -310,6 +332,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
           address: party.customer_address != null ? String(party.customer_address) : null,
           email: party.customer_email != null ? String(party.customer_email) : null,
           phone: party.customer_phone != null ? String(party.customer_phone) : null,
+          buyerKind: buyerKindFor(party.customer_type),
         } : null,
         lines: (items.rows as Array<Record<string, unknown>>).map((item) => {
           const taxPercent = Number(item.tax_percent ?? 0);
@@ -341,7 +364,8 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
       const table = row.doc_ref_type === 'credit_notes' ? 'credit_notes' : 'debit_notes';
       const note = await client.query(
         `SELECT n.invoice_id, n.reason, n.reason_code, c.name AS customer_name, c.tin AS customer_tin,
-                c.address AS customer_address, c.email AS customer_email, c.phone AS customer_phone
+                c.address AS customer_address, c.email AS customer_email, c.phone AS customer_phone,
+                c.customer_type AS customer_type
            FROM ${table} n
            JOIN customers c ON c.id = n.customer_id
           WHERE n.id = $1 AND n.tenant_id = $2`,
@@ -400,6 +424,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
           address: party.customer_address != null ? String(party.customer_address) : null,
           email: party.customer_email != null ? String(party.customer_email) : null,
           phone: party.customer_phone != null ? String(party.customer_phone) : null,
+          buyerKind: buyerKindFor(party.customer_type),
         } : null,
         lines,
         oriInvoiceNo: ref.oriInvoiceNo,
@@ -527,7 +552,8 @@ async function loadReceiptFiscalSource(client: pg.PoolClient, row: ClaimedFiscal
   const base: FiscalSource = { buyer: null, lines: [], oriInvoiceNo: null, oriInvoiceId: null, remarks: null, reasonCode: null, reason: null, stock: null };
   const rcpt = await client.query(
     `SELECT r.invoice_id, c.name AS customer_name, c.tin AS customer_tin,
-            c.address AS customer_address, c.email AS customer_email, c.phone AS customer_phone
+            c.address AS customer_address, c.email AS customer_email, c.phone AS customer_phone,
+            c.customer_type AS customer_type
        FROM receipts r
        JOIN customers c ON c.id = r.customer_id
       WHERE r.id = $1 AND r.tenant_id = $2`,
@@ -541,6 +567,7 @@ async function loadReceiptFiscalSource(client: pg.PoolClient, row: ClaimedFiscal
     address: party.customer_address != null ? String(party.customer_address) : null,
     email: party.customer_email != null ? String(party.customer_email) : null,
     phone: party.customer_phone != null ? String(party.customer_phone) : null,
+    buyerKind: buyerKindFor(party.customer_type),
   };
   let lines: FiscalLine[] = [];
   const invoiceId = Number(party.invoice_id);
@@ -660,6 +687,7 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
       docType: row.doc_type,
       tin: taxpayer?.tin ?? null,
       securityFlags: config.security_flags,
+      exchangeId: stableExchangeId(row),
     });
 
     // Begin a fresh transaction to persist the URA outcome, re-applying the

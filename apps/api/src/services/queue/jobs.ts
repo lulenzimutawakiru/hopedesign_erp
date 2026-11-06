@@ -3,6 +3,7 @@ import { runDueCronJobs } from '../cronJobs.js';
 import { processNotificationDeliveries } from '../communication.js';
 import { runHikvisionWorkerTick } from '../hikvision/processor.js';
 import { runEfrisWorkerTick, runEfrisCreditNotePollTick } from '../efris/processor.js';
+import { runEfrisHealthCheckTick } from '../efris/health.js';
 import { runServiceDeskSlaTick } from '../serviceDeskSla.js';
 
 /**
@@ -26,5 +27,6 @@ export const TASK_HANDLERS: Readonly<Record<string, TaskHandler>> = {
   'hikvision-queue': runHikvisionWorkerTick,
   'efris-worker': runEfrisWorkerTick,
   'efris-credit-note-poll': runEfrisCreditNotePollTick,
+  'efris-health-check': runEfrisHealthCheckTick,
   'service-desk-sla': runServiceDeskSlaTick,
 };

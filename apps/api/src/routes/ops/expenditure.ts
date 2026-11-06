@@ -2,7 +2,7 @@ import { Router } from 'express';
 import pg from 'pg';
 import multer from 'multer';
 import { tx, Ctx } from '../../db.js';
-import { requirePermission } from '../../middleware/authorize.js';
+import { can, requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest } from '../../utils.js';
 import * as exp from '../../services/expenses.js';
 import * as proc from '../../services/procurement.js';
@@ -13,7 +13,7 @@ const expUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 
 type OpFn = (client: pg.PoolClient, ctx: Ctx, body: any, params: Record<string, string>) => Promise<unknown>;
 type QueryFn = (client: pg.PoolClient, ctx: Ctx, query: Record<string, unknown>, params: Record<string, string>) => Promise<unknown>;
 
-const run = (permission: string, fn: OpFn) => [
+const run = (permission: string | string[], fn: OpFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
     const out = await tx((client) => fn(client, req.ctx, req.body ?? {}, req.params as Record<string, string>), req.ctx);
@@ -21,7 +21,7 @@ const run = (permission: string, fn: OpFn) => [
   }),
 ];
 
-const runGet = (permission: string, fn: QueryFn) => [
+const runGet = (permission: string | string[], fn: QueryFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
     const out = await tx(
@@ -32,12 +32,24 @@ const runGet = (permission: string, fn: QueryFn) => [
   }),
 ];
 
+const runExpenseGet = (fn: (client: pg.PoolClient, ctx: Ctx, query: Record<string, unknown>, params: Record<string, string>, viewAll: boolean) => Promise<unknown>) => [
+  requirePermission(['expenditure.expenses.view', 'expenditure.expenses.view_own']),
+  asyncHandler(async (req, res) => {
+    const viewAll = can(req.auth, 'expenditure.expenses.view');
+    const out = await tx(
+      (client) => fn(client, req.ctx, req.query as Record<string, unknown>, req.params as Record<string, string>, viewAll),
+      req.ctx
+    );
+    res.json({ data: out });
+  }),
+];
+
 // Meta + fraud guard
-expenditureOpsRouter.get('/meta', ...runGet('expenditure.expenses.view', (c, ctx) => exp.expenseMeta(c, ctx)));
-expenditureOpsRouter.post('/duplicate-scan', ...run('expenditure.expenses.create', (c, ctx, b) => exp.duplicateScan(c, ctx, b)));
+expenditureOpsRouter.get('/meta', ...runGet(['expenditure.expenses.view', 'expenditure.expenses.create'], (c, ctx) => exp.expenseMeta(c, ctx)));
+expenditureOpsRouter.post('/duplicate-scan', ...run('expenditure.expenses.view', (c, ctx, b) => exp.duplicateScan(c, ctx, b)));
 
 // Expenses
-expenditureOpsRouter.get('/expenses', ...runGet('expenditure.expenses.view', (c, ctx, q) => exp.listExpenses(c, ctx, {
+expenditureOpsRouter.get('/expenses', ...runExpenseGet((c, ctx, q, _p, viewAll) => exp.listExpenses(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
   paymentStatus: q.paymentStatus != null ? String(q.paymentStatus) : undefined,
@@ -51,12 +63,21 @@ expenditureOpsRouter.get('/expenses', ...runGet('expenditure.expenses.view', (c,
   to: q.to != null ? String(q.to) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  ownOnly: !viewAll,
 })));
-expenditureOpsRouter.get('/expenses/:id', ...runGet('expenditure.expenses.view', (c, ctx, _q, p) => exp.getExpense(c, ctx, Number(p.id))));
+expenditureOpsRouter.get('/expenses/:id', ...runExpenseGet((c, ctx, _q, p, viewAll) => exp.getExpense(c, ctx, Number(p.id), !viewAll)));
 expenditureOpsRouter.post('/expenses', ...run('expenditure.expenses.create', (c, ctx, b) => exp.createExpense(c, ctx, b)));
 expenditureOpsRouter.post('/expenses/:id/update', ...run('expenditure.expenses.update', (c, ctx, b, p) => exp.updateExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/expenses/:id/submit', ...run('expenditure.expenses.submit', (c, ctx, _b, p) => exp.submitExpense(c, ctx, Number(p.id))));
-expenditureOpsRouter.post('/expenses/:id/pay', ...run('expenditure.expenses.approve', (c, ctx, b, p) => exp.payExpense(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/expenses/:id/pay', ...run('expenditure.payments.create', (c, ctx, b, p) => exp.payExpense(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/payments/:id/approve', ...run('expenditure.payments.approve', (c, ctx, b, p) => exp.approveExpensePayment(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : undefined)));
+expenditureOpsRouter.get('/payments/meta', ...runGet('expenditure.payments.create', (c, ctx) => exp.expensePaymentMeta(c, ctx)));
+expenditureOpsRouter.get('/payments', ...runGet('expenditure.payments.view', (c, ctx, q) => exp.listExpensePayments(c, ctx, q)));
+expenditureOpsRouter.post('/payments/:id/reject', ...run('expenditure.payments.approve', (c, ctx, b, p) => exp.rejectExpensePayment(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : undefined)));
+expenditureOpsRouter.post('/payments/:id/execute', ...run('expenditure.payments.post', (c, ctx, b, p) => exp.executeExpensePayment(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/payments/:id/reconcile', ...run('expenditure.payments.reconcile', (c, ctx, b, p) => exp.reconcileExpensePayment(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/payment-reconciliations/:id/approve', ...run('expenditure.payments.reconcile_approve', (c, ctx, b, p) => exp.approveExpensePaymentReconciliation(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : undefined)));
+expenditureOpsRouter.post('/expenses/:id/verify', ...run('expenditure.expenses.verify', (c, ctx, b, p) => exp.verifyExpenseForPosting(c, ctx, Number(p.id), b.comment != null ? String(b.comment) : undefined)));
 expenditureOpsRouter.post('/expenses/:id/post', ...run('expenditure.expenses.post', (c, ctx, _b, p) => exp.postExpense(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/expenses/:id/void', ...run('expenditure.expenses.void', (c, ctx, b, p) => exp.voidExpense(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : null)));
 expenditureOpsRouter.get('/board', ...runGet('expenditure.expenses.view', (c, ctx) => exp.expenseBoard(c, ctx)));
@@ -70,7 +91,7 @@ expenditureOpsRouter.get('/receipts', ...runGet('expenditure.receipts.view', (c,
 })));
 expenditureOpsRouter.post(
   '/receipts',
-  requirePermission('expenditure.receipts.upload'),
+  requirePermission(['expenditure.receipts.upload', 'expenditure.expenses.create']),
   expUpload.single('file'),
   asyncHandler(async (req, res) => {
     const out = await tx(
@@ -80,7 +101,7 @@ expenditureOpsRouter.post(
           file: req.file
             ? { originalname: req.file!.originalname, mimetype: req.file!.mimetype, size: req.file!.size, buffer: req.file!.buffer }
             : undefined,
-        }),
+        }, !can(req.auth, 'expenditure.receipts.upload')),
       req.ctx
     );
     res.json({ data: out });

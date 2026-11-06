@@ -26,7 +26,7 @@ const TRANSITION_COLUMNS = new Set([
   'approved_by', 'approved_at', 'reviewed_by', 'reviewed_at',
   'released_by', 'released_at', 'closed_by', 'closed_at',
   'reopened_by', 'reopened_at', 'reopen_count', 'locked_at',
-  'gl_posted', 'gl_journal_id',
+  'gl_posted', 'gl_journal_id', 'variance_explanation',
 ]);
 
 export type LifecycleAction =
@@ -107,7 +107,7 @@ export async function transition(
     if (!TRANSITION_COLUMNS.has(col)) throw new Error(`payroll transition cannot set ${col}`);
     if (value === SQL_NOW) sets.push(`${col} = now()`);
     else if (value === undefined || value === null) sets.push(`${col} = NULL`);
-    else { params.push(value); sets.push(`${col} = ${params.length}`); }
+    else { params.push(value); sets.push(`${col} = $${params.length}`); }
   }
   await client.query(`UPDATE payrolls SET ${sets.join(', ')} WHERE id = $1`, params);
 

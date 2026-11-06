@@ -1312,10 +1312,10 @@ export async function createIntercompanyTransfer(
   const rate = n(input.exchangeRate) || 1;
   const fromPeriodId = await openPeriodForCompany(client, fromCompanyId, txnDate);
   const toPeriodId = await openPeriodForCompany(client, toCompanyId, txnDate);
-  const dueFromCode = input.dueFromAccountCode ?? '1405';
-  const dueToCode = input.dueToAccountCode ?? '2105';
-  const fromBankId = await accountIdForCompany(client, ctx.tenantId, fromCompanyId, input.fromAccountCode ?? '1100');
-  const toBankId = await accountIdForCompany(client, ctx.tenantId, toCompanyId, input.toAccountCode ?? '1100');
+  const dueFromCode = input.dueFromAccountCode ?? '10111700';
+  const dueToCode = input.dueToAccountCode ?? '10121200';
+  const fromBankId = await accountIdForCompany(client, ctx.tenantId, fromCompanyId, input.fromAccountCode ?? '10111300');
+  const toBankId = await accountIdForCompany(client, ctx.tenantId, toCompanyId, input.toAccountCode ?? '10111300');
   const fromDueFromId = await accountIdForCompany(client, ctx.tenantId, fromCompanyId, dueFromCode);
   const toDueToId = await accountIdForCompany(client, ctx.tenantId, toCompanyId, dueToCode);
   const docNo = await nextDocNo(client, ctx, 'ICT');
@@ -1433,16 +1433,34 @@ export async function runConsolidation(
     });
   }
   const eliminations: Array<{ accountCode: string; debit: number; credit: number; description: string }> = [];
-  const dueFrom = consolidated.get('1405');
-  const dueTo = consolidated.get('2105');
-  if (dueFrom && dueTo) {
-    const off = Math.min(Math.abs(dueFrom.amount), Math.abs(dueTo.amount));
-    if (off > 0) {
-      dueFrom.amount = round2(dueFrom.amount - off);
-      dueTo.amount = round2(dueTo.amount + off);
-      eliminations.push({ accountCode: '1405', debit: 0, credit: off, description: 'Eliminate intercompany due-from balances' });
-      eliminations.push({ accountCode: '2105', debit: off, credit: 0, description: 'Eliminate intercompany due-to balances' });
-    }
+  const dueFromCode = '10111700';
+  const dueToCode = '10121200';
+  const ic = await client.query(
+    `SELECT a.code, COALESCE(SUM(jl.debit - jl.credit), 0)::numeric AS raw
+       FROM intercompany_transactions it
+       JOIN journal_entries je ON je.id IN (it.from_journal_id, it.to_journal_id) AND je.status = 'POSTED'
+       JOIN journal_lines jl ON jl.entry_id = je.id
+       JOIN chart_of_accounts a ON a.id = jl.account_id
+      WHERE it.tenant_id = $1
+        AND it.txn_date BETWEEN $2::date AND $3::date
+        AND a.code = ANY($4::text[])
+      GROUP BY a.code`,
+    [ctx.tenantId, start, end, [dueFromCode, dueToCode]]
+  );
+  let icFrom = 0;
+  let icTo = 0;
+  for (const row of ic.rows) {
+    if (String(row.code) === dueFromCode) icFrom = Number(row.raw);
+    if (String(row.code) === dueToCode) icTo = Number(row.raw);
+  }
+  const dueFrom = consolidated.get(dueFromCode);
+  const dueTo = consolidated.get(dueToCode);
+  const off = Math.min(Math.abs(icFrom), Math.abs(icTo));
+  if (dueFrom && dueTo && off > 0) {
+    dueFrom.amount = round2(dueFrom.amount - off);
+    dueTo.amount = round2(dueTo.amount + off);
+    eliminations.push({ accountCode: dueFromCode, debit: 0, credit: off, description: 'Eliminate intercompany due-from balances' });
+    eliminations.push({ accountCode: dueToCode, debit: off, credit: 0, description: 'Eliminate intercompany due-to balances' });
   }
   const consolidatedRows = [...consolidated.values()].sort((a, b) => a.code.localeCompare(b.code));
   const consDebit = round2(consolidatedRows.reduce((s, r) => s + (r.amount > 0 ? r.amount : 0), 0));

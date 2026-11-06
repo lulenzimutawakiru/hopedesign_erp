@@ -3,7 +3,7 @@
 // Permission codes: {module}.{resource}.{action}
 // ============================================================
 
-const ACTIONS = ["view","create","update","delete","submit","approve","reject","cancel","void","archive","restore","print","export","import","scan","transfer","assign","release","convert","verify","post","generate","complete","admit","discharge","dispense","settle","terminate","delete_draft","manage_templates","manage_clauses","manage_versions","manage_legal_rules","view_audit","validate","sign","download","renew","vary","issue","manage","dispose","audit","depreciate","impair","capitalize","maintain","inspect","checkin","checkout","replace","activate","investigate","resolve","comment","reprint","perform","close","return","send","suspend","resume","revoke","expire","upload"];
+const ACTIONS = ["view","view_own","create","update","delete","submit","approve","reject","cancel","void","archive","restore","print","export","import","scan","transfer","assign","release","convert","verify","post","generate","complete","admit","discharge","dispense","settle","terminate","delete_draft","manage_templates","manage_clauses","manage_versions","manage_legal_rules","view_audit","validate","sign","download","renew","vary","issue","manage","dispose","audit","depreciate","impair","capitalize","maintain","inspect","checkin","checkout","replace","activate","investigate","resolve","comment","reprint","perform","close","return","send","suspend","resume","revoke","expire","upload","reconcile","reconcile_approve"];
 
 const MODULES = {
   dashboard: { overview: ["view"], kpis: ["view"] },
@@ -174,7 +174,7 @@ const MODULES = {
     kcb: ["view","manage","test"],
     equity: ["view","manage","test"],
     budgets: ["view","create","update","submit","approve","close"],
-    expenses: ["view","create","update","submit","approve","post","void"],
+    expenses: ["view","view_own","create","update","submit","approve","post","void"],
     advances: ["view","create","settle","void"],
     taxes: ["view","create","update"],
     reports: ["view","print","export"],
@@ -199,11 +199,11 @@ const MODULES = {
   expenditure: {
     dashboards: ["view"],
     requisitions: ["view","create","update","submit","approve","fulfill","cancel"],
-    expenses: ["view","create","update","submit","approve","post","void"],
+    expenses: ["view","view_own","create","update","submit","approve","verify","post","void"],
     petty_cash: ["view","create","update","replenish","reconcile"],
     claims: ["view","create","approve","reimburse"],
     receipts: ["view","upload","verify"],
-    payments: ["view","create","approve","post"],
+    payments: ["view","create","approve","post","reconcile","reconcile_approve"],
     daily_close: ["view","create","approve"],
     reports: ["view"],
     settings: ["manage"],
@@ -303,6 +303,7 @@ const MODULES = {
     payslips: ["view","print","send","generate"],
     loans: ["view","create","update","approve","reject","pause","write_off"],
       advances: ["view","create","update","approve","reject"],
+    fines: ["view","create","approve","waive"],
     final_settlements: ["view","create","update","submit","approve","reject","pay","export"],
   },
   healthcare: {
@@ -735,7 +736,7 @@ const ROLES = [
   { code: "recruitment_officer", name: "Recruitment Officer", grants: ["hr.requisitions.*", "hr.vacancies.*", "hr.vacancy_channels.*", "hr.candidates.*", "hr.applications.*", "hr.interviews.*", "hr.assessments.*", "hr.offers.*", "hr.onboarding.view", "hr.positions.view", "hr.workforce_plans.view", "hr.employees.view"] },
   { code: "training_officer", name: "Training Officer", grants: ["hr.training_catalog.*", "hr.training_sessions.*", "hr.training_requests.*", "hr.training_enrollments.*", "hr.training_certificates.*", "hr.competencies.*", "hr.employees.view"] },
   { code: "performance_officer", name: "Performance Officer", grants: ["hr.performance_goals.*", "hr.performance_kpis.*", "hr.performance_reviews.*", "hr.pips.*", "hr.employees.view"] },
-  { code: "payroll_manager", name: "Payroll Manager", grants: ["hr.payrolls.view", "hr.payrolls.update", "hr.payrolls.submit", "hr.payrolls.approve", "hr.payrolls.post", "hr.payrolls.print", "hr.payroll_components.*", "hr.employee_salaries.*", "hr.employee_earnings.*", "hr.employee_deductions.*", "hr.employee_benefits.*", "hr.overtime_records.*", "hr.bonus_records.*", "hr.commission_records.*", "hr.statutory_configs.view", "hr.payroll_settings.*", "hr.employees.view", "hr.loans.view", "hr.timesheets.view", "hr.overtime.view", "hr.employee_requests.view", "hr.final_settlements.*", "hr.loans.approve", "hr.loans.write_off", "hr.advances.view", "hr.advances.approve", "workflows.instances.*"] },
+  { code: "payroll_manager", name: "Payroll Manager", grants: ["hr.payrolls.view", "hr.payrolls.update", "hr.payrolls.submit", "hr.payrolls.approve", "hr.payrolls.post", "hr.payrolls.print", "hr.payroll_components.*", "hr.employee_salaries.*", "hr.employee_earnings.*", "hr.employee_deductions.*", "hr.employee_benefits.*", "hr.overtime_records.*", "hr.bonus_records.*", "hr.commission_records.*", "hr.statutory_configs.view", "hr.payroll_settings.*", "hr.employees.view", "hr.loans.view", "hr.timesheets.view", "hr.overtime.view", "hr.employee_requests.view", "hr.final_settlements.*", "hr.loans.approve", "hr.loans.write_off", "hr.advances.view", "hr.advances.approve", "hr.fines.view", "hr.fines.approve", "workflows.instances.*"] },
   { code: "payroll_officer", name: "Payroll Officer", grants: ["hr.payrolls.view", "hr.payrolls.create", "hr.payrolls.update", "hr.payrolls.submit", "hr.payrolls.print", "hr.payroll_components.view", "hr.employee_salaries.view", "hr.employee_salaries.create", "hr.employee_salaries.update", "hr.employee_earnings.view", "hr.employee_earnings.create", "hr.employee_earnings.update", "hr.employee_deductions.view", "hr.employee_deductions.create", "hr.employee_deductions.update", "hr.employee_benefits.view", "hr.employee_benefits.create", "hr.employee_benefits.update", "hr.overtime_records.view", "hr.overtime_records.create", "hr.overtime_records.update", "hr.bonus_records.view", "hr.bonus_records.create", "hr.bonus_records.update", "hr.commission_records.view", "hr.commission_records.create", "hr.commission_records.update", "hr.statutory_configs.view", "hr.payroll_settings.view", "hr.timesheets.view", "hr.overtime.view", "hr.employees.view", "hr.final_settlements.view", "hr.final_settlements.create", "hr.final_settlements.update", "hr.final_settlements.submit", "hr.final_settlements.export"] },
   { code: "time_attendance_officer", name: "Time & Attendance Officer", grants: ["hr.attendance.*", "hr.shifts.*", "hr.shift_assignments.*", "hr.timesheets.*", "hr.overtime.*", "hr.holidays.view", "hr.employees.view", "hr.leave.view", "hikvision.*"] },
   { code: "employee_self_service", name: "Employee Self-Service User", grants: ["hr.leave.view", "hr.leave.create", "hr.attendance.view", "hr.payslips.view", "hr.employee_requests.*", "hr.benefit_plans.view", "hr.benefit_enrollments.view", "hr.training_catalog.view", "hr.training_sessions.view", "hr.competencies.view", "hr.performance_goals.view", "hr.performance_reviews.view", "hr.holidays.view", "hr.contracts.view", "hr.contracts.sign", "hr.contracts.download", "hr.certificates.view", "notifications.notifications.*", "hr.attendance.view_own","governance.signature_profiles.view","governance.signature_profiles.create","governance.signature_profiles.submit","governance.signature_profiles.upload","governance.document_signatures.verify"] },

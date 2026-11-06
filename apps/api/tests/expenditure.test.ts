@@ -54,7 +54,8 @@ describe('Ops daily expenditure module', () => {
   });
 
   it('records, approves, pays and posts an expense', async () => {
-    const create = await api.post('/api/ops/expenditure/expenses').set(auth(opsToken)).send({
+    const { token: expenseCreatorToken } = await loginAs('hr.hannah');
+    const create = await api.post('/api/ops/expenditure/expenses').set(auth(expenseCreatorToken)).send({
       description: `Integration test fuel ${Date.now()}`,
       amount: 250000,
       categoryId,
@@ -68,7 +69,7 @@ describe('Ops daily expenditure module', () => {
     expect(create.body.data.expNo).toMatch(/^EXP-/);
     expect(create.body.data.status).toBe('DRAFT');
 
-    const submit = await api.post(`/api/ops/expenditure/expenses/${id}/submit`).set(auth(opsToken)).send({});
+    const submit = await api.post(`/api/ops/expenditure/expenses/${id}/submit`).set(auth(expenseCreatorToken)).send({});
     expect(submit.status).toBe(200);
     expect(submit.body.data.status).toBe('SUBMITTED');
 
@@ -81,15 +82,89 @@ describe('Ops daily expenditure module', () => {
     expect(decide.status).toBe(200);
     expect(decide.body.data.status).toBe('APPROVED');
 
-    const pay = await api.post(`/api/ops/expenditure/expenses/${id}/pay`).set(auth(finToken)).send({});
-    expect(pay.status).toBe(200);
-    expect(pay.body.data.status).toBe('PAID');
-    expect(pay.body.data.payNo).toMatch(/^PAY-/);
+    // Accounting verification is an independent control between approval and GL posting.
+    const selfVerify = await api.post(`/api/ops/expenditure/expenses/${id}/verify`)
+      .set(auth(finToken)).send({ comment: 'Approver cannot verify own approval' });
+    expect(selfVerify.status).toBe(403);
+    const { token: adminToken } = await loginAs('admin');
+    const verified = await api.post(`/api/ops/expenditure/expenses/${id}/verify`)
+      .set(auth(adminToken)).send({ comment: 'Checked account coding, tax, supporting evidence and totals' });
+    expect(verified.status).toBe(200);
+    expect(verified.body.data.accountingVerified).toBe(true);
 
+    // Accounting verification/posting is distinct from settlement.
     const post = await api.post(`/api/ops/expenditure/expenses/${id}/post`).set(auth(finToken)).send({});
     expect(post.status).toBe(200);
     expect(post.body.data.accountingStatus).toBe('POSTED');
     expect(post.body.data.glPosted).toBe(true);
+
+    const request1 = await api.post(`/api/ops/expenditure/expenses/${id}/pay`).set(auth(finToken)).send({
+      amount: 100000, paymentMethodId,
+    });
+    expect(request1.status).toBe(200);
+    expect(request1.body.data.status).toBe('SUBMITTED');
+    expect(request1.body.data.payNo).toMatch(/^PAY-/);
+
+    // Neither the expense creator nor payment requester may approve the voucher.
+    const creatorApprove = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/approve`)
+      .set(auth(expenseCreatorToken)).send({ reason: 'Creator approval must fail' });
+    expect(creatorApprove.status).toBe(403);
+    const selfApprove = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/approve`)
+      .set(auth(finToken)).send({ reason: 'Self-approval must fail' });
+    expect(selfApprove.status).toBe(403);
+
+    const approve1 = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/approve`)
+      .set(auth(adminToken)).send({ reason: 'Verified supporting documents' });
+    expect(approve1.status).toBe(200);
+    expect(approve1.body.data.status).toBe('APPROVED');
+
+    const creatorExec = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/execute`)
+      .set(auth(expenseCreatorToken)).send({});
+    expect(creatorExec.status).toBe(403);
+
+    const execute1 = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/execute`)
+      .set(auth(opsToken)).send({ reference: `BANK-TEST-${Date.now()}`, paymentDate: '2026-11-06' });
+    expect(execute1.status).toBe(200);
+    expect(execute1.body.data.paymentStatus).toBe('PARTIALLY_PAID');
+    expect(Number(execute1.body.data.paidTotal)).toBe(100000);
+
+    const afterPartial = await api.get(`/api/ops/expenditure/expenses/${id}`).set(auth(finToken));
+    expect(afterPartial.status).toBe(200);
+    expect(afterPartial.body.data.paymentStatus).toBe('PARTIALLY_PAID');
+
+    const request2 = await api.post(`/api/ops/expenditure/expenses/${id}/pay`).set(auth(finToken)).send({
+      amount: 150000, paymentMethodId,
+    });
+    expect(request2.status).toBe(200);
+    const approve2 = await api.post(`/api/ops/expenditure/payments/${request2.body.data.payId}/approve`)
+      .set(auth(adminToken)).send({ reason: 'Second instalment verified' });
+    expect(approve2.status).toBe(200);
+    const execute2 = await api.post(`/api/ops/expenditure/payments/${request2.body.data.payId}/execute`)
+      .set(auth(opsToken)).send({ reference: `BANK-TEST-2-${Date.now()}`, paymentDate: '2026-11-06' });
+    expect(execute2.status).toBe(200);
+    expect(execute2.body.data.paymentStatus).toBe('PAID');
+    expect(Number(execute2.body.data.paidTotal)).toBe(250000);
+
+    const history = await api.get(`/api/ops/expenditure/expenses/${id}`).set(auth(finToken));
+    expect(history.status).toBe(200);
+    expect(history.body.data.payments).toHaveLength(2);
+    expect(history.body.data.payments.every((p: { glPosted: boolean }) => p.glPosted)).toBe(true);
+
+    const reconcile = await api.post(`/api/ops/expenditure/payments/${request2.body.data.payId}/reconcile`)
+      .set(auth(finToken)).send({
+        statementReference: `BANK-STATEMENT-${Date.now()}`,
+        statementAmount: 150000,
+        statementDate: '2026-11-06',
+      });
+    expect(reconcile.status).toBe(200);
+    expect(reconcile.body.data.status).toBe('MATCHED');
+    const selfApproveRecon = await api.post(`/api/ops/expenditure/payment-reconciliations/${reconcile.body.data.id}/approve`)
+      .set(auth(finToken)).send({ reason: 'Self-approval must fail' });
+    expect(selfApproveRecon.status).toBe(403);
+    const approveRecon = await api.post(`/api/ops/expenditure/payment-reconciliations/${reconcile.body.data.id}/approve`)
+      .set(auth(adminToken)).send({ reason: 'Bank statement independently checked' });
+    expect(approveRecon.status).toBe(200);
+    expect(approveRecon.body.data.status).toBe('APPROVED');
   });
 
   it('blocks the creator from approving their own expense (segregation of duties)', async () => {

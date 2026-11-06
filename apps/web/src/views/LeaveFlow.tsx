@@ -7,7 +7,16 @@ import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
 type Rec = Record<string, unknown>;
 
 const REQUEST_STATUSES = ['SUBMITTED', 'APPROVED', 'REJECTED', 'CANCELLED'];
-const LEAVE_TYPE_DEFAULTS = ['ANNUAL', 'SICK', 'MATERNITY', 'PATERNITY', 'UNPAID', 'STUDY', 'COMPASSIONATE', 'OTHER'];
+const LEAVE_TYPE_DEFAULTS = ['ANNUAL', 'SICK', 'MATERNITY', 'PATERNITY', 'UNPAID', 'STUDY', 'COMPASSIONATE'];
+const LEAVE_NOTES: Record<string, string> = {
+  ANNUAL: '21 working days a year after six months of service. Leave is not sold while the person is employed.',
+  SICK: 'Full pay for the first two months (44 working days). Half pay for the next four months is decided on the payroll, not cut automatically.',
+  MATERNITY: '60 working days on full pay. At least four weeks should fall after the birth or miscarriage, and the job is kept.',
+  PATERNITY: '4 working days a year on full pay, taken immediately after the birth or miscarriage.',
+  COMPASSIONATE: 'Up to 3 working days on one occasion, and 6 working days in a year.',
+  UNPAID: 'Unpaid absence. Weekends and public holidays are not counted.',
+  STUDY: 'Study leave follows the company policy. Weekends and public holidays are not counted.',
+};
 
 export default function LeaveFlow({ path }: { path: string }) {
   const parts = path.split('/').filter(Boolean);
@@ -37,11 +46,11 @@ function LeaveRequests() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Leave failed'));
   }, [status]);
   useEffect(() => { load(); }, [load]);
-  const decide = async (id: number, action: 'approve' | 'reject') => {
+  const decide = async (id: number, action: 'approve' | 'reject' | 'cancel') => {
     setBusy(true); setError(''); setNotice('');
     try {
       await api(`/api/ops/hr/leave/${id}/${action}`, { method: 'POST', body: '{}' });
-      setNotice(action === 'approve' ? 'Leave request approved - balance updated' : 'Leave request rejected');
+      setNotice(action === 'approve' ? 'Leave request approved' : action === 'cancel' ? 'Leave request cancelled' : 'Leave request rejected');
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -53,7 +62,7 @@ function LeaveRequests() {
         <div>
           <p className="mod-kicker" data-mod="hr">Leave management</p>
           <h1>Leave requests</h1>
-          <p className="muted">Submit, review and approve leave. Entitlements, accruals and approval rules come from the configured leave policies.</p>
+          <p className="muted">Days are working days. Weekends and public holidays are excluded. The person who submits a request does not approve it.</p>
         </div>
         <div className="head-actions">
           <button className="btn" onClick={() => navigate('/people/leave/calendar')}>Calendar</button>
@@ -74,7 +83,9 @@ function LeaveRequests() {
           <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th className="cell-num">Days</th><th>Reason</th><th>Status</th><th /></tr></thead>
           <tbody>
             {rows.map((r) => {
-              const canDecide = String(r.status) === 'SUBMITTED' && can(user, 'hr.leave.approve');
+              const status = String(r.status);
+              const canDecide = status === 'SUBMITTED' && can(user, 'hr.leave.approve');
+              const canCancel = (status === 'SUBMITTED' || status === 'APPROVED') && can(user, 'hr.leave.approve');
               return (
                 <tr key={String(r.id)}>
                   <td><div className="cell-mono">{String(r.employeeNo ?? '')}</div><strong>{String(r.firstName ?? '')} {String(r.lastName ?? '')}</strong></td>
@@ -85,10 +96,11 @@ function LeaveRequests() {
                   <td className="muted">{String(r.reason ?? '-')}</td>
                   <td><Badge value={r.status} /></td>
                   <td>
-                    {canDecide && (
+                    {(canDecide || canCancel) && (
                       <div className="row-actions">
-                        <button className="btn btn-sm btn-success" disabled={busy} onClick={() => decide(Number(r.id), 'approve')}>Approve</button>
-                        <button className="btn btn-sm" disabled={busy} onClick={() => decide(Number(r.id), 'reject')}>Reject</button>
+                        {canDecide && <button className="btn btn-sm btn-success" disabled={busy} onClick={() => decide(Number(r.id), 'approve')}>Approve</button>}
+                        {canDecide && <button className="btn btn-sm" disabled={busy} onClick={() => decide(Number(r.id), 'reject')}>Reject</button>}
+                        {canCancel && <button className="btn btn-sm" disabled={busy} onClick={() => decide(Number(r.id), 'cancel')}>Cancel</button>}
                       </div>
                     )}
                   </td>
@@ -120,7 +132,7 @@ function RequestComposer({ onClose, onSaved }: { onClose: () => void; onSaved: (
       .catch(() => undefined);
     api<{ data: Rec[] }>('/api/ops/hcm/leave/balances')
       .then((r) => {
-        const codes = Array.from(new Set((r.data ?? []).map((b) => String(b.leaveTypeCode ?? '')).filter(Boolean)));
+        const codes = Array.from(new Set((r.data ?? []).map((b) => String(b.leaveTypeCode ?? '')).filter((c) => LEAVE_TYPE_DEFAULTS.includes(c))));
         if (codes.length) setTypes(Array.from(new Set([...LEAVE_TYPE_DEFAULTS, ...codes])));
       })
       .catch(() => undefined);
@@ -168,6 +180,7 @@ function RequestComposer({ onClose, onSaved }: { onClose: () => void; onSaved: (
         <div className="field field-required"><label>End date</label><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></div>
       </div>
       <div className="field" style={{ marginTop: 12 }}><label>Reason</label><textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+      <p className="muted" style={{ marginTop: 8 }}>{LEAVE_NOTES[leaveType] ?? 'Weekends and public holidays are not counted.'}</p>
     </Modal>
   );
 }

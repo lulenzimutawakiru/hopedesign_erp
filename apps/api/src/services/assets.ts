@@ -1556,16 +1556,16 @@ export async function approveDisposal(client: pg.PoolClient, ctx: Ctx, disposalI
 
   const catRes = await client.query('SELECT name FROM asset_categories WHERE id = $1', [asset.category_id]);
   const catName = String(catRes.rows[0]?.name ?? '');
-  const costAccount = /IT|COMPUTER|LAPTOP|SERVER|PRINTER|MOBILE|NETWORK|PHONE|SCANNER/i.test(catName) ? '1610' : '1600';
-  const accDepId = await finance.getAccountId(client, ctx, '1620');
+  const costAccount = /IT|COMPUTER|LAPTOP|SERVER|PRINTER|MOBILE|NETWORK|PHONE|SCANNER/i.test(catName) ? '10112600' : '10112400';
+  const accDepId = await finance.getAccountId(client, ctx, '10112925');
   const costId = await finance.getAccountId(client, ctx, costAccount);
-  const glId = await finance.getAccountId(client, ctx, '1690');
+  const glId = await finance.getAccountId(client, ctx, '10251700');
   const lines: finance.JournalLine[] = [
     { account_id: accDepId, debit: accDep, description: `Accumulated depreciation - ${asset.asset_no}` },
     { account_id: costId, credit: cost, description: `Asset cost removed - ${asset.asset_no}` },
   ];
   if (salePrice > 0) {
-    const bankId = await finance.getAccountId(client, ctx, '1100');
+    const bankId = await finance.getAccountId(client, ctx, '10111300');
     lines.push({ account_id: bankId, debit: salePrice, description: `Proceeds - ${asset.asset_no}` });
   }
   if (gainLoss > 0) lines.push({ account_id: glId, credit: gainLoss, description: `Gain on disposal - ${asset.asset_no}` });
@@ -1641,7 +1641,7 @@ export async function approveDisposal(client: pg.PoolClient, ctx: Ctx, disposalI
 }
 
 /** Impairment approved: apply book value, adjust accumulated depreciation,
- *  post GL (Dr 6500 / Cr 1620; reversed for reversals). Revaluation: book
+ *  post GL (Dr depreciation expense / Cr accumulated depreciation; reversed for reversals). Revaluation: book
  *  value only. */
 export async function approveImpairment(client: pg.PoolClient, ctx: Ctx, impairmentId: number) {
   const res = await client.query(
@@ -1672,8 +1672,8 @@ export async function approveImpairment(client: pg.PoolClient, ctx: Ctx, impairm
       [newBook, newAccDep, ctx.userId ?? null, asset.id]
     );
     if (delta !== 0) {
-      const expId = await finance.getAccountId(client, ctx, '6500');
-      const accDepId = await finance.getAccountId(client, ctx, '1620');
+      const expId = await finance.getAccountId(client, ctx, '10256000');
+      const accDepId = await finance.getAccountId(client, ctx, '10112925');
       const lines: finance.JournalLine[] = delta > 0
         ? [
             { account_id: expId, debit: Math.abs(delta), description: `Impairment - ${asset.asset_no}` },
@@ -2563,16 +2563,16 @@ export async function completeMaintenanceWorkOrder(client: pg.PoolClient, ctx: C
   const completedDate = s(b.completedDate) ?? new Date().toISOString().slice(0, 10);
   let glJournalId: number | null = null;
   if (totalCost > 0) {
-    const maintExpId = await finance.getAccountId(client, ctx, '6400');
+    const maintExpId = await finance.getAccountId(client, ctx, '10256200');
     const lines: finance.JournalLine[] = [
       { account_id: maintExpId, debit: totalCost, description: `Maintenance ${wo.wo_no} - ${asset.asset_no}` },
     ];
     if (partsCost > 0) {
-      const rawInvId = await finance.getAccountId(client, ctx, '1310');
+      const rawInvId = await finance.getAccountId(client, ctx, '10111400');
       lines.push({ account_id: rawInvId, credit: partsCost, description: `Spare parts issued - ${wo.wo_no}` });
     }
     if (serviceCost > 0) {
-      const apId = await finance.getAccountId(client, ctx, '2100');
+      const apId = await finance.getAccountId(client, ctx, '10121100');
       lines.push({ account_id: apId, credit: serviceCost, description: `Maintenance service - ${wo.wo_no}` });
     }
     glJournalId = await finance.postJournalLines(client, ctx, {
@@ -3739,8 +3739,8 @@ async function postDepreciationCore(
   amount = Math.min(Number(amount.toFixed(2)), maxAmount);
   if (amount <= 0) throw badRequest(`No depreciation to post for ${asset.asset_no} (book value ${book} is at or below residual ${residual})`);
 
-  const expId = await finance.getAccountId(client, ctx, '6500');
-  const accDepId = await finance.getAccountId(client, ctx, '1620');
+  const expId = await finance.getAccountId(client, ctx, '10256000');
+  const accDepId = await finance.getAccountId(client, ctx, '10112925');
   const glJournalId = await finance.postJournalLines(client, ctx, {
     entryDate: periodEnd,
     journalType: 'ASSET_DEPRECIATION',

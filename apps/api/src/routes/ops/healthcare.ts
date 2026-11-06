@@ -221,8 +221,8 @@ async function postBill(c: pg.PoolClient, ctx: Ctx, _b: any, p: Record<string, s
   if (bl.status !== 'APPROVED' && bl.status !== 'CONFIRMED') {
     throw badRequest(`Healthcare bill must be APPROVED before posting (current: ${bl.status})`);
   }
-  const arId = await getAccountId(c, ctx, '1400');
-  const revId = await getAccountId(c, ctx, '4000');
+  const arId = await getAccountId(c, ctx, '10111500');
+  const revId = await getAccountId(c, ctx, '10241200');
   const amount = Number(bl.amount);
   const journalId = await postJournalLines(c, ctx, {
     entryDate: new Date().toISOString().slice(0, 10),

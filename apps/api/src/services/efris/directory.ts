@@ -31,6 +31,7 @@ import {
 } from './config.js';
 import { EfrisClientError, probeEfrisGateway } from './client.js';
 import { assertUrlMatchesMode, defaultEndpoint, EfrisProtocolError, looksLikePrivateKey } from './protocol.js';
+import { latestEfrisHealthCheck } from './health.js';
 
 /** efris_taxpayers.efris_status - mirrors the CHECK constraint in 0142. */
 export const EFRIS_TAXPAYER_STATUSES: readonly string[] = [
@@ -820,6 +821,7 @@ export interface EfrisIntegrationStatus {
   failedTransactions: number;
   lastSuccessfulTransactionAt: string | null;
   lastErrorAt: string | null;
+  lastHealthCheck: Record<string, unknown> | null;
   message: string;
 }
 
@@ -915,6 +917,8 @@ export async function efrisIntegrationStatus(
       'EFRIS is connected in production (ACTIVE) mode' + hostBit + '. ' + pending + ' transaction(s) awaiting a URA response.';
   }
 
+  const lastHealthCheck = await latestEfrisHealthCheck(client, ctx, config?.id ?? null);
+
   return {
     configured: Boolean(config),
     mode,
@@ -933,6 +937,7 @@ export async function efrisIntegrationStatus(
     failedTransactions: Number(txn.failed_transactions ?? 0),
     lastSuccessfulTransactionAt: txn.last_success_at ? new Date(txn.last_success_at as string).toISOString() : null,
     lastErrorAt: errRow.last_error_at ? new Date(errRow.last_error_at as string).toISOString() : null,
+    lastHealthCheck,
     message,
   };
 }

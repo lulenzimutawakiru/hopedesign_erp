@@ -141,7 +141,7 @@ describe('branded document exports', () => {
 describe('finance document exports in all formats', () => {
   async function expenseId(token: string): Promise<number> {
     const accts = await api.get('/api/ops/finance/accounts').set(auth(token));
-    const expAcct = accts.body.data.find((a: { code: string }) => a.code === '6100');
+    const expAcct = accts.body.data.find((a: { code: string }) => a.code === '10254500');
     expect(expAcct).toBeTruthy();
     const res = await api.post('/api/ops/finance/expenses').set(auth(token)).send({
       expenseDate: '2026-08-20',
