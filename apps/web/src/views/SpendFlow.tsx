@@ -1557,10 +1557,12 @@ function ExpenseDesk({ id }: { id: number }) {
   const [msg, setMsg] = useState('');
   const [payMethod, setPayMethod] = useState('');
   const [payAmount, setPayAmount] = useState('');
+  const [payBankAccount, setPayBankAccount] = useState('');
   const [showPay, setShowPay] = useState(false);
   const [voidReason, setVoidReason] = useState('');
   const [showVoid, setShowVoid] = useState(false);
   const [methods, setMethods] = useState<Rec[]>([]);
+  const [bankAccounts, setBankAccounts] = useState<Rec[]>([]);
 
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/expenditure/expenses/${id}`)
@@ -1571,7 +1573,7 @@ function ExpenseDesk({ id }: { id: number }) {
   useEffect(() => {
     let alive = true;
     api<{ data: Rec }>('/api/ops/expenditure/meta')
-      .then((r) => alive && setMethods((r.data.paymentMethods as Rec[] | undefined) ?? []))
+      .then((r) => { if (!alive) return; setMethods((r.data.paymentMethods as Rec[] | undefined) ?? []); setBankAccounts((r.data.bankAccounts as Rec[] | undefined) ?? []); })
       .catch(() => undefined);
     return () => { alive = false; };
   }, []);
@@ -1609,7 +1611,6 @@ function ExpenseDesk({ id }: { id: number }) {
   const paymentRows = (e.payments as Rec[] | undefined) ?? [];
   const dup = e.duplicateOf as Rec | null | undefined;
   const isDraft = e.status === 'DRAFT';
-  const isPaid = e.status === 'PAID' || s(e.paymentStatus) === 'PAID';
   const isPosted = s(e.accountingStatus) === 'POSTED';
   const canSubmit = isDraft && can(user, 'expenditure.expenses.submit');
   const canPay = s(e.accountingStatus) === 'POSTED' && s(e.paymentStatus) !== 'PAID' && can(user, 'expenditure.payments.create');
@@ -1747,10 +1748,10 @@ function ExpenseDesk({ id }: { id: number }) {
       </section>
 
       {showPay && (
-        <Modal title={`Request payment for ${s(e.expNo)}` onClose={() => setShowPay(false)}
+        <Modal title={`Request payment for ${s(e.expNo)}`} onClose={() => setShowPay(false)}
           footer={<>
             <button className="btn btn-ghost" onClick={() => setShowPay(false)}>Cancel</button>
-            <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('pay', 'Payment request submitted', { paymentMethodId: num(payMethod) || undefined, amount: num(payAmount) || undefined })}>
+            <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('pay', 'Payment request submitted', { paymentMethodId: num(payMethod) || undefined, amount: num(payAmount) || undefined, bankAccountId: num(payBankAccount) || undefined })}>
               {busy === 'pay' ? 'Working…' : 'Submit Payment Request'}
             </button>
           </>}>
@@ -1759,9 +1760,19 @@ function ExpenseDesk({ id }: { id: number }) {
               <input type="number" min="1" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder={fmtMoney(num(e.amount))} />
             </label>
             <label className="field">Payment method
-              <select value={payMethod} onChange={(e) => setPayMethod(e.target.value)}>
+              <select value={payMethod} onChange={(e) => {
+                setPayMethod(e.target.value);
+                const selected = methods.find((m) => s(m.id) === e.target.value);
+                setPayBankAccount(s(selected?.bankAccountId));
+              }}>
                 <option value="">Use default ({s(e.paymentMethodName) || 'not set'})</option>
                 {methods.map((m) => <option key={s(m.id)} value={s(m.id)}>{s(m.name)}</option>)}
+              </select>
+            </label>
+            <label className="field">Bank account (required for bank/direct supplier payments)
+              <select value={payBankAccount} onChange={(e) => setPayBankAccount(e.target.value)}>
+                <option value="">Use payment-method account / not applicable</option>
+                {bankAccounts.map((b) => <option key={s(b.id)} value={s(b.id)}>{s(b.name)} · {s(b.code)}</option>)}
               </select>
             </label>
             <p className="empty-state">This submits a payment request for independent approval. The expense is not marked paid and no bank or cash journal is posted until a different authorised user executes the approved request.</p>
