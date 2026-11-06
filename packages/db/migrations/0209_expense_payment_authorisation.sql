@@ -5,7 +5,10 @@
 ALTER TABLE payment_requests
   ADD COLUMN IF NOT EXISTS execution_reference TEXT,
   ADD COLUMN IF NOT EXISTS payment_date DATE,
-  ADD COLUMN IF NOT EXISTS approval_comment TEXT;
+  ADD COLUMN IF NOT EXISTS approval_comment TEXT,
+  ADD COLUMN IF NOT EXISTS rejected_by BIGINT REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_payment_requests_expense_outstanding
   ON payment_requests(company_id, tenant_id, ref_id, status)
