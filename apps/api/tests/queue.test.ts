@@ -94,6 +94,7 @@ describe('scheduled task registry', () => {
       'hikvision-queue': 10_000,
       'efris-worker': 20_000,
       'efris-credit-note-poll': 60_000,
+      'efris-health-check': 300_000,
       'notification-dispatch': 15_000,
       'service-desk-sla': 60_000,
     });

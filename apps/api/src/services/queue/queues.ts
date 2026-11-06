@@ -85,6 +85,15 @@ export const SCHEDULED_TASKS: readonly ScheduledTask[] = [
     lock: WORKER_LOCKS.EFRIS_CREDIT_NOTE_POLL,
   },
   {
+    id: 'efris-health-check',
+    label: 'EFRIS gateway health monitor',
+    everyMs: 300_000,
+    // 5-minute cadence; offset so the probe does not land on the same second as
+    // the 60s tasks whose minute boundary it shares.
+    offsetMs: 90_000,
+    lock: WORKER_LOCKS.EFRIS_HEALTH_CHECK,
+  },
+  {
     id: 'notification-dispatch',
     label: 'Notification delivery',
     everyMs: 15_000,
