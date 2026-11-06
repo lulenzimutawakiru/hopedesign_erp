@@ -6,6 +6,7 @@ import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler } from '../../utils.js';
 import * as exp from '../../services/expenses.js';
 import * as expenseControls from '../../services/expenseValidation.js';
+import * as expenseExport from '../../services/expenseExport.js';
 import * as proc from '../../services/procurement.js';
 
 export const expenditureOpsRouter = Router();
@@ -38,6 +39,10 @@ expenditureOpsRouter.get('/meta', ...runGet('expenditure.expenses.view', (c, ctx
 expenditureOpsRouter.post('/duplicate-scan', ...run('expenditure.expenses.create', (c, ctx, b) => exp.duplicateScan(c, ctx, b)));
 
 // Expenses
+expenditureOpsRouter.get('/expenses/export', ...runGet('expenditure.expenses.view', async (c, ctx, q, _p) => {
+  const out = await expenseExport.exportExpenses(c, ctx, q);
+  return out.format === 'csv' ? { ...out, downloadName: `expenses_${new Date().toISOString().slice(0, 10)}.csv` } : out;
+}));
 expenditureOpsRouter.get('/expenses', ...runGet('expenditure.expenses.view', (c, ctx, q) => exp.listExpenses(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
