@@ -105,7 +105,7 @@ export async function expenseMeta(client: pg.PoolClient, ctx: Ctx) {
       [companyId(ctx), ctx.tenantId]
     ),
     client.query(
-      `SELECT id, code, name, method_type, channel, bank_account_id, is_active
+      `SELECT id, code, name, method_type, channel, is_active
        FROM payment_methods
        WHERE company_id = $1 AND tenant_id = $2 AND is_active = true
        ORDER BY name`,
