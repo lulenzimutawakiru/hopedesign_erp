@@ -1,196 +1,29 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, fmtDate, fmtMoney, fmtNum, getToken } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { DOCUMENT_EXPORT_FORMATS } from '../components/DownloadMenu';
 import { toast } from '../components/toast';
-
-type Rec = Record<string, unknown>;
-
-function num(v: unknown, fallback = 0): number {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : fallback;
-}
-
-function s(v: unknown): string {
-  return v === null || v === undefined ? '' : String(v);
-}
-
-const DAY_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function isoDay(v: unknown): string {
-  if (!v) return '';
-  const str = String(v);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
-    const d = new Date(str);
-    if (!Number.isNaN(d.getTime())) {
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    }
-  }
-  const d = new Date(str);
-  return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
-}
-
-function fmtDay(v: unknown): string {
-  const d = isoDay(v);
-  if (!d) return fmtDate(v);
-  const [y, mo, day] = d.split('-').map(Number);
-  return `${String(day).padStart(2, '0')} ${DAY_MONTHS[mo - 1]} ${y}`;
-}
-
-function todayIso(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
-
-function personName(row: Rec): string {
-  const name = `${s(row.firstName)} ${s(row.lastName)}`.trim();
-  return name || s(row.requesterName) || s(row.createdByName) || 'Unknown';
-}
-
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      className="btn btn-sm btn-ghost"
-      title="Copy to clipboard"
-      onClick={() => {
-        void navigator.clipboard.writeText(value).then(() => {
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1500);
-        });
-      }}
-    >
-      {copied ? 'Copied' : 'Copy'}
-    </button>
-  );
-}
-
-function RiskBadge({ row }: { row: Rec }) {
-  const level = s(row.riskLevel);
-  if (!level) return null;
-  const tone = level === 'CRITICAL' ? 'badge-danger' : level === 'HIGH' ? 'badge-danger' : level === 'MEDIUM' ? 'badge-amber' : '';
-  return (
-    <span className={`badge ${tone}`}>
-      {level === 'CRITICAL' || level === 'HIGH' ? '⚠ ' : ''}
-      {level.replace(/_/g, ' ')}
-    </span>
-  );
-}
-
-const SPEND_TABS: [string, string][] = [
-  ['board', 'Command Center'],
-  ['requisitions', 'Requisitions'],
-  ['expenses', 'Daily Expenditure'],
-  ['petty-cash', 'Petty Cash'],
-  ['claims', 'Expense Claims'],
-  ['close', 'Daily Close'],
-  ['payments', 'Payment Requests'],
-];
-
-function SpendTabs({ active }: { active: string }) {
-  const { user } = useAuth();
-  return (
-    <nav className="spend-tabs" aria-label="Spend sections">
-      {SPEND_TABS.filter(([key]) => key !== 'payments' || can(user, 'expenditure.payments.view')).map(([key, label]) => (
-        <button
-          key={key}
-          type="button"
-          className={'spend-tab' + (active === key ? ' is-on' : '')}
-          onClick={() => navigate(key === 'board' ? '/spend' : '/spend/' + key)}
-        >
-          {label}
-        </button>
-      ))}
-    </nav>
-  );
-}
-
-function SpendShell({
-  title,
-  blurb,
-  active,
-  actions,
-  children,
-}: {
-  title: string;
-  blurb?: string;
-  active: string;
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  const crumb = SPEND_TABS.find(([key]) => key === active)?.[1] ?? title;
-  return (
-    <div className="page spend-page">
-      <div className="crumbs">
-        <button type="button" className="crumb-link" onClick={() => navigate('/spend')}>
-          Requisitions & Spend
-        </button>
-        {active !== 'board' && (
-          <>
-            <span className="crumb-sep">/</span>
-            <span>{crumb}</span>
-          </>
-        )}
-      </div>
-      <header className="page-head">
-        <div>
-          <div className="mod-kicker" data-mod="fin">Requisitions & Spend</div>
-          <h1>{title}</h1>
-          {blurb ? <p className="muted" style={{ margin: '6px 0 0', maxWidth: 640 }}>{blurb}</p> : null}
-        </div>
-        {actions ? <div className="head-actions">{actions}</div> : null}
-      </header>
-      <SpendTabs active={active} />
-      {children}
-    </div>
-  );
-}
-
-function StatusFilter({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: string[] }) {
-  return (
-    <select className="search-input" style={{ width: 'auto', maxWidth: 220 }} value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">All statuses</option>
-      {options.map((st) => <option key={st} value={st}>{st.replace(/_/g, ' ')}</option>)}
-    </select>
-  );
-}
-
-function MetaCard({ title, rows }: { title?: string; rows: [string, unknown][] }) {
-  const filled = rows.filter(([, v]) => v !== undefined && v !== null && String(v) !== '');
-  if (!filled.length) return null;
-  return (
-    <section className="card">
-      {title && <div className="card-head"><h3>{title}</h3></div>}
-      <dl className="detail-list">
-        {filled.map(([k, v]) => (
-          <div className="detail-row" key={k}>
-            <dt>{k}</dt>
-            <dd>{String(v)}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
-  );
-}
-
-function Pipeline({ steps, status }: { steps: string[]; status: string }) {
-  const idx = Math.max(0, steps.indexOf(status));
-  const known = steps.includes(status);
-  return (
-    <ol className="pipeline">
-      {steps.map((step, i) => (
-        <li key={step} className={`pipeline-step ${known && i <= idx ? 'done' : ''} ${known && i === idx ? 'current' : ''}`}>
-          <span className="pipeline-dot">{i + 1}</span>
-          <span>{step.replace(/_/g, ' ')}</span>
-        </li>
-      ))}
-    </ol>
-  );
-}
+import RecordExpense from './spend/RecordExpense';
+import {
+  CopyButton,
+  MetaCard,
+  Pipeline,
+  ReceiptChips,
+  RiskBadge,
+  SpendShell,
+  SpendTabs,
+  StatusFilter,
+  fmtDay,
+  isoDay,
+  num,
+  personName,
+  s,
+  todayIso,
+  uploadReceiptInput,
+  type Rec,
+} from './spend/kit';
 
 function parseSpend(path: string): { view: string; id: string | null; action: string | null } {
   const parts = path.split('/').filter(Boolean);
@@ -205,7 +38,7 @@ export default function SpendFlow({ path }: { path: string }) {
   if (view === 'requisitions' && id && action === 'edit') return <RequisitionComposer editId={Number(id)} />;
   if (view === 'requisitions' && id) return <RequisitionDesk id={Number(id)} />;
   if (view === 'requisitions') return <RequisitionList />;
-  if (view === 'expenses' && id === 'new') return <ExpenseForm />;
+  if (view === 'expenses' && id === 'new') return <RecordExpense />;
   if (view === 'expenses' && id) return <ExpenseDesk id={Number(id)} />;
   if (view === 'expenses') return <ExpenseList />;
   if (view === 'petty-cash' && id) return <PettyCashFund id={Number(id)} />;
@@ -1128,34 +961,6 @@ function RequisitionComposer({ editId }: { editId?: number }) {
 
 // ---------- Daily Expenditure ----------
 
-async function uploadReceiptInput(file: File | undefined, refType: string, refId: number): Promise<Rec> {
-  if (!file) throw new Error('Choose a file first');
-  const fd = new FormData();
-  fd.append('file', file);
-  fd.append('refType', refType);
-  fd.append('refId', String(refId));
-  const r = await api<{ data: Rec }>('/api/ops/expenditure/receipts', { method: 'POST', body: fd });
-  return r.data;
-}
-
-function ReceiptChips({ receipts }: { receipts: Rec[] }) {
-  if (!receipts.length) return <p className="empty-state">No receipts attached yet.</p>;
-  return (
-    <div className="related-list">
-      {receipts.map((r) => (
-        <div key={s(r.id)} className="related-item" style={{ alignItems: 'center', gap: 8 }}>
-          <span style={{ fontWeight: 600 }}>{s(r.fileName)}</span>
-          <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-            {s(r.supplier) || 'Unknown supplier'}{r.invoiceNo ? ` · INV ${s(r.invoiceNo)}` : ''}
-          </span>
-          {num(r.total) > 0 && <span style={{ color: 'var(--muted)', fontSize: 12 }}>{fmtMoney(num(r.total))}</span>}
-          {r.verified === true || r.verified === 'true' ? <Badge value="VERIFIED" /> : <Badge value="UNVERIFIED" />}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 const EXP_STATUSES = ['DRAFT', 'SUBMITTED', 'APPROVED', 'PAID', 'POSTED', 'VOID', 'REJECTED'];
 
 function ExpenseList() {
@@ -1231,231 +1036,6 @@ function ExpenseList() {
           {total > 30 && <Pager page={page} pageSize={30} total={total} onPage={setPage} />}
         </section>
       )}
-    </SpendShell>
-  );
-}
-
-interface ExpLineDraft { key: number; description: string; quantity: string; unitCost: string; }
-
-function ExpenseForm() {
-  const { user } = useAuth();
-  const [meta, setMeta] = useState<Rec | null>(null);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState('');
-  const [description, setDescription] = useState('');
-  const [amount, setAmount] = useState('');
-  const [categoryId, setCategoryId] = useState('');
-  const [expDate, setExpDate] = useState(todayIso());
-  const [departmentId, setDepartmentId] = useState(s(user?.department_id));
-  const [costCentreId, setCostCentreId] = useState('');
-  const [paymentMethodId, setPaymentMethodId] = useState('');
-  const [payee, setPayee] = useState('');
-  const [supplierId, setSupplierId] = useState('');
-  const [employeeId, setEmployeeId] = useState('');
-  const [projectId, setProjectId] = useState('');
-  const [budgetId, setBudgetId] = useState('');
-  const [taxAmount, setTaxAmount] = useState('');
-  const [vehicle, setVehicle] = useState('');
-  const [reference, setReference] = useState('');
-  const [isPlanned, setIsPlanned] = useState(true);
-  const [showLines, setShowLines] = useState(false);
-  const [lines, setLines] = useState<ExpLineDraft[]>([{ key: nextLineKey(), description: '', quantity: '1', unitCost: '' }]);
-
-  useEffect(() => {
-    api<{ data: Rec }>('/api/ops/expenditure/meta')
-      .then((r) => setMeta(r.data))
-      .catch((e) => setError(e.message));
-  }, []);
-
-  const cats = (meta?.categories as Rec[] | undefined) ?? [];
-  const methods = (meta?.paymentMethods as Rec[] | undefined) ?? [];
-  const depts = (meta?.departments as Rec[] | undefined) ?? [];
-  const centres = (meta?.costCentres as Rec[] | undefined) ?? [];
-  const projs = (meta?.projects as Rec[] | undefined) ?? [];
-  const emps = (meta?.employees as Rec[] | undefined) ?? [];
-  const sups = (meta?.suppliers as Rec[] | undefined) ?? [];
-  const bdgs = (meta?.budgets as Rec[] | undefined) ?? [];
-
-  const patchLine = (key: number, patch: Partial<ExpLineDraft>) =>
-    setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
-
-  const save = (submitNow: boolean) => {
-    setBusy('save');
-    setError('');
-    const body: Rec = {
-      description,
-      amount: num(amount),
-      categoryId: num(categoryId) || undefined,
-      expDate,
-      departmentId: num(departmentId) || undefined,
-      costCentreId: num(costCentreId) || undefined,
-      paymentMethodId: num(paymentMethodId) || undefined,
-      payee: payee || undefined,
-      supplierId: num(supplierId) || undefined,
-      employeeId: num(employeeId) || undefined,
-      projectId: num(projectId) || undefined,
-      budgetId: num(budgetId) || undefined,
-      taxAmount: taxAmount ? num(taxAmount) : undefined,
-      vehicle: vehicle || undefined,
-      reference: reference || undefined,
-      isPlanned,
-      lines: showLines ? lines.map((l) => ({
-        description: l.description,
-        quantity: l.quantity ? num(l.quantity) : undefined,
-        unitCost: l.unitCost ? num(l.unitCost) : undefined,
-        amount: l.quantity && l.unitCost ? num(l.quantity) * num(l.unitCost) : undefined,
-      })) : undefined,
-    };
-    api<{ data: Rec }>('/api/ops/expenditure/expenses', { method: 'POST', body: JSON.stringify(body) })
-      .then((r) => {
-        const next = () => navigate(`/spend/expenses/${s(r.data.id)}`);
-        if (submitNow) {
-          return api<{ data: Rec }>(`/api/ops/expenditure/expenses/${s(r.data.id)}/submit`, { method: 'POST', body: '{}' })
-            .then(next)
-            .catch((e) => { setError(e.message); setBusy(''); });
-        }
-        next();
-        return undefined;
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setBusy(''));
-  };
-
-  return (
-    <SpendShell title="Record Expense" blurb="Capture the spend, then submit it for approval." active="expenses">
-      {error && <ErrorBanner error={error} />}
-      <div className="form-grid">
-        <section className="card card-accent">
-          <div className="card-head"><h3>Expense details</h3></div>
-          <div className="form-grid">
-            <label className="field field-required">Date
-              <input type="date" value={expDate} onChange={(e) => setExpDate(e.target.value)} />
-            </label>
-            <label className="field field-required">Category
-              <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-                <option value="">Select category…</option>
-                {cats.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.categoryGroup)} · {s(c.name)}</option>)}
-              </select>
-            </label>
-            <label className="field field-required" style={{ gridColumn: '1 / -1' }}>Description
-              <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What was this spent on?" />
-            </label>
-            <label className="field field-required">Amount (UGX)
-              <input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
-            </label>
-            <label className="field">Tax amount
-              <input type="number" min="0" step="0.01" value={taxAmount} onChange={(e) => setTaxAmount(e.target.value)} placeholder="0.00" />
-            </label>
-            <label className="field">Department
-              <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
-                <option value="">Select department…</option>
-                {depts.map((d) => <option key={s(d.id)} value={s(d.id)}>{s(d.name)}</option>)}
-              </select>
-            </label>
-            <label className="field">Cost centre
-              <select value={costCentreId} onChange={(e) => setCostCentreId(e.target.value)}>
-                <option value="">Select cost centre…</option>
-                {centres.map((c) => <option key={s(c.id)} value={s(c.id)}>{s(c.name)}</option>)}
-              </select>
-            </label>
-            <label className="field">Project
-              <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-                <option value="">No project</option>
-                {projs.map((p) => <option key={s(p.id)} value={s(p.id)}>{s(p.name)}</option>)}
-              </select>
-            </label>
-            <label className="field">Budget
-              <select value={budgetId} onChange={(e) => setBudgetId(e.target.value)}>
-                <option value="">No budget</option>
-                {bdgs.map((b) => <option key={s(b.id)} value={s(b.id)}>{s(b.budgetNo)} · {s(b.name)}</option>)}
-              </select>
-            </label>
-          </div>
-        </section>
-
-        <section className="card card-accent">
-          <div className="card-head"><h3>Payment</h3></div>
-          <div className="form-grid">
-            <label className="field field-required">Payment method
-              <select value={paymentMethodId} onChange={(e) => setPaymentMethodId(e.target.value)}>
-                <option value="">Select method…</option>
-                {methods.map((m) => <option key={s(m.id)} value={s(m.id)}>{s(m.name)} ({s(m.methodType).replace(/_/g, ' ')})</option>)}
-              </select>
-            </label>
-            <label className="field">Payee
-              <input value={payee} onChange={(e) => setPayee(e.target.value)} placeholder="Who received the money?" />
-            </label>
-            <label className="field">Supplier
-              <select value={supplierId} onChange={(e) => {
-                setSupplierId(e.target.value);
-                const sup = sups.find((x) => s(x.id) === e.target.value);
-                if (sup) setPayee(s(sup.name));
-              }}>
-                <option value="">Not supplier-related</option>
-                {sups.map((x) => <option key={s(x.id)} value={s(x.id)}>{s(x.name)}</option>)}
-              </select>
-            </label>
-            <label className="field">Employee (reimbursement)
-              <select value={employeeId} onChange={(e) => {
-                setEmployeeId(e.target.value);
-                const emp = emps.find((x) => s(x.id) === e.target.value);
-                if (emp) setPayee(s(emp.name));
-              }}>
-                <option value="">Not employee-related</option>
-                {emps.map((x) => <option key={s(x.id)} value={s(x.id)}>{s(x.name)}</option>)}
-              </select>
-            </label>
-            <label className="field">Vehicle
-              <input value={vehicle} onChange={(e) => setVehicle(e.target.value)} placeholder="e.g. UAX 123A" />
-            </label>
-            <label className="field">Reference / invoice no
-              <input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="INV-…" />
-            </label>
-            <label className="field checkbox-field" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input type="checkbox" checked={isPlanned} onChange={(e) => setIsPlanned(e.target.checked)} />
-              Planned expenditure (not emergency)
-            </label>
-          </div>
-        </section>
-      </div>
-
-      <section className="card">
-        <div className="card-head">
-          <h3>Line breakdown</h3>
-          <button className="btn btn-sm btn-ghost" onClick={() => setShowLines(!showLines)}>{showLines ? 'Hide lines' : 'Add line breakdown'}</button>
-        </div>
-        {showLines && (
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr><th>Description</th><th>Qty</th><th>Unit cost</th><th>Line total</th><th></th></tr>
-              </thead>
-              <tbody>
-                {lines.map((l) => (
-                  <tr key={l.key}>
-                    <td><input value={l.description} onChange={(e) => patchLine(l.key, { description: e.target.value })} placeholder="Line description" style={{ width: '100%' }} /></td>
-                    <td><input type="number" min="0" step="0.01" value={l.quantity} onChange={(e) => patchLine(l.key, { quantity: e.target.value })} style={{ width: 90 }} /></td>
-                    <td><input type="number" min="0" step="0.01" value={l.unitCost} onChange={(e) => patchLine(l.key, { unitCost: e.target.value })} style={{ width: 130 }} /></td>
-                    <td className="cell-mono">{fmtMoney(num(l.quantity) * num(l.unitCost))}</td>
-                    <td><button className="btn btn-sm btn-ghost-danger" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>Remove</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ padding: 10 }}>
-              <button className="btn btn-sm" onClick={() => setLines((ls) => [...ls, { key: nextLineKey(), description: '', quantity: '1', unitCost: '' }])}>+ Add line</button>
-            </div>
-          </div>
-        )}
-      </section>
-      <div className="spend-dock">
-        <div className="spend-dock-meta">Amount <strong>{fmtMoney(num(amount))}</strong></div>
-        <div className="head-actions">
-          <button type="button" className="btn" onClick={() => navigate('/spend/expenses')}>Cancel</button>
-          <button type="button" className="btn" disabled={busy !== ''} onClick={() => save(false)}>{busy === 'save' ? 'Saving…' : 'Save draft'}</button>
-          <button type="button" className="btn btn-primary" disabled={busy !== ''} onClick={() => save(true)}>{busy === 'save' ? 'Saving…' : 'Save & submit'}</button>
-        </div>
-      </div>
     </SpendShell>
   );
 }

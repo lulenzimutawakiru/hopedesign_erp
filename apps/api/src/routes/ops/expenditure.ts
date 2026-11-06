@@ -4,33 +4,12 @@ import multer from 'multer';
 import { tx, Ctx } from '../../db.js';
 import { can, requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest } from '../../utils.js';
+import { run, runGet } from '../routeHelpers.js';
 import * as exp from '../../services/expenses.js';
 import * as proc from '../../services/procurement.js';
 
 export const expenditureOpsRouter = Router();
 const expUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-
-type OpFn = (client: pg.PoolClient, ctx: Ctx, body: any, params: Record<string, string>) => Promise<unknown>;
-type QueryFn = (client: pg.PoolClient, ctx: Ctx, query: Record<string, unknown>, params: Record<string, string>) => Promise<unknown>;
-
-const run = (permission: string | string[], fn: OpFn) => [
-  requirePermission(permission),
-  asyncHandler(async (req, res) => {
-    const out = await tx((client) => fn(client, req.ctx, req.body ?? {}, req.params as Record<string, string>), req.ctx);
-    res.json({ data: out });
-  }),
-];
-
-const runGet = (permission: string | string[], fn: QueryFn) => [
-  requirePermission(permission),
-  asyncHandler(async (req, res) => {
-    const out = await tx(
-      (client) => fn(client, req.ctx, req.query as Record<string, unknown>, req.params as Record<string, string>),
-      req.ctx
-    );
-    res.json({ data: out });
-  }),
-];
 
 const runExpenseGet = (fn: (client: pg.PoolClient, ctx: Ctx, query: Record<string, unknown>, params: Record<string, string>, viewAll: boolean) => Promise<unknown>) => [
   requirePermission(['expenditure.expenses.view', 'expenditure.expenses.view_own']),
