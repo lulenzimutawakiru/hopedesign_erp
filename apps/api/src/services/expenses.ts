@@ -527,9 +527,10 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   });
   await client.query(
     `UPDATE payment_requests SET status = 'PAID', paid_by = $1, paid_at = now(),
-            gl_posted = true, gl_journal_id = $2, reference = COALESCE($3, reference), updated_at = now()
-      WHERE id = $4 AND company_id = $5 AND tenant_id = $6`,
-    [ctx.userId ?? null, paymentJournalId, s(b.reference), paymentId, companyId(ctx), ctx.tenantId]
+            gl_posted = true, gl_journal_id = $2, payment_date = $3,
+            execution_reference = COALESCE($4, execution_reference), updated_at = now()
+      WHERE id = $5 AND company_id = $6 AND tenant_id = $7`,
+    [ctx.userId ?? null, paymentJournalId, isoDate(b.paymentDate ?? new Date()), s(b.reference), paymentId, companyId(ctx), ctx.tenantId]
   );
   await client.query(
     `INSERT INTO financial_postings (company_id, tenant_id, ref_type, ref_id, ref_code, journal_id, posting_type, amount, posted_by)
