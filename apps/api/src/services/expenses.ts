@@ -513,6 +513,9 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   if (!eRes.rows.length) throw notFound('Linked expense not found');
   const expense = toCamelRow(eRes.rows[0]);
   if (expense.status === 'VOID') throw badRequest('A voided expense cannot be settled.');
+  if (expense.createdBy != null && Number(expense.createdBy) === Number(ctx.userId)) {
+    throw forbidden('The expense creator cannot execute its payment.');
+  }
   if (expense.accountingStatus !== 'POSTED' || expense.glPosted !== true) {
     throw badRequest('The expense must be posted to Accounts Payable before settlement.');
   }
