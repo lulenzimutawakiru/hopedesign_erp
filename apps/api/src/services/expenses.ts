@@ -705,6 +705,26 @@ export async function rejectExpensePayment(client: pg.PoolClient, ctx: Ctx, paym
   if (p.requestedBy != null && Number(p.requestedBy) === Number(ctx.userId)) {
     throw forbidden('The payment requester cannot reject their own payment request.');
   }
+  const expenseControl = await client.query(
+    `SELECT et.created_by,
+            EXISTS (
+              SELECT 1 FROM approval_tasks t
+              JOIN workflow_instances i ON i.id = t.instance_id
+              WHERE i.entity_type = 'ops.expenses' AND i.entity_id = et.id
+                AND i.company_id = et.company_id AND i.tenant_id = et.tenant_id
+                AND t.status = 'APPROVED' AND t.decided_by = $4
+            ) AS is_expense_approver
+       FROM expense_transactions et
+      WHERE et.id = $1 AND et.company_id = $2 AND et.tenant_id = $3`,
+    [Number(p.refId), companyId(ctx), ctx.tenantId, ctx.userId ?? null]
+  );
+  if (!expenseControl.rows.length) throw notFound('Linked expense not found');
+  if (Number(expenseControl.rows[0].created_by) === Number(ctx.userId)) {
+    throw forbidden('The expense creator cannot reject its payment.');
+  }
+  if (expenseControl.rows[0].is_expense_approver === true) {
+    throw forbidden('The expense approver cannot reject its payment voucher.');
+  }
   await client.query(
     `UPDATE payment_requests SET status = 'REJECTED', rejection_reason = $1, rejected_by = $2, rejected_at = now(), updated_at = now()
       WHERE id = $3 AND company_id = $4 AND tenant_id = $5`,
