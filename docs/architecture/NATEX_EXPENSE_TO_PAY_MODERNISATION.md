@@ -37,14 +37,13 @@ visibility. Draft edits and submission are restricted to the expense creator.
 - Payment request creation, approval, execution and reconciliation each use distinct permissions and recorded lifecycle transitions.
 - Payment execution now requires the dedicated `expenditure.payments.post` permission rather than the expense-approval permission.
 - Inactive or invalid payment methods are rejected; the CREDIT method type cannot be used to falsely mark a supplier-credit expense as paid.
-- If an expense is marked paid before its first GL posting, the expense journal credits the payment-method ledger account instead of creating an AP balance.
+- Legacy historical records that were paid before their first GL posting retain the backward-compatible payment-account posting path; new expenses must be accounting-posted to AP before payment can be requested.
 
 This is an incremental correction using existing chart-of-accounts mappings. Payment is now a staged lifecycle: request (SUBMITTED), independent approval (APPROVED), then execution (PAID) with a separate AP settlement journal. The requester cannot approve or execute their own request, and the approver cannot execute that same request. Partial settlement is supported by multiple payment vouchers against one posted expense; pending and approved vouchers reserve the outstanding balance. Rejected requests release their reservation and retain a separate rejection reason/audit identity. Executed vouchers can be matched to bank/mobile-money statement lines; mismatches require an explanation and reconciliation sign-off is independent of the reconciler. The payment worklist exposes status, GL posting and reconciliation evidence.
 
 ### Follow-on implementation work
 
-1. Add evidence upload to the employee-owned expense lifecycle, with strict
-   ownership validation for expense attachments.
+1. Extend receipt evidence with OCR-assisted extraction and supplier invoice validation; employee-owned uploads and ownership checks are implemented.
 2. Add automated bank-statement import and provider integrations; manual statement matching and independent reconciliation approval are implemented.
 3. Review expense-line/header/tax reconciliation and accrual accounting.
 4. Integrate budget commitments and release/conversion semantics.
