@@ -756,8 +756,15 @@ export async function reconcileExpensePayment(client: pg.PoolClient, ctx: Ctx, p
   }
   const statementReference = s(b.statementReference)?.trim();
   if (!statementReference) throw badRequest('Bank or mobile-money statement reference is required.');
-  const statementAmount = round2(num0(b.statementAmount));
-  if (statementAmount < 0) throw badRequest('Statement amount cannot be negative.');
+  const statementDateInput = s(b.statementDate);
+  if (!statementDateInput || !/^\\d{4}-\\d{2}-\\d{2}$/.test(statementDateInput)) {
+    throw badRequest('Statement date is required in YYYY-MM-DD format.');
+  }
+  const amountInput = n(b.statementAmount);
+  if (amountInput == null || !Number.isFinite(amountInput) || amountInput <= 0) {
+    throw badRequest('Statement amount must be a positive number.');
+  }
+  const statementAmount = round2(amountInput);
   const currency = s(b.currency) ?? String(p.currency ?? 'UGX');
   if (currency !== String(p.currency ?? 'UGX')) throw badRequest('Statement currency must match the payment voucher currency.');
   const variance = round2(statementAmount - num0(p.amount));
