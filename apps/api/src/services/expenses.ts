@@ -322,13 +322,15 @@ export async function updateExpense(client: pg.PoolClient, ctx: Ctx, id: number,
   const sets: string[] = [];
   const params: unknown[] = [];
   const changes: Record<string, unknown> = {};
-  const push = (col: string, val: unknown) => {
+  const oldChanges: Record<string, unknown> = {};
+  const push = (col: string, val: unknown, oldValue: unknown) => {
     params.push(val);
     sets.push(`${col} = $${params.length}`);
     changes[col] = val;
+    oldChanges[col] = oldValue;
   };
   for (const [camel, col] of Object.entries(EXPENSE_EDIT)) {
-    if (camel in b) push(col, col === 'amount' || col === 'tax_amount' ? round2(num0(b[camel])) : col === 'is_planned' ? b[camel] === true || b[camel] === 'true' : col === 'exp_date' ? isoDate(b[camel]) : n(b[camel]) ?? s(b[camel]));
+    if (camel in b) push(col, col === 'amount' || col === 'tax_amount' ? round2(num0(b[camel])) : col === 'is_planned' ? b[camel] === true || b[camel] === 'true' : col === 'exp_date' ? isoDate(b[camel]) : n(b[camel]) ?? s(b[camel]), cur[camel]);
   }
   if (sets.length === 0) return cur;
   params.push(ctx.userId ?? null, id);
@@ -349,7 +351,7 @@ export async function updateExpense(client: pg.PoolClient, ctx: Ctx, id: number,
       lineNo += 1;
     }
   }
-  await logAudit(client, ctx, { action: 'update', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), oldValues: changes, newValues: changes });
+  await logAudit(client, ctx, { action: 'update', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), oldValues: oldChanges, newValues: changes });
   return getExpense(client, ctx, id);
 }
 
