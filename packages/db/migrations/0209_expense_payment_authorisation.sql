@@ -28,7 +28,7 @@ INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id
 FROM roles r
 JOIN permissions p ON p.code = 'expenditure.payments.approve'
-WHERE r.code IN ('super_administrator','cfo','finance_manager','chief_accountant','managing_director','executive_director')
+WHERE r.code IN ('super_administrator','system_administrator','cfo','finance_manager','chief_accountant','managing_director','executive_director')
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
 COMMENT ON COLUMN payment_requests.approval_comment IS
