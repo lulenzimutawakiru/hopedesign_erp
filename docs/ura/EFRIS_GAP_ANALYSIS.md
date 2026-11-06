@@ -91,16 +91,16 @@ The configuration supports a manual T101 probe (`/efris/configurations/:id/probe
 - credential/certificate expiry, and
 - device-registration validity (the 2026-10-20 re-provisioning left the device unregistered; nothing surfaces this until a submission fails with `400 Device does not exist`).
 - **Severity:** Medium.
-- **Remediation:** A scheduled health job that records probe outcomes + a surfaced device-registration status. Does not require inventing URA fields (T101 already exists).
+- **Remediation:** **Implemented (this branch).** `0228_efris_health_monitoring.sql` + `services/efris/health.ts`: a scheduled worker probes every active TEST/ACTIVE configuration (T101/token) every 5 minutes and records the outcome; `/efris/health` surfaces it and `efrisIntegrationStatus` includes `lastHealthCheck`. Offline-enabler configs (TCS-owned key) are recorded `ok=null` (manual), never a false failure.
 
 ### GAP-7 — No formal UAT matrix or sandbox integration harness
 Tests are mock-based and deterministic, which is correct for CI. But the sandbox round-trip is a manual operation with no formal UAT matrix (section 15) and no separate, clearly-marked sandbox harness.
 - **Severity:** Medium (governance).
-- **Remediation:** `docs/ura/EFRIS_UAT_TEST_PLAN.md` + a tagged sandbox integration script that never runs in CI.
+- **Remediation:** **Produced (this branch).** `docs/ura/EFRIS_UAT_TEST_PLAN.md` (13-scenario matrix) + `scripts/efris-sandbox-harness.ts`, a tagged script that runs the read-only T101/T119 sandbox proofs and never runs in CI. Fiscalising steps stay on the ERP API + worker (built by the real payload builders).
 
 ### GAP-8 — Documentation deliverables missing
 No `docs/ura/` existed before this branch. Section 18 requires six documents plus updated API documentation.
-- **Remediation:** produced incrementally on this branch.
+- **Remediation:** **Complete (this branch).** `EFRIS_GAP_ANALYSIS.md`, `EFRIS_REQUIREMENTS_MATRIX.md`, `EFRIS_ARCHITECTURE.md`, `EFRIS_CONFIGURATION_GUIDE.md` (includes the API surface), `EFRIS_UAT_TEST_PLAN.md`, `EFRIS_PRODUCTION_READINESS.md`.
 
 ---
 

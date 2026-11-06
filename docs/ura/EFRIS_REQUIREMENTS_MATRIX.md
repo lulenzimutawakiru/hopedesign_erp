@@ -13,7 +13,7 @@ Status legend:
 | ID | Requirement (mandate) | Status | Implementation / Evidence | Notes |
 |---|---|---|---|---|
 | REQ-1 | Taxpayer registration & TIN | ✅ | `efris_taxpayers` + `directory.ts` CRUD | Secrets stored as env refs, never in DB |
-| REQ-2 | EFRIS device registration & thumbprint | 🟡 | `resolveDeviceNo` + T101 probe | No automated registration-validity check (GAP-6) |
+| REQ-2 | EFRIS device registration & thumbprint | ✅ | `resolveDeviceNo` + T101 probe + scheduled health monitoring (GAP-6, `efris_health_checks`) | Device-registration failures surface automatically now |
 | REQ-3 | Digital certificates / key signing | ✅ | RSA-SHA1 sign + T104 AES key decrypt (`protocol.ts`) | Round-trip covered by `efris.protocol.test.ts` |
 | REQ-4 | Sandbox & production environments | ✅ | `assertUrlMatchesMode`; TEST/ACTIVE host isolation | Cross-mode submission refused |
 | REQ-5 | Goods & services registration | ✅ | `goods.ts` catalogue + product mapping lifecycle | REGISTERED is operator-confirmed |
@@ -33,11 +33,11 @@ Status legend:
 | REQ-19 | Secrets management & least privilege | ✅ | Env-only secrets; `efris.configuration.manage` guarded | |
 | REQ-20 | Audit trail without secret exposure | ✅ | `logAudit` on lookup/submit/fail/fiscalize; metadata only | |
 | REQ-21 | Frontend EFRIS workspace | 🟡 | Embedded in `FinanceFlow.tsx` + `OrganisationSettings.tsx` | No standalone dashboard; see GAP-8 |
-| REQ-22 | Reports (section 14 list) | 🟡 | Reconciliation + stock movement + VAT filing | Several reports missing (GAP-5) |
-| REQ-23 | Automated test suite | ✅ | 4 suites, ~40 cases (mock/deterministic) | Sandbox harness separate (GAP-7) |
-| REQ-24 | UAT matrix | ❌ | — | To be produced (GAP-7) |
+| REQ-22 | Reports (section 14 list) | 🟡 | Reconciliation + stock movement + VAT filing + health report (`/efris/health`) | Tax-category splits still blocked on GAP-2 |
+| REQ-23 | Automated test suite | ✅ | 5 suites, ~35 cases (mock/deterministic) | Sandbox harness separate (GAP-7) |
+| REQ-24 | UAT matrix | ✅ | `EFRIS_UAT_TEST_PLAN.md` + `scripts/efris-sandbox-harness.ts` | 13-scenario matrix, sandbox-only |
 | REQ-25 | Database migration discipline | ✅ | Backward-compatible migrations; no drop/rename; 0211/0220/0222/0223 | |
-| REQ-26 | Documentation deliverables (section 18) | 🟡 | `EFRIS_GAP_ANALYSIS.md`, `EFRIS_REQUIREMENTS_MATRIX.md` (this branch) | Architecture / config guide / UAT plan / production readiness pending |
+| REQ-26 | Documentation deliverables (section 18) | ✅ | Gap analysis, requirements matrix, architecture, configuration guide, UAT plan, production readiness | Six docs complete; API surface documented in the config guide |
 
 ---
 
