@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS expense_payment_reconciliations (
   company_id BIGINT NOT NULL REFERENCES companies(id),
   tenant_id BIGINT NOT NULL REFERENCES tenants(id),
   payment_request_id BIGINT NOT NULL REFERENCES payment_requests(id),
+  bank_transaction_id BIGINT REFERENCES bank_transactions(id),
   statement_date DATE NOT NULL,
   statement_reference TEXT NOT NULL,
   statement_amount NUMERIC(18,2) NOT NULL CHECK (statement_amount >= 0),
