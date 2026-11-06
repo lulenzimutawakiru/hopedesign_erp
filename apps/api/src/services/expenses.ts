@@ -95,7 +95,7 @@ async function budgets(client: pg.PoolClient, ctx: Ctx) {
 
 /** Form metadata: categories, payment channels, departments, centres, projects, employees, suppliers, funds, budgets. */
 export async function expenseMeta(client: pg.PoolClient, ctx: Ctx) {
-  const [cats, methods, depts, centres, projs, emps, sups, funds, bdgs, bankAccounts] = await Promise.all([
+  const [cats, methods, depts, centres, projs, emps, sups, funds, bdgs] = await Promise.all([
     client.query(
       `SELECT c.id, c.code, c.name, c.category_group, c.account_id, a.code AS account_code,
               a.name AS account_name, c.description, c.is_active
@@ -124,13 +124,6 @@ export async function expenseMeta(client: pg.PoolClient, ctx: Ctx) {
       [companyId(ctx), ctx.tenantId]
     ),
     budgets(client, ctx),
-    client.query(
-      `SELECT id, code, name, currency, gl_account_id
-       FROM bank_accounts
-       WHERE company_id = $1 AND tenant_id = $2 AND is_active = true AND gl_account_id IS NOT NULL
-       ORDER BY name`,
-      [companyId(ctx), ctx.tenantId]
-    ),
   ]);
   return {
     categories: toCamelRows(cats.rows),
@@ -142,8 +135,28 @@ export async function expenseMeta(client: pg.PoolClient, ctx: Ctx) {
     suppliers: sups,
     pettyCashFunds: toCamelRows(funds.rows),
     budgets: bdgs,
-    bankAccounts: toCamelRows(bankAccounts.rows),
   };
+}
+
+/** Payment-only metadata; bank account details are not exposed through employee expense creation metadata. */
+export async function expensePaymentMeta(client: pg.PoolClient, ctx: Ctx) {
+  const [methods, bankAccounts] = await Promise.all([
+    client.query(
+      `SELECT id, code, name, method_type, channel, bank_account_id
+         FROM payment_methods
+        WHERE company_id = $1 AND tenant_id = $2 AND is_active = true
+        ORDER BY name`,
+      [companyId(ctx), ctx.tenantId]
+    ),
+    client.query(
+      `SELECT id, code, name, currency, gl_account_id
+         FROM bank_accounts
+        WHERE company_id = $1 AND tenant_id = $2 AND is_active = true AND gl_account_id IS NOT NULL
+        ORDER BY name`,
+      [companyId(ctx), ctx.tenantId]
+    ),
+  ]);
+  return { paymentMethods: toCamelRows(methods.rows), bankAccounts: toCamelRows(bankAccounts.rows) };
 }
 
 /** Possible-duplicate scan: same supplier + invoice + amount, or a hash match. */
