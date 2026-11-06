@@ -393,6 +393,30 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
      s(cur.currency) ?? 'UGX', paymentMethodId, n(b.bankAccountId) ?? n(cur.bankAccountId) ?? null,
      s(b.reference) ?? s(cur.reference), ctx.userId ?? null, ctx.userId ?? null]
   );
+  // If the expense was already accrued to Accounts Payable, record the
+  // settlement as a separate journal: Dr AP / Cr the actual payment account.
+  // If it has not yet been posted, the later expense posting will recognise
+  // the expense and credit the payment account in one balanced journal.
+  if (String(cur.accountingStatus) === 'POSTED') {
+    const payable = await finance.getAccountId(client, ctx, '10121100');
+    const creditCode = creditAccountForMethod(String(cur.paymentMethodType ?? ''), paymentMethodId);
+    const cashBank = await finance.getAccountId(client, ctx, creditCode);
+    const paymentJournalId = await finance.postJournalLines(client, ctx, {
+      entryDate: isoDate(cur.expDate),
+      journalType: 'PAYMENT',
+      description: `Settlement of expense ${cur.expNo}`,
+      lines: [
+        { account_id: payable, debit: round2(num0(cur.amount)), credit: 0, description: `Clear AP ${cur.expNo}` },
+        { account_id: cashBank, debit: 0, credit: round2(num0(cur.amount)), description: `Payment ${cur.expNo}` },
+      ],
+      refType: 'expense_payment', refId: Number(payRes.rows[0].id), refCode: payNo,
+      currency: s(cur.currency) ?? 'UGX',
+    });
+    await client.query(
+      `UPDATE payment_requests SET gl_posted = true, gl_journal_id = $1 WHERE id = $2`,
+      [paymentJournalId, Number(payRes.rows[0].id)]
+    );
+  }
   await client.query(
     `UPDATE expense_transactions
         SET payment_status = 'PAID', status = 'PAID', paid_by = $1, paid_at = now(), payment_method_id = COALESCE($2, payment_method_id), updated_by = $1
@@ -431,7 +455,12 @@ export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
   const taxAmount = round2(num0(cur.taxAmount));
   const expenseAccountId = cur.accountId != null ? Number(cur.accountId) : cur.categoryAccountId != null ? Number(cur.categoryAccountId) : null;
   const expenseAccount = expenseAccountId ?? (await finance.getAccountId(client, ctx, '10254500'));
-  const creditCode = creditAccountForMethod(String(cur.paymentMethodType ?? ''), cur.paymentMethodId != null ? Number(cur.paymentMethodId) : null);
+  // An approved but unpaid expense creates a liability, not a cash/bank
+  // movement. Actual settlement is posted separately by payExpense.
+  const isPaid = String(cur.paymentStatus) === 'PAID' || String(cur.status) === 'PAID';
+  const creditCode = isPaid
+    ? creditAccountForMethod(String(cur.paymentMethodType ?? ''), cur.paymentMethodId != null ? Number(cur.paymentMethodId) : null)
+    : '10121100';
   const creditAccount = await finance.getAccountId(client, ctx, creditCode);
   const lines: finance.JournalLine[] = [
     {
@@ -444,7 +473,7 @@ export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
     const vat = await finance.getAccountId(client, ctx, '10111900');
     lines.push({ account_id: vat, debit: taxAmount, credit: 0, description: `Input VAT ${cur.expNo}` });
   }
-  lines.push({ account_id: creditAccount, debit: 0, credit: round2(amount), description: `Payment ${cur.expNo}` });
+  lines.push({ account_id: creditAccount, debit: 0, credit: round2(amount), description: isPaid ? `Payment ${cur.expNo}` : `Accounts payable ${cur.expNo}` });
   const journalId = await finance.postJournalLines(client, ctx, {
     entryDate: isoDate(cur.expDate),
     journalType: 'EXPENSE',
