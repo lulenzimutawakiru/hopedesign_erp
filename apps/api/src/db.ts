@@ -1,8 +1,10 @@
-﻿import pg from 'pg';
+import pg from 'pg';
 import { config } from './config.js';
 import { correlationId } from './utils.js';
 
 const { Pool } = pg;
+
+const isTestEnv = config.env === 'test';
 
 export const pool = new Pool({
   host: config.postgres.host,
@@ -14,8 +16,22 @@ export const pool = new Pool({
   // `rejectUnauthorized: false` disabled TLS authentication entirely on
   // managed endpoints; now verification only relaxes on an explicit opt-out.
   ssl: config.postgres.ssl ? { rejectUnauthorized: config.postgres.rejectUnauthorized } : undefined,
-  max: 10,
+  max: isTestEnv ? 10 : 20,
+  min: 0,
   idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  statement_timeout: 30_000,
+  query_timeout: 30_000,
+  application_name: 'hopedesign-erp',
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 5_000,
+  maxLifetimeSeconds: 60 * 30,
+});
+
+pool.on('connect', (client) => {
+  client.on('error', (err) => {
+    console.error('[db] client error', err.message);
+  });
 });
 
 pool.on('error', (err) => {
@@ -51,25 +67,41 @@ const applyContext = async (client: pg.PoolClient | pg.Client, ctx: Ctx) => {
   await client.query('SELECT set_config($1,$2,true)', ['app.device', ctx.device ?? '']);
 };
 
+const rollbackQuietly = async (client: pg.PoolClient | pg.Client) => {
+  try {
+    await client.query('ROLLBACK');
+  } catch {
+    // If the transaction was never started or already failed, keep the original
+    // error intact and avoid masking it with a secondary rollback failure.
+  }
+};
+
+const withTransaction = async <T>(
+  action: (client: pg.PoolClient, ctx: Ctx) => Promise<T>,
+  ctx: Ctx = {}
+): Promise<T> => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await applyContext(client, ctx);
+    const result = await action(client, ctx);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await rollbackQuietly(client);
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
 /** Run a single query inside a transaction with app context applied. */
 export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params: unknown[] = [],
   ctx: Ctx = {}
 ): Promise<pg.QueryResult<T>> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await applyContext(client, ctx);
-    const result = await client.query<T>(text, params);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+  return withTransaction(async (client) => client.query<T>(text, params), ctx);
 }
 
 /** Run a callback inside a transaction with app context applied. */
@@ -77,19 +109,7 @@ export async function tx<T>(
   fn: (client: pg.PoolClient, ctx: Ctx) => Promise<T>,
   ctx: Ctx = {}
 ): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await applyContext(client, ctx);
-    const result = await fn(client, ctx);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+  return withTransaction(fn, ctx);
 }
 
 /** Run a callback on a fresh pooled connection in its own transaction with
@@ -102,19 +122,7 @@ export async function detach<T>(
   fn: (client: pg.PoolClient, ctx: Ctx) => Promise<T>,
   ctx: Ctx = {}
 ): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await applyContext(client, ctx);
-    const result = await fn(client, ctx);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw err;
-  } finally {
-    client.release();
-  }
+  return withTransaction(fn, ctx);
 }
 
 export async function pingDb(): Promise<void> {
