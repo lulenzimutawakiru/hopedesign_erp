@@ -16,7 +16,7 @@ import { createServer, type Server } from 'node:http';
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, it, expect, afterAll } from 'vitest';
 import { api, auth, loginAs, pool } from './helpers.js';
-import { drainEfrisQueue } from '../src/services/efris/processor.js';
+import { drainEfrisQueue, originalInvoiceRef } from '../src/services/efris/processor.js';
 import { encryptAesEcb } from '../src/services/efris/protocol.js';
 
 const TENANT_ID = 2;
@@ -47,6 +47,7 @@ const configIds: number[] = [];
 const configCodes: string[] = [];
 const taxpayerCodes: string[] = [];
 const invoiceIds: number[] = [];
+const receiptIds: number[] = [];
 
 /** Park a configuration so the 20s background worker cannot race the test. */
 async function parkConfig(id: number) {
@@ -235,6 +236,10 @@ afterAll(async () => {
     [TENANT_ID, COMPANY_ID, startedAt]
   );
 
+  for (const receiptId of receiptIds) {
+    await asTenant('DELETE FROM receipts WHERE id = $1 AND tenant_id = $2', [receiptId, TENANT_ID]);
+  }
+
   for (const invoiceId of invoiceIds) {
     await asTenant(
       `DELETE FROM journal_lines
@@ -359,6 +364,64 @@ describe('URA EFRIS fiscalization', () => {
     expect(after.rows[0].n).toBe(1);
 
     await parkConfig(target.configId);
+  });
+
+  it('resolves a B2C credit-note original reference from the linked e-receipt FDN', async () => {
+    // A B2C sale fiscalises its RECEIPT as a T109 e-receipt; the customer invoice
+    // itself is never fiscalised. A credit note against that invoice must therefore
+    // reference the receipt's FDN — otherwise URA rejects the T110 with 2825
+    // "without original invoice".
+    const inv = await asTenant(
+      `INSERT INTO customer_invoices
+         (company_id, tenant_id, invoice_no, customer_id, invoice_date, currency, status,
+          subtotal, discount_amount, tax_amount, total, amount_paid)
+       VALUES ($1,$2,$3,1,CURRENT_DATE,'UGX','APPROVED',100000,0,18000,118000,0)
+       RETURNING id`,
+      [COMPANY_ID, TENANT_ID, `B2C-INV-${tag()}`]
+    );
+    const invoiceId = Number(inv.rows[0].id);
+    invoiceIds.push(invoiceId);
+
+    const rcpt = await asTenant(
+      `INSERT INTO receipts (company_id, tenant_id, receipt_no, invoice_id, customer_id, receipt_date, amount, method, status)
+       VALUES ($1,$2,$3,$4,1,CURRENT_DATE,118000,'CASH','POSTED')
+       RETURNING id`,
+      [COMPANY_ID, TENANT_ID, `B2C-RC-${tag()}`, invoiceId]
+    );
+    const receiptId = Number(rcpt.rows[0].id);
+    receiptIds.push(receiptId);
+
+    const txn = await asTenant(
+      `INSERT INTO efris_transactions
+         (company_id, tenant_id, doc_type, doc_ref_type, doc_ref_id, doc_ref_code, txn_date,
+          currency, gross_amount, tax_amount, idempotency_key, status)
+       VALUES ($1,$2,'SALES_INVOICE','receipts',$3,$4,CURRENT_DATE,'UGX',118000,18000,$5,'FISCALIZED')
+       RETURNING id`,
+      [COMPANY_ID, TENANT_ID, receiptId, `B2C-RC-${tag()}`, `MANUAL:B2C:${tag()}`]
+    );
+    const txnId = Number(txn.rows[0].id);
+    txnIds.push(txnId);
+
+    await asTenant(
+      `INSERT INTO efris_documents (tenant_id, efris_transaction_id, erp_doc_no, fdn, verification_code, response_payload, transmitted_at, fiscalized_at)
+       VALUES ($1,$2,$3,'FDN-B2C-001','VRC-B2C-001','{}'::jsonb,now(),now())`,
+      [TENANT_ID, txnId, `B2C-RC-${tag()}`]
+    );
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT set_app_context($1,$2,NULL,NULL)', [TENANT_ID, COMPANY_ID]);
+      const ref = await originalInvoiceRef(client, TENANT_ID, invoiceId);
+      // The B2C sale's FDN lives on the receipt, not the (never-fiscalised) invoice.
+      expect(ref.oriInvoiceNo).toBe('FDN-B2C-001');
+      // The e-receipt response carries no internal invoiceId, so the reference
+      // falls back to the FDN rather than sending an empty oriInvoiceId (2825).
+      expect(ref.oriInvoiceId).toBe('FDN-B2C-001');
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
   });
 
   it('records a failed URA submission instead of fabricating a fiscal document', async () => {

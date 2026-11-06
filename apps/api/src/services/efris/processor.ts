@@ -226,8 +226,16 @@ interface FiscalSource {
   stock: StockSource | null;
 }
 
-/** Original invoice's FDN (invoiceNo) and internal invoiceId, for a T110 credit note. */
-async function originalInvoiceRef(
+/**
+ * Original invoice's FDN (invoiceNo) and internal invoiceId, for a T110 credit
+ * note. The original sale may have been fiscalised two ways:
+ *   * B2B — as a `customer_invoices` T109 tax invoice, or
+ *   * B2C — as a `receipts` T109 e-receipt that links back to its invoice via
+ *     `receipts.invoice_id` (customer invoices themselves are never fiscalised).
+ * A credit note against a B2C sale must reference the RECEIPT's FDN, otherwise
+ * URA rejects the T110 with 2825 "without original invoice".
+ */
+export async function originalInvoiceRef(
   client: pg.PoolClient,
   tenantId: number,
   invoiceId: number
@@ -238,10 +246,14 @@ async function originalInvoiceRef(
        FROM efris_documents d
        JOIN efris_transactions t ON t.id = d.efris_transaction_id
       WHERE t.tenant_id = $1
-        AND t.doc_ref_type = 'customer_invoices'
-        AND t.doc_ref_id = $2
         AND t.status = 'FISCALIZED'
         AND d.fdn IS NOT NULL
+        AND (
+              (t.doc_ref_type = 'customer_invoices' AND t.doc_ref_id = $2)
+           OR (t.doc_ref_type = 'receipts' AND t.doc_ref_id IN (
+                 SELECT id FROM receipts WHERE invoice_id = $2 AND tenant_id = $1
+               ))
+        )
       ORDER BY d.id DESC
       LIMIT 1`,
     [tenantId, invoiceId]
@@ -250,7 +262,10 @@ async function originalInvoiceRef(
   const fdn = row?.fdn != null ? String(row.fdn).trim() : null;
   const invoiceIdRaw = digFirst(row?.response_payload ?? null, ['invoiceId']);
   const invoiceIdVal = typeof invoiceIdRaw === 'string' && invoiceIdRaw.trim() ? invoiceIdRaw.trim() : null;
-  return { oriInvoiceNo: fdn || null, oriInvoiceId: invoiceIdVal };
+  // B2C e-receipt responses can lack a distinct internal invoice id; URA still
+  // requires a non-empty oriInvoiceId on a T110 (2825 when either is missing),
+  // so fall back to the original FDN rather than send an empty reference.
+  return { oriInvoiceNo: fdn || null, oriInvoiceId: invoiceIdVal || fdn || null };
 }
 
 /**
