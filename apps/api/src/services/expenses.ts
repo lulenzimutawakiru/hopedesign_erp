@@ -415,7 +415,7 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
   const methodType = String(methodRes.rows[0].method_type ?? '').toUpperCase();
   if (methodType === 'CREDIT') throw badRequest('Credit terms are not a payment execution method.');
   const bankAccountId = n(b.bankAccountId) ?? n(methodRes.rows[0].bank_account_id);
-  if (methodType.includes('BANK') && bankAccountId == null) {
+  if ((methodType.includes('BANK') || methodType.includes('DIRECT_SUPPLIER')) && bankAccountId == null) {
     throw badRequest('Select a bank account linked to an active GL control account for this payment method.');
   }
   if (bankAccountId != null) {
@@ -504,6 +504,7 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   );
   if (!eRes.rows.length) throw notFound('Linked expense not found');
   const expense = toCamelRow(eRes.rows[0]);
+  if (expense.status === 'VOID') throw badRequest('A voided expense cannot be settled.');
   if (expense.accountingStatus !== 'POSTED' || expense.glPosted !== true) {
     throw badRequest('The expense must be posted to Accounts Payable before settlement.');
   }
@@ -798,6 +799,16 @@ export async function voidExpense(client: pg.PoolClient, ctx: Ctx, id: number, r
   const cur = await getExpense(client, ctx, id);
   if (String(cur.status) === 'VOID') throw badRequest('Expense is already void');
   if (!reason) throw badRequest('A void reason is required');
+  const paymentActivity = await client.query(
+    `SELECT 1 FROM payment_requests
+      WHERE company_id = $1 AND tenant_id = $2 AND ref_type = 'EXPENSE'
+        AND ref_id = $3 AND status IN ('SUBMITTED','APPROVED','PAID')
+      LIMIT 1`,
+    [companyId(ctx), ctx.tenantId, id]
+  );
+  if (paymentActivity.rows.length) {
+    throw badRequest('This expense has an active or executed payment voucher. Resolve or reverse the payment lifecycle before voiding the expense.');
+  }
   if (cur.glPosted === true && cur.glJournalId != null) {
     await finance.voidJournal(client, ctx, Number(cur.glJournalId), reason);
     await client.query(
