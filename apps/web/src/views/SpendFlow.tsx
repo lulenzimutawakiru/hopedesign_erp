@@ -1586,6 +1586,7 @@ function ExpenseDesk({ id }: { id: number }) {
   const lines = (e.lines as Rec[] | undefined) ?? [];
   const receipts = (e.receipts as Rec[] | undefined) ?? [];
   const timeline = (e.timeline as Rec[] | undefined) ?? [];
+  const paymentRows = (e.payments as Rec[] | undefined) ?? [];
   const dup = e.duplicateOf as Rec | null | undefined;
   const isDraft = e.status === 'DRAFT';
   const isPaid = e.status === 'PAID' || s(e.paymentStatus) === 'PAID';
@@ -1678,6 +1679,28 @@ function ExpenseDesk({ id }: { id: number }) {
           </div>
         </section>
       )}
+
+      <section className="card">
+        <div className="card-head"><h3>Payment history</h3></div>
+        {paymentRows.length === 0 && <p className="empty-state">No payment vouchers have been requested.</p>}
+        {paymentRows.length > 0 && (
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Voucher</th><th>Amount</th><th>Method</th><th>Status</th><th>Payment date</th><th>GL journal</th></tr></thead>
+              <tbody>{paymentRows.map((p) => (
+                <tr key={s(p.id)}>
+                  <td className="cell-mono">{s(p.payNo)}</td>
+                  <td>{fmtMoney(num(p.amount))} {s(p.currency)}</td>
+                  <td>{s(p.paymentMethodName) || '—'}</td>
+                  <td><Badge value={p.status} /></td>
+                  <td>{p.paymentDate ? fmtDay(p.paymentDate) : '—'}</td>
+                  <td className="cell-mono">{p.glPosted ? s(p.glJournalId) : 'Not posted'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <section className="card">
         <div className="card-head"><h3>Approval timeline</h3></div>
