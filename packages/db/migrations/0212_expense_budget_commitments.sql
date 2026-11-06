@@ -1,4 +1,6 @@
 -- 0212 - Reserve expense budgets at submission and release on terminal transitions
+ALTER TABLE budget_commitments ADD COLUMN IF NOT EXISTS release_reason TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_budget_commitments_expense_ref
   ON budget_commitments(tenant_id, doc_ref_type, doc_ref_id, status)
   WHERE doc_type = 'EXPENSE';
@@ -9,7 +11,14 @@ BEGIN
   IF NEW.status IS DISTINCT FROM OLD.status
      AND NEW.status IN ('POSTED','REJECTED','VOID','CANCELLED','DRAFT') THEN
     UPDATE budget_commitments
-       SET status = 'RELEASED', released_at = now()
+       SET status = 'RELEASED', released_at = now(),
+           release_reason = CASE NEW.status
+             WHEN 'POSTED' THEN 'Expense posted to the general ledger; actual spend replaces commitment'
+             WHEN 'REJECTED' THEN 'Expense approval rejected or returned'
+             WHEN 'VOID' THEN 'Expense voided'
+             WHEN 'CANCELLED' THEN 'Expense cancelled'
+             ELSE 'Expense returned to draft for correction'
+           END
      WHERE company_id = NEW.company_id
        AND tenant_id = NEW.tenant_id
        AND doc_type = 'EXPENSE'
