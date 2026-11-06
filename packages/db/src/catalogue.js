@@ -174,7 +174,7 @@ const MODULES = {
     kcb: ["view","manage","test"],
     equity: ["view","manage","test"],
     budgets: ["view","create","update","submit","approve","close"],
-    expenses: ["view","create","update","submit","approve","post","void"],
+    expenses: ["view","view_own","create","update","submit","approve","post","void"],
     advances: ["view","create","settle","void"],
     taxes: ["view","create","update"],
     reports: ["view","print","export"],
