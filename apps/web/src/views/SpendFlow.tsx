@@ -1613,8 +1613,10 @@ function ExpenseDesk({ id }: { id: number }) {
   const isDraft = e.status === 'DRAFT';
   const isPosted = s(e.accountingStatus) === 'POSTED';
   const canSubmit = isDraft && can(user, 'expenditure.expenses.submit');
+  const canVerify = e.status === 'APPROVED' && e.accountingVerified !== true && can(user, 'expenditure.expenses.verify');
+  const pipelineStatus = e.status === 'APPROVED' && e.accountingVerified === true ? 'VERIFIED' : s(e.status);
   const canPay = s(e.accountingStatus) === 'POSTED' && s(e.paymentStatus) !== 'PAID' && can(user, 'expenditure.payments.create');
-  const canPost = (e.status === 'APPROVED' || e.status === 'PAID') && !isPosted && can(user, 'expenditure.expenses.post');
+  const canPost = (e.status === 'APPROVED' || e.status === 'PAID') && e.accountingVerified === true && !isPosted && can(user, 'expenditure.expenses.post');
   const canVoid = !['VOID', 'REJECTED', 'CANCELLED'].includes(s(e.status)) && can(user, 'expenditure.expenses.void');
 
   return (
@@ -1623,6 +1625,7 @@ function ExpenseDesk({ id }: { id: number }) {
         <button className="btn btn-ghost" onClick={() => navigate('/spend/expenses')}>← Daily Expenditure</button>
         <h1 style={{ margin: 0, flex: 1 }}><span className="cell-mono">{s(e.expNo)}</span> <Badge value={e.status} /> <RiskBadge row={e} /></h1>
         {canSubmit && <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('submit', 'Expense submitted')}>{busy === 'submit' ? 'Working…' : 'Submit for Approval'}</button>}
+        {canVerify && <button className="btn btn-primary" disabled={busy !== ''} onClick={() => { const comment = window.prompt('Accounting verification notes (coding, tax, receipt and line checks):'); if (comment?.trim()) act('verify', 'Expense accounting verified', { comment }); }}>Verify Accounting</button>}
         {canPay && <button className="btn btn-primary" disabled={busy !== ''} onClick={() => setShowPay(true)}>Request Payment</button>}
         {canPost && <button className="btn btn-ghost" disabled={busy !== ''} onClick={() => act('post', 'Posted to ledger')}>{busy === 'post' ? 'Working…' : 'Post to Ledger'}</button>}
         {canVoid && <button className="btn btn-ghost-danger" disabled={busy !== ''} onClick={() => setShowVoid(true)}>Void</button>}
@@ -1635,7 +1638,7 @@ function ExpenseDesk({ id }: { id: number }) {
           ⚠ Possible duplicate: <span className="cell-mono">{s(dup.expNo)}</span> ({fmtMoney(num(dup.amount))}, {s(dup.status)}).
         </div>
       )}
-      <Pipeline steps={['DRAFT', 'SUBMITTED', 'APPROVED', 'POSTED']} status={s(e.status)} />
+      <Pipeline steps={['DRAFT', 'SUBMITTED', 'APPROVED', 'VERIFIED', 'POSTED']} status={pipelineStatus} />
 
       <div className="form-grid">
         <section className="card">
@@ -1654,6 +1657,9 @@ function ExpenseDesk({ id }: { id: number }) {
             <div className="detail-row"><dt>Project</dt><dd>{s(e.projectName) || '—'}</dd></div>
             <div className="detail-row"><dt>Payment method</dt><dd>{s(e.paymentMethodName) || '—'}</dd></div>
             <div className="detail-row"><dt>Payment status</dt><dd><Badge value={e.paymentStatus} /></dd></div>
+            <div className="detail-row"><dt>Accounting verification</dt><dd><Badge value={e.accountingVerified ? 'VERIFIED' : 'PENDING'} /></dd></div>
+            <div className="detail-row"><dt>Verified by</dt><dd>{s(e.verifiedBy) || '—'}</dd></div>
+            <div className="detail-row"><dt>Verification notes</dt><dd>{s(e.verificationComment) || '—'}</dd></div>
             <div className="detail-row"><dt>Accounting</dt><dd><Badge value={e.accountingStatus} /></dd></div>
             <div className="detail-row"><dt>Reference</dt><dd><span className="cell-mono">{s(e.reference) || '—'}</span></dd></div>
             <div className="detail-row"><dt>Vehicle</dt><dd>{s(e.vehicle) || '—'}</dd></div>
