@@ -1784,7 +1784,7 @@ function ExpenseDesk({ id }: { id: number }) {
             <label className="field">Bank account (required for bank/direct supplier payments)
               <select value={payBankAccount} onChange={(e) => setPayBankAccount(e.target.value)}>
                 <option value="">Use payment-method account / not applicable</option>
-                {bankAccounts.map((b) => <option key={s(b.id)} value={s(b.id)}>{s(b.name)} · {s(b.code)}</option>)}
+                {bankAccounts.filter((b) => s(b.currency) === (s(e.currency) || 'UGX')).map((b) => <option key={s(b.id)} value={s(b.id)}>{s(b.name)} · {s(b.code)}</option>)}
               </select>
             </label>
             <p className="empty-state">This submits a payment request for independent approval. The expense is not marked paid and no bank or cash journal is posted until a different authorised user executes the approved request.</p>
