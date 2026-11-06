@@ -816,7 +816,7 @@ export async function postPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: nu
 
   const totals = {
     gross: 0, paye: 0, nssf: 0, employerNssf: 0,
-    loans: 0, advances: 0, other: 0, lst: 0, net: 0,
+    loans: 0, advances: 0, fines: 0, other: 0, lst: 0, net: 0,
   };
   const earningsByCentre = new Map<string, { costCentreId: number | null; amount: number }>();
   const employerNssfByCentre = new Map<string, { costCentreId: number | null; amount: number }>();
@@ -840,6 +840,7 @@ export async function postPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: nu
     totals.employerNssf += employerNssf;
     totals.loans += Number(it.loans ?? 0);
     totals.advances += Number(it.advances ?? 0);
+    totals.fines += Number(it.fines ?? 0);
     totals.other += Number(it.other_deductions ?? 0);
     totals.lst += Number(it.lst ?? 0);
     totals.net += Number(it.net_pay ?? 0);
@@ -858,7 +859,7 @@ export async function postPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: nu
     return getAccountId(client, ctx, PAYROLL_GL_FALLBACK[role]);
   };
 
-  const staffRecoveries = totals.loans + totals.advances + totals.other;
+  const staffRecoveries = totals.loans + totals.advances + totals.fines + totals.other;
   const debits = round2(totals.gross) + round2(totals.employerNssf);
   const creditsBeforeNet =
     round2(totals.paye) + round2(totals.nssf + totals.employerNssf) + round2(totals.lst) + round2(staffRecoveries);

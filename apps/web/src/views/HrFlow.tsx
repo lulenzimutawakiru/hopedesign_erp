@@ -59,7 +59,7 @@ export default function HrFlow({ path }: { path: string }) {
   if (view === 'requisitions' || view === 'vacancies' || view === 'recruitment' || view === 'candidates') return <RecruitmentFlow path={path} />;
   if (view === 'onboarding' || view === 'onboardings') return <OnboardingFlow path={path} />;
   if (view === 'org' || view === 'positions' || view === 'workforce' || view === 'workforce-plans' || view === 'scenarios') return <WorkforcePlanning path={path} />;
-  if (['loans', 'advances', 'payments', 'performance', 'training', 'benefits', 'relations', 'time', 'me'].includes(view)) return <HcmOps path={path} />;
+  if (['loans', 'advances', 'fines', 'payments', 'performance', 'training', 'benefits', 'relations', 'time', 'me'].includes(view)) return <HcmOps path={path} />;
   return <PeopleBoard />;
 }
 
