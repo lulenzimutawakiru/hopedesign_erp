@@ -724,14 +724,16 @@ export async function listExpensePayments(client: pg.PoolClient, ctx: Ctx, q: Re
             pr.payee, pr.amount, pr.currency, pr.status, pr.reference,
             pr.requested_by, pr.approved_by, pr.approved_at, pr.paid_by, pr.paid_at,
             pr.payment_date, pr.execution_reference, pr.approval_comment, pr.rejection_reason,
-            pr.payment_method_id, pm.name AS payment_method_name, pr.gl_posted,
+            pr.payment_method_id, pr.bank_account_id, pm.name AS payment_method_name, pr.gl_posted,
             pr.gl_journal_id, et.description AS expense_description,
             epr.id AS reconciliation_id, epr.bank_transaction_id, epr.status AS reconciliation_status,
             epr.statement_reference, epr.statement_date, epr.statement_amount, epr.variance
        FROM payment_requests pr
        LEFT JOIN payment_methods pm ON pm.id = pr.payment_method_id
        LEFT JOIN expense_transactions et ON et.id = pr.ref_id AND et.company_id = pr.company_id AND et.tenant_id = pr.tenant_id
-       LEFT JOIN expense_payment_reconciliations epr ON epr.payment_request_id = pr.id
+       LEFT JOIN expense_payment_reconciliations epr
+         ON epr.payment_request_id = pr.id
+        AND epr.company_id = pr.company_id AND epr.tenant_id = pr.tenant_id
       WHERE ${where.join(' AND ')}
       ORDER BY pr.created_at DESC, pr.id DESC LIMIT 200`,
     params
