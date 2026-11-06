@@ -403,7 +403,7 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
     const cashBank = await finance.getAccountId(client, ctx, creditCode);
     const paymentJournalId = await finance.postJournalLines(client, ctx, {
       entryDate: isoDate(cur.expDate),
-      journalType: 'PAYMENT',
+      journalType: 'SUPPLIER_PAYMENT',
       description: `Settlement of expense ${cur.expNo}`,
       lines: [
         { account_id: payable, debit: round2(num0(cur.amount)), credit: 0, description: `Clear AP ${cur.expNo}` },
@@ -437,7 +437,8 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
 function creditAccountForMethod(methodType: string | null | undefined, paymentMethodId: number | null): string {
   const t = String(methodType ?? '').toUpperCase();
   if (t.includes('BANK') || t.includes('CARD')) return '10111300';
-  if (t.includes('CREDIT') || t.includes('DIRECT_SUPPLIER')) return '10121100';
+  if (t.includes('CREDIT')) return '10121100';
+  if (t.includes('DIRECT_SUPPLIER')) return '10111300';
   if (t.includes('MOBILE')) return '10111200';
   if (t.includes('PETTY')) return '10111200';
   if (t.includes('REIMBURS')) return '10111200';
