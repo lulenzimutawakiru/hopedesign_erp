@@ -115,6 +115,10 @@ describe('Ops daily expenditure module', () => {
     expect(approve1.status).toBe(200);
     expect(approve1.body.data.status).toBe('APPROVED');
 
+    const creatorExec = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/execute`)
+      .set(auth(expenseCreatorToken)).send({});
+    expect(creatorExec.status).toBe(403);
+
     const execute1 = await api.post(`/api/ops/expenditure/payments/${request1.body.data.payId}/execute`)
       .set(auth(opsToken)).send({ reference: `BANK-TEST-${Date.now()}`, paymentDate: '2026-11-06' });
     expect(execute1.status).toBe(200);
