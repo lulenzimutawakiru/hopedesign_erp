@@ -3,8 +3,9 @@ import pg from 'pg';
 import multer from 'multer';
 import { tx, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
-import { asyncHandler, badRequest } from '../../utils.js';
+import { asyncHandler } from '../../utils.js';
 import * as exp from '../../services/expenses.js';
+import * as expenseControls from '../../services/expenseValidation.js';
 import * as proc from '../../services/procurement.js';
 
 export const expenditureOpsRouter = Router();
@@ -53,9 +54,9 @@ expenditureOpsRouter.get('/expenses', ...runGet('expenditure.expenses.view', (c,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
 })));
 expenditureOpsRouter.get('/expenses/:id', ...runGet('expenditure.expenses.view', (c, ctx, _q, p) => exp.getExpense(c, ctx, Number(p.id))));
-expenditureOpsRouter.post('/expenses', ...run('expenditure.expenses.create', (c, ctx, b) => exp.createExpense(c, ctx, b)));
-expenditureOpsRouter.post('/expenses/:id/update', ...run('expenditure.expenses.update', (c, ctx, b, p) => exp.updateExpense(c, ctx, Number(p.id), b)));
-expenditureOpsRouter.post('/expenses/:id/submit', ...run('expenditure.expenses.submit', (c, ctx, _b, p) => exp.submitExpense(c, ctx, Number(p.id))));
+expenditureOpsRouter.post('/expenses', ...run('expenditure.expenses.create', (c, ctx, b) => expenseControls.createExpense(c, ctx, b)));
+expenditureOpsRouter.post('/expenses/:id/update', ...run('expenditure.expenses.update', (c, ctx, b, p) => expenseControls.updateExpense(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/expenses/:id/submit', ...run('expenditure.expenses.submit', (c, ctx, _b, p) => expenseControls.submitExpense(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/expenses/:id/pay', ...run('expenditure.expenses.approve', (c, ctx, b, p) => exp.payExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/expenses/:id/post', ...run('expenditure.expenses.post', (c, ctx, _b, p) => exp.postExpense(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/expenses/:id/void', ...run('expenditure.expenses.void', (c, ctx, b, p) => exp.voidExpense(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : null)));
@@ -74,13 +75,12 @@ expenditureOpsRouter.post(
   expUpload.single('file'),
   asyncHandler(async (req, res) => {
     const out = await tx(
-      (client) =>
-        exp.uploadReceipt(client, req.ctx, {
-          ...req.body,
-          file: req.file
-            ? { originalname: req.file!.originalname, mimetype: req.file!.mimetype, size: req.file!.size, buffer: req.file!.buffer }
-            : undefined,
-        }),
+      (client) => expenseControls.uploadReceipt(client, req.ctx, {
+        ...req.body,
+        file: req.file
+          ? { originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size, buffer: req.file.buffer }
+          : undefined,
+      }),
       req.ctx
     );
     res.json({ data: out });
