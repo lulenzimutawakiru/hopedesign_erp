@@ -11,6 +11,7 @@ import * as efrisHealth from '../../services/efris/health.js';
 import * as efrisTaxpayer from '../../services/efris/taxpayer.js';
 import * as efrisGoods from '../../services/efris/goods.js';
 import * as efrisStock from '../../services/efris/stock.js';
+import * as efrisReports from '../../services/efris/reports.js';
 import * as taxFilings from '../../services/taxFilings.js';
 import * as reportHistory from '../../services/reportHistory.js';
 import * as finAppr from '../../services/financeApprovals.js';
@@ -447,6 +448,29 @@ financeOpsRouter.get('/efris/stock-movements', ...runGet(['efris.transactions.vi
   from: q.from != null ? String(q.from) : null,
   to: q.to != null ? String(q.to) : null,
   status: q.status != null ? String(q.status) : null,
+})));
+
+// EFRIS reports (GAP-5, section 14). All figures come from URA-confirmed
+// outcomes persisted by the worker — never from an unacknowledged attempt.
+financeOpsRouter.get('/efris/reports/daily-sales', ...runGet(['efris.transactions.view', 'finance.reports.view'], (c, ctx, q) => efrisReports.dailyFiscalizedSales(c, ctx, {
+  from: q.from != null ? String(q.from) : null,
+  to: q.to != null ? String(q.to) : null,
+})));
+financeOpsRouter.get('/efris/reports/tax-categories', ...runGet(['efris.transactions.view', 'finance.reports.view'], (c, ctx, q) => efrisReports.salesByTaxCategory(c, ctx, {
+  from: q.from != null ? String(q.from) : null,
+  to: q.to != null ? String(q.to) : null,
+})));
+financeOpsRouter.get('/efris/reports/zero-rated', ...runGet(['efris.transactions.view', 'finance.reports.view'], (c, ctx, q) => efrisReports.zeroRatedSupplies(c, ctx, {
+  from: q.from != null ? String(q.from) : null,
+  to: q.to != null ? String(q.to) : null,
+})));
+financeOpsRouter.get('/efris/reports/reconciliation/daily', ...runGet('efris.reconciliation.view', (c, ctx, q) => efrisReports.dailyReconciliation(c, ctx, {
+  from: q.from != null ? String(q.from) : null,
+  to: q.to != null ? String(q.to) : null,
+})));
+financeOpsRouter.get('/efris/reports/product-registration', ...runGet('efris.configuration.view', (c, ctx) => efrisReports.productRegistrationReport(c, ctx)));
+financeOpsRouter.get('/efris/reports/health', ...runGet('efris.configuration.view', (c, ctx, q) => efrisReports.integrationHealthReport(c, ctx, {
+  configId: q.configId != null ? Number(q.configId) : null,
 })));
 
 // URA goods catalogue (Part J) — searchable copy + bulk import from the official list.

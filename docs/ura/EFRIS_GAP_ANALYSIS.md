@@ -58,12 +58,12 @@ Consequences:
 3. **Excise duty is not modelled.** Every `excise*` field in `buildT109Content` / `buildT110Content` is emitted empty.
 
 - **Severity:** High for any taxpayer with exempt or excisable supplies; Low for the current single-product (NATEX-A4, standard-rated) scope.
-- **Remediation:** Add a config-driven tax-category resolver (effective-dated, per-company) instead of the hard-coded band. **The exact URA `taxCategoryCode` for "exempt" and any excise fields must be confirmed from the official specification before implementation.**
+- **Remediation:** **Implemented (this branch, code-side).** `protocol.ts → taxCategory(rate, {exempt, categories})` is now config-driven and fail-closed: a non-standard rate throws `EFRIS_TAX_CATEGORY_UNMAPPED` instead of being silently labelled Standard, and an exempt line is refused (`EFRIS_EXEMPT_CATEGORY_UNMAPPED`) rather than emitted as zero-rated, unless the operator supplies the mapping in `security_flags.taxCategories`. The two proven defaults (`01` Standard, `02` Zero) are unchanged. **The exact URA `taxCategoryCode` for "exempt" and any excise fields still must come from the official specification** — the model carries them, but the values are not invented.
 
 ### GAP-3 — B2G is not explicitly modelled
 `buyerDetails.buyerType` is derived solely from the presence of a buyer TIN: `'0'` (registered business) when a TIN is present, `'1'` (consumer) otherwise. There is no distinct B2G (business-to-government) classification.
 - **Severity:** Medium.
-- **Remediation:** Confirm the URA B2G buyer classification and whether the customer master already distinguishes government buyers; then map it.
+- **Remediation:** **Implemented (this branch, code-side).** `buyerKind` is plumbed from `customers.customer_type = 'GOVERNMENT'` through the builder into `UraParty.buyerKind`, and `protocol.ts → buyerTypeCode()` resolves it fail-closed: business/consumer keep the proven `'0'`/`'1'`, and a government buyer throws `EFRIS_B2G_BUYER_TYPE_UNMAPPED` unless `security_flags.buyerTypes.government` is configured. **The URA government buyer-type code itself still requires official confirmation** before it is populated.
 
 ### GAP-4 — Uncertain-submission (timeout) reconciliation is not automatic (REQUIRES URA CONFIRMATION)
 On a network/unknown-outcome failure the worker marks the row `RETRYING` and re-submits the **same** payload on the next attempt. It does **not** first query URA for the original transaction's outcome before re-submitting.
@@ -71,10 +71,10 @@ On a network/unknown-outcome failure the worker marks the row `RETRYING` and re-
 Mitigations already present:
 - The submission payload carries a stable `sellersReferenceNo` (`docRefCode`) and `referenceNo`; the same payload is replayed, so a gateway that deduplicates on content will not double-issue.
 - Migration `0211_efris_duplicate_fiscalisation_guard.sql` guards against duplicate fiscalisation at the DB layer.
-- `dataExchangeId` is regenerated per attempt (`crypto.randomBytes(16)`), which **weakens** URA-level dedupe keyed on the exchange id.
+- `dataExchangeId` was regenerated per attempt (`crypto.randomBytes(16)`), which **weakened** URA-level dedupe keyed on the exchange id. It is now a stable, deterministic id per document identity (`stableExchangeId` in `processor.ts`, threaded through `SubmitFiscalOptions` → `buildGlobalInfo`), so retries of one document reuse the same exchange id.
 
 - **Severity:** High for reliability under flaky connectivity (the exact scenario section 11 of the mandate targets).
-- **Remediation:** Before re-submitting a network-timeout failure, call the official URA status/query interface for the transaction (reference number) and reconcile first. **The query interface code and request shape must come from the official specification.**
+- **Remediation:** **Partially implemented (this branch).** The stable `dataExchangeId` is done. The remaining step — querying URA for the original transaction's outcome before re-submitting a network-timeout failure — is still **REQUIRES URA CONFIRMATION**: the query interface code and request shape must come from the official specification.
 
 ### GAP-5 — Reports are incomplete against section 14
 Present: EFRIS reconciliation (`/efris/reconciliation`), stock-movement report (`/efris/stock-movements`), VAT return filing (migration `0223`).
@@ -84,7 +84,7 @@ Missing from the mandate's list:
 - API/integration health and product-registration-status reports.
 
 - **Severity:** Medium.
-- **Remediation:** Add the report queries once the tax-category model (GAP-2) is confirmed.
+- **Remediation:** **Implemented (this branch).** `services/efris/reports.ts` + `/efris/reports/*` routes: daily fiscalised sales, sales by tax category (transaction-level taxable vs zero-rated), zero-rated supplies, daily ERP-vs-EFRIS reconciliation, product-registration status, and an integration-health summary. Per-line URA tax-category splits remain blocked on the GAP-2 exempt code.
 
 ### GAP-6 — No automated credential/device lifecycle monitoring
 The configuration supports a manual T101 probe (`/efris/configurations/:id/probe`), but there is no automated monitoring for:
@@ -116,11 +116,11 @@ No `docs/ura/` existed before this branch. Section 18 requires six documents plu
 
 ## 4. Remediation order (proposed)
 
-1. **Documentation + traceability** (GAP-1, GAP-7, GAP-8) — no URA dependency. *In progress on this branch.*
-2. **Automatic health/device monitoring** (GAP-6) — safe; reuses T101.
-3. **Reports** (GAP-5) — safe; blocked on GAP-2 confirmation for tax-category splits.
-4. **Uncertain-submission reconciliation** (GAP-4) — **REQUIRES the official status-query interface**.
-5. **Tax-category/excise model** (GAP-2) and **B2G** (GAP-3) — **REQUIRE official URA confirmation** of category codes and buyer classification.
+1. **Documentation + traceability** (GAP-1, GAP-7, GAP-8) — ✅ complete on this branch.
+2. **Automatic health/device monitoring** (GAP-6) — ✅ complete on this branch.
+3. **Reports** (GAP-5) — ✅ complete on this branch (transaction-level splits; per-line URA category codes remain blocked on GAP-2).
+4. **Tax-category / B2G code plumbing** (GAP-2 / GAP-3) — ✅ code-side complete: config-driven, fail-closed. The exempt category code and the government buyer code still require official URA confirmation.
+5. **Uncertain-submission reconciliation** (GAP-4) — 🟡 data-exchange id now stable; the status-query-before-resubmit still **REQUIRES the official status-query interface**.
 
 ---
 

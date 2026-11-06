@@ -14,6 +14,8 @@ import {
   buildT131Content,
   isStockDocType,
   resolveDeviceNo,
+  type BuyerTypeMapping,
+  type TaxCategoryMapping,
   type UraLine,
   type UraParty,
   type UraStockInput,
@@ -40,6 +42,8 @@ export interface FiscalParty {
   address?: string | null;
   email?: string | null;
   phone?: string | null;
+  /** Buyer classification hint (e.g. 'government') used to resolve URA buyerType. */
+  buyerKind?: string | null;
 }
 
 export interface FiscalLine {
@@ -56,6 +60,8 @@ export interface FiscalLine {
   goodsCategoryName?: string | null;
   /** 1 when the line is VAT-applicable, 0 otherwise. */
   vatApplicableFlag?: string | null;
+  /** True when this line is an exempt supply (URA distinguishes exempt from zero-rated). */
+  exempt?: boolean;
 }
 
 /** A T131 stock line: the registered goods identity + a quantity and unit value. */
@@ -105,6 +111,10 @@ export interface FiscalBuildContext {
   sellersReferenceNo?: string | null;
   /** T131 stock-movement source (present for stock doc types). */
   stock?: StockSource | null;
+  /** Config-driven URA tax-category mapping (overrides security_flags.taxCategories). */
+  taxCategories?: TaxCategoryMapping | null;
+  /** Config-driven URA buyer-type mapping (overrides security_flags.buyerTypes). */
+  buyerTypes?: BuyerTypeMapping | null;
 }
 
 export interface BuiltFiscalPayload {
@@ -119,6 +129,12 @@ const compact = (v: string | null | undefined): string | null => {
   const s = v.trim();
   return s.length > 0 ? s : null;
 };
+
+/** Coerce an unknown config value into a plain object, or null. */
+function asObjectMap(v: unknown): Record<string, unknown> | null {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+  return null;
+}
 
 /** Deep-merge `overlay` (from payload_mapping) over `base`; arrays replace. */
 function deepMerge(base: Record<string, unknown>, overlay: unknown): Record<string, unknown> {
@@ -148,6 +164,7 @@ function asParty(party: FiscalParty | null | undefined): UraParty | null {
     address: party.address ?? null,
     email: party.email ?? null,
     phone: party.phone ?? null,
+    buyerKind: party.buyerKind ?? null,
   };
 }
 
@@ -164,6 +181,7 @@ function asLines(lines: FiscalLine[] | undefined): UraLine[] {
     goodsCategoryId: line.goodsCategoryId ?? null,
     goodsCategoryName: line.goodsCategoryName ?? null,
     vatApplicableFlag: line.vatApplicableFlag ?? null,
+    exempt: line.exempt === true,
   }));
 }
 
@@ -210,6 +228,10 @@ export function buildSubmitPayload(ctx: FiscalBuildContext): BuiltFiscalPayload 
   const flags = ctx.config?.security_flags && typeof ctx.config.security_flags === 'object'
     ? ctx.config.security_flags
     : {};
+  const taxCategories: TaxCategoryMapping | null = ctx.taxCategories ??
+    (asObjectMap(flags.taxCategories ?? flags.tax_categories) as TaxCategoryMapping | null);
+  const buyerTypes: BuyerTypeMapping | null = ctx.buyerTypes ??
+    (asObjectMap(flags.buyerTypes ?? flags.buyer_types) as BuyerTypeMapping | null);
   const seller: Record<string, unknown> = {
     legalName: compact(taxpayer?.legal_name ?? null),
     tradingName: compact(taxpayer?.trading_name ?? null),
@@ -258,6 +280,8 @@ export function buildSubmitPayload(ctx: FiscalBuildContext): BuiltFiscalPayload 
     oriInvoiceId: ctx.oriInvoiceId ?? null,
     deviceNo: resolveDeviceNo(flags, undefined),
     remarks: ctx.remarks ?? ctx.requestRef,
+    taxCategories,
+    buyerTypes,
   });
   // Credit notes are applied through T110, whose content structure differs from
   // T109 (top-level oriInvoiceId/oriInvoiceNo, minimal basicInformation, no
@@ -281,6 +305,8 @@ export function buildSubmitPayload(ctx: FiscalBuildContext): BuiltFiscalPayload 
       applicationTime: ctx.applicationTime ?? null,
       sellersReferenceNo: ctx.sellersReferenceNo ?? null,
       remarks: ctx.remarks ?? ctx.requestRef,
+      taxCategories,
+      buyerTypes,
     });
   }
   const mapping = ctx.config?.payload_mapping;
