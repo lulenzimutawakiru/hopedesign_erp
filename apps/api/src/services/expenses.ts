@@ -613,9 +613,13 @@ export async function listExpenses(client: pg.PoolClient, ctx: Ctx, q: Record<st
   const pageSize = Math.min(100, Math.max(1, num0(q.pageSize) || 30));
   const params: unknown[] = [ctx.tenantId, companyId(ctx)];
   const where = ['et.tenant_id = $1', 'et.company_id = $2'];
-  if (q.ownOnly === true && ctx.userId != null) {
-    params.push(ctx.userId);
-    where.push(`et.created_by = $${params.length}`);
+  if (q.ownOnly === true) {
+    if (ctx.userId == null) {
+      where.push('1 = 0');
+    } else {
+      params.push(ctx.userId);
+      where.push(`et.created_by = ${params.length}`);
+    }
   }
   if (s(q.status)) { params.push(s(q.status)); where.push(`et.status = $${params.length}`); }
   if (s(q.paymentStatus)) { params.push(s(q.paymentStatus)); where.push(`et.payment_status = $${params.length}`); }
