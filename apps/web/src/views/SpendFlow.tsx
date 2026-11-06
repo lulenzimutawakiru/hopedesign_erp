@@ -1609,13 +1609,17 @@ function ExpenseDesk({ id }: { id: number }) {
   const receipts = (e.receipts as Rec[] | undefined) ?? [];
   const timeline = (e.timeline as Rec[] | undefined) ?? [];
   const paymentRows = (e.payments as Rec[] | undefined) ?? [];
+  const reservedPayments = paymentRows
+    .filter((p) => ['SUBMITTED', 'APPROVED', 'PAID'].includes(s(p.status)))
+    .reduce((sum, p) => sum + num(p.amount), 0);
+  const outstandingBalance = Math.max(0, Math.round((num(e.amount) - reservedPayments) * 100) / 100);
   const dup = e.duplicateOf as Rec | null | undefined;
   const isDraft = e.status === 'DRAFT';
   const isPosted = s(e.accountingStatus) === 'POSTED';
   const canSubmit = isDraft && can(user, 'expenditure.expenses.submit');
   const canVerify = e.status === 'APPROVED' && e.accountingVerified !== true && can(user, 'expenditure.expenses.verify');
   const pipelineStatus = e.status === 'APPROVED' && e.accountingVerified === true ? 'VERIFIED' : s(e.status);
-  const canPay = s(e.accountingStatus) === 'POSTED' && s(e.paymentStatus) !== 'PAID' && can(user, 'expenditure.payments.create');
+  const canPay = s(e.accountingStatus) === 'POSTED' && outstandingBalance > 0 && can(user, 'expenditure.payments.create');
   const canPost = (e.status === 'APPROVED' || e.status === 'PAID') && e.accountingVerified === true && !isPosted && can(user, 'expenditure.expenses.post');
   const canVoid = !['VOID', 'REJECTED', 'CANCELLED'].includes(s(e.status)) && can(user, 'expenditure.expenses.void');
 
@@ -1765,7 +1769,7 @@ function ExpenseDesk({ id }: { id: number }) {
           </>}>
           <div className="form-grid">
             <label className="field">Request amount (leave blank for full outstanding balance)
-              <input type="number" min="1" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder={fmtMoney(num(e.amount))} />
+              <input type="number" min="1" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder={fmtMoney(outstandingBalance)} />
             </label>
             <label className="field">Payment method
               <select value={payMethod} onChange={(e) => {
