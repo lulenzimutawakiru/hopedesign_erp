@@ -46,7 +46,7 @@ const runExpenseGet = (fn: (client: pg.PoolClient, ctx: Ctx, query: Record<strin
 
 // Meta + fraud guard
 expenditureOpsRouter.get('/meta', ...runGet(['expenditure.expenses.view', 'expenditure.expenses.create'], (c, ctx) => exp.expenseMeta(c, ctx)));
-expenditureOpsRouter.post('/duplicate-scan', ...run('expenditure.expenses.create', (c, ctx, b) => exp.duplicateScan(c, ctx, b)));
+expenditureOpsRouter.post('/duplicate-scan', ...run('expenditure.expenses.view', (c, ctx, b) => exp.duplicateScan(c, ctx, b)));
 
 // Expenses
 expenditureOpsRouter.get('/expenses', ...runExpenseGet((c, ctx, q, _p, viewAll) => exp.listExpenses(c, ctx, {
