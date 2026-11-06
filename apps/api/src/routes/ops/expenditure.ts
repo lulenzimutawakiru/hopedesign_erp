@@ -83,7 +83,7 @@ expenditureOpsRouter.get('/receipts', ...runGet('expenditure.receipts.view', (c,
 })));
 expenditureOpsRouter.post(
   '/receipts',
-  requirePermission('expenditure.receipts.upload'),
+  requirePermission(['expenditure.receipts.upload', 'expenditure.expenses.create']),
   expUpload.single('file'),
   asyncHandler(async (req, res) => {
     const out = await tx(
@@ -93,7 +93,7 @@ expenditureOpsRouter.post(
           file: req.file
             ? { originalname: req.file!.originalname, mimetype: req.file!.mimetype, size: req.file!.size, buffer: req.file!.buffer }
             : undefined,
-        }),
+        }, !can(req.auth, 'expenditure.receipts.upload')),
       req.ctx
     );
     res.json({ data: out });
