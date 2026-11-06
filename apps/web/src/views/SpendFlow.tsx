@@ -88,6 +88,7 @@ const SPEND_TABS: [string, string][] = [
   ['petty-cash', 'Petty Cash'],
   ['claims', 'Expense Claims'],
   ['close', 'Daily Close'],
+  ['payments', 'Payment Requests'],
 ];
 
 function SpendTabs({ active }: { active: string }) {
@@ -212,6 +213,7 @@ export default function SpendFlow({ path }: { path: string }) {
   if (view === 'claims' && id) return <ClaimDesk id={Number(id)} />;
   if (view === 'claims') return <ClaimsList />;
   if (view === 'close') return <DailyCloseDesk />;
+  if (view === 'payments') return <ExpensePaymentsDesk />;
   // Employees with universal expense-initiation access land on their own
   // expense register, not the organisation-wide finance command centre.
   if (!can(user, 'expenditure.dashboards.view')) return <ExpenseList />;
@@ -1457,6 +1459,77 @@ function ExpenseForm() {
   );
 }
 
+function ExpensePaymentsDesk() {
+  const { user } = useAuth();
+  const [items, setItems] = useState<Rec[]>([]);
+  const [status, setStatus] = useState('SUBMITTED');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState<number | null>(null);
+  const [message, setMessage] = useState('');
+  const canApprove = can(user, 'expenditure.payments.approve');
+  const canExecute = can(user, 'expenditure.payments.post');
+  const load = useCallback(() => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+    api<{ data: Rec[] }>(`/api/ops/expenditure/payments${qs}`)
+      .then((r) => setItems(r.data))
+      .catch((e) => setError(e.message));
+  }, [status]);
+  useEffect(load, [load]);
+  const act = async (id: number, action: 'approve' | 'reject' | 'execute') => {
+    setBusy(id); setMessage(''); setError('');
+    try {
+      if (action === 'approve' || action === 'reject') {
+        const reason = window.prompt(action === 'approve' ? 'Enter approval comment / payment verification reference:' : 'Enter reason for rejection:');
+        if (!reason?.trim()) return;
+        await api(`/api/ops/expenditure/payments/${id}/${action}`, { method: 'POST', body: JSON.stringify({ reason }) });
+      } else {
+        const reference = window.prompt('Enter bank, mobile-money, cheque or cash transaction reference (if available):') ?? '';
+        await api(`/api/ops/expenditure/payments/${id}/execute`, { method: 'POST', body: JSON.stringify({ reference: reference || undefined, paymentDate: todayIso() }) });
+      }
+      setMessage(`Payment request ${action === 'execute' ? 'executed' : action === 'approve' ? 'approved' : 'rejected'}.`);
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+  return (
+    <SpendShell title="Payment Requests" blurb="Review payment requests, enforce independent approval, execute authorised settlements and track their GL journals." active="payments">
+      <div className="spend-toolbar">
+        <StatusFilter value={status} onChange={setStatus} options={['SUBMITTED', 'APPROVED', 'PAID', 'REJECTED', 'VOID']} />
+        <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{items.length} requests</span>
+      </div>
+      {error && <ErrorBanner error={error} />}
+      {message && <div className="notice-banner">{message}</div>}
+      <section className="card">
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Voucher</th><th>Expense</th><th>Payee</th><th>Method</th><th>Amount</th><th>Status</th><th>GL</th><th>Actions</th></tr></thead>
+            <tbody>
+              {items.map((p) => (
+                <tr key={s(p.id)}>
+                  <td className="cell-mono">{s(p.payNo)}</td>
+                  <td><button className="btn btn-ghost" onClick={() => navigate(`/spend/expenses/${s(p.expenseId)}`)}>{s(p.expenseNo)}</button></td>
+                  <td>{s(p.payee) || '—'}</td><td>{s(p.paymentMethodName) || '—'}</td>
+                  <td>{fmtMoney(num(p.amount))} {s(p.currency)}</td><td><Badge value={p.status} /></td>
+                  <td>{p.glPosted ? <Badge value="POSTED" /> : '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {p.status === 'SUBMITTED' && canApprove && <>
+                      <button className="btn btn-sm btn-primary" disabled={busy === num(p.id)} onClick={() => void act(num(p.id), 'approve')}>Approve</button>{' '}
+                      <button className="btn btn-sm btn-ghost-danger" disabled={busy === num(p.id)} onClick={() => void act(num(p.id), 'reject')}>Reject</button>
+                    </>}
+                    {p.status === 'APPROVED' && canExecute && <button className="btn btn-sm btn-primary" disabled={busy === num(p.id)} onClick={() => void act(num(p.id), 'execute')}>Execute</button>}
+                    {p.status === 'PAID' && <span className="muted">Executed</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!items.length && <p className="empty-state">No payment requests in this status.</p>}
+        </div>
+      </section>
+    </SpendShell>
+  );
+}
+
 function ExpenseDesk({ id }: { id: number }) {
   const { user } = useAuth();
   const [row, setRow] = useState<Rec | null>(null);
@@ -1518,7 +1591,7 @@ function ExpenseDesk({ id }: { id: number }) {
   const isPaid = e.status === 'PAID' || s(e.paymentStatus) === 'PAID';
   const isPosted = s(e.accountingStatus) === 'POSTED';
   const canSubmit = isDraft && can(user, 'expenditure.expenses.submit');
-  const canPay = (e.status === 'APPROVED' || e.status === 'POSTED') && !isPaid && can(user, 'expenditure.expenses.approve');
+  const canPay = s(e.accountingStatus) === 'POSTED' && s(e.paymentStatus) !== 'PAID' && can(user, 'expenditure.payments.create');
   const canPost = (e.status === 'APPROVED' || e.status === 'PAID') && !isPosted && can(user, 'expenditure.expenses.post');
   const canVoid = !['VOID', 'REJECTED', 'CANCELLED'].includes(s(e.status)) && can(user, 'expenditure.expenses.void');
 
@@ -1528,7 +1601,7 @@ function ExpenseDesk({ id }: { id: number }) {
         <button className="btn btn-ghost" onClick={() => navigate('/spend/expenses')}>← Daily Expenditure</button>
         <h1 style={{ margin: 0, flex: 1 }}><span className="cell-mono">{s(e.expNo)}</span> <Badge value={e.status} /> <RiskBadge row={e} /></h1>
         {canSubmit && <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('submit', 'Expense submitted')}>{busy === 'submit' ? 'Working…' : 'Submit for Approval'}</button>}
-        {canPay && <button className="btn btn-primary" disabled={busy !== ''} onClick={() => setShowPay(true)}>Record Payment</button>}
+        {canPay && <button className="btn btn-primary" disabled={busy !== ''} onClick={() => setShowPay(true)}>Request Payment</button>}
         {canPost && <button className="btn btn-ghost" disabled={busy !== ''} onClick={() => act('post', 'Posted to ledger')}>{busy === 'post' ? 'Working…' : 'Post to Ledger'}</button>}
         {canVoid && <button className="btn btn-ghost-danger" disabled={busy !== ''} onClick={() => setShowVoid(true)}>Void</button>}
       </div>
@@ -1540,7 +1613,7 @@ function ExpenseDesk({ id }: { id: number }) {
           ⚠ Possible duplicate: <span className="cell-mono">{s(dup.expNo)}</span> ({fmtMoney(num(dup.amount))}, {s(dup.status)}).
         </div>
       )}
-      <Pipeline steps={['DRAFT', 'SUBMITTED', 'APPROVED', 'PAID', 'POSTED']} status={s(e.status)} />
+      <Pipeline steps={['DRAFT', 'SUBMITTED', 'APPROVED', 'POSTED']} status={s(e.status)} />
 
       <div className="form-grid">
         <section className="card">
@@ -1631,11 +1704,11 @@ function ExpenseDesk({ id }: { id: number }) {
       </section>
 
       {showPay && (
-        <Modal title={`Record payment for ${s(e.expNo)}`} onClose={() => setShowPay(false)}
+        <Modal title={`Request payment for ${s(e.expNo)}` onClose={() => setShowPay(false)}
           footer={<>
             <button className="btn btn-ghost" onClick={() => setShowPay(false)}>Cancel</button>
-            <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('pay', 'Payment recorded', { paymentMethodId: num(payMethod) || undefined })}>
-              {busy === 'pay' ? 'Working…' : 'Confirm Payment'}
+            <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('pay', 'Payment request submitted', { paymentMethodId: num(payMethod) || undefined })}>
+              {busy === 'pay' ? 'Working…' : 'Submit Payment Request'}
             </button>
           </>}>
           <div className="form-grid">
@@ -1645,7 +1718,7 @@ function ExpenseDesk({ id }: { id: number }) {
                 {methods.map((m) => <option key={s(m.id)} value={s(m.id)}>{s(m.name)}</option>)}
               </select>
             </label>
-            <p className="empty-state">Payment creates a PAY voucher and marks the expense as paid.</p>
+            <p className="empty-state">This submits a payment request for independent approval. The expense is not marked paid and no bank or cash journal is posted until a different authorised user executes the approved request.</p>
           </div>
         </Modal>
       )}
