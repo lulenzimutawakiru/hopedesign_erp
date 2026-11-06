@@ -710,13 +710,26 @@ export async function listReceipts(client: pg.PoolClient, ctx: Ctx, q: Record<st
   return toCamelRows(rows.rows);
 }
 
-export async function uploadReceipt(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
+export async function uploadReceipt(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>, ownExpenseOnly = false) {
   const refType = String(b.refType ?? '').toUpperCase();
   const refId = n(b.refId);
   if (!['EXPENSE', 'CLAIM', 'REQUISITION', 'REPLENISHMENT', 'SUPPLIER_INVOICE', 'PAYMENT'].includes(refType)) {
     throw badRequest('Invalid receipt refType');
   }
   if (refId == null) throw badRequest('refId is required');
+  if (refType === 'EXPENSE') {
+    const owner = await client.query(
+      `SELECT created_by FROM expense_transactions
+       WHERE id = $1 AND tenant_id = $2 AND company_id = $3`,
+      [refId, ctx.tenantId, companyId(ctx)]
+    );
+    if (!owner.rows.length) throw notFound('Expense not found');
+    if (ownExpenseOnly && Number(owner.rows[0].created_by) !== Number(ctx.userId)) {
+      throw forbidden('You may only attach evidence to your own expense');
+    }
+  } else if (ownExpenseOnly) {
+    throw forbidden('Expense creators may only attach evidence to their own expense records');
+  }
   const file = b.file as { originalname?: string; mimetype?: string; size?: number; buffer?: Buffer } | undefined;
   const storageKey = s(b.storageKey);
   if (!file?.buffer && !storageKey) throw badRequest('Provide a file upload or an existing storageKey');
