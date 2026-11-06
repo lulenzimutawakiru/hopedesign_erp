@@ -606,7 +606,7 @@ export async function rejectExpensePayment(client: pg.PoolClient, ctx: Ctx, paym
     throw forbidden('The payment requester cannot reject their own payment request.');
   }
   await client.query(
-    `UPDATE payment_requests SET status = 'REJECTED', approval_comment = $1, approved_by = $2, approved_at = now(), updated_at = now()
+    `UPDATE payment_requests SET status = 'REJECTED', rejection_reason = $1, rejected_by = $2, rejected_at = now(), updated_at = now()
       WHERE id = $3 AND company_id = $4 AND tenant_id = $5`,
     [reason.trim(), ctx.userId ?? null, paymentId, companyId(ctx), ctx.tenantId]
   );
