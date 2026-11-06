@@ -407,13 +407,27 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
   const paymentMethodId = n(b.paymentMethodId) ?? n(cur.paymentMethodId);
   if (paymentMethodId == null) throw badRequest('Select a payment method.');
   const methodRes = await client.query(
-    `SELECT method_type FROM payment_methods
+    `SELECT method_type, bank_account_id FROM payment_methods
       WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
     [paymentMethodId, companyId(ctx), ctx.tenantId]
   );
   if (!methodRes.rows.length) throw badRequest('Select an active payment method.');
   const methodType = String(methodRes.rows[0].method_type ?? '').toUpperCase();
   if (methodType === 'CREDIT') throw badRequest('Credit terms are not a payment execution method.');
+  const bankAccountId = n(b.bankAccountId) ?? n(methodRes.rows[0].bank_account_id);
+  if (methodType.includes('BANK') && bankAccountId == null) {
+    throw badRequest('Select a bank account linked to an active GL control account for this payment method.');
+  }
+  if (bankAccountId != null) {
+    const bank = await client.query(
+      `SELECT id, gl_account_id FROM bank_accounts
+        WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
+      [bankAccountId, companyId(ctx), ctx.tenantId]
+    );
+    if (!bank.rows.length || !bank.rows[0].gl_account_id) {
+      throw badRequest('The selected bank account is inactive or has no linked GL account.');
+    }
+  }
   const payNo = await nextDoc(client, ctx, 'PAY');
   const payeeType = cur.supplierId != null ? 'SUPPLIER' : cur.employeeId != null ? 'EMPLOYEE' : 'OTHER';
   const payRes = await client.query(
@@ -424,7 +438,7 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
      RETURNING id`,
     [companyId(ctx), ctx.tenantId, ctx.branchId ?? null, payNo, id, String(cur.expNo),
      s(b.payee) ?? s(cur.payee), payeeType, requestAmount, s(cur.currency) ?? 'UGX',
-     paymentMethodId, n(b.bankAccountId), s(b.reference), ctx.userId ?? null]
+     paymentMethodId, bankAccountId, s(b.reference), ctx.userId ?? null]
   );
   await client.query(
     `INSERT INTO approval_actions (company_id, tenant_id, entity_type, entity_id, entity_code, action, actor_user_id, metadata)
@@ -514,9 +528,24 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   if (!method.rows.length) throw badRequest('The payment method is no longer active.');
   const methodType = String(method.rows[0].method_type ?? '').toUpperCase();
   if (methodType === 'CREDIT') throw badRequest('Credit terms cannot execute a payment.');
+  let configuredBankGl: number | null = null;
+  if (p.bankAccountId != null) {
+    const bank = await client.query(
+      `SELECT gl_account_id FROM bank_accounts
+        WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
+      [Number(p.bankAccountId), companyId(ctx), ctx.tenantId]
+    );
+    if (!bank.rows.length || !bank.rows[0].gl_account_id) {
+      throw badRequest('The payment bank account is no longer active or has no linked GL account.');
+    }
+    configuredBankGl = Number(bank.rows[0].gl_account_id);
+  }
+  if (methodType.includes('BANK') && configuredBankGl == null) {
+    throw badRequest('A bank payment requires a configured bank GL account.');
+  }
   const payable = await finance.getAccountId(client, ctx, '10121100');
   const creditCode = creditAccountForMethod(methodType, Number(p.paymentMethodId));
-  const cashBank = await finance.getAccountId(client, ctx, creditCode);
+  const cashBank = configuredBankGl ?? await finance.getAccountId(client, ctx, creditCode);
   const paymentJournalId = await finance.postJournalLines(client, ctx, {
     entryDate: isoDate(b.paymentDate ?? new Date()),
     journalType: 'SUPPLIER_PAYMENT',
