@@ -1571,10 +1571,12 @@ function ExpenseDesk({ id }: { id: number }) {
         <section className="card">
           <div className="card-head">
             <h3>Receipts</h3>
-            <label className="btn btn-sm">
-              {busy === 'receipt' ? 'Uploading…' : 'Upload receipt'}
-              <input type="file" hidden disabled={busy !== ''} onChange={(ev) => { const f = ev.target.files?.[0]; ev.target.value = ''; void attach(f); }} />
-            </label>
+            {(can(user, 'expenditure.expenses.create') || can(user, 'expenditure.receipts.upload')) && (
+              <label className="btn btn-sm">
+                {busy === 'receipt' ? 'Uploading…' : 'Upload receipt'}
+                <input type="file" hidden disabled={busy !== ''} onChange={(ev) => { const f = ev.target.files?.[0]; ev.target.value = ''; void attach(f); }} />
+              </label>
+            )}
           </div>
           <ReceiptChips receipts={receipts} />
         </section>
