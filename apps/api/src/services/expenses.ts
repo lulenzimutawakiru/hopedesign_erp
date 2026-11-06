@@ -677,7 +677,7 @@ export async function listExpensePayments(client: pg.PoolClient, ctx: Ctx, q: Re
             pr.requested_by, pr.approved_by, pr.approved_at, pr.paid_by, pr.paid_at,
             pr.payment_method_id, pm.name AS payment_method_name, pr.gl_posted,
             pr.gl_journal_id, et.description AS expense_description,
-            epr.id AS reconciliation_id, epr.status AS reconciliation_status,
+            epr.id AS reconciliation_id, epr.bank_transaction_id, epr.status AS reconciliation_status,
             epr.statement_reference, epr.statement_date, epr.statement_amount, epr.variance
        FROM payment_requests pr
        LEFT JOIN payment_methods pm ON pm.id = pr.payment_method_id
@@ -1097,7 +1097,7 @@ export async function getExpense(client: pg.PoolClient, ctx: Ctx, id: number, ow
   const payments = await client.query(
     `SELECT pr.id, pr.pay_no, pr.amount, pr.currency, pr.status, pr.reference,
             pr.execution_reference, pr.payment_date, pr.requested_by, pr.approved_by,
-            pr.approved_at, pr.paid_by, pr.paid_at, pr.gl_posted, pr.gl_journal_id,
+            pr.approved_at, pr.paid_by, pr.paid_at, pr.gl_posted, pr.gl_journal_id, epr.bank_transaction_id,
             pm.name AS payment_method_name
        FROM payment_requests pr
        LEFT JOIN payment_methods pm ON pm.id = pr.payment_method_id
