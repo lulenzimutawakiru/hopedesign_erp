@@ -647,7 +647,7 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   let configuredBankGl: number | null = null;
   if (p.bankAccountId != null) {
     const bank = await client.query(
-      `SELECT gl_account_id FROM bank_accounts
+      `SELECT gl_account_id, currency FROM bank_accounts
         WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
       [Number(p.bankAccountId), companyId(ctx), ctx.tenantId]
     );
@@ -854,7 +854,7 @@ export async function reconcileExpensePayment(client: pg.PoolClient, ctx: Ctx, p
          JOIN journal_entries je ON je.id = jl.entry_id AND je.status = 'POSTED'
          JOIN bank_accounts ba ON ba.gl_account_id = jl.account_id
         WHERE je.id = $1 AND ba.id = $2 AND je.tenant_id = $3
-          AND (jl.credit = $4 OR jl.debit = $4)
+          AND jl.credit = $4
         ORDER BY jl.id LIMIT 1`,
       [Number(p.glJournalId), Number(p.bankAccountId), ctx.tenantId, num0(p.amount)]
     );
