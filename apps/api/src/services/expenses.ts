@@ -396,7 +396,7 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
     `SELECT COALESCE(SUM(amount),0)::numeric AS paid
        FROM payment_requests
       WHERE company_id = $1 AND tenant_id = $2 AND ref_type = 'EXPENSE'
-        AND ref_id = $3 AND status = 'PAID'`,
+        AND ref_id = $3 AND status IN ('SUBMITTED','APPROVED','PAID')`,
     [companyId(ctx), ctx.tenantId, id]
   );
   const outstanding = round2(num0(cur.amount) - num0(paidRes.rows[0]?.paid));
@@ -453,7 +453,7 @@ export async function approveExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   }
   if (!reason?.trim()) throw badRequest('Approval comment or reference is required.');
   await client.query(
-    `UPDATE payment_requests SET status = 'APPROVED', approved_by = $1, approved_at = now(), reference = COALESCE(reference, $2), updated_at = now()
+    `UPDATE payment_requests SET status = 'APPROVED', approved_by = $1, approved_at = now(), approval_comment = $2, updated_at = now()
       WHERE id = $3 AND company_id = $4 AND tenant_id = $5`,
     [ctx.userId ?? null, reason.trim(), paymentId, companyId(ctx), ctx.tenantId]
   );
@@ -556,6 +556,59 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
     entityId: Number(p.refId), entityCode: String(expense.expNo), payload: { payNo: p.payNo, paymentAmount, paidTotal } });
   return { payId: paymentId, payNo: p.payNo, journalId: paymentJournalId, amount: paymentAmount,
     paidTotal, outstanding: round2(num0(expense.amount) - paidTotal), paymentStatus: fullyPaid ? 'PAID' : 'PARTIALLY_PAID' };
+}
+
+/** Payment worklist, tenant/company scoped and optionally filtered by state. */
+export async function listExpensePayments(client: pg.PoolClient, ctx: Ctx, q: Record<string, unknown> = {}) {
+  const params: unknown[] = [companyId(ctx), ctx.tenantId];
+  const where = [`pr.company_id = $1`, `pr.tenant_id = $2`, `pr.ref_type = 'EXPENSE'`];
+  if (s(q.status)) { params.push(s(q.status)); where.push(`pr.status = ${params.length}`); }
+  if (s(q.q)) {
+    params.push(`%${s(q.q)}%`);
+    where.push(`(pr.pay_no ILIKE ${params.length} OR pr.ref_code ILIKE ${params.length} OR pr.payee ILIKE ${params.length})`);
+  }
+  const rows = await client.query(
+    `SELECT pr.id, pr.pay_no, pr.ref_id AS expense_id, pr.ref_code AS expense_no,
+            pr.payee, pr.amount, pr.currency, pr.status, pr.reference,
+            pr.requested_by, pr.approved_by, pr.approved_at, pr.paid_by, pr.paid_at,
+            pr.payment_method_id, pm.name AS payment_method_name, pr.gl_posted,
+            pr.gl_journal_id, et.description AS expense_description
+       FROM payment_requests pr
+       LEFT JOIN payment_methods pm ON pm.id = pr.payment_method_id
+       LEFT JOIN expense_transactions et ON et.id = pr.ref_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY pr.created_at DESC, pr.id DESC LIMIT 200`,
+    params
+  );
+  return toCamelRows(rows.rows);
+}
+
+/** Reject a submitted payment request with a mandatory explanation. */
+export async function rejectExpensePayment(client: pg.PoolClient, ctx: Ctx, paymentId: number, reason?: string) {
+  if (!reason?.trim()) throw badRequest('A rejection reason is required.');
+  const res = await client.query(
+    `SELECT * FROM payment_requests
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND ref_type = 'EXPENSE'
+      FOR UPDATE`,
+    [paymentId, companyId(ctx), ctx.tenantId]
+  );
+  if (!res.rows.length) throw notFound('Payment request not found');
+  const p = toCamelRow(res.rows[0]);
+  if (p.status !== 'SUBMITTED') throw badRequest(`Only submitted payment requests can be rejected (current: ${p.status}).`);
+  if (p.requestedBy != null && Number(p.requestedBy) === Number(ctx.userId)) {
+    throw forbidden('The payment requester cannot reject their own payment request.');
+  }
+  await client.query(
+    `UPDATE payment_requests SET status = 'REJECTED', approval_comment = $1, approved_by = $2, approved_at = now(), updated_at = now()
+      WHERE id = $3 AND company_id = $4 AND tenant_id = $5`,
+    [reason.trim(), ctx.userId ?? null, paymentId, companyId(ctx), ctx.tenantId]
+  );
+  await client.query(
+    `INSERT INTO approval_actions (company_id, tenant_id, entity_type, entity_id, entity_code, action, actor_user_id, comment)
+     VALUES ($1,$2,'ops.expense_payments',$3,$4,'REJECT',$5,$6)`,
+    [companyId(ctx), ctx.tenantId, paymentId, String(p.payNo), ctx.userId ?? null, reason.trim()]
+  );
+  return { id: paymentId, status: 'REJECTED' };
 }
 
 /** Map a payment method type to the credit side of the expense journal. */
