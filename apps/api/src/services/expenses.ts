@@ -757,7 +757,7 @@ export async function reconcileExpensePayment(client: pg.PoolClient, ctx: Ctx, p
   const statementReference = s(b.statementReference)?.trim();
   if (!statementReference) throw badRequest('Bank or mobile-money statement reference is required.');
   const statementDateInput = s(b.statementDate);
-  if (!statementDateInput || !/^\\d{4}-\\d{2}-\\d{2}$/.test(statementDateInput)) {
+  if (!statementDateInput || !/^\d{4}-\d{2}-\d{2}$/.test(statementDateInput)) {
     throw badRequest('Statement date is required in YYYY-MM-DD format.');
   }
   const amountInput = n(b.statementAmount);
