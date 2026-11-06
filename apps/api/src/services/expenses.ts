@@ -445,18 +445,27 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
   if (!methodRes.rows.length) throw badRequest('Select an active payment method.');
   const methodType = String(methodRes.rows[0].method_type ?? '').toUpperCase();
   if (methodType === 'CREDIT') throw badRequest('Credit terms are not a payment execution method.');
-  const bankAccountId = n(b.bankAccountId) ?? n(methodRes.rows[0].bank_account_id);
+  const configuredBankAccountId = n(methodRes.rows[0].bank_account_id);
+  const requestedBankAccountId = n(b.bankAccountId);
+  if (configuredBankAccountId != null && requestedBankAccountId != null &&
+      configuredBankAccountId !== requestedBankAccountId) {
+    throw badRequest('The selected bank account does not match the bank account configured for this payment method.');
+  }
+  const bankAccountId = configuredBankAccountId ?? requestedBankAccountId;
   if ((methodType.includes('BANK') || methodType.includes('DIRECT_SUPPLIER')) && bankAccountId == null) {
     throw badRequest('Select a bank account linked to an active GL control account for this payment method.');
   }
   if (bankAccountId != null) {
     const bank = await client.query(
-      `SELECT id, gl_account_id FROM bank_accounts
+      `SELECT id, gl_account_id, currency FROM bank_accounts
         WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
       [bankAccountId, companyId(ctx), ctx.tenantId]
     );
     if (!bank.rows.length || !bank.rows[0].gl_account_id) {
       throw badRequest('The selected bank account is inactive or has no linked GL account.');
+    }
+    if (String(bank.rows[0].currency ?? 'UGX') !== String(cur.currency ?? 'UGX')) {
+      throw badRequest('The selected bank account currency must match the expense currency. Cross-currency settlement requires an FX workflow.');
     }
   }
   const payNo = await nextDoc(client, ctx, 'PAY');
@@ -608,6 +617,9 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
     );
     if (!bank.rows.length || !bank.rows[0].gl_account_id) {
       throw badRequest('The payment bank account is no longer active or has no linked GL account.');
+    }
+    if (String(bank.rows[0].currency ?? 'UGX') !== String(p.currency ?? expense.currency ?? 'UGX')) {
+      throw badRequest('The payment bank account currency no longer matches the voucher currency.');
     }
     configuredBankGl = Number(bank.rows[0].gl_account_id);
   }
