@@ -805,7 +805,7 @@ export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, i
   );
   const cur = await getExpense(client, ctx, id);
   if (cur.accountingVerified === true) throw badRequest('Expense accounting has already been verified.');
-  if (cur.status !== 'APPROVED') throw badRequest(`Only approved expenses can be accounting-verified (current: ${cur.status}).`);
+  if (!['APPROVED','PAID'].includes(String(cur.status))) throw badRequest(`Only approved expenses or legacy paid expenses can be accounting-verified (current: ${cur.status}).`);
   if (cur.accountingStatus === 'POSTED') throw badRequest('The expense is already posted.');
   if (cur.createdBy != null && Number(cur.createdBy) === Number(ctx.userId)) {
     throw forbidden('The expense creator cannot perform accounting verification.');
