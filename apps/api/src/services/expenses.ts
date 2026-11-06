@@ -382,6 +382,18 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
   const payNo = await nextDoc(client, ctx, 'PAY');
   const payeeType = cur.supplierId != null ? 'SUPPLIER' : cur.employeeId != null ? 'EMPLOYEE' : 'OTHER';
   const paymentMethodId = n(b.paymentMethodId) ?? n(cur.paymentMethodId);
+  const methodRes = paymentMethodId == null
+    ? { rows: [] }
+    : await client.query(
+        `SELECT method_type FROM payment_methods
+         WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
+        [paymentMethodId, companyId(ctx), ctx.tenantId]
+      );
+  if (paymentMethodId != null && !methodRes.rows.length) throw badRequest('Select an active payment method');
+  const paymentMethodType = String(methodRes.rows[0]?.method_type ?? cur.paymentMethodType ?? '').toUpperCase();
+  if (paymentMethodType === 'CREDIT') {
+    throw badRequest('Credit terms are not a payment execution method. Keep the expense unpaid until settlement.');
+  }
   const payRes = await client.query(
     `INSERT INTO payment_requests
        (company_id, tenant_id, branch_id, pay_no, ref_type, ref_id, ref_code, payee, payee_type,
@@ -399,7 +411,7 @@ export async function payExpense(client: pg.PoolClient, ctx: Ctx, id: number, b:
   // the expense and credit the payment account in one balanced journal.
   if (String(cur.accountingStatus) === 'POSTED') {
     const payable = await finance.getAccountId(client, ctx, '10121100');
-    const creditCode = creditAccountForMethod(String(cur.paymentMethodType ?? ''), paymentMethodId);
+    const creditCode = creditAccountForMethod(paymentMethodType, paymentMethodId);
     const cashBank = await finance.getAccountId(client, ctx, creditCode);
     const paymentJournalId = await finance.postJournalLines(client, ctx, {
       entryDate: isoDate(cur.expDate),
