@@ -26,6 +26,7 @@ JOIN permissions p
   ON p.code IN (
     'expenditure.expenses.create',
     'expenditure.expenses.submit',
+    'expenditure.expenses.update',
     'expenditure.expenses.view_own'
   )
 ON CONFLICT (role_id, permission_id) DO NOTHING;
@@ -43,6 +44,7 @@ BEGIN
   WHERE p.code IN (
     'expenditure.expenses.create',
     'expenditure.expenses.submit',
+    'expenditure.expenses.update',
     'expenditure.expenses.view_own'
   )
   ON CONFLICT (role_id, permission_id) DO NOTHING;
