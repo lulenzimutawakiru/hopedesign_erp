@@ -746,12 +746,75 @@ function creditAccountForMethod(methodType: string | null | undefined, paymentMe
   return '10111200';
 }
 
+/** Independent accounting review before any expense GL posting. */
+export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, id: number, comment?: string) {
+  if (!comment?.trim()) throw badRequest('Accounting verification comment is required.');
+  const cur = await getExpense(client, ctx, id);
+  if (cur.status !== 'APPROVED') throw badRequest(`Only approved expenses can be accounting-verified (current: ${cur.status}).`);
+  if (cur.accountingStatus === 'POSTED') throw badRequest('The expense is already posted.');
+  if (cur.createdBy != null && Number(cur.createdBy) === Number(ctx.userId)) {
+    throw forbidden('The expense creator cannot perform accounting verification.');
+  }
+  if (cur.approvedBy != null && Number(cur.approvedBy) === Number(ctx.userId)) {
+    throw forbidden('The expense approver cannot perform accounting verification.');
+  }
+  const amount = round2(num0(cur.amount));
+  const taxAmount = round2(num0(cur.taxAmount));
+  if (amount <= 0 || taxAmount < 0 || taxAmount > amount) {
+    throw badRequest('Expense amount or tax amount is invalid. Correct the document before verification.');
+  }
+  const lineTotals = await client.query(
+    `SELECT COUNT(*)::int AS line_count, COALESCE(SUM(amount),0)::numeric AS line_total
+       FROM expense_lines
+      WHERE expense_transaction_id = $1 AND tenant_id = $2`,
+    [id, ctx.tenantId]
+  );
+  if (Number(lineTotals.rows[0]?.line_count ?? 0) > 0 &&
+      Math.abs(round2(num0(lineTotals.rows[0].line_total)) - amount) > 0.01) {
+    throw badRequest('Expense line total does not equal the expense header amount.');
+  }
+  const category = await client.query(
+    `SELECT c.account_id
+       FROM expense_categories c
+      WHERE c.id = $1 AND c.company_id = $2 AND c.tenant_id = $3 AND c.is_active = true`,
+    [Number(cur.categoryId), companyId(ctx), ctx.tenantId]
+  );
+  if (!category.rows.length) throw badRequest('The expense category is inactive or outside the current company.');
+  const accountId = cur.accountId != null ? Number(cur.accountId) :
+    category.rows[0].account_id != null ? Number(category.rows[0].account_id) : null;
+  if (accountId == null) throw badRequest('Assign an expense GL account before accounting verification.');
+  const account = await client.query(
+    `SELECT id FROM chart_of_accounts
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true`,
+    [accountId, companyId(ctx), ctx.tenantId]
+  );
+  if (!account.rows.length) throw badRequest('The selected expense GL account is inactive or outside the current company.');
+  await client.query(
+    `UPDATE expense_transactions
+        SET accounting_verified = true, verified_by = $1, verified_at = now(),
+            verification_comment = $2, updated_by = $1
+      WHERE id = $3 AND company_id = $4 AND tenant_id = $5 AND status = 'APPROVED'`,
+    [ctx.userId ?? null, comment.trim(), id, companyId(ctx), ctx.tenantId]
+  );
+  await logAudit(client, ctx, { action: 'accounting_verify', resource: 'expenses',
+    recordId: id, recordCode: String(cur.expNo),
+    newValues: { accountingVerified: true, accountId, amount, taxAmount, comment: comment.trim() } });
+  return getExpense(client, ctx, id);
+}
+
 export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
   const cur = await getExpense(client, ctx, id);
   if (!['APPROVED', 'PAID'].includes(String(cur.status))) {
     throw badRequest(`Only approved/paid expenses can be posted (current: ${cur.status})`);
   }
   if (String(cur.accountingStatus) === 'POSTED') throw badRequest('Expense is already posted');
+  if (cur.accountingVerified !== true) throw badRequest('Accounting verification is required before GL posting.');
+  if (cur.verifiedBy != null && Number(cur.verifiedBy) === Number(ctx.userId)) {
+    throw forbidden('The accounting verifier cannot post the same expense.');
+  }
+  if (cur.createdBy != null && Number(cur.createdBy) === Number(ctx.userId)) {
+    throw forbidden('The expense creator cannot post their own expense.');
+  }
   const amount = num0(cur.amount);
   const taxAmount = round2(num0(cur.taxAmount));
   const expenseAccountId = cur.accountId != null ? Number(cur.accountId) : cur.categoryAccountId != null ? Number(cur.categoryAccountId) : null;
