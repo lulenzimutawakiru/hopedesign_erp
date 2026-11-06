@@ -69,7 +69,7 @@ expenditureOpsRouter.get('/expenses/:id', ...runExpenseGet((c, ctx, _q, p, viewA
 expenditureOpsRouter.post('/expenses', ...run('expenditure.expenses.create', (c, ctx, b) => exp.createExpense(c, ctx, b)));
 expenditureOpsRouter.post('/expenses/:id/update', ...run('expenditure.expenses.update', (c, ctx, b, p) => exp.updateExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/expenses/:id/submit', ...run('expenditure.expenses.submit', (c, ctx, _b, p) => exp.submitExpense(c, ctx, Number(p.id))));
-expenditureOpsRouter.post('/expenses/:id/pay', ...run('expenditure.expenses.approve', (c, ctx, b, p) => exp.payExpense(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/expenses/:id/pay', ...run('expenditure.payments.post', (c, ctx, b, p) => exp.payExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/expenses/:id/post', ...run('expenditure.expenses.post', (c, ctx, _b, p) => exp.postExpense(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/expenses/:id/void', ...run('expenditure.expenses.void', (c, ctx, b, p) => exp.voidExpense(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : null)));
 expenditureOpsRouter.get('/board', ...runGet('expenditure.expenses.view', (c, ctx) => exp.expenseBoard(c, ctx)));
