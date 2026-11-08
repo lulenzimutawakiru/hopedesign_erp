@@ -2,10 +2,88 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, fmtMoney, fmtNum, EntityMeta, ListResult } from '../../api';
 import { useAuth, can } from '../../auth';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../../components/ui';
-import { JsonForm } from '../../components/JsonForm';
+import { JsonForm, FormSection, SelectOption } from '../../components/JsonForm';
 
 type Rec = Record<string, unknown>;
 const n = (v: unknown) => Number(v ?? 0);
+
+interface ProductOptions {
+  units: { id: number; code: string; name: string }[];
+  categories: { id: number; code: string; name: string }[];
+  suppliers: { id: number; code: string; name: string }[];
+}
+
+/** Fixed enum options drawn from the products table CHECK constraints. */
+const ENUM_OPTIONS: Record<string, SelectOption[]> = {
+  type: [
+    { value: 'REAM', label: 'Ream' },
+    { value: 'SHEET', label: 'Sheet' },
+    { value: 'FINISHED_GOODS', label: 'Finished goods' },
+    { value: 'SECURITY_ITEM', label: 'Security paper' },
+  ],
+  securityClassification: [
+    { value: 'NONE', label: 'None' },
+    { value: 'RESTRICTED', label: 'Restricted' },
+    { value: 'CONFIDENTIAL', label: 'Confidential' },
+    { value: 'SECRET', label: 'Secret' },
+  ],
+  valuationMethod: [
+    { value: 'FIFO', label: 'FIFO' },
+    { value: 'WEIGHTED_AVERAGE', label: 'Weighted average' },
+  ],
+  abcClass: [
+    { value: 'A', label: 'A' },
+    { value: 'B', label: 'B' },
+    { value: 'C', label: 'C' },
+  ],
+  xyzClass: [
+    { value: 'X', label: 'X' },
+    { value: 'Y', label: 'Y' },
+    { value: 'Z', label: 'Z' },
+  ],
+  efrisRegistrationStatus: [
+    { value: 'UNMAPPED', label: 'Unmapped' },
+    { value: 'MAPPED', label: 'Mapped' },
+    { value: 'SUBMITTED', label: 'Submitted' },
+    { value: 'REGISTERED', label: 'Registered' },
+    { value: 'EXCLUDED', label: 'Excluded' },
+  ],
+};
+
+/** Field groups — anything not listed falls into a collapsed "More options". */
+const SECTIONS: FormSection[] = [
+  {
+    title: 'Identity',
+    defaultOpen: true,
+    fields: ['code', 'name', 'sku', 'barcode', 'gtin', 'internalCode', 'brand', 'productFamily', 'variantName', 'description'],
+  },
+  {
+    title: 'Classification & pricing',
+    defaultOpen: true,
+    fields: ['type', 'categoryId', 'unitId', 'securityClassification', 'valuationMethod', 'standardPrice', 'standardCost'],
+  },
+  {
+    title: 'Paper specifications',
+    defaultOpen: true,
+    fields: ['gsm', 'widthMm', 'rollLengthM', 'rollDiameterMm', 'sheetsPerReam', 'reamWeightKg', 'weightPerUnit', 'lotSize'],
+  },
+  {
+    title: 'Stock & replenishment',
+    defaultOpen: true,
+    fields: ['reorderPoint', 'safetyStock', 'leadTimeDays', 'moq', 'eoq', 'maxStock', 'abcClass', 'xyzClass', 'preferredSupplierId', 'countryOfOrigin', 'cycleCountFrequencyDays'],
+  },
+  {
+    title: 'Traceability & tracking',
+    defaultOpen: false,
+    fields: ['isTracked', 'isSerialized', 'batchControlled', 'lotControlled', 'serialControlled', 'expiryControlled', 'inspectionRequired', 'isRfidEnabled', 'shelfLifeDays', 'storageRequirements', 'hazardClass'],
+  },
+  {
+    title: 'EFRIS / URA registration',
+    defaultOpen: false,
+    description: 'Filled from the URA goods catalogue. Registration status is only ever confirmed by an operator, never auto-derived.',
+    fields: ['efrisGoodsCode', 'efrisUnitOfMeasure', 'efrisGoodsCategoryId', 'efrisGoodsCategoryName', 'efrisGoodsName', 'efrisRegistrationStatus', 'efrisRegisteredAt'],
+  },
+];
 
 /**
  * Sellable product catalogue — full CRUD for the finished goods the company
@@ -17,6 +95,7 @@ const n = (v: unknown) => Number(v ?? 0);
 export default function SalesProducts() {
   const { user } = useAuth();
   const [meta, setMeta] = useState<EntityMeta | null>(null);
+  const [options, setOptions] = useState<ProductOptions | null>(null);
   const [rows, setRows] = useState<Rec[]>([]);
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
@@ -33,6 +112,12 @@ export default function SalesProducts() {
   }, []);
 
   useEffect(() => {
+    api<{ data: ProductOptions }>('/api/ops/inventory/product-options')
+      .then((r) => setOptions(r.data))
+      .catch(() => {/* options are non-critical; the form still works with raw inputs */});
+  }, []);
+
+  useEffect(() => {
     api<ListResult>('/api/inventory/products?pageSize=200')
       .then((r) => setRows(Array.isArray(r.data) ? r.data : []))
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load products'));
@@ -43,6 +128,16 @@ export default function SalesProducts() {
     const s = q.trim().toLowerCase();
     return rows.filter((r) => `${r.code} ${r.name}`.toLowerCase().includes(s));
   }, [rows, q]);
+
+  const selects = useMemo<Record<string, SelectOption[]>>(() => {
+    if (!options) return ENUM_OPTIONS;
+    return {
+      ...ENUM_OPTIONS,
+      unitId: options.units.map((u) => ({ value: u.id, label: `${u.code} — ${u.name}` })),
+      categoryId: options.categories.map((c) => ({ value: c.id, label: c.name })),
+      preferredSupplierId: options.suppliers.map((s) => ({ value: s.id, label: s.name })),
+    };
+  }, [options]);
 
   const reload = () =>
     api<ListResult>('/api/inventory/products?pageSize=200')
@@ -122,12 +217,12 @@ export default function SalesProducts() {
 
       {creating && (
         <Modal title="New product" onClose={() => setCreating(false)} wide>
-          <JsonForm meta={meta} onSubmit={submit(null)} onCancel={() => setCreating(false)} submitLabel="Create" />
+          <JsonForm meta={meta} sections={SECTIONS} selects={selects} onSubmit={submit(null)} onCancel={() => setCreating(false)} submitLabel="Create" />
         </Modal>
       )}
       {editing && (
         <Modal title={`Edit ${String(editing.code)}`} onClose={() => setEditing(null)} wide>
-          <JsonForm meta={meta} initial={editing} onSubmit={submit(Number(editing.id))} onCancel={() => setEditing(null)} submitLabel="Save" />
+          <JsonForm meta={meta} sections={SECTIONS} selects={selects} initial={editing} onSubmit={submit(Number(editing.id))} onCancel={() => setEditing(null)} submitLabel="Save" />
         </Modal>
       )}
     </div>
