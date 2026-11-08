@@ -2610,7 +2610,7 @@ export async function listSupplierInvoices(
   }
   const res = await client.query(
     `SELECT si.id, si.supplier_invoice_no, si.supplier_document_no, si.status, si.invoice_date, si.due_date, si.total, si.amount_paid,
-            si.three_way_matched, si.gl_posted, po.po_no, s.code AS supplier_code, s.name AS supplier_name
+            si.supplier_id, si.three_way_matched, si.gl_posted, po.po_no, s.code AS supplier_code, s.name AS supplier_name
      FROM supplier_invoices si
      JOIN suppliers s ON s.id = si.supplier_id
      LEFT JOIN purchase_orders po ON po.id = si.po_id

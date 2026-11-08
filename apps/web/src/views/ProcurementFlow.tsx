@@ -241,18 +241,22 @@ export default function ProcurementFlow({ path }: { path: string }) {
   if (view === 'requisitions' && id === 'new') return <PrComposer />;
   if (view === 'requisitions' && id) return <PrDesk id={Number(id)} />;
   if (view === 'requisitions') return <PrList />;
+  if (view === 'rfqs' && id === 'new') return <RfqComposer />;
   if (view === 'rfqs' && id) return <RfqDesk id={Number(id)} />;
   if (view === 'rfqs') return <RfqList />;
   if (view === 'orders' && id === 'new') return <PoComposer />;
   if (view === 'orders' && id) return <PoDesk id={Number(id)} />;
   if (view === 'orders') return <PoList />;
+  if (view === 'receipts' && id === 'new') return <GrnComposer />;
   if (view === 'receipts' && id) return <GrnDesk id={Number(id)} />;
   if (view === 'receipts') return <GrnList />;
+  if (view === 'invoices' && id === 'new') return <InvoiceComposer />;
   if (view === 'invoices' && id) return <InvoiceDesk id={Number(id)} />;
   if (view === 'invoices') return <InvoiceList />;
   if (view === 'match' && id) return <MatchDetail poId={Number(id)} />;
   if (view === 'match') return <MatchDesk />;
   if (view === 'prices') return <PricesDesk />;
+  if (view === 'payments' && id === 'new') return <PaymentComposer />;
   if (view === 'payments' && id) return <PaymentDesk id={Number(id)} />;
   if (view === 'payments') return <PaymentList />;
   if (view === 'demand') return <DemandDesk />;
@@ -1692,6 +1696,7 @@ function PrComposer({ editId }: { editId?: number }) {
   );
 }
 function RfqList() {
+  const { user } = useAuth();
   const [rows, setRows] = useState<Rec[]>([]);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
@@ -1714,6 +1719,9 @@ function RfqList() {
           <p className="mod-kicker" data-mod="proc">Sourcing</p>
           <h1>Requests for quotation</h1>
           <p className="muted">Issue an RFQ from an approved PR, collect quotes, then award the lowest one.</p>
+        </div>
+        <div className="head-actions">
+          {can(user, 'procurement.rfqs.create') && <button className="btn btn-primary" onClick={() => navigate('/buy/rfqs/new')}>+ New RFQ</button>}
         </div>
       </header>
       <BuyTabs active="rfqs" />
@@ -1761,6 +1769,95 @@ function RfqList() {
         </table>
       </div>
       <div className="pager"><span>{fmtNum(filtered.length)} records</span></div>
+    </div>
+  );
+}
+function RfqComposer() {
+  const [prs, setPrs] = useState<Rec[]>([]);
+  const [suppliers, setSuppliers] = useState<Rec[]>([]);
+  const [requisitionId, setRequisitionId] = useState('');
+  const [supplierIds, setSupplierIds] = useState<string[]>([]);
+  const [closingDate, setClosingDate] = useState(() => addDays(new Date().toISOString().slice(0, 10), 7));
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const loadSuppliers = useCallback(() => {
+    api<{ data: Rec[] }>('/api/ops/procurement/suppliers').then((r) => setSuppliers(r.data ?? [])).catch(() => undefined);
+  }, []);
+  useEffect(() => { loadSuppliers(); }, [loadSuppliers]);
+  useEffect(() => {
+    api<{ data: { rows: Rec[] } }>('/api/ops/procurement/requisitions?status=APPROVED&pageSize=100')
+      .then((r) => setPrs(r.data.rows ?? []))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load requisitions'));
+  }, []);
+  const selected = prs.find((p) => String(p.id) === requisitionId);
+  const toggleSupplier = (id: string) => setSupplierIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const save = async () => {
+    setError('');
+    if (!requisitionId) { setError('Pick an approved requisition'); return; }
+    if (!supplierIds.length) { setError('Pick at least one supplier to invite'); return; }
+    setBusy(true);
+    try {
+      const r = await api<{ data: { rfqId: number } }>('/api/ops/procurement/rfqs', {
+        method: 'POST',
+        body: JSON.stringify({ requisitionId: Number(requisitionId), supplierIds: supplierIds.map(Number), closingDate: closingDate || null, notes: notes || null }),
+      });
+      navigate(`/buy/rfqs/${r.data.rfqId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <button className="btn btn-sm" onClick={() => navigate('/buy/rfqs')}>Back</button>
+          <h1>New request for quotation</h1>
+          <p className="muted">Issue an RFQ from an approved PR and invite suppliers to quote.</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn" onClick={() => navigate('/buy/rfqs')}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving...' : 'Issue RFQ'}</button>
+        </div>
+      </header>
+      {error && <ErrorBanner error={error} />}
+      <section className="card card-pad">
+        <div className="form-grid">
+          <div className="field field-required">
+            <label>Requisition</label>
+            <select value={requisitionId} onChange={(e) => { setRequisitionId(e.target.value); setSupplierIds([]); }}>
+              <option value="">Select an approved requisition...</option>
+              {prs.map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.prNo)} · {String(p.title ?? 'Untitled')} ({fmtNum(p.itemCount)} lines · {fmtMoney(p.estimatedTotal)})</option>)}
+            </select>
+            {selected && (
+              <span className="muted" style={{ fontSize: 11 }}>
+                {String(selected.category ?? 'GOODS')}{selected.requestedByName ? ` · requested by ${String(selected.requestedByName)}` : ''}{selected.requiredDate ? ` · required ${fmtDay(selected.requiredDate)}` : ''}
+              </span>
+            )}
+          </div>
+          <div className="field"><label>Closes</label><input type="date" value={closingDate} onChange={(e) => setClosingDate(e.target.value)} /></div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}><label>Notes</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Terms, delivery expectations, contact for questions" /></div>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head"><h3>Invite suppliers</h3><span className="muted">{fmtNum(supplierIds.length)} selected</span></div>
+        {suppliers.length === 0 && <p className="muted" style={{ padding: 16 }}>No suppliers on file. Create a supplier first, then issue the RFQ.</p>}
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Invite</th><th>Supplier</th><th>Type</th><th>Status</th></tr></thead>
+            <tbody>
+              {suppliers.map((s) => (
+                <tr key={String(s.id)}>
+                  <td><input type="checkbox" checked={supplierIds.includes(String(s.id))} onChange={() => toggleSupplier(String(s.id))} /></td>
+                  <td><div className="cell-mono">{String(s.code)}</div>{String(s.name)}</td>
+                  <td><Badge value={s.supplierType} /></td>
+                  <td><Badge value={s.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
@@ -2606,6 +2703,7 @@ function PoComposer() {
   );
 }
 function GrnList() {
+  const { user } = useAuth();
   const [rows, setRows] = useState<Rec[]>([]);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
@@ -2629,7 +2727,10 @@ function GrnList() {
           <h1>Inbound receipts</h1>
           <p className="muted">Received stock lands here, then passes inspection before it hits the bins.</p>
         </div>
-        <button className="btn" onClick={() => navigate('/inventory/receive')}>Warehouse receive</button>
+        <div className="head-actions">
+          {can(user, 'procurement.goods_receipts.create') && <button className="btn btn-primary" onClick={() => navigate('/buy/receipts/new')}>+ New GRN</button>}
+          <button className="btn" onClick={() => navigate('/inventory/receive')}>Warehouse receive</button>
+        </div>
       </header>
       <BuyTabs active="receipts" />
       {error && <ErrorBanner error={error} />}
@@ -2674,6 +2775,127 @@ function GrnList() {
         </table>
       </div>
       <div className="pager"><span>{fmtNum(filtered.length)} records</span></div>
+    </div>
+  );
+}
+interface GrnLine {
+  key: string;
+  poItemId: number;
+  productId: number;
+  productCode: string;
+  productName: string;
+  remaining: number;
+  quantityReceived: number;
+  unitCost: number;
+  expiryDate: string;
+  batchNo: string;
+}
+
+function GrnComposer() {
+  const [pos, setPos] = useState<Rec[]>([]);
+  const [poId, setPoId] = useState('');
+  const [lines, setLines] = useState<GrnLine[]>([]);
+  const [receivedAt, setReceivedAt] = useState(() => new Date().toISOString().slice(0, 10));
+  const [deliveryRef, setDeliveryRef] = useState('');
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api<{ data: { rows: Rec[] } }>('/api/ops/procurement/orders?pageSize=100')
+      .then((r) => setPos((r.data.rows ?? []).filter((o) => ['APPROVED', 'PARTIALLY_RECEIVED'].includes(String(o.status)))))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load purchase orders'));
+  }, []);
+  useEffect(() => {
+    if (!poId) { setLines([]); return; }
+    api<{ data: { order: Rec; items: Rec[] } }>(`/api/ops/procurement/orders/${poId}`)
+      .then((r) => setLines((r.data.items ?? []).map((i) => {
+        const remaining = Math.max(0, num(i.quantity) - num(i.receivedQty));
+        return {
+          key: `${Date.now()}-${Math.random()}`,
+          poItemId: Number(i.id),
+          productId: Number(i.productId),
+          productCode: String(i.productCode ?? ''),
+          productName: String(i.productName ?? ''),
+          remaining,
+          quantityReceived: remaining,
+          unitCost: num(i.unitPrice),
+          expiryDate: '',
+          batchNo: '',
+        };
+      })))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load purchase order'));
+  }, [poId]);
+  const setLine = (key: string, patch: Partial<GrnLine>) => {
+    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+  };
+  const save = async () => {
+    setError('');
+    if (!poId) { setError('Pick a purchase order to receive against'); return; }
+    const items = lines
+      .filter((l) => l.quantityReceived > 0)
+      .map((l) => ({ poItemId: l.poItemId, productId: l.productId, quantityReceived: l.quantityReceived, unitCost: l.unitCost, expiryDate: l.expiryDate || null, batchNo: l.batchNo || null }));
+    if (!items.length) { setError('Enter a received quantity on at least one line'); return; }
+    setBusy(true);
+    try {
+      const r = await api<{ data: { grnId: number } }>('/api/ops/procurement/goods-receipts', {
+        method: 'POST',
+        body: JSON.stringify({ poId: Number(poId), receivedAt: receivedAt || null, deliveryRef: deliveryRef || null, notes: notes || null, items }),
+      });
+      navigate(`/buy/receipts/${r.data.grnId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <button className="btn btn-sm" onClick={() => navigate('/buy/receipts')}>Back</button>
+          <h1>New goods receipt</h1>
+          <p className="muted">Receive stock against an approved purchase order. Received lines pass inspection before hitting the bins.</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn" onClick={() => navigate('/buy/receipts')}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving...' : 'Receive'}</button>
+        </div>
+      </header>
+      {error && <ErrorBanner error={error} />}
+      <section className="card card-pad">
+        <div className="form-grid">
+          <div className="field field-required">
+            <label>Purchase order</label>
+            <select value={poId} onChange={(e) => setPoId(e.target.value)}>
+              <option value="">Select a PO...</option>
+              {pos.map((o) => <option key={String(o.id)} value={String(o.id)}>{String(o.poNo)} · {String(o.supplierName)} ({fmtNum(Math.max(0, num(o.orderedQty) - num(o.receivedQty)))} to receive)</option>)}
+            </select>
+          </div>
+          <div className="field"><label>Received on</label><input type="date" value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} /></div>
+          <div className="field"><label>Delivery ref</label><input value={deliveryRef} onChange={(e) => setDeliveryRef(e.target.value)} placeholder="e.g. driver's waybill / consignment note" /></div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}><label>Notes</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+        </div>
+      </section>
+      {poId && (
+        <section className="card">
+          <div className="card-head"><h3>Lines</h3><span className="muted">{fmtNum(lines.length)} items · quantity defaults to the open balance</span></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Product</th><th className="cell-num">Open</th><th className="cell-num">Received</th><th className="cell-num">Unit cost</th><th>Expiry</th><th>Batch</th></tr></thead>
+              <tbody>
+                {lines.map((l) => (
+                  <tr key={l.key}>
+                    <td><div className="cell-mono">{l.productCode}</div>{l.productName}</td>
+                    <td className="cell-num">{fmtNum(l.remaining)}</td>
+                    <td><input className="cell-input" type="number" min={0} max={l.remaining} value={l.quantityReceived} onChange={(e) => setLine(l.key, { quantityReceived: num(e.target.value) })} /></td>
+                    <td><input className="cell-input" type="number" min={0} step="0.01" value={l.unitCost} onChange={(e) => setLine(l.key, { unitCost: num(e.target.value) })} /></td>
+                    <td><input className="cell-input" type="date" value={l.expiryDate} onChange={(e) => setLine(l.key, { expiryDate: e.target.value })} /></td>
+                    <td><input className="cell-input" value={l.batchNo} onChange={(e) => setLine(l.key, { batchNo: e.target.value })} placeholder="Batch / lot" /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -2816,6 +3038,7 @@ function GrnDesk({ id }: { id: number }) {
   );
 }
 function InvoiceList() {
+  const { user } = useAuth();
   const [rows, setRows] = useState<Rec[]>([]);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
@@ -2837,7 +3060,10 @@ function InvoiceList() {
           <h1>Accounts payable</h1>
           <p className="muted">Invoice against received stock, three-way match, then release payment.</p>
         </div>
-        <button className="btn" onClick={() => navigate('/finance/ap')}>AP ledger</button>
+        <div className="head-actions">
+          {can(user, 'procurement.supplier_invoices.create') && <button className="btn btn-primary" onClick={() => navigate('/buy/invoices/new')}>+ New invoice</button>}
+          <button className="btn" onClick={() => navigate('/finance/ap')}>AP ledger</button>
+        </div>
       </header>
       <BuyTabs active="invoices" />
       {error && <ErrorBanner error={error} />}
@@ -2883,6 +3109,144 @@ function InvoiceList() {
         </table>
       </div>
       <div className="pager"><span>{fmtNum(rows.length)} records</span></div>
+    </div>
+  );
+}
+interface InvLine {
+  key: string;
+  poItemId: number;
+  productId: number;
+  productCode: string;
+  productName: string;
+  receivable: number;
+  quantity: number;
+  unitPrice: number;
+  taxPercent: number;
+}
+
+function InvoiceComposer() {
+  const [pos, setPos] = useState<Rec[]>([]);
+  const [poId, setPoId] = useState('');
+  const [supplierId, setSupplierId] = useState<number | ''>('');
+  const [grns, setGrns] = useState<Rec[]>([]);
+  const [grnId, setGrnId] = useState('');
+  const [lines, setLines] = useState<InvLine[]>([]);
+  const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dueDate, setDueDate] = useState('');
+  const [supplierDocumentNo, setSupplierDocumentNo] = useState('');
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api<{ data: { rows: Rec[] } }>('/api/ops/procurement/orders?pageSize=100')
+      .then((r) => setPos((r.data.rows ?? []).filter((o) => ['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED'].includes(String(o.status)))))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load purchase orders'));
+  }, []);
+  useEffect(() => {
+    if (!poId) { setLines([]); setGrns([]); return; }
+    api<{ data: { order: Rec; items: Rec[]; receipts: Rec[] } }>(`/api/ops/procurement/orders/${poId}`)
+      .then((r) => {
+        setSupplierId(r.data.order.supplierId ? Number(r.data.order.supplierId) : '');
+        setGrns(r.data.receipts ?? []);
+        setGrnId('');
+        setLines((r.data.items ?? []).map((i) => {
+          const receivable = Math.max(0, num(i.receivedQty) - num(i.invoicedQty));
+          return {
+            key: `${Date.now()}-${Math.random()}`,
+            poItemId: Number(i.id),
+            productId: Number(i.productId),
+            productCode: String(i.productCode ?? ''),
+            productName: String(i.productName ?? ''),
+            receivable,
+            quantity: receivable,
+            unitPrice: num(i.unitPrice),
+            taxPercent: num(i.taxPercent),
+          };
+        }));
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load purchase order'));
+  }, [poId]);
+  const setLine = (key: string, patch: Partial<InvLine>) => {
+    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+  };
+  const total = useMemo(() => lines.reduce((s, l) => s + lineTotal(l.quantity, l.unitPrice, l.taxPercent), 0), [lines]);
+  const save = async () => {
+    setError('');
+    if (!poId) { setError('Pick a purchase order to invoice against'); return; }
+    if (supplierId === '') { setError('Supplier could not be determined from the purchase order'); return; }
+    const items = lines
+      .filter((l) => l.quantity > 0)
+      .map((l) => ({ poItemId: l.poItemId, productId: l.productId, quantity: l.quantity, unitPrice: l.unitPrice, taxPercent: l.taxPercent }));
+    if (!items.length) { setError('Enter an invoiced quantity on at least one line'); return; }
+    setBusy(true);
+    try {
+      const r = await api<{ data: { invoiceId: number } }>('/api/ops/procurement/supplier-invoices', {
+        method: 'POST',
+        body: JSON.stringify({ poId: Number(poId), grnId: grnId ? Number(grnId) : null, supplierId: Number(supplierId), invoiceDate: invoiceDate || null, dueDate: dueDate || null, supplierDocumentNo: supplierDocumentNo || null, notes: notes || null, items }),
+      });
+      navigate(`/buy/invoices/${r.data.invoiceId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <button className="btn btn-sm" onClick={() => navigate('/buy/invoices')}>Back</button>
+          <h1>New supplier invoice</h1>
+          <p className="muted">Invoice against received stock. Quantities default to the not-yet-invoiced received balance.</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn" onClick={() => navigate('/buy/invoices')}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving...' : 'Save invoice'}</button>
+        </div>
+      </header>
+      {error && <ErrorBanner error={error} />}
+      <section className="card card-pad">
+        <div className="form-grid">
+          <div className="field field-required">
+            <label>Purchase order</label>
+            <select value={poId} onChange={(e) => setPoId(e.target.value)}>
+              <option value="">Select a PO...</option>
+              {pos.map((o) => <option key={String(o.id)} value={String(o.id)}>{String(o.poNo)} · {String(o.supplierName)}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>GRN (optional)</label>
+            <select value={grnId} onChange={(e) => setGrnId(e.target.value)}>
+              <option value="">None</option>
+              {grns.map((g) => <option key={String(g.id)} value={String(g.id)}>{String(g.grnNo)} · {String(g.status)}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>Invoice date</label><input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></div>
+          <div className="field"><label>Due date</label><input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></div>
+          <div className="field"><label>Supplier doc no.</label><input value={supplierDocumentNo} onChange={(e) => setSupplierDocumentNo(e.target.value)} placeholder="Supplier's own invoice number" /></div>
+          <div className="field" style={{ gridColumn: '1 / -1' }}><label>Notes</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+        </div>
+      </section>
+      {poId && (
+        <section className="card">
+          <div className="card-head"><h3>Lines</h3><span className="muted">{fmtNum(lines.length)} items · {fmtMoney(total)}</span></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Product</th><th className="cell-num">Receivable</th><th className="cell-num">Qty</th><th className="cell-num">Unit price</th><th className="cell-num">Tax %</th><th className="cell-num">Line</th></tr></thead>
+              <tbody>
+                {lines.map((l) => (
+                  <tr key={l.key}>
+                    <td><div className="cell-mono">{l.productCode}</div>{l.productName}</td>
+                    <td className="cell-num">{fmtNum(l.receivable)}</td>
+                    <td><input className="cell-input" type="number" min={0} value={l.quantity} onChange={(e) => setLine(l.key, { quantity: num(e.target.value) })} /></td>
+                    <td><input className="cell-input" type="number" min={0} step="0.01" value={l.unitPrice} onChange={(e) => setLine(l.key, { unitPrice: num(e.target.value) })} /></td>
+                    <td><input className="cell-input" type="number" min={0} max={100} value={l.taxPercent} onChange={(e) => setLine(l.key, { taxPercent: num(e.target.value) })} /></td>
+                    <td className="cell-num">{fmtMoney(lineTotal(l.quantity, l.unitPrice, l.taxPercent))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="otc-total">Total {fmtMoney(total)}</div>
+        </section>
+      )}
     </div>
   );
 }
@@ -3453,6 +3817,92 @@ function MatchDetail({ poId }: { poId: number }) {
   );
 }
 
+function PaymentComposer() {
+  const [suppliers, setSuppliers] = useState<Rec[]>([]);
+  const [invoices, setInvoices] = useState<Rec[]>([]);
+  const [supplierId, setSupplierId] = useState('');
+  const [supplierInvoiceId, setSupplierInvoiceId] = useState('');
+  const [amount, setAmount] = useState(0);
+  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [method, setMethod] = useState('BANK_TRANSFER');
+  const [reference, setReference] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const loadSuppliers = useCallback(() => {
+    api<{ data: Rec[] }>('/api/ops/procurement/suppliers').then((r) => setSuppliers(r.data ?? [])).catch(() => undefined);
+  }, []);
+  useEffect(() => { loadSuppliers(); }, [loadSuppliers]);
+  useEffect(() => {
+    api<{ data: Rec[] }>('/api/ops/procurement/supplier-invoices')
+      .then((r) => setInvoices((r.data ?? []).filter((i) => num(i.total) - num(i.amountPaid) > 0)))
+      .catch(() => undefined);
+  }, []);
+  const supplierInvoices = useMemo(
+    () => invoices.filter((i) => !supplierId || String(i.supplierId) === supplierId),
+    [invoices, supplierId]
+  );
+  const selectedInvoice = supplierInvoices.find((i) => String(i.id) === supplierInvoiceId);
+  const pickInvoice = (id: string) => {
+    setSupplierInvoiceId(id);
+    const inv = supplierInvoices.find((i) => String(i.id) === id);
+    if (inv) setAmount(Math.max(0, num(inv.total) - num(inv.amountPaid)));
+  };
+  const save = async () => {
+    setError('');
+    if (!supplierId) { setError('Supplier is required'); return; }
+    if (!(amount > 0)) { setError('Payment amount must be positive'); return; }
+    setBusy(true);
+    try {
+      const r = await api<{ data: { paymentId: number } }>('/api/ops/procurement/payments', {
+        method: 'POST',
+        body: JSON.stringify({ supplierId: Number(supplierId), supplierInvoiceId: supplierInvoiceId ? Number(supplierInvoiceId) : null, amount, paymentDate: paymentDate || null, method, reference: reference || null }),
+      });
+      navigate(`/buy/payments/${r.data.paymentId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <button className="btn btn-sm" onClick={() => navigate('/buy/payments')}>Back</button>
+          <h1>New supplier payment</h1>
+          <p className="muted">Record a payment against a supplier, optionally against an open invoice. Submit releases it into the workflow.</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn" onClick={() => navigate('/buy/payments')}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving...' : 'Save payment'}</button>
+        </div>
+      </header>
+      {error && <ErrorBanner error={error} />}
+      <section className="card card-pad">
+        <div className="form-grid">
+          <div className="field field-required">
+            <label>Supplier</label>
+            <SupplierPicker suppliers={suppliers} value={supplierId} onChange={(v) => { setSupplierId(v); setSupplierInvoiceId(''); }} onCreated={() => loadSuppliers()} placeholder="Select..." />
+          </div>
+          <div className="field">
+            <label>Invoice (optional)</label>
+            <select value={supplierInvoiceId} onChange={(e) => pickInvoice(e.target.value)}>
+              <option value="">None — on account</option>
+              {supplierInvoices.map((i) => <option key={String(i.id)} value={String(i.id)}>{String(i.supplierInvoiceNo)} · open {fmtMoney(num(i.total) - num(i.amountPaid))}</option>)}
+            </select>
+            {selectedInvoice && <span className="muted" style={{ fontSize: 11 }}>PO {String(selectedInvoice.poNo ?? '—')} · total {fmtMoney(selectedInvoice.total)}</span>}
+          </div>
+          <div className="field field-required"><label>Amount</label><input type="number" min={0} step="0.01" value={amount} onChange={(e) => setAmount(num(e.target.value))} /></div>
+          <div className="field"><label>Payment date</label><input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} /></div>
+          <div className="field"><label>Method</label>
+            <select value={method} onChange={(e) => setMethod(e.target.value)}>
+              {['BANK_TRANSFER', 'CASH', 'CHEQUE', 'MOBILE_MONEY'].map((m) => <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>Reference</label><input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. bank transaction / cheque number" /></div>
+        </div>
+      </section>
+    </div>
+  );
+}
 function PaymentDesk({ id }: { id: number }) {
   const { user } = useAuth();
   const [doc, setDoc] = useState<{ payment: Rec } | null>(null);
@@ -3530,6 +3980,7 @@ function PaymentDesk({ id }: { id: number }) {
 }
 
 function PaymentList() {
+  const { user } = useAuth();
   const [rows, setRows] = useState<Rec[]>([]);
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
@@ -3553,7 +4004,10 @@ function PaymentList() {
           <h1>Outgoing payments</h1>
           <p className="muted">Submit sends the payment into the release workflow. The bank/AP journal posts on release.</p>
         </div>
-        <button className="btn" onClick={() => navigate('/finance/ap')}>AP ledger</button>
+        <div className="head-actions">
+          {can(user, 'procurement.payments.create') && <button className="btn btn-primary" onClick={() => navigate('/buy/payments/new')}>+ New payment</button>}
+          <button className="btn" onClick={() => navigate('/finance/ap')}>AP ledger</button>
+        </div>
       </header>
       <BuyTabs active="payments" />
       {error && <ErrorBanner error={error} />}
