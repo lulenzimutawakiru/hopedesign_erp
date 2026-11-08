@@ -9,6 +9,7 @@ import * as inv from '../../services/inventory.js';
 import * as wh from '../../services/warehouse.js';
 import * as se from '../../services/stockEntries.js';
 import * as puoms from '../../services/productUoms.js';
+import * as reorderRules from '../../services/reorderRules.js';
 
 export const inventoryOpsRouter = Router();
 
@@ -114,6 +115,44 @@ inventoryOpsRouter.post('/reservations', ...run('inventory.reservations.create',
   refId: Number(b.refId),
 })));
 inventoryOpsRouter.post('/reservations/:id/release', ...run('inventory.reservations.release', (c, _ctx, _b, p) => inv.release(c, Number(p.id))));
+
+// Reordering rules (Odoo-style per-product replenishment master)
+inventoryOpsRouter.get('/reorder-rules', ...runGet('inventory.reorder_rules.view', (c, ctx) => reorderRules.listReorderRules(c, ctx)));
+inventoryOpsRouter.post('/reorder-rules', ...run('inventory.reorder_rules.create', (c, ctx, b) => reorderRules.saveReorderRule(c, ctx, null, {
+  productId: Number(b.productId),
+  warehouseId: b.warehouseId != null && b.warehouseId !== '' ? Number(b.warehouseId) : null,
+  ruleType: b.ruleType != null ? String(b.ruleType) : null,
+  minQty: b.minQty != null && b.minQty !== '' ? Number(b.minQty) : null,
+  maxQty: b.maxQty != null && b.maxQty !== '' ? Number(b.maxQty) : null,
+  reorderPoint: b.reorderPoint != null && b.reorderPoint !== '' ? Number(b.reorderPoint) : null,
+  eoqQty: b.eoqQty != null && b.eoqQty !== '' ? Number(b.eoqQty) : null,
+  safetyStock: b.safetyStock != null && b.safetyStock !== '' ? Number(b.safetyStock) : null,
+  leadTimeDays: b.leadTimeDays != null && b.leadTimeDays !== '' ? Number(b.leadTimeDays) : null,
+  multipleQty: b.multipleQty != null && b.multipleQty !== '' ? Number(b.multipleQty) : undefined,
+  preferredSupplierId: b.preferredSupplierId != null && b.preferredSupplierId !== '' ? Number(b.preferredSupplierId) : null,
+  isActive: b.isActive !== false,
+})));
+inventoryOpsRouter.put('/reorder-rules/:id', ...run('inventory.reorder_rules.update', (c, ctx, b, p) => reorderRules.saveReorderRule(c, ctx, Number(p.id), {
+  productId: Number(b.productId),
+  warehouseId: b.warehouseId != null && b.warehouseId !== '' ? Number(b.warehouseId) : null,
+  ruleType: b.ruleType != null ? String(b.ruleType) : null,
+  minQty: b.minQty != null && b.minQty !== '' ? Number(b.minQty) : null,
+  maxQty: b.maxQty != null && b.maxQty !== '' ? Number(b.maxQty) : null,
+  reorderPoint: b.reorderPoint != null && b.reorderPoint !== '' ? Number(b.reorderPoint) : null,
+  eoqQty: b.eoqQty != null && b.eoqQty !== '' ? Number(b.eoqQty) : null,
+  safetyStock: b.safetyStock != null && b.safetyStock !== '' ? Number(b.safetyStock) : null,
+  leadTimeDays: b.leadTimeDays != null && b.leadTimeDays !== '' ? Number(b.leadTimeDays) : null,
+  multipleQty: b.multipleQty != null && b.multipleQty !== '' ? Number(b.multipleQty) : undefined,
+  preferredSupplierId: b.preferredSupplierId != null && b.preferredSupplierId !== '' ? Number(b.preferredSupplierId) : null,
+  isActive: b.isActive !== false,
+})));
+inventoryOpsRouter.delete('/reorder-rules/:id', ...run('inventory.reorder_rules.delete', (c, ctx, _b, p) => reorderRules.deleteReorderRule(c, ctx, Number(p.id))));
+inventoryOpsRouter.post('/reorder-rules/order', ...run('inventory.reorder_rules.create', (c, ctx, b) => reorderRules.orderFromRule(c, ctx, {
+  productId: Number(b.productId),
+  quantity: b.quantity != null && b.quantity !== '' ? Number(b.quantity) : null,
+  warehouseId: b.warehouseId != null && b.warehouseId !== '' ? Number(b.warehouseId) : null,
+  supplierId: b.supplierId != null && b.supplierId !== '' ? Number(b.supplierId) : null,
+})));
 
 // Stock adjustments (draft -> submit -> workflow approval -> post)
 inventoryOpsRouter.post('/adjustments', ...run('inventory.adjustments.create', (c, ctx, b) => inv.createAdjustment(c, ctx, b)));
