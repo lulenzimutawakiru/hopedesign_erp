@@ -55,6 +55,7 @@ const MODULES = {
     debit_notes: ["view","create","update","submit","approve","post","void","print","export"],
     returns: ["view","create","update","approve","inspect","complete","print","export"],
     statements: ["view","print","export"],
+    price_lists: ["view","create","update","delete"],
   },
   procurement: {
     suppliers: ["view","create","update","delete","submit","approve","block","evaluate","export","import"],
@@ -664,14 +665,14 @@ const ROLES = [
   { code: "internal_auditor", name: "Internal Auditor", grants: ["efris.dashboard.view","efris.transactions.view","efris.configuration.view","efris.reconciliation.view","efris.credit_notes.view","efris.debit_notes.view","efris.reports.view","efris.reports.export","efris.errors.view", "admin.audit.*", "finance.reports.*", "inventory.stock.view", "procurement.orders.view", "sales.invoices.view", "reports.*", "finance.audit.view", "finance.journals.view", "finance.efris.view", "finance.tax_transactions.view", "finance.tax_filings.view", "finance.production_costs.view", "finance.close_tasks.view", "finance.consolidation.view", "compliance.pdpo.view", "compliance.pdpo.export", "compliance.processing_activities.view", "compliance.consents.view", "compliance.subject_requests.view", "compliance.breaches.view", "compliance.iso.view", "compliance.operating.view"] },
   // Sales / CRM
   { code: "sales_director", name: "Sales Director", grants: ["crm.*", "sales.*", "reports.sales.*", "compliance.operating.view", "compliance.operating.manage"] },
-  { code: "sales_manager", name: "Sales Manager", grants: ["crm.*", "sales.quotations.*", "sales.orders.*", "sales.delivery_notes.*", "sales.returns.*", "workflows.instances.*", "reports.sales.view", "communication.command.view", "communication.emails.*", "communication.notifications.*", "communication.delivery_logs.view", "compliance.operating.view", "compliance.operating.manage"] },
-  { code: "sales_executive", name: "Sales Executive", grants: ["crm.leads.*", "crm.customers.*", "crm.contacts.*", "crm.opportunities.*", "crm.activities.*", "sales.quotations.view", "sales.quotations.create", "sales.quotations.submit", "sales.quotations.print", "sales.quotations.send", "sales.orders.view"] },
+  { code: "sales_manager", name: "Sales Manager", grants: ["crm.*", "sales.quotations.*", "sales.orders.*", "sales.delivery_notes.*", "sales.returns.*", "sales.price_lists.*", "workflows.instances.*", "reports.sales.view", "communication.command.view", "communication.emails.*", "communication.notifications.*", "communication.delivery_logs.view", "compliance.operating.view", "compliance.operating.manage"] },
+  { code: "sales_executive", name: "Sales Executive", grants: ["crm.leads.*", "crm.customers.*", "crm.contacts.*", "crm.opportunities.*", "crm.activities.*", "sales.quotations.view", "sales.quotations.create", "sales.quotations.submit", "sales.quotations.print", "sales.quotations.send", "sales.orders.view", "sales.price_lists.view"] },
   { code: "sales_representative", name: "Sales Representative", grants: ["crm.leads.view", "crm.leads.create", "crm.leads.update", "crm.activities.*", "crm.customers.view"] },
   { code: "crm_manager", name: "CRM Manager", grants: ["crm.*", "reports.sales.view"] },
   { code: "crm_officer", name: "CRM Officer", grants: ["crm.leads.*", "crm.customers.view", "crm.contacts.*", "crm.activities.*"] },
   { code: "account_manager", name: "Account Manager", grants: ["crm.customers.view", "crm.contacts.*", "crm.activities.*", "crm.complaints.*", "sales.orders.view", "sales.invoices.view"] },
   { code: "customer_service_officer", name: "Customer Service Officer", grants: ["crm.customers.view", "crm.contacts.*", "crm.complaints.*", "crm.activities.*"] },
-  { code: "sales_coordinator", name: "Sales Coordinator", grants: ["sales.quotations.view", "sales.orders.view", "sales.delivery_notes.view", "crm.activities.*"] },
+  { code: "sales_coordinator", name: "Sales Coordinator", grants: ["sales.quotations.view", "sales.orders.view", "sales.delivery_notes.view", "sales.price_lists.view", "crm.activities.*"] },
   // Procurement
   { code: "procurement_director", name: "Procurement Director", grants: ["procurement.*", "reports.procurement.*", "compliance.operating.view", "compliance.operating.manage"] },
   { code: "procurement_manager", name: "Procurement Manager", grants: ["procurement.*", "expenditure.*", "workflows.instances.*", "compliance.operating.view", "compliance.operating.manage"] },

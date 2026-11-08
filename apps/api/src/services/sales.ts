@@ -6,6 +6,7 @@ import { consume, postMove, reserve } from './inventory.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import * as finance from './finance.js';
+import { resolveUnitPrice } from './salesPriceLists.js';
 import { notifyCustomer } from './communication.js';
 import { config } from '../config.js';
 import { assertPostDelivery, assertRequirementReviewed } from './iso/gates.js';
@@ -19,7 +20,7 @@ export interface SalesLineInput {
   description?: string | null;
   quantity: number;
   unitId?: number | null;
-  unitPrice: number;
+  unitPrice?: number;
   discountPercent?: number;
   taxPercent?: number;
   deliveryDate?: string | null;
@@ -151,8 +152,6 @@ export async function createQuotation(
   const companyId = ctx.companyId;
   if (!companyId) throw badRequest('Company context required');
   if (!input.items?.length) throw badRequest('At least one line item is required');
-  const quoted = input.items.reduce((s, it) => s + Number(it.quantity) * Number(it.unitPrice), 0);
-  await assertCustomerCanTrade(client, ctx, input.customerId, quoted);
   const quotationNo = await nextDoc(client, ctx, 'QT');
   const ins = await client.query(
     `INSERT INTO sales_quotations
@@ -176,7 +175,9 @@ export async function createQuotation(
     const product = await productMeta(client, ctx, item.productId);
     const qty = Number(item.quantity);
     if (qty <= 0) throw badRequest('Quantity must be positive');
-    const unitPrice = Number(item.unitPrice);
+    const unitPrice = item.unitPrice != null
+      ? Number(item.unitPrice)
+      : (await resolveUnitPrice(client, ctx, input.customerId, item.productId)) ?? Number(product.standard_price);
     const discountPercent = Number(item.discountPercent ?? 0);
     const taxPercent = item.taxPercent != null ? Number(item.taxPercent) : defaultRate;
     const lineTotal = qty * unitPrice;
@@ -195,6 +196,7 @@ export async function createQuotation(
     discount += discountAmt;
     tax += taxAmt;
   }
+  await assertCustomerCanTrade(client, ctx, input.customerId, subtotal);
   const total = round2(subtotal - discount + tax);
   await client.query(
     `UPDATE sales_quotations SET subtotal = $1, discount_amount = $2, tax_amount = $3, total = $4 WHERE id = $5`,
@@ -411,7 +413,9 @@ export async function createSalesOrder(
     const product = await productMeta(client, ctx, item.productId);
     const qty = Number(item.quantity);
     if (qty <= 0) throw badRequest('Quantity must be positive');
-    const unitPrice = Number(item.unitPrice);
+    const unitPrice = item.unitPrice != null
+      ? Number(item.unitPrice)
+      : (await resolveUnitPrice(client, ctx, input.customerId, item.productId)) ?? Number(product.standard_price);
     const discountPercent = Number(item.discountPercent ?? 0);
     const taxPercent = item.taxPercent != null ? Number(item.taxPercent) : defaultRate;
     const lineTotal = qty * unitPrice;
@@ -1519,14 +1523,36 @@ export async function postDebitNote(client: pg.PoolClient, ctx: Ctx, debitNoteId
   return { debitNoteId, journalId };
 }
 
-export async function listSellableProducts(client: pg.PoolClient, ctx: Ctx) {
+export async function listSellableProducts(client: pg.PoolClient, ctx: Ctx, customerId?: number) {
   const res = await client.query(
-    `SELECT id, code, name, type, standard_price, unit_id
+    `SELECT id, code, name, type, standard_price, standard_cost, unit_id
      FROM products WHERE tenant_id = $1 AND company_id = $2 AND status = 'ACTIVE'
      ORDER BY code LIMIT 80`,
     [ctx.tenantId, ctx.companyId]
   );
-  return toCamelRows(res.rows);
+  const rows = res.rows;
+  if (customerId) {
+    const pl = await client.query(
+      `SELECT pli.product_id, pli.unit_price
+       FROM price_list_items pli
+       JOIN price_lists pl ON pl.id = pli.price_list_id AND pl.is_active = true
+       JOIN customers c ON c.price_list_id = pl.id
+       WHERE c.id = $1 AND c.tenant_id = $2
+         AND (pl.valid_from IS NULL OR pl.valid_from <= CURRENT_DATE)
+         AND (pl.valid_to IS NULL OR pl.valid_to >= CURRENT_DATE)
+         AND (pli.effective_from IS NULL OR pli.effective_from <= CURRENT_DATE)
+         AND (pli.effective_to IS NULL OR pli.effective_to >= CURRENT_DATE)`,
+      [customerId, ctx.tenantId]
+    );
+    const map = new Map(pl.rows.map((r) => [Number(r.product_id), Number(r.unit_price)]));
+    for (const r of rows) {
+      const lp = map.get(Number(r.id));
+      r.list_price = lp != null ? lp : Number(r.standard_price);
+    }
+  } else {
+    for (const r of rows) r.list_price = Number(r.standard_price);
+  }
+  return toCamelRows(rows);
 }
 
 export async function listCustomers(client: pg.PoolClient, ctx: Ctx, q?: string) {
