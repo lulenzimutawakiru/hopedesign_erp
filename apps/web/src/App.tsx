@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { useAuth } from './auth';
+import { getToken } from './api';
 import { shortCompanyName, useCompanyProfile } from './company';
 import { useHashRoute } from './router';
 import Login from './views/Login';
@@ -21,6 +22,16 @@ export default function App() {
   useEffect(() => {
     document.title = company.name !== 'Company' ? `${shortCompanyName(company.name)} OS` : 'Natex Cloud';
   }, [company]);
+
+  // Warm the Shell chunk in parallel with the /api/auth/me round-trip. The Shell
+  // is the app core rendered as soon as the session restores, so lazy-loading it
+  // only after /me resolves would serialize an extra network round-trip onto the
+  // cold-start path. App effects run before the parent AuthProvider's effect, so
+  // this fetch starts alongside (not after) the /me request. Dynamic imports
+  // dedupe, so the lazy() below resolves instantly once the chunk is warm.
+  useEffect(() => {
+    if (getToken()) void import('./views/Shell');
+  }, [user]);
 
   useEffect(() => {
     const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');

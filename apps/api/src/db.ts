@@ -60,11 +60,27 @@ const applyContext = async (client: pg.PoolClient | pg.Client, ctx: Ctx) => {
   const company = ctx.companyId ?? null;
   const branch = ctx.branchId ?? null;
   const user = ctx.userId ?? null;
-  await client.query('SELECT set_app_context($1,$2,$3,$4)', [tenant, company, branch, user]);
-  await client.query('SELECT set_config($1,$2,true)', ['app.correlation_id', ctx.correlationId ?? correlationId()]);
-  await client.query('SELECT set_config($1,$2,true)', ['app.ip', ctx.ip ?? '']);
-  await client.query('SELECT set_config($1,$2,true)', ['app.user_agent', ctx.userAgent ?? '']);
-  await client.query('SELECT set_config($1,$2,true)', ['app.device', ctx.device ?? '']);
+  // Perf: collapse five separate GUC-setting round-trips into one. `set_app_context`
+  // and the four `set_config` calls are transaction-local GUC writes that commute,
+  // so a single SELECT (one wire round-trip) applies them all; `is_local => true`
+  // keeps them scoped to the surrounding transaction exactly as before.
+  await client.query(
+    `SELECT set_app_context($1,$2,$3,$4),
+            set_config('app.correlation_id', $5, true),
+            set_config('app.ip', $6, true),
+            set_config('app.user_agent', $7, true),
+            set_config('app.device', $8, true)`,
+    [
+      tenant,
+      company,
+      branch,
+      user,
+      ctx.correlationId ?? correlationId(),
+      ctx.ip ?? '',
+      ctx.userAgent ?? '',
+      ctx.device ?? '',
+    ]
+  );
 };
 
 const rollbackQuietly = async (client: pg.PoolClient | pg.Client) => {

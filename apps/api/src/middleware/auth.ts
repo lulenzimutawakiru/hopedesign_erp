@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import { verifyAccessToken } from '../auth.js';
-import { query } from '../db.js';
+import { query, tx } from '../db.js';
 import { AuthUser } from '../types.js';
 import { overdueAccessReview, pendingAcknowledgement } from '../services/iso/gates.js';
 import { forbidden, unauthorized } from '../utils.js';
@@ -42,58 +42,64 @@ const OVERRIDES_SQL = `
 `;
 
 export async function loadAuthUser(userId: number, tenantId: number): Promise<AuthUser> {
-  const userRes = await query(USER_SQL, [userId], { tenantId });
-  if (userRes.rows.length === 0) throw unauthorized('User no longer exists');
-  const userRow = userRes.rows[0] as unknown as Record<string, unknown>;
-  if (userRow.status !== 'ACTIVE') throw unauthorized('Account is not active');
-  if (Number(userRow.tenant_id) !== tenantId) throw unauthorized('Tenant mismatch');
-  const rolesRes = await query(ROLES_SQL, [userId], { tenantId });
-  const permsRes = await query(PERMS_SQL, [userId], { tenantId });
-  const overridesRes = await query(OVERRIDES_SQL, [userId], { tenantId });
-  const delegationRes = await query(DELEGATIONS_SQL, [userId, tenantId], { tenantId });
-  const actingRoles: ActingRoleSummary[] = [];
-  const delegationPerms = new Set<string>();
-  for (const row of delegationRes.rows as Record<string, unknown>[]) {
-    const permCode = String(row.permission_code ?? '');
-    if (permCode) delegationPerms.add(permCode);
-  }
-  // Per-user overrides are the last word on top of role- and delegation-derived
-  // permissions: a 'revoke' removes a code the roles or a delegation would
-  // otherwise grant, a 'grant' adds one they do not. Applied after the union so
-  // a revoke also beats a delegation that happens to carry the same code.
-  const permissions = new Set<string>([...permsRes.rows.map((r) => String(r.code)), ...delegationPerms]);
-  for (const row of overridesRes.rows as Record<string, unknown>[]) {
-    const code = String(row.code ?? '');
-    if (!code) continue;
-    if (row.effect === 'revoke') permissions.delete(code);
-    else permissions.add(code);
-  }
-  const actingByDelegation = new Map<number, ActingRoleSummary>();
-  for (const row of delegationRes.rows as Record<string, unknown>[]) {
-    const delegationId = Number(row.delegation_id);
-    if (!actingByDelegation.has(delegationId)) {
-      actingByDelegation.set(delegationId, {
-        delegation_id: delegationId,
-        delegation_code: String(row.delegation_code ?? ''),
-        delegation_company_id: row.delegation_company_id ?? null,
-        delegator_user_id: row.delegator_user_id ?? null,
-        delegator_name: row.delegator_first_name && row.delegator_last_name
-          ? `${row.delegator_first_name} ${row.delegator_last_name}`
-          : null,
-        role_code: String(row.role_code ?? ''),
-        role_name: String(row.role_name ?? ''),
-        starts_at: row.starts_at ?? null,
-        expires_at: row.expires_at ?? null,
-      } as ActingRoleSummary);
+  // Perf: resolve the whole auth user in one transaction. Previously each of the
+  // seven lookups below ran in its own transaction, costing seven pool
+  // acquisitions, seven BEGIN/COMMIT pairs and seven sets of context GUC writes.
+  // They read only and share the caller's tenant context, so a single connection
+  // + transaction removes the overhead without changing what is returned.
+  return tx(async (client) => {
+    const userRes = await client.query(USER_SQL, [userId]);
+    if (userRes.rows.length === 0) throw unauthorized('User no longer exists');
+    const userRow = userRes.rows[0] as unknown as Record<string, unknown>;
+    if (userRow.status !== 'ACTIVE') throw unauthorized('Account is not active');
+    if (Number(userRow.tenant_id) !== tenantId) throw unauthorized('Tenant mismatch');
+    const rolesRes = await client.query(ROLES_SQL, [userId]);
+    const permsRes = await client.query(PERMS_SQL, [userId]);
+    const overridesRes = await client.query(OVERRIDES_SQL, [userId]);
+    const delegationRes = await client.query(DELEGATIONS_SQL, [userId, tenantId]);
+    const actingRoles: ActingRoleSummary[] = [];
+    const delegationPerms = new Set<string>();
+    for (const row of delegationRes.rows as Record<string, unknown>[]) {
+      const permCode = String(row.permission_code ?? '');
+      if (permCode) delegationPerms.add(permCode);
     }
-  }
-  actingByDelegation.forEach((v) => actingRoles.push(v));
-  const modsRes = await query('SELECT activate_modules FROM tenants WHERE id = $1', [tenantId], { tenantId });
-  const activateModules = Array.isArray(modsRes.rows[0]?.activate_modules)
-    ? (modsRes.rows[0].activate_modules as string[])
-    : [];
-  const scopeRes = await query(
-    `SELECT t.code AS tenant_code, t.name AS tenant_name,
+    // Per-user overrides are the last word on top of role- and delegation-derived
+    // permissions: a 'revoke' removes a code the roles or a delegation would
+    // otherwise grant, a 'grant' adds one they do not. Applied after the union so
+    // a revoke also beats a delegation that happens to carry the same code.
+    const permissions = new Set<string>([...permsRes.rows.map((r) => String(r.code)), ...delegationPerms]);
+    for (const row of overridesRes.rows as Record<string, unknown>[]) {
+      const code = String(row.code ?? '');
+      if (!code) continue;
+      if (row.effect === 'revoke') permissions.delete(code);
+      else permissions.add(code);
+    }
+    const actingByDelegation = new Map<number, ActingRoleSummary>();
+    for (const row of delegationRes.rows as Record<string, unknown>[]) {
+      const delegationId = Number(row.delegation_id);
+      if (!actingByDelegation.has(delegationId)) {
+        actingByDelegation.set(delegationId, {
+          delegation_id: delegationId,
+          delegation_code: String(row.delegation_code ?? ''),
+          delegation_company_id: row.delegation_company_id ?? null,
+          delegator_user_id: row.delegator_user_id ?? null,
+          delegator_name: row.delegator_first_name && row.delegator_last_name
+            ? `${row.delegator_first_name} ${row.delegator_last_name}`
+            : null,
+          role_code: String(row.role_code ?? ''),
+          role_name: String(row.role_name ?? ''),
+          starts_at: row.starts_at ?? null,
+          expires_at: row.expires_at ?? null,
+        } as ActingRoleSummary);
+      }
+    }
+    actingByDelegation.forEach((v) => actingRoles.push(v));
+    const modsRes = await client.query('SELECT activate_modules FROM tenants WHERE id = $1', [tenantId]);
+    const activateModules = Array.isArray(modsRes.rows[0]?.activate_modules)
+      ? (modsRes.rows[0].activate_modules as string[])
+      : [];
+    const scopeRes = await client.query(
+      `SELECT t.code AS tenant_code, t.name AS tenant_name,
             c.code AS company_code,
             c.name AS company_name, b.code AS branch_code, b.name AS branch_name,
             d.code AS department_code, d.name AS department_name,
@@ -159,17 +165,17 @@ export async function loadAuthUser(userId: number, tenantId: number): Promise<Au
      LEFT JOIN budgets bg ON bg.id = $10 AND bg.tenant_id = t.id
      LEFT JOIN fiscal_years fy ON fy.id = $11 AND fy.tenant_id = t.id
      WHERE t.id = $1`,
-    [tenantId, userRow.company_id ?? null, userRow.branch_id ?? null, userRow.department_id ?? null, userRow.division_id ?? null, userRow.id, userRow.requesting_location_id ?? null, userRow.cost_centre_id ?? null, userRow.project_id ?? null, userRow.budget_id ?? null, userRow.fiscal_year_id ?? null],
-    { tenantId }
+    [tenantId, userRow.company_id ?? null, userRow.branch_id ?? null, userRow.department_id ?? null, userRow.division_id ?? null, userRow.id, userRow.requesting_location_id ?? null, userRow.cost_centre_id ?? null, userRow.project_id ?? null, userRow.budget_id ?? null, userRow.fiscal_year_id ?? null]
   );
-  return {
-    ...(userRow as unknown as AuthUser),
-    ...(scopeRes.rows[0] ?? {}),
-    roles: rolesRes.rows as unknown as AuthUser['roles'],
-    permissions: [...permissions],
-    activate_modules: activateModules,
-    actingRoles: actingRoles.length > 0 ? actingRoles : undefined,
-  };
+    return {
+      ...(userRow as unknown as AuthUser),
+      ...(scopeRes.rows[0] ?? {}),
+      roles: rolesRes.rows as unknown as AuthUser['roles'],
+      permissions: [...permissions],
+      activate_modules: activateModules,
+      actingRoles: actingRoles.length > 0 ? actingRoles : undefined,
+    };
+  }, { tenantId });
 }
 
 export async function authenticate(req: Request, _res: Response, next: NextFunction) {
