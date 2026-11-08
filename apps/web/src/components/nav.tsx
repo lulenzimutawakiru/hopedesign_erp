@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { can, useAuth, type MeUser } from '../auth';
 import { navigate } from '../router';
 import { listHref } from '../listState';
+import { prefetchRoute } from '../routePrefetch';
 import {
   type BadgeKind,
   type Breakpoint,
@@ -338,6 +339,8 @@ function NavSub({
                 title={child.label}
                 aria-current={current ? 'page' : undefined}
                 onClick={() => onNavigate(child.href)}
+                onPointerEnter={() => prefetchRoute(child.href)}
+                onFocus={() => prefetchRoute(child.href)}
               >
                 <span className="nav-label">{child.label}</span>
               </button>
@@ -373,6 +376,8 @@ function NavButton({
       aria-current={active ? 'page' : undefined}
       className={`nav-item ${active ? 'nav-active' : ''}`}
       onClick={onClick}
+      onPointerEnter={() => prefetchRoute(item.href)}
+      onFocus={() => prefetchRoute(item.href)}
     >
       <span className="nav-dot" aria-hidden />
       {expanded ? <span className="nav-label">{item.label}</span> : item.label.slice(0, 1)}

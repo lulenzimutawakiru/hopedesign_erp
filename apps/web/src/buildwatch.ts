@@ -59,7 +59,12 @@ async function checkForNewBuild(): Promise<void> {
 }
 
 export function startBuildWatch(): void {
-  void checkForNewBuild();
+  // No immediate check on load: a freshly served index.html always carries the
+  // current build id, so the first /build.json round-trip would only ever match.
+  // It is also exactly the moment /api/auth/me and the first route chunks are
+  // competing for the connection, so we skip it and rely on the periodic poll,
+  // focus and visibility triggers to catch a long-lived tab that predates a
+  // deploy.
   window.setInterval(() => void checkForNewBuild(), POLL_MS);
   window.addEventListener('focus', () => void checkForNewBuild());
   document.addEventListener('visibilitychange', () => {
