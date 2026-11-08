@@ -1045,9 +1045,10 @@ export async function listSellableProducts(client: pg.PoolClient, ctx: Ctx) {
             ), 0)::numeric AS available_qty
      FROM products p
      WHERE p.tenant_id = $1 AND p.company_id = $2 AND p.status = 'ACTIVE'
+       AND p.type = ANY($3::text[])
      ORDER BY p.code
      LIMIT 80`,
-    [ctx.tenantId, ctx.companyId]
+    [ctx.tenantId, ctx.companyId, sales.SELLABLE_PRODUCT_TYPES]
   );
   return toCamelRows(res.rows);
 }

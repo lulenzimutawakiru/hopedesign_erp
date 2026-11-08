@@ -1,19 +1,41 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, fmtMoney, fmtNum } from '../../api';
-import { Badge, ErrorBanner, PageLoader } from '../../components/ui';
+import { api, fmtMoney, fmtNum, EntityMeta, ListResult } from '../../api';
+import { useAuth, can } from '../../auth';
+import { Badge, ErrorBanner, Modal, PageLoader } from '../../components/ui';
+import { JsonForm } from '../../components/JsonForm';
 
 type Rec = Record<string, unknown>;
 const n = (v: unknown) => Number(v ?? 0);
 
-/** Sellable product catalogue, surfaced from the Sales app (Odoo Sales > Products). */
+/**
+ * Sellable product catalogue — full CRUD for the finished goods the company
+ * sells. Backed by the `inventory/products` resource, which the API already
+ * scopes to finished goods only (reams, sheets, finished goods and security
+ * paper); raw materials, packaging and consumables are procurement-only and
+ * never appear here.
+ */
 export default function SalesProducts() {
+  const { user } = useAuth();
+  const [meta, setMeta] = useState<EntityMeta | null>(null);
   const [rows, setRows] = useState<Rec[]>([]);
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Rec | null>(null);
+
+  const canCreate = can(user, 'inventory.items.create');
+  const canEdit = can(user, 'inventory.items.update');
+
   useEffect(() => {
-    api<{ data: Rec[] }>('/api/ops/sales/products')
+    api<{ data: EntityMeta }>('/api/meta/entities/inventory/products')
+      .then((r) => setMeta(r.data))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load product form'));
+  }, []);
+
+  useEffect(() => {
+    api<ListResult>('/api/inventory/products?pageSize=200')
       .then((r) => setRows(Array.isArray(r.data) ? r.data : []))
-      .catch((e) => setError(e instanceof Error ? e.message : 'Products failed'));
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load products'));
   }, []);
 
   const filtered = useMemo(() => {
@@ -22,8 +44,23 @@ export default function SalesProducts() {
     return rows.filter((r) => `${r.code} ${r.name}`.toLowerCase().includes(s));
   }, [rows, q]);
 
-  if (error) return <ErrorBanner error={error} />;
-  if (!rows.length) return <PageLoader variant="page" label="Loading products…" />;
+  const reload = () =>
+    api<ListResult>('/api/inventory/products?pageSize=200')
+      .then((r) => setRows(Array.isArray(r.data) ? r.data : []))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to reload products'));
+
+  const submit = (id: number | null) => async (values: Record<string, unknown>) => {
+    await api(`/api/inventory/products${id ? `/${id}` : ''}`, {
+      method: id ? 'PATCH' : 'POST',
+      body: JSON.stringify(values),
+    });
+    setCreating(false);
+    setEditing(null);
+    await reload();
+  };
+
+  if (!meta && error) return <ErrorBanner error={error} />;
+  if (!meta) return <PageLoader variant="page" label="Loading products…" />;
 
   return (
     <div className="page">
@@ -31,13 +68,19 @@ export default function SalesProducts() {
         <div>
           <p className="mod-kicker" data-mod="sales">Sales</p>
           <h1>Products</h1>
-          <p className="muted">Sellable catalogue — list price, cost and gross margin.</p>
+          <p className="muted">Sellable finished goods — list price, cost and gross margin.</p>
         </div>
+        {canCreate && (
+          <div className="head-actions">
+            <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New product</button>
+          </div>
+        )}
       </header>
       <div className="toolbar">
         <input className="search-input" placeholder="Search products…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search products" />
         <span className="muted">{filtered.length} products</span>
       </div>
+      {error && <ErrorBanner error={error} />}
       <div className="table-wrap card">
         <table className="data">
           <thead>
@@ -52,11 +95,16 @@ export default function SalesProducts() {
           </thead>
           <tbody>
             {filtered.map((r) => {
-              const price = n(r.listPrice ?? r.standardPrice);
+              const price = n(r.standardPrice);
               const cost = n(r.standardCost);
               const margin = price > 0 ? ((price - cost) / price) * 100 : null;
               return (
-                <tr key={String(r.id)}>
+                <tr
+                  key={String(r.id)}
+                  className={canEdit ? 'row-click' : undefined}
+                  onClick={canEdit ? () => setEditing(r) : undefined}
+                  title={canEdit ? 'Edit product' : undefined}
+                >
                   <td className="cell-mono">{String(r.code)}</td>
                   <td>{String(r.name)}</td>
                   <td><Badge value={r.type} /></td>
@@ -70,7 +118,18 @@ export default function SalesProducts() {
           </tbody>
         </table>
       </div>
-      <p className="muted" style={{ marginTop: 12 }}>List price reflects the product's standard price; customers on a price list see their assigned price when quoting.</p>
+      <p className="muted" style={{ marginTop: 12 }}>Only finished goods are sold. Raw materials, packaging and consumables are managed under Inventory and never appear in sales.</p>
+
+      {creating && (
+        <Modal title="New product" onClose={() => setCreating(false)} wide>
+          <JsonForm meta={meta} onSubmit={submit(null)} onCancel={() => setCreating(false)} submitLabel="Create" />
+        </Modal>
+      )}
+      {editing && (
+        <Modal title={`Edit ${String(editing.code)}`} onClose={() => setEditing(null)} wide>
+          <JsonForm meta={meta} initial={editing} onSubmit={submit(Number(editing.id))} onCancel={() => setEditing(null)} submitLabel="Save" />
+        </Modal>
+      )}
     </div>
   );
 }
