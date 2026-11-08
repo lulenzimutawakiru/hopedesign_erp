@@ -5,6 +5,7 @@ import { tx, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest } from '../../utils.js';
 import * as proc from '../../services/procurement.js';
+import * as sourcing from '../../services/procurementSourcing.js';
 
 export const procurementOpsRouter = Router();
 const prUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -205,3 +206,40 @@ procurementOpsRouter.get('/payments', ...runGet('procurement.payments.view', (c,
 procurementOpsRouter.get('/payments/:id', ...runGet('procurement.payments.view', (c, ctx, _q, p) => proc.getSupplierPayment(c, ctx, Number(p.id))));
 procurementOpsRouter.post('/payments', ...run('procurement.payments.create', (c, ctx, b) => proc.createSupplierPayment(c, ctx, b)));
 procurementOpsRouter.post('/payments/:id/submit', ...run('procurement.payments.submit', (c, ctx, _b, p) => proc.submitSupplierPayment(c, ctx, Number(p.id))));
+
+// Vendor price lists (supplier_price_lists) — Odoo "Vendor Pricelists".
+procurementOpsRouter.get('/sourcing-meta', ...runGet('procurement.suppliers.view', (c, ctx) => sourcing.sourcingMeta(c, ctx)));
+procurementOpsRouter.get('/vendor-pricelists', ...runGet('procurement.suppliers.view', (c, ctx, q) => sourcing.listVendorPricelists(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  supplierId: q.supplierId != null ? Number(q.supplierId) : undefined,
+  productId: q.productId != null ? Number(q.productId) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+procurementOpsRouter.post('/vendor-pricelists', ...run('procurement.suppliers.update', (c, ctx, b) => sourcing.createVendorPricelist(c, ctx, b)));
+procurementOpsRouter.patch('/vendor-pricelists/:id', ...run('procurement.suppliers.update', (c, ctx, b, p) => sourcing.updateVendorPricelist(c, ctx, Number(p.id), b)));
+
+// Supplier contracts (supplier_contracts) — Odoo "Purchase Agreements".
+procurementOpsRouter.get('/supplier-contracts', ...runGet('procurement.contracts.view', (c, ctx, q) => sourcing.listSupplierContracts(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  supplierId: q.supplierId != null ? Number(q.supplierId) : undefined,
+  status: q.status != null ? String(q.status) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+procurementOpsRouter.post('/supplier-contracts', ...run('procurement.contracts.create', (c, ctx, b) => sourcing.createSupplierContract(c, ctx, b)));
+procurementOpsRouter.patch('/supplier-contracts/:id', ...run('procurement.contracts.update', (c, ctx, b, p) => sourcing.updateSupplierContract(c, ctx, Number(p.id), b)));
+
+// Supplier evaluations (supplier_evaluations) — vendor performance.
+procurementOpsRouter.get('/supplier-evaluations', ...runGet('procurement.suppliers.view', (c, ctx, q) => sourcing.listSupplierEvaluations(c, ctx, {
+  supplierId: q.supplierId != null ? Number(q.supplierId) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+procurementOpsRouter.post('/supplier-evaluations', ...run('procurement.suppliers.evaluate', (c, ctx, b) => sourcing.createSupplierEvaluation(c, ctx, b)));
+
+// Purchase analysis — Odoo "Purchases Analysis".
+procurementOpsRouter.get('/purchase-analysis', ...runGet('procurement.orders.view', (c, ctx, q) => sourcing.purchaseAnalysis(c, ctx, {
+  fromDate: q.fromDate != null ? String(q.fromDate) : undefined,
+  toDate: q.toDate != null ? String(q.toDate) : undefined,
+})));

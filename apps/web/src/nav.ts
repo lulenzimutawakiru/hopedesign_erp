@@ -97,6 +97,10 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'demand', label: 'Demand', href: '/buy/demand', perm: 'procurement.requisitions.view' , group: 'Sourcing'},
           { id: 'requisitions', label: 'Requisitions', href: '/buy/requisitions', perm: 'procurement.requisitions.view' , group: 'Sourcing'},
           { id: 'rfqs', label: 'RFQs', href: '/buy/rfqs', perm: 'procurement.rfqs.view' , group: 'Sourcing'},
+          { id: 'vendor-pricelists', label: 'Vendor Pricelists', href: '/buy/vendor-pricelists', perm: 'procurement.suppliers.view' , group: 'Sourcing'},
+          { id: 'supplier-contracts', label: 'Supplier Contracts', href: '/buy/supplier-contracts', perm: 'procurement.contracts.view' , group: 'Sourcing'},
+          { id: 'supplier-evaluations', label: 'Evaluations', href: '/buy/supplier-evaluations', perm: 'procurement.suppliers.view' , group: 'Sourcing'},
+          { id: 'purchase-analysis', label: 'Purchase Analysis', href: '/buy/purchase-analysis', perm: 'procurement.orders.view' , group: 'Reporting'},
           { id: 'orders', label: 'Purchase Orders', href: '/buy/orders', perm: 'procurement.orders.view' , group: 'Purchasing'},
           { id: 'grn', label: 'Goods Receipts', href: '/buy/receipts', perm: 'procurement.goods_receipts.view' , group: 'Purchasing'},
           { id: 'invoices', label: 'Supplier Invoices', href: '/buy/invoices', perm: 'procurement.supplier_invoices.view' , group: 'Financials'},
@@ -825,6 +829,10 @@ export function requiredPermForPath(path: string): string | undefined {
       receipts: 'procurement.goods_receipts.view',
       invoices: 'procurement.supplier_invoices.view',
       payments: 'procurement.payments.view',
+      'vendor-pricelists': 'procurement.suppliers.view',
+      'supplier-contracts': 'procurement.contracts.view',
+      'supplier-evaluations': 'procurement.suppliers.view',
+      'purchase-analysis': 'procurement.orders.view',
     };
     return map[parts[1] ?? ''] ?? 'procurement.orders.view';
   }

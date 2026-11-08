@@ -8,6 +8,7 @@ import DownloadMenu from '../components/DownloadMenu';
 import { SupplierPicker } from '../components/SupplierPicker';
 import { pick } from '../helpers';
 import { toast } from '../components/toast';
+import SupplierSourcing from './SupplierSourcing';
 
 type Rec = Record<string, unknown>;
 
@@ -256,6 +257,7 @@ export default function ProcurementFlow({ path }: { path: string }) {
   if (view === 'payments') return <PaymentList />;
   if (view === 'demand') return <DemandDesk />;
   if (view === 'office-needs') return <OfficeNeedsForm />;
+  if (view === 'vendor-pricelists' || view === 'supplier-contracts' || view === 'supplier-evaluations' || view === 'purchase-analysis') return <SupplierSourcing tab={view} />;
   return <BuyBoard />;
 }
 
