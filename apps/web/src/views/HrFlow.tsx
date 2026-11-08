@@ -16,6 +16,9 @@ import { ArrearsComposer, ArrearsList } from './HrArrears';
 import { OffboardingComposer, OffboardingDesk, OffboardingList } from './HrOffboarding';
 import { PayrollCommandCentre, PayrollComposer, PayrollList } from './HrPayrollCentre';
 import { AttendanceDesk, ExceptionsCentre, PeopleBoard } from './HrPeopleDesks';
+import HrPayslips from './HrPayslips';
+import SalaryRules from './SalaryRules';
+import PayrollReports from './PayrollReports';
 
 /**
  * People (HR) flow router. Keeps only path dispatch and the thin LeaveFlow
@@ -44,6 +47,9 @@ export default function HrFlow({ path }: { path: string }) {
   if (view === 'payrolls' && id === 'runs') return <PayrollList />;
   if (view === 'payrolls' && id) return <PayrollDesk id={Number(id)} />;
   if (view === 'payrolls') return <PayrollCommandCentre />;
+  if (view === 'payslips') return <HrPayslips />;
+  if (view === 'salary-rules') return <SalaryRules />;
+  if (view === 'payroll-reports') return <PayrollReports />;
   if (view === 'final-settlements' && id) return <FinalSettlementDesk id={Number(id)} />;
   if (view === 'final-settlements') return <FinalSettlementList />;
   if (view === 'off-cycle' && id === 'new') return <OffCycleComposer />;
