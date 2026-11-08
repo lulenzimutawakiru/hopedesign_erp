@@ -19,6 +19,7 @@ import { AttendanceDesk, ExceptionsCentre, PeopleBoard } from './HrPeopleDesks';
 import HrPayslips from './HrPayslips';
 import SalaryRules from './SalaryRules';
 import PayrollReports from './PayrollReports';
+import TimeOffAdmin from './TimeOffAdmin';
 
 /**
  * People (HR) flow router. Keeps only path dispatch and the thin LeaveFlow
@@ -38,6 +39,7 @@ export default function HrFlow({ path }: { path: string }) {
   if (view === 'employees') return <EmployeeList />;
   if (view === 'employee-ids') return <EmployeeIdentity path={path} />;
   if (view === 'leave') return <LeaveDesk path={path} />;
+  if (view === 'time-off') return <TimeOffAdmin tab={id ?? 'types'} />;
   if (view === 'attendance') return <AttendanceDesk />;
   if (view === 'contracts') return <ContractFlow path={path} />;
   if (view === 'payroll-calendar') return <PayrollCalendar />;
