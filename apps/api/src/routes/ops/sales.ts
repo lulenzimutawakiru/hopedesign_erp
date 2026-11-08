@@ -4,13 +4,14 @@ import { tx, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler } from '../../utils.js';
 import * as sales from '../../services/sales.js';
+import * as priceLists from '../../services/salesPriceLists.js';
 
 export const salesOpsRouter = Router();
 
 type OpFn = (client: pg.PoolClient, ctx: Ctx, body: any, params: Record<string, string>) => Promise<unknown>;
 type QueryFn = (client: pg.PoolClient, ctx: Ctx, query: Record<string, unknown>, params: Record<string, string>) => Promise<unknown>;
 
-const run = (permission: string, fn: OpFn) => [
+const run = (permission: string | string[], fn: OpFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
     const out = await tx((client) => fn(client, req.ctx, req.body ?? {}, req.params as Record<string, string>), req.ctx);
@@ -18,7 +19,7 @@ const run = (permission: string, fn: OpFn) => [
   }),
 ];
 
-const runGet = (permission: string, fn: QueryFn) => [
+const runGet = (permission: string | string[], fn: QueryFn) => [
   requirePermission(permission),
   asyncHandler(async (req, res) => {
     const out = await tx(
@@ -31,7 +32,7 @@ const runGet = (permission: string, fn: QueryFn) => [
 
 salesOpsRouter.get('/board', ...runGet('sales.orders.view', (c, ctx) => sales.salesBoard(c, ctx)));
 salesOpsRouter.get('/command-center', ...runGet('sales.orders.view', (c, ctx) => sales.commandCenter(c, ctx)));
-salesOpsRouter.get('/products', ...runGet('sales.quotations.create', (c, ctx) => sales.listSellableProducts(c, ctx)));
+salesOpsRouter.get('/products', ...runGet(['sales.orders.view', 'sales.quotations.create'], (c, ctx, q) => sales.listSellableProducts(c, ctx, q.customerId != null ? Number(q.customerId) : undefined)));
 salesOpsRouter.get('/customers', ...runGet('sales.quotations.view', (c, ctx, q) => sales.listCustomers(c, ctx, q.q != null ? String(q.q) : undefined)));
 salesOpsRouter.get('/customers/directory', ...runGet('sales.quotations.view', (c, ctx, q) => sales.customerDirectory(c, ctx, q.q != null ? String(q.q) : undefined)));
 salesOpsRouter.get('/customers/:id/360', ...runGet('sales.quotations.view', (c, ctx, _q, p) => sales.customer360(c, ctx, Number(p.id))));
@@ -143,3 +144,12 @@ salesOpsRouter.post('/debit-notes', ...run('sales.debit_notes.create', (c, ctx, 
 salesOpsRouter.post('/returns', ...run('sales.returns.create', (c, ctx, b) => sales.createSalesReturn(c, ctx, b)));
 salesOpsRouter.get('/returns/:id', ...runGet('sales.returns.view', (c, ctx, _q, p) => sales.getSalesReturn(c, ctx, Number(p.id))));
 salesOpsRouter.post('/returns/:id/complete', ...run('sales.returns.complete', (c, ctx, b, p) => sales.completeSalesReturn(c, ctx, Number(p.id), { qcResult: b.qcResult != null ? String(b.qcResult) : null })));
+
+// --- Sales price lists (Odoo-style customer price sets) ---
+salesOpsRouter.get('/price-lists', ...runGet('sales.price_lists.view', (c, ctx) => priceLists.listPriceLists(c, ctx)));
+salesOpsRouter.post('/price-lists', ...run('sales.price_lists.create', (c, ctx, b) => priceLists.createPriceList(c, ctx, b)));
+salesOpsRouter.get('/price-lists/:id', ...runGet('sales.price_lists.view', (c, ctx, _q, p) => priceLists.getPriceList(c, ctx, Number(p.id))));
+salesOpsRouter.put('/price-lists/:id', ...run('sales.price_lists.update', (c, ctx, b, p) => priceLists.updatePriceList(c, ctx, Number(p.id), b)));
+salesOpsRouter.delete('/price-lists/:id', ...run('sales.price_lists.delete', (c, ctx, _b, p) => priceLists.deletePriceList(c, ctx, Number(p.id))));
+salesOpsRouter.put('/price-lists/:id/items', ...run('sales.price_lists.update', (c, ctx, b, p) => priceLists.savePriceListItems(c, ctx, Number(p.id), Array.isArray(b.items) ? b.items : [])));
+salesOpsRouter.put('/customers/:id/price-list', ...run('sales.price_lists.update', (c, ctx, b, p) => priceLists.assignPriceListToCustomer(c, ctx, Number(p.id), b.priceListId != null ? Number(b.priceListId) : null)));

@@ -85,6 +85,8 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'credits', label: 'Credit Notes', href: '/sales/credit_notes', perm: 'sales.credit_notes.view' , group: 'Billing'},
           { id: 'debits', label: 'Debit Notes', href: '/sales/debit_notes', perm: 'sales.debit_notes.view' , group: 'Billing'},
           { id: 'returns', label: 'Returns', href: '/sales/returns', perm: 'sales.returns.view' , group: 'Billing'},
+          { id: 'price_lists', label: 'Price Lists', href: '/sales/price_lists', perm: 'sales.price_lists.view' , group: 'Pricing'},
+          { id: 'products', label: 'Products', href: '/sales/products', perm: 'sales.orders.view' , group: 'Master Data'},
         ],
       },
       {
@@ -815,6 +817,7 @@ export function requiredPermForPath(path: string): string | undefined {
     return map[parts[1] ?? ''] ?? 'procurement.orders.view';
   }
   if (parts[0] === 'sales' && parts[1] === 'customers') return 'sales.quotations.view';
+  if (parts[0] === 'sales' && parts[1] === 'products') return 'sales.orders.view';
   if (parts[0] === 'sales' && parts[1]) return `sales.${parts[1]}.view`;
   if (parts[0] === 'inventory-intel') return 'inventory.stock.view';
   if (parts[0] === 'inventory' && parts[1]) {

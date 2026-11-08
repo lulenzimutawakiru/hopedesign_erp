@@ -7,6 +7,8 @@ import { useMenu } from '../components/popoverFocus';
 import DownloadMenu from '../components/DownloadMenu';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { toast } from '../components/toast';
+import PriceLists from './sales/PriceLists';
+import SalesProducts from './sales/Products';
 
 const RESOURCES: { resource: string; label: string; perm: string }[] = [
   { resource: 'quotations', label: 'Quotations', perm: 'sales.quotations.view' },
@@ -78,6 +80,8 @@ function lineTotal(qty: number, price: number, disc: number, tax: number): numbe
 export default function SalesFlow({ path }: { path: string }) {
   const { resource, id } = parseSalesPath(path);
   if (resource === 'board' || resource === '') return <SalesBoard />;
+  if (resource === 'price_lists') return <PriceLists />;
+  if (resource === 'products') return <SalesProducts />;
   if (id === 'new') return <Composer resource={resource} />;
   if (resource === 'customers' && id && Number(id) > 0) return <CustomerDesk id={Number(id)} />;
   if (resource === 'customers') return <CustomerDirectory />;
@@ -1142,13 +1146,13 @@ function Composer({ resource }: { resource: string }) {
                   <td>
                     <LookupField
                       compact
-                      endpoint="/api/ops/sales/products"
+                      endpoint={customerId ? `/api/ops/sales/products?customerId=${customerId}` : '/api/ops/sales/products'}
                       display={(r) => `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`}
                       valueLabel={l.productLabel}
                       onPick={(r) => setLine(l.key, {
                         productId: num(r.id),
                         productLabel: `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`,
-                        unitPrice: num(pick(r, 'standardPrice', 'standard_price'), l.unitPrice),
+                        unitPrice: num(pick(r, 'listPrice', 'standardPrice', 'standard_price'), l.unitPrice),
                       })}
                     />
                   </td>
