@@ -34,6 +34,17 @@ export function EmployeeEditor({ id }: { id: number }) {
   const [payrollCurrency, setPayrollCurrency] = useState('');
   const [payrollEnabled, setPayrollEnabled] = useState(false);
   const [isSecondary, setIsSecondary] = useState(false);
+  const [managerId, setManagerId] = useState('');
+  const [coachId, setCoachId] = useState('');
+  const [locationId, setLocationId] = useState('');
+  const [workEmail, setWorkEmail] = useState('');
+  const [workPhone, setWorkPhone] = useState('');
+  const [mobilePhone, setMobilePhone] = useState('');
+  const [workPermitNo, setWorkPermitNo] = useState('');
+  const [badgeId, setBadgeId] = useState('');
+  const [tags, setTags] = useState('');
+  const [people, setPeople] = useState<Rec[]>([]);
+  const [locations, setLocations] = useState<Rec[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -41,10 +52,14 @@ export function EmployeeEditor({ id }: { id: number }) {
       api<{ data: Rec[] }>('/api/ops/hr/departments'),
       api<{ data: Rec[] }>('/api/ops/hr/payroll-groups'),
       api<{ data: Rec }>(`/api/ops/hr/employees/${id}`),
+      api<{ data: Rec[] }>('/api/ops/hr/employees/picker'),
+      api<{ data: { locations: Rec[] } }>('/api/ops/hcm/org-refs'),
     ])
-      .then(([deptRes, groupRes, empRes]) => {
+      .then(([deptRes, groupRes, empRes, peopleRes, orgRes]) => {
         setDepts(deptRes.data ?? []);
         setGroups(groupRes.data ?? []);
+        setPeople(peopleRes.data ?? []);
+        setLocations(orgRes.data.locations ?? []);
         const e = empRes.data.employee as Rec;
         setDoc(empRes.data);
         setFirstName(String(e.firstName ?? ''));
@@ -66,6 +81,15 @@ export function EmployeeEditor({ id }: { id: number }) {
         setPayrollCurrency(String(e.payrollCurrency ?? ''));
         setPayrollEnabled(Boolean(e.payrollEnabled));
         setIsSecondary(Boolean(e.isSecondaryEmployment));
+        setManagerId(e.managerId != null ? String(e.managerId) : '');
+        setCoachId(e.coachId != null ? String(e.coachId) : '');
+        setLocationId(e.locationId != null ? String(e.locationId) : '');
+        setWorkEmail(String(e.workEmail ?? ''));
+        setWorkPhone(String(e.workPhone ?? ''));
+        setMobilePhone(String(e.mobilePhone ?? ''));
+        setWorkPermitNo(String(e.workPermitNo ?? ''));
+        setBadgeId(String(e.badgeId ?? ''));
+        setTags(Array.isArray(e.tags) ? (e.tags as unknown[]).join(', ') : '');
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Employee failed'));
   }, [id]);
@@ -95,6 +119,15 @@ export function EmployeeEditor({ id }: { id: number }) {
           payrollGroupId: payrollGroupId ? Number(payrollGroupId) : null,
           paymentMethod: paymentMethod || null,
           payrollCurrency: payrollCurrency.trim() || null,
+          managerId: managerId ? Number(managerId) : null,
+          coachId: coachId ? Number(coachId) : null,
+          locationId: locationId ? Number(locationId) : null,
+          workEmail: workEmail.trim() || null,
+          workPhone: workPhone.trim() || null,
+          mobilePhone: mobilePhone.trim() || null,
+          workPermitNo: workPermitNo.trim() || null,
+          badgeId: badgeId.trim() || null,
+          tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
         }),
       });
       navigate(`/people/employees/${id}`);
@@ -147,7 +180,7 @@ export function EmployeeEditor({ id }: { id: number }) {
               <option value="SUSPENDED">Suspended</option>
             </select>
           </div>
-          <div className="field"><label>Work email</label><input type="email" value={email} onChange={(ev) => setEmail(ev.target.value)} /></div>
+          <div className="field"><label>Private email</label><input type="email" value={email} onChange={(ev) => setEmail(ev.target.value)} /></div>
           <div className="field"><label>Phone</label><input value={phone} onChange={(ev) => setPhone(ev.target.value)} /></div>
           <div className="field"><label>TIN</label><input value={tin} onChange={(ev) => setTin(ev.target.value)} /></div>
           <div className="field"><label>NSSF no</label><input value={nssfNo} onChange={(ev) => setNssfNo(ev.target.value)} /></div>
@@ -188,6 +221,36 @@ export function EmployeeEditor({ id }: { id: number }) {
             <p className="muted">Taxed at a fixed rate instead of the resident PAYE bands, and no NSSF is withheld here.</p>
           </div>
         </div>
+        <div className="def-sec-head" style={{ marginTop: 18 }}><span className="def-sec-icon" aria-hidden>🏢</span><div><h3>Directory</h3><p>Reporting line, work location and work contacts.</p></div></div>
+        <div className="form-grid" style={{ marginTop: 10 }}>
+          <div className="field">
+            <label>Manager</label>
+            <select value={managerId} onChange={(ev) => setManagerId(ev.target.value)}>
+              <option value="">—</option>
+              {people.filter((p) => Number(p.id) !== id).map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.firstName)} {String(p.lastName)}{p.position ? ` · ${String(p.position)}` : ''}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Coach</label>
+            <select value={coachId} onChange={(ev) => setCoachId(ev.target.value)}>
+              <option value="">—</option>
+              {people.filter((p) => Number(p.id) !== id).map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.firstName)} {String(p.lastName)}{p.position ? ` · ${String(p.position)}` : ''}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Work location</label>
+            <select value={locationId} onChange={(ev) => setLocationId(ev.target.value)}>
+              <option value="">—</option>
+              {locations.map((l) => <option key={String(l.id)} value={String(l.id)}>{String(l.code)} · {String(l.name)}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>Work email</label><input type="email" value={workEmail} onChange={(ev) => setWorkEmail(ev.target.value)} /></div>
+          <div className="field"><label>Work phone</label><input value={workPhone} onChange={(ev) => setWorkPhone(ev.target.value)} /></div>
+          <div className="field"><label>Mobile phone</label><input value={mobilePhone} onChange={(ev) => setMobilePhone(ev.target.value)} /></div>
+          <div className="field"><label>Work permit no</label><input value={workPermitNo} onChange={(ev) => setWorkPermitNo(ev.target.value)} /></div>
+          <div className="field"><label>Badge ID</label><input value={badgeId} onChange={(ev) => setBadgeId(ev.target.value)} /></div>
+          <div className="field"><label>Tags</label><input value={tags} onChange={(ev) => setTags(ev.target.value)} placeholder="Comma separated" /></div>
+        </div>
         <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={busy || !canEdit} onClick={save}>Save changes</button>
       </section>
     </div>
@@ -214,9 +277,20 @@ export function EmployeeComposer() {
   const [userHits, setUserHits] = useState<Rec[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [managerId, setManagerId] = useState('');
+  const [coachId, setCoachId] = useState('');
+  const [locationId, setLocationId] = useState('');
+  const [workPhone, setWorkPhone] = useState('');
+  const [mobilePhone, setMobilePhone] = useState('');
+  const [badgeId, setBadgeId] = useState('');
+  const [tags, setTags] = useState('');
+  const [people, setPeople] = useState<Rec[]>([]);
+  const [locations, setLocations] = useState<Rec[]>([]);
   useEffect(() => {
     api<{ data: Rec[] }>('/api/ops/hr/departments').then((r) => setDepts(r.data ?? [])).catch(() => undefined);
     api<{ data: Rec[] }>('/api/ops/hr/payroll-groups').then((r) => setGroups(r.data ?? [])).catch(() => undefined);
+    api<{ data: Rec[] }>('/api/ops/hr/employees/picker').then((r) => setPeople(r.data ?? [])).catch(() => undefined);
+    api<{ data: { locations: Rec[] } }>('/api/ops/hcm/org-refs').then((r) => setLocations(r.data.locations ?? [])).catch(() => undefined);
   }, []);
   const searchUsers = async () => {
     if (!userQ.trim()) { setUserHits([]); return; }
@@ -243,6 +317,13 @@ export function EmployeeComposer() {
           paymentMethod: paymentMethod || null,
           payrollCurrency: payrollCurrency.trim() || null,
           userId: userId ? Number(userId) : null,
+          managerId: managerId ? Number(managerId) : null,
+          coachId: coachId ? Number(coachId) : null,
+          locationId: locationId ? Number(locationId) : null,
+          workPhone: workPhone.trim() || null,
+          mobilePhone: mobilePhone.trim() || null,
+          badgeId: badgeId.trim() || null,
+          tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
         }),
       });
       if (returnTo) navigate('/people/' + returnTo, { query: { hired: '1' } });
@@ -338,6 +419,34 @@ export function EmployeeComposer() {
               </table>
             </div>
           )}
+        </div>
+        <div className="def-sec-head" style={{ marginTop: 18 }}><span className="def-sec-icon" aria-hidden>🏢</span><div><h3>Directory</h3><p>Reporting line, work location and badge.</p></div></div>
+        <div className="form-grid" style={{ marginTop: 10 }}>
+          <div className="field">
+            <label>Manager</label>
+            <select value={managerId} onChange={(e) => setManagerId(e.target.value)}>
+              <option value="">—</option>
+              {people.map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.firstName)} {String(p.lastName)}{p.position ? ` · ${String(p.position)}` : ''}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Coach</label>
+            <select value={coachId} onChange={(e) => setCoachId(e.target.value)}>
+              <option value="">—</option>
+              {people.map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.firstName)} {String(p.lastName)}{p.position ? ` · ${String(p.position)}` : ''}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Work location</label>
+            <select value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+              <option value="">—</option>
+              {locations.map((l) => <option key={String(l.id)} value={String(l.id)}>{String(l.code)} · {String(l.name)}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>Work phone</label><input value={workPhone} onChange={(e) => setWorkPhone(e.target.value)} /></div>
+          <div className="field"><label>Mobile phone</label><input value={mobilePhone} onChange={(e) => setMobilePhone(e.target.value)} /></div>
+          <div className="field"><label>Badge ID</label><input value={badgeId} onChange={(e) => setBadgeId(e.target.value)} /></div>
+          <div className="field"><label>Tags</label><input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="Comma separated" /></div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 16 }} disabled={busy} onClick={save}>Save employee</button>
       </section>

@@ -5,6 +5,7 @@ import { tx, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest, notFound } from '../../utils.js';
 import * as hr from '../../services/hr.js';
+import * as employeeDirectory from '../../services/employeeDirectory.js';
 import * as finalSettlement from '../../services/finalSettlement.js';
 import * as offCycle from '../../services/offCycle.js';
 import * as arrears from '../../services/arrears.js';
@@ -78,7 +79,33 @@ hrOpsRouter.get('/employees', ...runGet('hr.employees.view', (c, ctx, q) => hr.l
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
 })));
+hrOpsRouter.get('/employees/picker', ...runGet('hr.employees.view', (c, ctx) => employeeDirectory.employeePicker(c, ctx)));
+hrOpsRouter.get('/directory', ...runGet('hr.employees.view', (c, ctx) => employeeDirectory.employeeDirectory(c, ctx)));
 hrOpsRouter.get('/employees/:id', ...runGet('hr.employees.view', (c, ctx, _q, p) => hr.getEmployee(c, ctx, Number(p.id))));
+hrOpsRouter.get('/employees/:id/private', ...runGet('hr.employees.view', (c, ctx, _q, p) => employeeDirectory.getEmployeePrivate(c, ctx, Number(p.id))));
+hrOpsRouter.post('/employees/:id/private/:kind', ...run('hr.employees.update', (c, ctx, b, p) => employeeDirectory.savePrivateItem(
+  c,
+  ctx,
+  Number(p.id),
+  p.kind as employeeDirectory.PrivateKind,
+  null,
+  b ?? {}
+)));
+hrOpsRouter.patch('/employees/:id/private/:kind/:itemId', ...run('hr.employees.update', (c, ctx, b, p) => employeeDirectory.savePrivateItem(
+  c,
+  ctx,
+  Number(p.id),
+  p.kind as employeeDirectory.PrivateKind,
+  Number(p.itemId),
+  b ?? {}
+)));
+hrOpsRouter.delete('/employees/:id/private/:kind/:itemId', ...run('hr.employees.update', (c, ctx, _b, p) => employeeDirectory.deletePrivateItem(
+  c,
+  ctx,
+  Number(p.id),
+  p.kind as employeeDirectory.PrivateKind,
+  Number(p.itemId)
+)));
 hrOpsRouter.get('/directory/users', ...runGet('hr.employees.view', (c, ctx, q) => identityLink.searchUsers(
   c,
   ctx,
@@ -142,6 +169,15 @@ hrOpsRouter.post('/employees', ...run('hr.employees.create', (c, ctx, b) => hr.c
     payrollCurrency: b.payrollCurrency != null ? String(b.payrollCurrency) : null,
     payrollGroupId: b.payrollGroupId != null ? String(b.payrollGroupId) : null,
     userId: b.userId != null && b.userId !== '' ? Number(b.userId) : null,
+    managerId: b.managerId != null && b.managerId !== '' ? Number(b.managerId) : null,
+    coachId: b.coachId != null && b.coachId !== '' ? Number(b.coachId) : null,
+    locationId: b.locationId != null && b.locationId !== '' ? Number(b.locationId) : null,
+    workEmail: b.workEmail != null ? String(b.workEmail) : null,
+    workPhone: b.workPhone != null ? String(b.workPhone) : null,
+    mobilePhone: b.mobilePhone != null ? String(b.mobilePhone) : null,
+    workPermitNo: b.workPermitNo != null ? String(b.workPermitNo) : null,
+    badgeId: b.badgeId != null ? String(b.badgeId) : null,
+    tags: Array.isArray(b.tags) ? b.tags.map((t: unknown) => String(t)) : undefined,
   })));
 hrOpsRouter.patch('/employees/:id', ...run('hr.employees.update', (c, ctx, b, p) => hr.updateEmployee(c, ctx, Number(p.id), {
   firstName: b.firstName !== undefined && b.firstName !== null ? String(b.firstName) : undefined,
@@ -163,6 +199,15 @@ hrOpsRouter.patch('/employees/:id', ...run('hr.employees.update', (c, ctx, b, p)
     paymentMethod: b.paymentMethod !== undefined ? (b.paymentMethod === null || b.paymentMethod === '' ? null : String(b.paymentMethod)) : undefined,
     payrollCurrency: b.payrollCurrency !== undefined ? (b.payrollCurrency === null || b.payrollCurrency === '' ? null : String(b.payrollCurrency)) : undefined,
     payrollGroupId: b.payrollGroupId !== undefined ? (b.payrollGroupId === null || b.payrollGroupId === '' ? null : String(b.payrollGroupId)) : undefined,
+    managerId: b.managerId !== undefined ? (b.managerId === null || b.managerId === '' ? null : Number(b.managerId)) : undefined,
+    coachId: b.coachId !== undefined ? (b.coachId === null || b.coachId === '' ? null : Number(b.coachId)) : undefined,
+    locationId: b.locationId !== undefined ? (b.locationId === null || b.locationId === '' ? null : Number(b.locationId)) : undefined,
+    workEmail: b.workEmail !== undefined ? (b.workEmail === null || b.workEmail === '' ? null : String(b.workEmail)) : undefined,
+    workPhone: b.workPhone !== undefined ? (b.workPhone === null || b.workPhone === '' ? null : String(b.workPhone)) : undefined,
+    mobilePhone: b.mobilePhone !== undefined ? (b.mobilePhone === null || b.mobilePhone === '' ? null : String(b.mobilePhone)) : undefined,
+    workPermitNo: b.workPermitNo !== undefined ? (b.workPermitNo === null || b.workPermitNo === '' ? null : String(b.workPermitNo)) : undefined,
+    badgeId: b.badgeId !== undefined ? (b.badgeId === null || b.badgeId === '' ? null : String(b.badgeId)) : undefined,
+    tags: b.tags !== undefined ? (Array.isArray(b.tags) ? b.tags.map((t: unknown) => String(t)) : null) : undefined,
   })));
 hrOpsRouter.post('/employees/:id/terminate', ...run('hr.employees.terminate', (c, ctx, b, p) => hr.terminateEmployee(c, ctx, Number(p.id), b.terminationDate != null ? String(b.terminationDate) : null)));
 hrOpsRouter.post('/employees/:id/clock-in', ...run('hr.attendance.create', (c, ctx, b, p) => hr.clockIn(c, ctx, Number(p.id), b)));
