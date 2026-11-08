@@ -4452,6 +4452,7 @@ html[data-theme='dark'] .fin-banner-critical span { color: #D8A6A1; }
 
 /* ---------- KPI cards ---------- */
 .fin-kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.fin-kpi-grid-5 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
 .fin-kpi {
   display: flex; flex-direction: column; gap: 8px; text-align: left;
   padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius);
@@ -4656,11 +4657,11 @@ html[data-theme='dark'] .fin-tree-row:hover { background: #0F2739; }
 
 /* ---------- Responsive: two columns on tablet, stacked on phone ---------- */
 @media (max-width: 1100px) {
-  .fin-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fin-kpi-grid, .fin-kpi-grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .fin-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
-  .fin-kpi-grid { grid-template-columns: 1fr; }
+  .fin-kpi-grid, .fin-kpi-grid-5 { grid-template-columns: 1fr; }
   .fin-kpi-value { font-size: 22px; }
   .fin-head h1 { font-size: 21px; }
   .fin-trend { height: 132px; gap: 6px; }

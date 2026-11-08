@@ -99,6 +99,26 @@ financeOpsRouter.get('/profit-loss', ...runGet(['finance.journals.view', 'financ
 }));
 financeOpsRouter.get('/balance-sheet', ...runGet(['finance.journals.view', 'finance.reports.view'], (c, ctx, q) =>
   fin.balanceSheet(c, ctx, q.asOf != null ? String(q.asOf) : new Date().toISOString().slice(0, 10))));
+financeOpsRouter.get('/cash-flow', ...runGet(['finance.journals.view', 'finance.reports.view'], (c, ctx, q) => {
+  const to = q.to != null ? String(q.to) : new Date().toISOString().slice(0, 10);
+  const from = q.from != null ? String(q.from) : `${to.slice(0, 4)}-01-01`;
+  return fin.cashFlowStatement(c, ctx, from, to);
+}));
+financeOpsRouter.get('/general-ledger', ...runGet(['finance.journals.view', 'finance.reports.view'], (c, ctx, q) =>
+  fin.generalLedger(c, ctx, {
+    accountId: q.accountId != null ? Number(q.accountId) : undefined,
+    from: q.from != null ? String(q.from) : undefined,
+    to: q.to != null ? String(q.to) : undefined,
+    limit: q.limit != null ? Number(q.limit) : undefined,
+  })));
+financeOpsRouter.get('/partner-ledger', ...runGet(['finance.journals.view', 'finance.reports.view'], (c, ctx, q) =>
+  fin.partnerLedger(c, ctx, {
+    partnerType: q.partnerType === 'supplier' ? 'supplier' : 'customer',
+    partnerId: q.partnerId != null ? Number(q.partnerId) : undefined,
+    from: q.from != null ? String(q.from) : undefined,
+    to: q.to != null ? String(q.to) : undefined,
+    limit: q.limit != null ? Number(q.limit) : undefined,
+  })));
 
 financeOpsRouter.get('/ar', ...runGet(['finance.journals.view', 'sales.invoices.view'], (c, ctx, q) =>
   fin.arLedger(c, ctx, { bucket: q.bucket != null ? String(q.bucket) : undefined })));
