@@ -3,6 +3,7 @@ import { api, fmtMoney, fmtNum, EntityMeta, ListResult } from '../../api';
 import { useAuth, can } from '../../auth';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../../components/ui';
 import { JsonForm, FormSection, SelectOption } from '../../components/JsonForm';
+import { EFRIS_UNITS_OF_MEASURE } from '../../data/efrisUnitsOfMeasure';
 
 type Rec = Record<string, unknown>;
 const n = (v: unknown) => Number(v ?? 0);
@@ -48,6 +49,12 @@ const ENUM_OPTIONS: Record<string, SelectOption[]> = {
     { value: 'REGISTERED', label: 'Registered' },
     { value: 'EXCLUDED', label: 'Excluded' },
   ],
+};
+
+/** Static selects that don't need fetched lookup data (enums + official EFRIS UOM codes). */
+const STATIC_SELECTS: Record<string, SelectOption[]> = {
+  ...ENUM_OPTIONS,
+  efrisUnitOfMeasure: EFRIS_UNITS_OF_MEASURE,
 };
 
 /** Field groups — anything not listed falls into a collapsed "More options". */
@@ -130,9 +137,9 @@ export default function SalesProducts() {
   }, [rows, q]);
 
   const selects = useMemo<Record<string, SelectOption[]>>(() => {
-    if (!options) return ENUM_OPTIONS;
+    if (!options) return STATIC_SELECTS;
     return {
-      ...ENUM_OPTIONS,
+      ...STATIC_SELECTS,
       unitId: options.units.map((u) => ({ value: u.id, label: `${u.code} — ${u.name}` })),
       categoryId: options.categories.map((c) => ({ value: c.id, label: c.name })),
       preferredSupplierId: options.suppliers.map((s) => ({ value: s.id, label: s.name })),
