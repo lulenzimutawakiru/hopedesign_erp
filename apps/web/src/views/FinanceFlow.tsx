@@ -95,6 +95,61 @@ function downloadCsv(filename: string, rows: string[][]): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function downloadTextFile(filename: string, mime: string, body: string): void {
+  const blob = new Blob(['\uFEFF' + body], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadJson(filename: string, data: unknown): void {
+  downloadTextFile(filename, 'application/json;charset=utf-8', JSON.stringify(data, null, 2));
+}
+
+function downloadXls(filename: string, headers: string[], rows: string[][]): void {
+  const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html =
+    '<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1">' +
+    '<tr>' + headers.map((h) => '<th>' + esc(h) + '</th>').join('') + '</tr>' +
+    rows.map((r) => '<tr>' + r.map((c) => '<td>' + esc(c) + '</td>').join('') + '</tr>').join('') +
+    '</table></body></html>';
+  downloadTextFile(filename, 'application/vnd.ms-excel;charset=utf-8', html);
+}
+
+type ExportFormat = 'csv' | 'json' | 'xls';
+
+/** Small three-format export dropdown used by the EFRIS error centre and sync logs. */
+function ExportMenu({ onExport, disabled }: { onExport: (fmt: ExportFormat) => void; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const pick = (fmt: ExportFormat) => { onExport(fmt); setOpen(false); };
+  const options: Array<{ id: ExportFormat; label: string; hint: string }> = [
+    { id: 'csv', label: 'CSV', hint: 'Rows as a spreadsheet' },
+    { id: 'json', label: 'JSON', hint: 'Structured data' },
+    { id: 'xls', label: 'Excel (.xls)', hint: 'Open directly in Excel' },
+  ];
+  return (
+    <div style={{ position: 'relative' }}>
+      <button className="btn btn-sm" aria-expanded={open} disabled={disabled} onClick={() => setOpen((v) => !v)}>Download</button>
+      {open && (
+        <div className="topbar-dropdown" style={{ top: 36, minWidth: 180, right: 0 }}>
+          <div className="dropdown-head">Export as</div>
+          {options.map((f) => (
+            <button key={f.id} className="search-item" onClick={() => pick(f.id)}>
+              <span className="search-item-title">{f.label}</span>
+              <span className="search-item-sub">{f.hint}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Single authoritative General Ledger strip. Order matches the finance cluster
 // in src/nav.ts; every target is an existing route.
 const GL_TABS: Array<{ href: string; label: string }> = [
@@ -6365,33 +6420,57 @@ function EfrisDesk() {
     </div>
   );
 
-  // CSV export for the error centre and sync log tabs. Rows reflect the current
-  // filters and sort, so the file matches exactly what the operator sees.
-  const exportErrorsCsv = () => {
-    downloadCsv('efris-errors.csv', [
-      ['Time', 'Stage', 'Reference', 'Code', 'Message', 'Retries', 'State'],
-      ...visible.map((r) => [
-        String(r.createdAt ?? '').slice(0, 19).replace('T', ' '),
-        String(r.stage ?? ''),
-        String(r.docRefCode ?? ''),
-        String(r.errorCode ?? ''),
-        String(r.errorMessage ?? ''),
-        String(r.retryCount ?? 0),
-        r.resolved ? 'RESOLVED' : 'OPEN',
-      ]),
-    ]);
+  // Multi-format export for the error centre and sync log tabs. Rows reflect the
+  // current filters and sort, so the file matches exactly what the operator sees.
+  const errorHeaders = ['Time', 'Stage', 'Reference', 'Code', 'Message', 'Retries', 'State'];
+  const errorRows = (): string[][] => visible.map((r) => [
+    String(r.createdAt ?? '').slice(0, 19).replace('T', ' '),
+    String(r.stage ?? ''),
+    String(r.docRefCode ?? ''),
+    String(r.errorCode ?? ''),
+    String(r.errorMessage ?? ''),
+    String(r.retryCount ?? 0),
+    r.resolved ? 'RESOLVED' : 'OPEN',
+  ]);
+  const exportErrors = (fmt: ExportFormat) => {
+    if (fmt === 'json') {
+      downloadJson('efris-errors.json', visible.map((r) => ({
+        time: String(r.createdAt ?? ''),
+        stage: String(r.stage ?? ''),
+        reference: String(r.docRefCode ?? ''),
+        code: String(r.errorCode ?? ''),
+        message: String(r.errorMessage ?? ''),
+        retries: Number(r.retryCount ?? 0),
+        state: r.resolved ? 'RESOLVED' : 'OPEN',
+      })));
+    } else if (fmt === 'xls') {
+      downloadXls('efris-errors.xls', errorHeaders, errorRows());
+    } else {
+      downloadCsv('efris-errors.csv', [errorHeaders, ...errorRows()]);
+    }
   };
-  const exportLogsCsv = () => {
-    downloadCsv('efris-sync-logs.csv', [
-      ['Time', 'Reference', 'Status', 'Error', 'Request'],
-      ...visible.map((r) => [
-        String(r.createdAt ?? '').slice(0, 19).replace('T', ' '),
-        String(r.docRefCode ?? ''),
-        String(r.status ?? ''),
-        String(r.error ?? ''),
-        r.requestPayload ? JSON.stringify(r.requestPayload) : '',
-      ]),
-    ]);
+  const logHeaders = ['Time', 'Reference', 'Status', 'Error', 'Request'];
+  const logRows = (): string[][] => visible.map((r) => [
+    String(r.createdAt ?? '').slice(0, 19).replace('T', ' '),
+    String(r.docRefCode ?? ''),
+    String(r.status ?? ''),
+    String(r.error ?? ''),
+    r.requestPayload ? JSON.stringify(r.requestPayload) : '',
+  ]);
+  const exportLogs = (fmt: ExportFormat) => {
+    if (fmt === 'json') {
+      downloadJson('efris-sync-logs.json', visible.map((r) => ({
+        time: String(r.createdAt ?? ''),
+        reference: String(r.docRefCode ?? ''),
+        status: String(r.status ?? ''),
+        error: r.error ?? null,
+        request: r.requestPayload ?? null,
+      })));
+    } else if (fmt === 'xls') {
+      downloadXls('efris-sync-logs.xls', logHeaders, logRows());
+    } else {
+      downloadCsv('efris-sync-logs.csv', [logHeaders, ...logRows()]);
+    }
   };
   // The ERP source document behind a fiscal document, rendered as a link when a
   // route is known; plain text otherwise.
@@ -6663,7 +6742,7 @@ function EfrisDesk() {
               </div>
               <div className="row-actions">
                 {!loading && statusNote && <span className="muted" style={{ fontSize: 12 }} role="status" aria-live="polite">{statusNote}</span>}
-                <button className="btn btn-sm" disabled={sourceCount === 0} onClick={exportErrorsCsv} title="Download the current error list as CSV">Download CSV</button>
+                <ExportMenu disabled={sourceCount === 0} onExport={exportErrors} />
               </div>
             </div>
             {loading ? <Skeleton rows={6} /> : failedPanel('error centre') ? (
@@ -6789,7 +6868,7 @@ function EfrisDesk() {
               </div>
               <div className="row-actions">
                 {!loading && statusNote && <span className="muted" style={{ fontSize: 12 }} role="status" aria-live="polite">{statusNote}</span>}
-                <button className="btn btn-sm" disabled={sourceCount === 0} onClick={exportLogsCsv} title="Download the current sync log as CSV">Download CSV</button>
+                <ExportMenu disabled={sourceCount === 0} onExport={exportLogs} />
               </div>
             </div>
             {loading ? <Skeleton rows={6} /> : failedPanel('sync logs') ? (
