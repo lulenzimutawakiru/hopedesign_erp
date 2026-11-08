@@ -48,6 +48,7 @@ const Account = lazy(() => import('./Account'));
 const PayrollSettings = lazy(() => import('./PayrollSettings'));
 const QrScanner = lazy(() => import('./QrScanner'));
 const SignRequests = lazy(() => import('./SignRequests'));
+const Intelligence = lazy(() => import('./Intelligence'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
   AccessDenied,
@@ -268,6 +269,7 @@ export default function Shell() {
       { match: () => path === '/communication' || path.startsWith('/communication/'), render: () => <CommunicationFlow path={path} /> },
       { match: () => path === '/documents' || path.startsWith('/documents/'), render: () => <DocumentsFlow path={path} /> },
       { match: () => path === '/esign' || path.startsWith('/esign/'), render: () => <SignRequests path={path} /> },
+      { match: () => path === '/intelligence' || path.startsWith('/intelligence/'), render: () => <Intelligence path={path} /> },
       { match: () => !!detailMatch, render: () => <EntityDetail route={detailMatch!} /> },
       { match: () => !!listMatch, render: () => <EntityList route={listMatch!} /> },
     ];

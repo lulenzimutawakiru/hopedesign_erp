@@ -64,6 +64,7 @@ export function routeMatches(path: string): boolean {
     path === '/communication' || path.startsWith('/communication/'),
     path === '/documents' || path.startsWith('/documents/'),
     path === '/esign' || path.startsWith('/esign/'),
+    path === '/intelligence' || path.startsWith('/intelligence/'),
     !!matchRoute(path, '/records/:module/:resource/:id'),
     !!matchRoute(path, '/records/:module/:resource'),
   ];

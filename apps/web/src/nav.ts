@@ -70,6 +70,16 @@ export const NAV_GROUPS: NavGroup[] = [
         ],
       },
       {
+        id: 'natex_intelligence', label: 'Intelligence', href: '/intelligence', perm: 'intelligence.dashboard.view', module: 'intelligence', accent: 'crm',
+        keywords: 'intelligence lead discovery prospect ai scoring campaign enrichment',
+        children: [
+          { id: 'intel_dashboard', label: 'Dashboard', href: '/intelligence', perm: 'intelligence.dashboard.view', group: 'Discovery' },
+          { id: 'intel_campaigns', label: 'Campaigns', href: '/intelligence/campaigns', perm: 'intelligence.campaigns.view', group: 'Discovery' },
+          { id: 'intel_prospects', label: 'Prospects', href: '/intelligence/prospects', perm: 'intelligence.prospects.view', group: 'Discovery' },
+          { id: 'intel_review', label: 'Review Queue', href: '/intelligence/review', perm: 'intelligence.prospects.review', group: 'Discovery' },
+        ],
+      },
+      {
         id: 'sales', label: 'Sales', href: '/sales', perm: 'sales.orders.view', module: 'sales', accent: 'sales',
         keywords: 'quote order invoice cash otc',
         children: [
@@ -956,6 +966,12 @@ export function requiredPermForPath(path: string): string | undefined {
       iso: 'compliance.iso.view',
     };
     return map[parts[1] ?? ''] ?? 'compliance.pdpo.view';
+  }
+  if (parts[0] === 'intelligence') {
+    if (parts[1] === 'campaigns') return 'intelligence.campaigns.view';
+    if (parts[1] === 'prospects') return 'intelligence.prospects.view';
+    if (parts[1] === 'review') return 'intelligence.prospects.review';
+    return 'intelligence.dashboard.view';
   }
   const item = ALL_NAV_ITEMS.find((i) => moduleActive(i.href, path));
   return item?.perm;
