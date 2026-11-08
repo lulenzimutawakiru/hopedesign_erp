@@ -1772,6 +1772,299 @@ export async function financeSummary(client: pg.PoolClient, ctx: Ctx) {
     attention,
   };
 }
+
+// ============================================================
+// General Ledger, Partner Ledger, Cash Flow Statement
+// (Odoo-Accounting parity reports)
+//
+// Every figure resolves to a posted journal line - nothing is derived or
+// invented. The partner ledger has no partner column on journal_lines, so a
+// partner is resolved through each entry's source document and the movement is
+// read from the AR/AP control-account line (COA.AR / COA.AP), which keeps
+// reversals netting correctly. The cash flow statement is the direct method:
+// cash movements are decomposed by the largest non-cash counterpart, classified
+// by journal_type first (the system's own controlled vocabulary) and by account
+// type as the fallback.
+// ============================================================
+
+export async function generalLedger(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  opts: { accountId?: number; from?: string; to?: string; limit?: number } = {}
+) {
+  const limit = Math.min(5000, Math.max(1, opts.limit ?? 2000));
+  const params: unknown[] = [ctx.tenantId, ctx.companyId];
+  const cond: string[] = [];
+  if (opts.accountId != null && Number(opts.accountId) > 0) {
+    params.push(Number(opts.accountId));
+    cond.push(`led.account_id = $${params.length}`);
+  }
+  if (opts.from) { params.push(opts.from); cond.push(`led.entry_date >= $${params.length}::date`); }
+  if (opts.to) { params.push(opts.to); cond.push(`led.entry_date <= $${params.length}::date`); }
+  const where = cond.length ? `WHERE ${cond.join(' AND ')}` : '';
+  params.push(limit);
+  const res = await client.query(
+    `WITH led AS (
+       SELECT je.id AS entry_id, je.entry_no, je.entry_date, je.journal_type, je.reference_code,
+              je.description AS entry_description,
+              jl.id AS line_id, jl.account_id, a.code AS account_code, a.name AS account_name,
+              a.account_type, COALESCE(a.opening_balance, 0) AS opening_balance,
+              jl.debit, jl.credit, jl.description AS line_description,
+              (COALESCE(a.opening_balance, 0) + SUM(jl.debit - jl.credit) OVER (
+                 PARTITION BY jl.account_id ORDER BY je.entry_date, je.id, jl.id
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS balance
+       FROM journal_lines jl
+       JOIN journal_entries je ON je.id = jl.entry_id AND je.status = 'POSTED'
+       JOIN chart_of_accounts a ON a.id = jl.account_id
+       WHERE je.tenant_id = $1 AND je.company_id = $2
+     )
+     SELECT * FROM led ${where}
+     ORDER BY led.account_code, led.entry_date, led.entry_id, led.line_id
+     LIMIT $${params.length}`,
+    params
+  );
+  const rows = toCamelRows(res.rows);
+  const debit = rows.reduce((s, r) => s + n(r.debit), 0);
+  const credit = rows.reduce((s, r) => s + n(r.credit), 0);
+  return { rows, totals: { debit, credit, movement: debit - credit }, limited: rows.length === limit };
+}
+
+export async function partnerLedger(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  opts: { partnerType?: 'customer' | 'supplier'; partnerId?: number; from?: string; to?: string; limit?: number } = {}
+) {
+  const partnerType = opts.partnerType === 'supplier' ? 'SUPPLIER' : 'CUSTOMER';
+  const limit = Math.min(5000, Math.max(1, opts.limit ?? 2000));
+  const arId = await getAccountId(client, ctx, COA.AR);
+  const apId = await getAccountId(client, ctx, COA.AP);
+
+  const partners = partnerType === 'CUSTOMER'
+    ? await client.query(
+        `SELECT c.id AS "partnerId", c.code, c.name, 'CUSTOMER' AS "partnerType",
+                COALESCE((SELECT SUM(v.balance) FROM v_ar_aging v WHERE v.customer_id = c.id), 0)::numeric AS balance
+         FROM customers c
+         WHERE c.tenant_id = $1 AND c.company_id = $2 AND c.status = 'ACTIVE'
+         ORDER BY c.name LIMIT 500`,
+        [ctx.tenantId, ctx.companyId]
+      )
+    : await client.query(
+        `SELECT s.id AS "partnerId", s.code, s.name, 'SUPPLIER' AS "partnerType",
+                COALESCE((SELECT SUM(v.balance) FROM v_ap_aging v WHERE v.supplier_id = s.id), 0)::numeric AS balance
+         FROM suppliers s
+         WHERE s.tenant_id = $1 AND s.company_id = $2 AND s.status = 'ACTIVE'
+         ORDER BY s.name LIMIT 500`,
+        [ctx.tenantId, ctx.companyId]
+      );
+
+  const params: unknown[] = [ctx.tenantId, ctx.companyId, partnerType, arId, apId];
+  const cond: string[] = ['led.partner_type = $3'];
+  if (opts.partnerId != null && Number(opts.partnerId) > 0) {
+    params.push(Number(opts.partnerId));
+    cond.push(`led.partner_id = $${params.length}`);
+  }
+  if (opts.from) { params.push(opts.from); cond.push(`led.doc_date >= $${params.length}::date`); }
+  if (opts.to) { params.push(opts.to); cond.push(`led.doc_date <= $${params.length}::date`); }
+  params.push(limit);
+
+  const res = await client.query(
+    `WITH led AS (
+       SELECT je.id AS entry_id, je.entry_date AS doc_date, je.reference_code AS doc_no,
+              je.description AS label, (je.reversal_of_id IS NOT NULL) AS is_reversal,
+              ci.customer_id AS partner_id, c.name AS partner_name, 'CUSTOMER' AS partner_type,
+              'Invoice' AS doc_type, jl.debit, jl.credit
+       FROM journal_entries je
+       JOIN customer_invoices ci ON ci.id = je.reference_id
+       JOIN customers c ON c.id = ci.customer_id
+       JOIN journal_lines jl ON jl.entry_id = je.id AND jl.account_id = $4
+       WHERE je.reference_type = 'customer_invoices' AND je.status = 'POSTED'
+         AND je.tenant_id = $1 AND je.company_id = $2
+       UNION ALL
+       SELECT je.id, je.entry_date, je.reference_code, je.description, (je.reversal_of_id IS NOT NULL),
+              rc.customer_id, c.name, 'CUSTOMER', 'Payment', jl.debit, jl.credit
+       FROM journal_entries je
+       JOIN receipts rc ON rc.id = je.reference_id
+       JOIN customers c ON c.id = rc.customer_id
+       JOIN journal_lines jl ON jl.entry_id = je.id AND jl.account_id = $4
+       WHERE je.reference_type = 'receipts' AND je.status = 'POSTED'
+         AND je.tenant_id = $1 AND je.company_id = $2
+       UNION ALL
+       SELECT je.id, je.entry_date, je.reference_code, je.description, (je.reversal_of_id IS NOT NULL),
+              cn.customer_id, c.name, 'CUSTOMER', 'Credit note', jl.debit, jl.credit
+       FROM journal_entries je
+       JOIN credit_notes cn ON cn.id = je.reference_id
+       JOIN customers c ON c.id = cn.customer_id
+       JOIN journal_lines jl ON jl.entry_id = je.id AND jl.account_id = $4
+       WHERE je.reference_type = 'credit_notes' AND je.status = 'POSTED'
+         AND je.tenant_id = $1 AND je.company_id = $2
+       UNION ALL
+       SELECT je.id, je.entry_date, je.reference_code, je.description, (je.reversal_of_id IS NOT NULL),
+              dn.customer_id, c.name, 'CUSTOMER', 'Debit note', jl.debit, jl.credit
+       FROM journal_entries je
+       JOIN debit_notes dn ON dn.id = je.reference_id
+       JOIN customers c ON c.id = dn.customer_id
+       JOIN journal_lines jl ON jl.entry_id = je.id AND jl.account_id = $4
+       WHERE je.reference_type = 'debit_notes' AND je.status = 'POSTED'
+         AND je.tenant_id = $1 AND je.company_id = $2
+       UNION ALL
+       SELECT je.id, je.entry_date, je.reference_code, je.description, (je.reversal_of_id IS NOT NULL),
+              si.supplier_id, s.name, 'SUPPLIER', 'Supplier invoice', jl.debit, jl.credit
+       FROM journal_entries je
+       JOIN supplier_invoices si ON si.id = je.reference_id
+       JOIN suppliers s ON s.id = si.supplier_id
+       JOIN journal_lines jl ON jl.entry_id = je.id AND jl.account_id = $5
+       WHERE je.reference_type = 'supplier_invoices' AND je.status = 'POSTED'
+         AND je.tenant_id = $1 AND je.company_id = $2
+       UNION ALL
+       SELECT je.id, je.entry_date, je.reference_code, je.description, (je.reversal_of_id IS NOT NULL),
+              sp.supplier_id, s.name, 'SUPPLIER', 'Supplier payment', jl.debit, jl.credit
+       FROM journal_entries je
+       JOIN supplier_payments sp ON sp.id = je.reference_id
+       JOIN suppliers s ON s.id = sp.supplier_id
+       JOIN journal_lines jl ON jl.entry_id = je.id AND jl.account_id = $5
+       WHERE je.reference_type = 'supplier_payments' AND je.status = 'POSTED'
+         AND je.tenant_id = $1 AND je.company_id = $2
+     )
+     SELECT led.*,
+       SUM(CASE WHEN led.partner_type = 'CUSTOMER' THEN led.debit - led.credit ELSE led.credit - led.debit END)
+         OVER (PARTITION BY led.partner_id, led.partner_type ORDER BY led.doc_date, led.entry_id) AS balance
+     FROM led
+     WHERE ${cond.join(' AND ')}
+     ORDER BY led.partner_name, led.doc_date, led.entry_id
+     LIMIT $${params.length}`,
+    params
+  );
+
+  const rows = toCamelRows(res.rows);
+  const debit = rows.reduce((s, r) => s + n(r.debit), 0);
+  const credit = rows.reduce((s, r) => s + n(r.credit), 0);
+  return {
+    partnerType: partnerType.toLowerCase(),
+    partners: toCamelRows(partners.rows),
+    rows,
+    totals: { debit, credit },
+    limited: rows.length === limit,
+  };
+}
+
+function cashFlowLine(journalType: unknown, counterpartType: unknown): { section: 'operating' | 'investing' | 'financing'; line: string } {
+  const jt = String(journalType ?? '').toUpperCase();
+  const ct = String(counterpartType ?? '').toUpperCase();
+  switch (jt) {
+    case 'CUSTOMER_RECEIPT': return { section: 'operating', line: 'Receipts from customers' };
+    case 'CREDIT_NOTE':
+    case 'DEBIT_NOTE': return { section: 'operating', line: 'Customer refunds and adjustments' };
+    case 'SUPPLIER_PAYMENT':
+    case 'GRN_RECEIPT': return { section: 'operating', line: 'Payments to suppliers' };
+    case 'PAYROLL': return { section: 'operating', line: 'Payments to employees' };
+    case 'TAX': return { section: 'operating', line: 'Taxes paid' };
+    case 'CASH_ADVANCE':
+    case 'ADVANCE_SETTLEMENT': return { section: 'operating', line: 'Staff advances (net)' };
+    case 'ASSET':
+    case 'ASSET_DEPRECIATION': return { section: 'investing', line: 'Fixed assets' };
+    default: break;
+  }
+  if (ct === 'REVENUE' || ct === 'CONTRA_REVENUE') return { section: 'operating', line: 'Receipts from customers' };
+  if (ct === 'EXPENSE' || ct === 'CONTRA_EXPENSE') return { section: 'operating', line: 'Payments for operating expenses' };
+  if (ct === 'EQUITY' || ct === 'CONTRA_EQUITY') return { section: 'financing', line: 'Equity contributions and drawings' };
+  if (ct === 'LIABILITY' || ct === 'CONTRA_LIABILITY') return { section: 'financing', line: 'Loans and other financing' };
+  if (ct === 'ASSET' || ct === 'CONTRA_ASSET') return { section: 'investing', line: 'Fixed and other assets' };
+  return { section: 'operating', line: 'Other operating movements' };
+}
+
+export async function cashFlowStatement(client: pg.PoolClient, ctx: Ctx, from: string, to: string) {
+  // Closing/opening cash are derived from the ledger (not from bankPosition,
+  // which always reflects the *current* balance) so historical date ranges are
+  // correct: opening = cash GL opening balance + movements before `from`,
+  // closing = opening + movements in [from, to].
+  const [totals, res] = await Promise.all([
+    client.query(
+      `WITH cash AS (
+         SELECT gl_account_id AS id FROM bank_accounts
+         WHERE tenant_id = $1 AND company_id = $2 AND is_active = true AND gl_account_id IS NOT NULL
+       ),
+       opening AS (
+         SELECT COALESCE(SUM(a.opening_balance), 0)::numeric AS v
+         FROM chart_of_accounts a
+         WHERE a.id IN (SELECT id FROM cash) AND a.tenant_id = $1 AND a.company_id = $2
+       ),
+       moves AS (
+         SELECT
+           COALESCE(SUM(CASE WHEN je.entry_date < $3::date THEN jl.debit - jl.credit ELSE 0 END), 0)::numeric AS before_from,
+           COALESCE(SUM(CASE WHEN je.entry_date <= $4::date THEN jl.debit - jl.credit ELSE 0 END), 0)::numeric AS up_to,
+           COALESCE(SUM(CASE WHEN je.entry_date BETWEEN $3::date AND $4::date THEN jl.debit - jl.credit ELSE 0 END), 0)::numeric AS in_window
+         FROM journal_lines jl
+         JOIN journal_entries je ON je.id = jl.entry_id AND je.status = 'POSTED'
+         WHERE jl.account_id IN (SELECT id FROM cash)
+           AND je.tenant_id = $1 AND je.company_id = $2
+           AND je.journal_type <> 'TRANSFER'
+       )
+       SELECT (SELECT v FROM opening) + (SELECT before_from FROM moves) AS opening_cash,
+              (SELECT v FROM opening) + (SELECT up_to FROM moves) AS closing_cash,
+              (SELECT in_window FROM moves) AS net_change`,
+      [ctx.tenantId, ctx.companyId, from, to]
+    ),
+    client.query(
+      `WITH cash AS (
+         SELECT gl_account_id AS id FROM bank_accounts
+         WHERE tenant_id = $1 AND company_id = $2 AND is_active = true AND gl_account_id IS NOT NULL
+       ),
+       moves AS (
+         SELECT je.id AS entry_id, je.journal_type,
+                SUM(jl.debit - jl.credit) FILTER (WHERE jl.account_id IN (SELECT id FROM cash)) AS cash_move,
+                (SELECT jl2.account_id FROM journal_lines jl2
+                  WHERE jl2.entry_id = je.id AND jl2.account_id NOT IN (SELECT id FROM cash)
+                  ORDER BY GREATEST(jl2.debit, jl2.credit) DESC LIMIT 1) AS counterpart_account
+         FROM journal_entries je
+         JOIN journal_lines jl ON jl.entry_id = je.id
+         WHERE je.status = 'POSTED' AND je.tenant_id = $1 AND je.company_id = $2
+           AND je.entry_date BETWEEN $3::date AND $4::date
+           AND je.journal_type <> 'TRANSFER'
+           AND EXISTS (SELECT 1 FROM journal_lines jl3 WHERE jl3.entry_id = je.id AND jl3.account_id IN (SELECT id FROM cash))
+         GROUP BY je.id
+         HAVING SUM(jl.debit - jl.credit) FILTER (WHERE jl.account_id IN (SELECT id FROM cash)) <> 0
+       )
+       SELECT m.entry_id, m.journal_type, m.cash_move, a.account_type AS counterpart_type, je.reference_code, je.description
+       FROM moves m
+       JOIN journal_entries je ON je.id = m.entry_id
+       LEFT JOIN chart_of_accounts a ON a.id = m.counterpart_account
+       ORDER BY je.entry_date, je.id`,
+      [ctx.tenantId, ctx.companyId, from, to]
+    ),
+  ]);
+
+  const openingCash = n(totals.rows[0]?.opening_cash);
+  const closingCash = n(totals.rows[0]?.closing_cash);
+  const netCashChange = n(totals.rows[0]?.net_change);
+
+  const sections: Record<'operating' | 'investing' | 'financing', { key: string; label: string; lines: Record<string, number> }> = {
+    operating: { key: 'operating', label: 'Operating activities', lines: {} },
+    investing: { key: 'investing', label: 'Investing activities', lines: {} },
+    financing: { key: 'financing', label: 'Financing activities', lines: {} },
+  };
+  for (const r of res.rows) {
+    const move = n(r.cash_move);
+    const { section, line } = cashFlowLine(r.journal_type, r.counterpart_type);
+    sections[section].lines[line] = (sections[section].lines[line] ?? 0) + move;
+  }
+
+  const order = ['operating', 'investing', 'financing'] as const;
+  const out = order.map((key) => {
+    const lines = Object.entries(sections[key].lines)
+      .filter(([, amount]) => Math.round(amount * 100) !== 0)
+      .map(([label, amount]) => ({ label, amount }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return {
+      key: sections[key].key,
+      label: sections[key].label,
+      total: lines.reduce((s, l) => s + l.amount, 0),
+      lines,
+    };
+  });
+
+  return { from, to, openingCash, closingCash, netCashChange, sections: out };
+}
+
 export async function postExpense(
   client: pg.PoolClient,
   ctx: Ctx,

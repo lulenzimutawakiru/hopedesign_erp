@@ -144,6 +144,9 @@ export default function FinanceFlow({ path }: { path: string }) {
   if (view === 'trial-balance') return <TrialBalance />;
   if (view === 'profit-loss') return <ProfitLoss />;
   if (view === 'balance-sheet') return <BalanceSheet />;
+  if (view === 'cash-flow') return <CashFlow />;
+  if (view === 'general-ledger') return <GeneralLedger />;
+  if (view === 'partner-ledger') return <PartnerLedger />;
   if (view === 'reports') return <ReportsHub />;
   if (view === 'ar') return <ArAp kind="ar" />;
   if (view === 'ap') return <ArAp kind="ap" />;
@@ -387,13 +390,14 @@ function Overview() {
 
   const num = (v: unknown) => Number(v ?? 0);
   const period = (data.period ?? null) as PeriodInfo | null;
-  const prior = (data.prior ?? {}) as { revenue: number; expense: number; profit: number };
-  const delta = (data.delta ?? {}) as { revenue: number | null; expense: number | null; profit: number | null };
   const trend = (Array.isArray(data.trend) ? data.trend : []) as TrendPoint[];
   const attention = (Array.isArray(data.attention) ? data.attention : []) as AttentionItem[];
   const approvals = (Array.isArray(data.approvals) ? data.approvals : []) as ApprovalItem[];
   const recent = (Array.isArray(data.recent) ? data.recent : []) as RecentItem[];
   const cashRows = (Array.isArray(data.cashRows) ? data.cashRows : []) as CashRow[];
+  // Odoo-style liquidity split: bank (deposit/current/savings/mobile) vs cash.
+  const bankTotal = cashRows.filter((r) => r.accountType !== 'CASH').reduce((s, r) => s + num(r.bookBalance), 0);
+  const cashTotal = cashRows.filter((r) => r.accountType === 'CASH').reduce((s, r) => s + num(r.bookBalance), 0);
   const arBuckets = (data.arBuckets ?? {}) as Record<string, number>;
   const apBuckets = (data.apBuckets ?? {}) as Record<string, number>;
   const critical = attention.filter((a) => a.severity === 'critical').length;
@@ -433,30 +437,31 @@ function Overview() {
         </div>
       )}
 
-      <div className="fin-kpi-grid">
+      <div className="fin-kpi-grid fin-kpi-grid-5">
         <FinKpi
-          label="Revenue" value={fmtMoney(data.monthRevenue)} emphasis
-          sub={`${fmtMoney(prior.revenue)} last month`} delta={delta.revenue}
-          spark={trend.map((t) => t.revenue)}
-          onClick={() => navigate('/finance/profit-loss')}
-        />
-        <FinKpi
-          label="Expenses" value={fmtMoney(data.monthExpense)} invert
-          sub={`${fmtMoney(prior.expense)} last month`} delta={delta.expense}
-          spark={trend.map((t) => t.expense)} sparkTone="warn"
-          onClick={() => navigate('/finance/expenses')}
-        />
-        <FinKpi
-          label="Net position" value={fmtMoney(data.monthProfit)}
-          sub={`${fmtMoney(prior.profit)} last month`} delta={delta.profit}
-          spark={trend.map((t) => t.profit)}
-          sparkTone={num(data.monthProfit) >= 0 ? 'ok' : 'bad'}
-          onClick={() => navigate('/finance/profit-loss')}
-        />
-        <FinKpi
-          label="Cash &amp; bank" value={fmtMoney(data.cash)} emphasis
-          sub={num(data.unreconciledBanks) > 0 ? `${fmtNum(data.unreconciledBanks)} unreconciled statement lines` : 'All statement lines reconciled'}
+          label="Bank" value={fmtMoney(bankTotal)} emphasis
+          sub="Deposit, current, savings &amp; mobile money"
           onClick={() => navigate('/finance/banks')}
+        />
+        <FinKpi
+          label="Cash" value={fmtMoney(cashTotal)}
+          sub="Cash accounts &amp; petty cash"
+          onClick={() => navigate('/finance/banks')}
+        />
+        <FinKpi
+          label="To Check" value={fmtNum(data.unreconciledBanks)}
+          sub={num(data.unreconciledBanks) > 0 ? 'unreconciled statement lines' : 'all statement lines matched'}
+          onClick={() => navigate('/finance/banks')}
+        />
+        <FinKpi
+          label="Unpaid invoices" value={fmtMoney(data.ar)} emphasis
+          sub={num(data.arOverdueCount) > 0 ? `${fmtNum(data.arOverdueCount)} overdue (${fmtMoney(data.arOverdue)})` : 'nothing overdue'}
+          onClick={() => navigate('/finance/ar')}
+        />
+        <FinKpi
+          label="Unpaid bills" value={fmtMoney(data.ap)} emphasis
+          sub={num(data.apOverdueCount) > 0 ? `${fmtNum(data.apOverdueCount)} overdue (${fmtMoney(data.apOverdue)})` : 'nothing overdue'}
+          onClick={() => navigate('/finance/ap')}
         />
       </div>
 
@@ -1598,6 +1603,287 @@ function BalanceSheet() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cash flow statement (direct method), general ledger and partner ledger.
+// These mirror the Odoo Accounting reporting surface: a formal cash flow
+// statement, a per-account transaction ledger, and a per-partner ledger.
+// ---------------------------------------------------------------------------
+
+function CashFlow() {
+  const [data, setData] = useState<Rec | null>(null);
+  const [from, setFrom] = useState(() => { const t = new Date(); return `${t.getFullYear()}-01-01`; });
+  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    api<{ data: Rec }>(`/api/ops/finance/cash-flow?from=${from}&to=${to}`)
+      .then((r) => setData(r.data))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Cash flow failed'));
+  }, [from, to]);
+  useEffect(() => { load(); }, [load]);
+  if (error) return <ErrorBanner error={error} />;
+  if (!data) return <PageLoader variant="page" label="Preparing cash flow statement..." />;
+  const sections = (Array.isArray(data.sections) ? data.sections : []) as Array<{ key: string; label: string; total: number; lines: Array<{ label: string; amount: number }> }>;
+  const exportCsv = () => {
+    const rows: string[][] = [['Section', 'Line', 'Amount']];
+    for (const s of sections) {
+      rows.push([s.label, '', '']);
+      for (const l of s.lines) rows.push(['', l.label, String(l.amount)]);
+      rows.push(['', 'Section total', String(s.total)]);
+    }
+    rows.push(['', 'Net change in cash', String(data.netCashChange)]);
+    downloadCsv('cash-flow.csv', rows);
+  };
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <p className="mod-kicker" data-mod="fin">Statement</p>
+          <h1>Cash flow statement</h1>
+          <p className="muted">{String(data.from)} {'→'} {String(data.to)}</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn btn-sm" onClick={exportCsv}>Export CSV</button>
+        </div>
+      </header>
+      <div className="toolbar">
+        <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
+        <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+      </div>
+      <div className="kpi-grid">
+        <div className="kpi-card"><span className="kpi-label">Opening cash</span><span className="kpi-value">{fmtMoney(data.openingCash)}</span></div>
+        <div className="kpi-card"><span className="kpi-label">Net change</span><span className="kpi-value">{fmtMoney(data.netCashChange)}</span></div>
+        <div className="kpi-card"><span className="kpi-label">Closing cash</span><span className="kpi-value">{fmtMoney(data.closingCash)}</span></div>
+      </div>
+      {sections.map((s) => (
+        <section key={s.key} className="table-wrap card" style={{ marginTop: 14 }}>
+          <table className="data">
+            <thead><tr><th>{s.label}</th><th className="cell-num">Amount</th></tr></thead>
+            <tbody>
+              {s.lines.map((l) => (
+                <tr key={l.label}>
+                  <td>{l.label}</td>
+                  <td className="cell-num" style={{ color: Number(l.amount) < 0 ? 'var(--danger)' : undefined }}>{fmtMoney(l.amount)}</td>
+                </tr>
+              ))}
+              {s.lines.length === 0 && <tr><td className="muted" colSpan={2}>No movements in this range.</td></tr>}
+              <tr>
+                <td><strong>{s.label} total</strong></td>
+                <td className="cell-num"><strong style={{ color: Number(s.total) < 0 ? 'var(--danger)' : undefined }}>{fmtMoney(s.total)}</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      ))}
+      <p className="muted" style={{ marginTop: 12 }}>
+        Direct method. Each posted entry that moves a bank or cash account is decomposed by its largest non-cash counterpart
+        and classified by journal type (falling back to account type). Positive amounts are inflows, negative amounts are outflows.
+      </p>
+    </div>
+  );
+}
+
+function GeneralLedger() {
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [accounts, setAccounts] = useState<Rec[]>([]);
+  const [accountId, setAccountId] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [totals, setTotals] = useState<Rec>({});
+  const [limited, setLimited] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    api<{ data: Rec[] }>('/api/ops/finance/accounts')
+      .then((r) => setAccounts(Array.isArray(r.data) ? r.data : []))
+      .catch(() => undefined);
+  }, []);
+  const load = useCallback(() => {
+    setLoading(true); setError('');
+    const p = new URLSearchParams();
+    if (accountId) p.set('accountId', accountId);
+    if (from) p.set('from', from);
+    if (to) p.set('to', to);
+    api<{ data: Rec }>(`/api/ops/finance/general-ledger?${p}`)
+      .then((r) => { setRows((r.data.rows as Rec[]) ?? []); setTotals((r.data.totals as Rec) ?? {}); setLimited(Boolean(r.data.limited)); })
+      .catch((e) => setError(e instanceof Error ? e.message : 'General ledger failed'))
+      .finally(() => setLoading(false));
+  }, [accountId, from, to]);
+  useEffect(() => { load(); }, [load]);
+  const groups = useMemo(() => {
+    const map = new Map<string, Rec[]>();
+    for (const r of rows) {
+      const k = String(r.accountId);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k)!.push(r);
+    }
+    return Array.from(map.entries()).map(([k, lines]) => ({
+      key: k,
+      accountCode: String(lines[0].accountCode ?? ''),
+      accountName: String(lines[0].accountName ?? ''),
+      accountType: String(lines[0].accountType ?? ''),
+      openingBalance: Number(lines[0].openingBalance ?? 0),
+      debit: lines.reduce((s, l) => s + Number(l.debit ?? 0), 0),
+      credit: lines.reduce((s, l) => s + Number(l.credit ?? 0), 0),
+      closing: Number(lines[lines.length - 1].balance ?? 0),
+      lines,
+    }));
+  }, [rows]);
+  const exportCsv = () => downloadCsv('general-ledger.csv', [
+    ['Account code', 'Account', 'Date', 'Entry', 'Type', 'Source', 'Description', 'Debit', 'Credit', 'Balance'],
+    ...rows.map((r) => [String(r.accountCode), String(r.accountName), String(r.entryDate).slice(0, 10), String(r.entryNo),
+      String(r.journalType).replace(/_/g, ' '), String(r.referenceCode ?? ''), String(r.lineDescription ?? r.entryDescription ?? ''),
+      String(r.debit ?? ''), String(r.credit ?? ''), String(r.balance ?? '')]),
+  ]);
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <p className="mod-kicker" data-mod="fin">General ledger</p>
+          <h1>General ledger</h1>
+          <p className="muted">Every posted journal line, grouped by account, with a running balance.</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn btn-sm" onClick={load}>Refresh</button>
+          <button className="btn btn-sm" onClick={exportCsv}>Export CSV</button>
+        </div>
+      </header>
+      <div className="toolbar">
+        <select className="search-input" style={{ maxWidth: 340 }} value={accountId} onChange={(e) => setAccountId(e.target.value)} aria-label="Account">
+          <option value="">All accounts</option>
+          {accounts.map((a) => <option key={String(a.id)} value={String(a.id)}>{String(a.code)} — {String(a.name)}</option>)}
+        </select>
+        <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
+        <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+        <span className="muted">Total debit {fmtMoney(totals.debit)} · credit {fmtMoney(totals.credit)}</span>
+      </div>
+      {error && <ErrorBanner error={error} />}
+      {loading ? <Skeleton rows={8} /> : groups.length === 0 ? (
+        <EmptyState title="No ledger lines" body="No posted journal lines match these filters." />
+      ) : (
+        groups.map((g) => (
+          <section key={g.key} className="table-wrap card" style={{ marginBottom: 14 }}>
+            <div className="card-head" style={{ justifyContent: 'space-between' }}>
+              <h3 style={{ margin: 0 }}>
+                <span className="cell-mono">{g.accountCode}</span> — {g.accountName}
+              </h3>
+              <span className="muted" style={{ fontSize: 12 }}>
+                <Badge value={g.accountType} /> · closing {fmtMoney(g.closing)}
+              </span>
+            </div>
+            <table className="data">
+              <thead><tr><th>Date</th><th>Entry</th><th>Type</th><th>Source</th><th>Description</th><th className="cell-num">Debit</th><th className="cell-num">Credit</th><th className="cell-num">Balance</th></tr></thead>
+              <tbody>
+                {g.lines.map((l) => (
+                  <tr key={String(l.lineId)}>
+                    <td>{String(l.entryDate).slice(0, 10)}</td>
+                    <td className="cell-mono">{String(l.entryNo)}</td>
+                    <td>{String(l.journalType).replace(/_/g, ' ')}</td>
+                    <td className="cell-mono">{String(l.referenceCode ?? '') || '—'}</td>
+                    <td>{String(l.lineDescription ?? l.entryDescription ?? '')}</td>
+                    <td className="cell-num">{Number(l.debit) ? fmtMoney(l.debit) : ''}</td>
+                    <td className="cell-num">{Number(l.credit) ? fmtMoney(l.credit) : ''}</td>
+                    <td className="cell-num">{fmtMoney(l.balance)}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td colSpan={5}><strong>Account total</strong></td>
+                  <td className="cell-num"><strong>{fmtMoney(g.debit)}</strong></td>
+                  <td className="cell-num"><strong>{fmtMoney(g.credit)}</strong></td>
+                  <td className="cell-num"><strong>{fmtMoney(g.closing)}</strong></td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+        ))
+      )}
+      {limited && <p className="muted">Showing the first {rows.length} lines — narrow the date range or pick an account to see more.</p>}
+    </div>
+  );
+}
+
+function PartnerLedger() {
+  const [partnerType, setPartnerType] = useState<'customer' | 'supplier'>('customer');
+  const [partners, setPartners] = useState<Rec[]>([]);
+  const [partnerId, setPartnerId] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [rows, setRows] = useState<Rec[]>([]);
+  const [totals, setTotals] = useState<Rec>({});
+  const [limited, setLimited] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(() => {
+    setLoading(true); setError('');
+    const p = new URLSearchParams({ partnerType });
+    if (partnerId) p.set('partnerId', partnerId);
+    if (from) p.set('from', from);
+    if (to) p.set('to', to);
+    api<{ data: Rec }>(`/api/ops/finance/partner-ledger?${p}`)
+      .then((r) => { setPartners((r.data.partners as Rec[]) ?? []); setRows((r.data.rows as Rec[]) ?? []); setTotals((r.data.totals as Rec) ?? {}); setLimited(Boolean(r.data.limited)); })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Partner ledger failed'))
+      .finally(() => setLoading(false));
+  }, [partnerType, partnerId, from, to]);
+  useEffect(() => { load(); }, [load]);
+  const switchType = (t: 'customer' | 'supplier') => { setPartnerType(t); setPartnerId(''); };
+  const exportCsv = () => downloadCsv('partner-ledger.csv', [
+    ['Partner', 'Date', 'Document', 'Type', 'Description', 'Debit', 'Credit', 'Balance'],
+    ...rows.map((r) => [String(r.partnerName), String(r.docDate).slice(0, 10), String(r.docNo ?? ''), String(r.docType),
+      String(r.label ?? ''), String(r.debit ?? ''), String(r.credit ?? ''), String(r.balance ?? '')]),
+  ]);
+  return (
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <p className="mod-kicker" data-mod="fin">Ledger</p>
+          <h1>Partner ledger</h1>
+          <p className="muted">Per-{partnerType === 'customer' ? 'customer' : 'supplier'} movements, resolved through the AR/AP control accounts.</p>
+        </div>
+        <div className="head-actions">
+          <button className="btn btn-sm" onClick={exportCsv}>Export CSV</button>
+        </div>
+      </header>
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <div className="tabs" role="tablist" aria-label="Partner type">
+          <button type="button" role="tab" aria-selected={partnerType === 'customer'} className={partnerType === 'customer' ? 'tab active' : 'tab'} onClick={() => switchType('customer')}>Customers</button>
+          <button type="button" role="tab" aria-selected={partnerType === 'supplier'} className={partnerType === 'supplier' ? 'tab active' : 'tab'} onClick={() => switchType('supplier')}>Suppliers</button>
+        </div>
+        <select className="search-input" style={{ maxWidth: 320 }} value={partnerId} onChange={(e) => setPartnerId(e.target.value)} aria-label="Partner">
+          <option value="">All {partnerType === 'customer' ? 'customers' : 'suppliers'}</option>
+          {partners.map((p) => <option key={String(p.partnerId)} value={String(p.partnerId)}>{String(p.name)} · {fmtMoney(p.balance)}</option>)}
+        </select>
+        <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
+        <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+      </div>
+      {error && <ErrorBanner error={error} />}
+      <div className="table-wrap card" style={{ marginTop: 12 }}>
+        <div className="card-head"><h3>Movements ({rows.length})</h3><span className="muted" style={{ fontSize: 12 }}>Total debit {fmtMoney(totals.debit)} · credit {fmtMoney(totals.credit)}</span></div>
+        {loading ? <Skeleton rows={8} /> : rows.length === 0 ? (
+          <EmptyState title="No movements" body={partnerId ? 'This partner has no posted activity in the selected range.' : 'No partner movements in the selected range.'} />
+        ) : (
+          <table className="data">
+            <thead><tr><th>Partner</th><th>Date</th><th>Document</th><th>Type</th><th>Description</th><th className="cell-num">Debit</th><th className="cell-num">Credit</th><th className="cell-num">Balance</th></tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={String(r.entryId)}>
+                  <td>{String(r.partnerName)}</td>
+                  <td>{String(r.docDate).slice(0, 10)}</td>
+                  <td className="cell-mono">{String(r.docNo ?? '') || '—'}</td>
+                  <td>{String(r.docType)}{r.isReversal ? ' (reversal)' : ''}</td>
+                  <td>{String(r.label ?? '')}</td>
+                  <td className="cell-num">{Number(r.debit) ? fmtMoney(r.debit) : ''}</td>
+                  <td className="cell-num">{Number(r.credit) ? fmtMoney(r.credit) : ''}</td>
+                  <td className="cell-num">{fmtMoney(r.balance)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {limited && <p className="muted">Showing the first {rows.length} movements — narrow the date range or pick a partner to see more.</p>}
     </div>
   );
 }

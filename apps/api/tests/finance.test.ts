@@ -796,3 +796,50 @@ describe('Finance budget gate and posting rules', () => {
     await execAsTenant(tenantId, companyId, 'DELETE FROM journal_entries WHERE id = $1', [entryId]);
   });
 });
+
+describe('Finance reporting surface (cash flow / GL / partner ledger)', () => {
+  const round = (v: unknown) => Math.round(Number(v) * 100);
+
+  it('produces a self-consistent cash flow statement', async () => {
+    const { token } = await loginAs('admin');
+    const year = new Date().getFullYear();
+    const res = await api.get(`/api/ops/finance/cash-flow?from=${year}-01-01&to=${year}-12-31`).set(auth(token));
+    expect(res.status).toBe(200);
+    const d = res.body.data;
+    expect(typeof d.openingCash).not.toBe('undefined');
+    expect(typeof d.closingCash).not.toBe('undefined');
+    // Opening + net movement must equal closing.
+    expect(round(d.openingCash) + round(d.netCashChange)).toBe(round(d.closingCash));
+    // Section line items must sum to the net cash change.
+    const sectionSum = (d.sections as Array<{ lines: Array<{ amount: number }> }>).reduce(
+      (s, sec) => s + sec.lines.reduce((t, l) => t + round(l.amount), 0),
+      0
+    );
+    expect(sectionSum).toBe(round(d.netCashChange));
+    for (const sec of d.sections) expect(['operating', 'investing', 'financing']).toContain(sec.key);
+  });
+
+  it('serves a general ledger with running balances', async () => {
+    const { token } = await loginAs('admin');
+    const res = await api.get('/api/ops/finance/general-ledger').set(auth(token));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.data.rows)).toBe(true);
+    expect(res.body.data.totals).toBeTruthy();
+    if (res.body.data.rows.length) {
+      const r = res.body.data.rows[0];
+      expect(typeof r.accountCode).toBe('string');
+      expect(typeof r.balance).not.toBe('undefined');
+    }
+  });
+
+  it('serves customer and supplier partner ledgers', async () => {
+    const { token } = await loginAs('admin');
+    const cust = await api.get('/api/ops/finance/partner-ledger?partnerType=customer').set(auth(token));
+    expect(cust.status).toBe(200);
+    expect(Array.isArray(cust.body.data.partners)).toBe(true);
+    expect(cust.body.data.partnerType).toBe('customer');
+    const sup = await api.get('/api/ops/finance/partner-ledger?partnerType=supplier').set(auth(token));
+    expect(sup.status).toBe(200);
+    expect(sup.body.data.partnerType).toBe('supplier');
+  });
+});
