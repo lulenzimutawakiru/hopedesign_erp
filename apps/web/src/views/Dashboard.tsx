@@ -2,6 +2,7 @@
 import { api, fmtDate, fmtMoney, fmtNum } from '../api';
 import { navigate } from '../router';
 import { useAuth, can } from '../auth';
+import { savePrefs } from '../prefs';
 import { COMMANDS, greetingFor, personaLabel, personaOf, WORKSPACES } from '../work';
 import { EmptyState, Meter } from '../components/os';
 import { DashboardSkeleton, ErrorState, SectionHeader, safeMessage } from '../components/states';
@@ -213,6 +214,7 @@ export default function Dashboard() {
             <button className="btn btn-primary" onClick={() => navigate('/inbox')}>Open inbox</button>
             {can(user, 'sales.quotations.create') && <button className="btn btn-ghost-on-navy" onClick={() => navigate('/sales/quotations/new')}>New quotation</button>}
             {can(user, 'inventory.stock.view') && <button className="btn btn-ghost-on-navy" onClick={() => navigate('/inventory/stock')}>Stock board</button>}
+            <button className="btn btn-ghost-on-navy" onClick={() => { savePrefs({ simpleMode: true }); navigate('/simple'); }}>Simple view</button>
           </div>
           {work.asOf && <div className="muted" style={{ marginTop: 14, fontSize: 11 }}>Refreshed {fmtDate(work.asOf)}</div>}
         </div>
