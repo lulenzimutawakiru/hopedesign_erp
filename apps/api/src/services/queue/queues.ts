@@ -108,6 +108,13 @@ export const SCHEDULED_TASKS: readonly ScheduledTask[] = [
     offsetMs: 15_000,
     lock: WORKER_LOCKS.SERVICE_DESK_SLA,
   },
+  {
+    id: 'intelligence-discovery',
+    label: 'Intelligence discovery campaigns',
+    everyMs: 60_000,
+    offsetMs: 50_000,
+    lock: WORKER_LOCKS.INTELLIGENCE_DISCOVERY,
+  },
 ];
 
 export const SCHEDULED_TASK_IDS: readonly string[] = SCHEDULED_TASKS.map((task) => task.id);

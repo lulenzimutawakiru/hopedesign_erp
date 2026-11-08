@@ -460,6 +460,12 @@ const MODULES = {
   sign: {
     sign_requests: ["view","create","update","delete","send","revoke","sign"],
   },
+  intelligence: {
+    dashboard: ["view"],
+    campaigns: ["view","create","update","delete","run"],
+    prospects: ["view","create","update","delete","enrich","review","convert"],
+    providers: ["view","configure"],
+  },
   efris: {
     dashboard: ["view"],
     transactions: ["view","submit","retry","reprocess","reject"],
@@ -1249,6 +1255,32 @@ const SIGN_ROLE_EXTENSIONS = {
   system_administrator: SIGN_FULL,
 };
 
+// Intelligence (lead discovery, migration 0240). Sales leadership and the
+// executive office get the full module. Sales executives can discover, enrich,
+// review and convert but cannot reconfigure providers or manage campaigns;
+// representatives get read-only discovery visibility.
+const INTELLIGENCE_FULL = ["intelligence.*"];
+const INTELLIGENCE_EXECUTIVE = [
+  "intelligence.dashboard.view",
+  "intelligence.campaigns.view",
+  "intelligence.prospects.view",
+  "intelligence.prospects.create",
+  "intelligence.prospects.update",
+  "intelligence.prospects.enrich",
+  "intelligence.prospects.review",
+  "intelligence.prospects.convert",
+];
+const INTELLIGENCE_REP = ["intelligence.dashboard.view", "intelligence.prospects.view"];
+const INTELLIGENCE_ROLE_EXTENSIONS = {
+  sales_director: INTELLIGENCE_FULL,
+  sales_manager: INTELLIGENCE_FULL,
+  sales_executive: INTELLIGENCE_EXECUTIVE,
+  sales_representative: INTELLIGENCE_REP,
+  md_assistant: INTELLIGENCE_FULL,
+  operations_manager: INTELLIGENCE_FULL,
+  system_administrator: INTELLIGENCE_FULL,
+};
+
 for (const role of ROLES) {
   const extra = [
     ...(SERVICE_DESK_ROLE_EXTENSIONS[role.code] || []),
@@ -1259,6 +1291,7 @@ for (const role of ROLES) {
     ...(FINANCE_CENTRE_ROLE_EXTENSIONS[role.code] || []),
     ...(EXCEPTION_ROLE_EXTENSIONS[role.code] || []),
     ...(SIGN_ROLE_EXTENSIONS[role.code] || []),
+    ...(INTELLIGENCE_ROLE_EXTENSIONS[role.code] || []),
   ];
   if (extra.length) role.grants = [...role.grants, ...extra];
 }

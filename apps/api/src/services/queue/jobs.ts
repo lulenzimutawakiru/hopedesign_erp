@@ -5,6 +5,7 @@ import { runHikvisionWorkerTick } from '../hikvision/processor.js';
 import { runEfrisWorkerTick, runEfrisCreditNotePollTick } from '../efris/processor.js';
 import { runEfrisHealthCheckTick } from '../efris/health.js';
 import { runServiceDeskSlaTick } from '../serviceDeskSla.js';
+import { runIntelligenceDiscoveryTick } from '../intelligence/service.js';
 
 /**
  * Task id -> handler. This module pulls in the five background services and
@@ -29,4 +30,5 @@ export const TASK_HANDLERS: Readonly<Record<string, TaskHandler>> = {
   'efris-credit-note-poll': runEfrisCreditNotePollTick,
   'efris-health-check': runEfrisHealthCheckTick,
   'service-desk-sla': runServiceDeskSlaTick,
+  'intelligence-discovery': runIntelligenceDiscoveryTick,
 };
