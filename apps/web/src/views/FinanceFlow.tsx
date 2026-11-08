@@ -306,6 +306,14 @@ function hrefForEfrisSource(docRefType: unknown, docRefId: unknown): string | nu
   }
 }
 
+/** The fiscal QR reference, only when it is itself a URL. A QR ref that is not
+ *  a URL is shown as plain text — never fabricate a URA verification link. */
+function hrefForQrRef(qrRef: unknown): string | null {
+  const v = String(qrRef ?? '').trim();
+  if (!v) return null;
+  return /^https?:\/\//i.test(v) ? v : null;
+}
+
 /** Dependency-free sparkline. Keeps the command center fast on large ledgers. */
 function Sparkline({ values, tone = 'ok', width = 120, height = 34 }: { values: number[]; tone?: 'ok' | 'warn' | 'bad'; width?: number; height?: number }) {
   const pts = values.length > 1 ? values.map(Number) : [0, 0];
@@ -6484,6 +6492,16 @@ function EfrisDesk() {
       </a>
     );
   };
+  // The fiscal QR reference, linked only when URA stored an actual URL for it.
+  const renderQrRef = (r: Rec) => {
+    const v = String(r.qrRef ?? '').trim();
+    if (!v) return null;
+    const href = hrefForQrRef(v);
+    if (!href) return v;
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" title="Open fiscal QR reference">{v}</a>
+    );
+  };
 
   return (
     <div className="page">
@@ -6696,7 +6714,7 @@ function EfrisDesk() {
                       <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
                         {r.fiscalizedAt ? `Fiscalized ${String(r.fiscalizedAt).slice(0, 19).replace('T', ' ')}` : r.transmittedAt ? `Sent ${String(r.transmittedAt).slice(0, 19).replace('T', ' ')}` : 'Not yet sent to URA'}
                       </div>
-                      {r.qrRef ? <div className="muted cell-mono" style={{ fontSize: 12, marginTop: 4 }}>QR {String(r.qrRef)}</div> : null}
+                      {r.qrRef ? <div className="muted cell-mono" style={{ fontSize: 12, marginTop: 4 }}>QR {renderQrRef(r)}</div> : null}
                     </div>
                   ))}
                 </div>
@@ -6718,7 +6736,7 @@ function EfrisDesk() {
                           <td className="cell-mono">{renderEfrisDocLink(r)}</td>
                           <td className="cell-mono">{r.fdn ? String(r.fdn) : '\u2014'}</td>
                           <td className="cell-mono">{r.verificationCode ? String(r.verificationCode) : '\u2014'}</td>
-                          <td className="cell-mono">{r.qrRef ? String(r.qrRef) : '\u2014'}</td>
+                          <td className="cell-mono">{r.qrRef ? renderQrRef(r) :'\u2014'}</td>
                           <td><Badge value={r.txnStatus} /></td>
                           <td>{r.fiscalizedAt ? String(r.fiscalizedAt).slice(0, 19).replace('T', ' ') : r.transmittedAt ? `sent ${String(r.transmittedAt).slice(0, 19).replace('T', ' ')}` : '\u2014'}</td>
                         </tr>
