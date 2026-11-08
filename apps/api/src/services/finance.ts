@@ -816,7 +816,7 @@ export async function postPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: nu
 
   const totals = {
     gross: 0, paye: 0, nssf: 0, employerNssf: 0,
-    loans: 0, advances: 0, fines: 0, other: 0, lst: 0, net: 0,
+    loans: 0, advances: 0, fines: 0, other: 0, lst: 0, net: 0, reimbursement: 0,
   };
   const earningsByCentre = new Map<string, { costCentreId: number | null; amount: number }>();
   const employerNssfByCentre = new Map<string, { costCentreId: number | null; amount: number }>();
@@ -844,6 +844,7 @@ export async function postPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: nu
     totals.other += Number(it.other_deductions ?? 0);
     totals.lst += Number(it.lst ?? 0);
     totals.net += Number(it.net_pay ?? 0);
+    totals.reimbursement += Number(it.reimbursement ?? 0);
     accumulate(earningsByCentre, costCentreId, gross);
     accumulate(employerNssfByCentre, costCentreId, employerNssf);
   }
@@ -860,7 +861,10 @@ export async function postPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: nu
   };
 
   const staffRecoveries = totals.loans + totals.advances + totals.fines + totals.other;
-  const debits = round2(totals.gross) + round2(totals.employerNssf);
+  // Expense reimbursements settle as a net addition on the payslip; they are
+  // recognized as an expense (not remuneration) on the debit side so the run
+  // balances while net pay carries the extra amount to the employee.
+  const debits = round2(totals.gross) + round2(totals.employerNssf) + round2(totals.reimbursement);
   const creditsBeforeNet =
     round2(totals.paye) + round2(totals.nssf + totals.employerNssf) + round2(totals.lst) + round2(staffRecoveries);
   const netPay = round2(debits - creditsBeforeNet);
@@ -899,6 +903,14 @@ export async function postPayroll(client: pg.PoolClient, ctx: Ctx, payrollId: nu
         description: `Employer NSSF ${label}`,
       });
     }
+  }
+  // Reimbursed employee expenses are an operating expense, not salaries.
+  if (round2(totals.reimbursement) !== 0) {
+    lines.push({
+      account_id: await getAccountId(client, ctx, '10254500'),
+      debit: round2(totals.reimbursement),
+      description: `Expense reimbursements ${label}`,
+    });
   }
   const pushCredit = async (role: string, amount: number, description: string) => {
     const value = round2(amount);

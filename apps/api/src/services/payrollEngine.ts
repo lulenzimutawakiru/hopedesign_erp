@@ -465,5 +465,73 @@ export interface DeductionLine {
   amount: number;
 }
 
+/**
+ * Load PAYSLIP-mode expense reimbursements that should settle in this payroll
+ * run, keyed by employee. An expense reimbursement is a return of the
+ * employee's own money, so it is a pure net addition on the payslip — it never
+ * enters gross, chargeable income, NSSF, LST or PAYE.
+ *
+ * Mirrors the `payroll_arrears` linkage: approved sources are linked to this
+ * run (`reimbursement_payroll_id = $payrollId`) the first time they are seen,
+ * read back on every recompute of the same run, and finally marked REIMBURSED
+ * by `postPayrollRun`. Reports settle their member claims; a lone claim (no
+ * report) settles itself.
+ */
+export async function loadExpenseReimbursements(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  payrollId: number,
+  employeeIds: number[]
+): Promise<Map<number, number>> {
+  const byEmployee = new Map<number, number>();
+  if (!employeeIds.length) return byEmployee;
+
+  // Link any approved, not-yet-linked PAYSLIP reimbursements to this run.
+  await client.query(
+    `UPDATE expense_reports SET reimbursement_payroll_id = $1
+      WHERE tenant_id = $2 AND company_id = $3
+        AND reimbursement_mode = 'PAYSLIP' AND status = 'APPROVED'
+        AND reimbursement_payroll_id IS NULL AND employee_id = ANY($4::bigint[])`,
+    [payrollId, ctx.tenantId, ctx.companyId, employeeIds]
+  );
+  await client.query(
+    `UPDATE employee_expense_claims SET reimbursement_payroll_id = $1
+      WHERE tenant_id = $2 AND company_id = $3
+        AND reimbursement_mode = 'PAYSLIP' AND status = 'APPROVED'
+        AND report_id IS NULL AND reimbursement_payroll_id IS NULL
+        AND employee_id = ANY($4::bigint[])`,
+    [payrollId, ctx.tenantId, ctx.companyId, employeeIds]
+  );
+
+  const reports = await client.query(
+    `SELECT r.employee_id, COALESCE(SUM(c.amount),0)::numeric AS total
+       FROM expense_reports r
+       JOIN employee_expense_claims c ON c.report_id = r.id
+      WHERE r.tenant_id = $1 AND r.company_id = $2
+        AND r.reimbursement_payroll_id = $3 AND r.status = 'APPROVED'
+      GROUP BY r.employee_id`,
+    [ctx.tenantId, ctx.companyId, payrollId]
+  );
+  for (const row of reports.rows) {
+    const emp = Number(row.employee_id);
+    byEmployee.set(emp, round2((byEmployee.get(emp) ?? 0) + Number(row.total || 0)));
+  }
+
+  const claims = await client.query(
+    `SELECT employee_id, COALESCE(SUM(amount),0)::numeric AS total
+       FROM employee_expense_claims
+      WHERE tenant_id = $1 AND company_id = $2
+        AND reimbursement_payroll_id = $3 AND status = 'APPROVED' AND report_id IS NULL
+      GROUP BY employee_id`,
+    [ctx.tenantId, ctx.companyId, payrollId]
+  );
+  for (const row of claims.rows) {
+    const emp = Number(row.employee_id);
+    byEmployee.set(emp, round2((byEmployee.get(emp) ?? 0) + Number(row.total || 0)));
+  }
+
+  return byEmployee;
+}
+
 
 
