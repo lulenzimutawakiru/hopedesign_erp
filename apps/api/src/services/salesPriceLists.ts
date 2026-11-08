@@ -132,16 +132,25 @@ export async function deletePriceList(client: pg.PoolClient, ctx: Ctx, id: numbe
 export async function savePriceListItems(client: pg.PoolClient, ctx: Ctx, id: number, items: PriceListItemInput[]) {
   const cur = await client.query('SELECT id FROM price_lists WHERE id = $1 AND tenant_id = $2', [id, ctx.tenantId]);
   if (cur.rows.length === 0) throw notFound('Price list not found');
-  await client.query('DELETE FROM price_list_items WHERE price_list_id = $1', [id]);
+  // The item set is keyed on product: keep the last row for each product so a
+  // duplicate selection can't trip the UNIQUE(price_list_id, product_id) index.
+  const byProduct = new Map<number, PriceListItemInput>();
   for (const it of items) {
+    const pid = Number(it.productId);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    byProduct.set(pid, it);
+  }
+
+  await client.query('DELETE FROM price_list_items WHERE price_list_id = $1', [id]);
+  for (const [productId, it] of byProduct) {
     const price = Number(it.unitPrice);
     if (!Number.isFinite(price) || price < 0) throw badRequest('Item price must be a non-negative number');
-    const product = await client.query('SELECT id FROM products WHERE id = $1 AND tenant_id = $2', [it.productId, ctx.tenantId]);
-    if (product.rows.length === 0) throw badRequest(`Product ${it.productId} not found`);
+    const product = await client.query('SELECT id FROM products WHERE id = $1 AND tenant_id = $2', [productId, ctx.tenantId]);
+    if (product.rows.length === 0) throw badRequest(`Product ${productId} not found`);
     await client.query(
       `INSERT INTO price_list_items (price_list_id, product_id, unit_price, currency, min_quantity, effective_from, effective_to)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [id, it.productId, round2(price), it.currency ?? 'UGX', Number(it.minQuantity ?? 0) || 0, it.effectiveFrom ?? null, it.effectiveTo ?? null]
+      [id, productId, round2(price), it.currency ?? 'UGX', Math.max(0, Number(it.minQuantity ?? 0) || 0), it.effectiveFrom ?? null, it.effectiveTo ?? null]
     );
   }
   const res = await client.query('SELECT count(*)::int AS n FROM price_list_items WHERE price_list_id = $1', [id]);
