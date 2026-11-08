@@ -240,9 +240,10 @@ button.sidebar-brand {
   border: none; border-radius: 9px;
   font-size: 13.5px; cursor: pointer;
   font-family: var(--font);
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
 }
-.nav-item:hover { background: #163247; color: #F1F5F9; }
-.nav-active { background: var(--hope); color: #FFFFFF; }
+.nav-item:hover { background: #163247; color: #F1F5F9; transform: translateX(2px); }
+.nav-active { background: var(--hope); color: #FFFFFF; box-shadow: 0 4px 14px -6px rgba(22, 119, 255, 0.55); }
 .nav-active .nav-dot { background: #FFFFFF; }
 .nav-item .nav-hint { margin-left: auto; font-size: 10px; color: var(--rail-dim); letter-spacing: 0.04em; }
 .nav-dot {
@@ -282,8 +283,11 @@ button.sidebar-brand {
 /* ---------- Topbar ---------- */
 .topbar {
   height: 56px;
-  background: var(--paper);
+  background: color-mix(in srgb, var(--paper) 86%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.35);
+  backdrop-filter: blur(12px) saturate(1.35);
   border-bottom: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(16, 29, 53, 0.04), 0 8px 20px -14px rgba(16, 29, 53, 0.12);
   display: flex; align-items: center; gap: 12px;
   padding: 0 18px;
   position: sticky; top: 0;
@@ -328,7 +332,7 @@ button.sidebar-brand {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 12px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 10px;
   background: var(--paper-2);
   color: var(--muted);
   cursor: pointer;
@@ -1187,6 +1191,47 @@ html[data-theme='dark'] .scan-verified .verify-mark { color: #20C4C4; }
 :focus-visible {
   outline: 2px solid var(--hope);
   outline-offset: 2px;
+}
+
+/* ---------- Modern shell polish ---------- */
+/* Brand-tinted text selection (subtle, keeps inherited text colour). */
+::selection { background: color-mix(in srgb, var(--hope) 22%, transparent); }
+
+/* Slim, unobtrusive, theme-aware scrollbars. */
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--muted-2); }
+.sidebar-nav { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.18) transparent; }
+.sidebar-nav::-webkit-scrollbar { width: 8px; }
+.sidebar-nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.sidebar-nav::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.32); }
+
+/* Route/content entrance — a gentle fade so a module switch feels responsive,
+   not instant. Auto-disabled under prefers-reduced-motion. */
+@keyframes shell-page-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.page { animation: shell-page-in 200ms ease-out; }
+
+/* Floating-layer entrance (command palette, modals, dropdowns, popovers). */
+@keyframes shell-pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.cmd-box, .modal, .search-dropdown, .topbar-dropdown, .scope-pop {
+  animation: shell-pop-in 140ms ease-out;
 }
 .net-banner {
   background: #3A2E12; color: #F0D48A; text-align: center;
