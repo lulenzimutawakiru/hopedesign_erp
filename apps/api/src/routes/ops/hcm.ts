@@ -6,6 +6,7 @@ import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest } from '../../utils.js';
 import * as hcm from '../../services/hcm.js';
 import * as hcmLists from '../../services/hcmLists.js';
+import * as leaveAdmin from '../../services/leaveAdmin.js';
 import { ORG_CATEGORY_BY_ID, defaultFor } from '../../services/organisationSettings/catalogue.js';
 import { loadCategoryValues } from '../../services/organisationSettings/settings.js';
 
@@ -395,6 +396,31 @@ hcmOpsRouter.get('/leave/balances', ...runGet('hr.leave_balances.view', (c, ctx,
   year: q.year != null ? Number(q.year) : null,
   leaveTypeId: q.leaveTypeId != null ? Number(q.leaveTypeId) : null,
 })));
+
+// Time Off types, accrual plans, allocations and public holidays (Odoo Time Off parity)
+hcmOpsRouter.get('/leave/types', ...runGet('hr.leave_types.view', (c, ctx, q) => leaveAdmin.listLeaveTypes(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  status: q.status != null ? String(q.status) : undefined,
+})));
+hcmOpsRouter.post('/leave/types', ...run('hr.leave_types.create', (c, ctx, b) => leaveAdmin.createLeaveType(c, ctx, b)));
+hcmOpsRouter.patch('/leave/types/:id', ...run('hr.leave_types.update', (c, ctx, b, p) => leaveAdmin.updateLeaveType(c, ctx, Number(p.id), b)));
+
+hcmOpsRouter.get('/leave/policies', ...runGet('hr.leave_policies.view', (c, ctx, q) => leaveAdmin.listLeavePolicies(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  status: q.status != null ? String(q.status) : undefined,
+})));
+hcmOpsRouter.post('/leave/policies', ...run('hr.leave_policies.create', (c, ctx, b) => leaveAdmin.createLeavePolicy(c, ctx, b)));
+hcmOpsRouter.patch('/leave/policies/:id', ...run('hr.leave_policies.update', (c, ctx, b, p) => leaveAdmin.updateLeavePolicy(c, ctx, Number(p.id), b)));
+
+hcmOpsRouter.post('/leave/allocations', ...run('hr.leave_balances.update', (c, ctx, b) => leaveAdmin.allocateLeave(c, ctx, b)));
+
+hcmOpsRouter.get('/holidays', ...runGet('hr.holidays.view', (c, ctx, q) => leaveAdmin.listHolidays(c, ctx, {
+  year: q.year != null ? Number(q.year) : undefined,
+  q: q.q != null ? String(q.q) : undefined,
+})));
+hcmOpsRouter.post('/holidays', ...run('hr.holidays.create', (c, ctx, b) => leaveAdmin.createHoliday(c, ctx, b)));
+hcmOpsRouter.patch('/holidays/:id', ...run('hr.holidays.update', (c, ctx, b, p) => leaveAdmin.updateHoliday(c, ctx, Number(p.id), b)));
+hcmOpsRouter.delete('/holidays/:id', ...run('hr.holidays.delete', (c, ctx, _b, p) => leaveAdmin.deleteHoliday(c, ctx, Number(p.id))));
 
 // ============================================================
 // PERFORMANCE

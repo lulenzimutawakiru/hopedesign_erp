@@ -349,6 +349,10 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'leave', label: 'Leave', href: '/people/leave', perm: 'hr.leave.view' , group: 'Time & Leave'},
           { id: 'leave-calendar', label: 'Leave Calendar', href: '/people/leave/calendar', perm: 'hr.holidays.view' , group: 'Time & Leave'},
           { id: 'leave-balances', label: 'Leave Balances', href: '/people/leave/balances', perm: 'hr.leave_balances.view' , group: 'Time & Leave'},
+          { id: 'time-off-types', label: 'Time Off Types', href: '/people/time-off/types', perm: 'hr.leave_types.view' , group: 'Time & Leave'},
+          { id: 'accrual-plans', label: 'Accrual Plans', href: '/people/time-off/plans', perm: 'hr.leave_policies.view' , group: 'Time & Leave'},
+          { id: 'leave-allocations', label: 'Allocations', href: '/people/time-off/allocations', perm: 'hr.leave_balances.view' , group: 'Time & Leave'},
+          { id: 'holidays', label: 'Public Holidays', href: '/people/time-off/holidays', perm: 'hr.holidays.view' , group: 'Time & Leave'},
           { id: 'attendance', label: 'Attendance', href: '/people/attendance', perm: 'hr.attendance.view' , group: 'Time & Leave'},
           { id: 'time', label: 'Time & Shifts', href: '/people/time', perm: 'hr.shifts.view' , group: 'Time & Leave'},
           { id: 'payroll', label: 'Payroll', href: '/people/payrolls', perm: 'hr.payrolls.view' , group: 'Payroll'},
@@ -795,6 +799,12 @@ export function requiredPermForPath(path: string): string | undefined {
     if (parts[1] === 'leave') {
       if (parts[2] === 'balances') return 'hr.leave_balances.view';
       if (parts[2] === 'calendar') return 'hr.holidays.view';
+    }
+    if (parts[1] === 'time-off') {
+      if (parts[2] === 'plans') return 'hr.leave_policies.view';
+      if (parts[2] === 'holidays') return 'hr.holidays.view';
+      if (parts[2] === 'allocations') return 'hr.leave_balances.view';
+      return 'hr.leave_types.view';
     }
     return map[parts[1] ?? ''] ?? 'hr.employees.view';
   }
