@@ -36,6 +36,7 @@ import {
   AlertCenter,
   VisualSchedule,
 } from './FactoryOs';
+import WorkCentres from './WorkCentres';
 
 type Rec = Record<string, unknown>;
 
@@ -105,6 +106,7 @@ export default function ManufacturingFlow({ path }: { path: string }) {
   if (view === 'shifts') return <MmsShifts />;
   if (view === 'boms') return <MmsBoms />;
   if (view === 'costing') return <MmsCosting />;
+  if (view === 'work-centres') return <WorkCentres id={id} />;
   if (view === 'orders' && id) return <OrderWorkspace id={Number(id)} />;
   if (view === 'orders') return <WoList />;
   if (view === 'plans' && id === 'new') return <PlanComposer />;

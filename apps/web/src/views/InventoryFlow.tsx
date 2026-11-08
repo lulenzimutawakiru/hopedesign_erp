@@ -9,6 +9,7 @@ import { JsonForm } from '../components/JsonForm';
 import WarehouseOps from './WarehouseOps';
 import EntityDetail from './EntityDetail';
 import QuickEntry from './QuickEntry';
+import ReorderingRules from './ReorderingRules';
 
 type Rec = Record<string, unknown>;
 
@@ -137,6 +138,7 @@ export default function InventoryFlow({ path }: { path: string }) {
   const { resource, id } = parseInventoryPath(path);
   if (OPS.has(resource)) return <WarehouseOps path={path} />;
   if (resource === 'quick-entry') return <QuickEntry initial={id} />;
+  if (resource === 'reorder') return <ReorderingRules />;
   if (id === 'new') {
     if (resource === 'transfers') return <TransferComposer />;
     if (resource === 'adjustments') return <AdjustmentComposer />;

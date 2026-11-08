@@ -4,6 +4,7 @@ import { tx, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest } from '../../utils.js';
 import * as mfg from '../../services/manufacturing.js';
+import * as workCentres from '../../services/workCentres.js';
 
 export const manufacturingOpsRouter = Router();
 
@@ -244,6 +245,16 @@ manufacturingOpsRouter.get('/routings/:id', ...runGet('production.boms.view', (c
 manufacturingOpsRouter.post('/routings', ...run('production.boms.create', (c, ctx, b) => mfg.createRouting(c, ctx, b)));
 manufacturingOpsRouter.put('/routings/:id', ...run('production.boms.update', (c, ctx, b, p) => mfg.updateRouting(c, ctx, Number(p.id), b)));
 manufacturingOpsRouter.delete('/routings/:id', ...run('production.boms.delete', (c, ctx, b, p) => mfg.deleteRouting(c, ctx, Number(p.id), b)));
+
+// Routing operations (setup/run/teardown times + alternative work centres)
+manufacturingOpsRouter.put('/routings/:id/operations', ...run('production.boms.update', (c, ctx, b, p) => workCentres.saveRoutingOperations(c, ctx, Number(p.id), Array.isArray(b.operations) ? b.operations : [])));
+
+// Work centres (Odoo Manufacturing > Work Centers parity)
+manufacturingOpsRouter.get('/work-centres', ...runGet('production.work_centres.view', (c, ctx) => workCentres.workCentresDesk(c, ctx)));
+manufacturingOpsRouter.get('/work-centres/:id', ...runGet('production.work_centres.view', (c, ctx, _q, p) => workCentres.workCentreDetail(c, ctx, Number(p.id))));
+manufacturingOpsRouter.post('/work-centres', ...run('production.work_centres.create', (c, ctx, b) => workCentres.saveWorkCentre(c, ctx, null, b)));
+manufacturingOpsRouter.put('/work-centres/:id', ...run('production.work_centres.update', (c, ctx, b, p) => workCentres.saveWorkCentre(c, ctx, Number(p.id), b)));
+manufacturingOpsRouter.delete('/work-centres/:id', ...run('production.work_centres.delete', (c, ctx, _b, p) => workCentres.deleteWorkCentre(c, ctx, Number(p.id))));
 
 // ---------------------------------------------------------------------------
 // Parity inquiries & maintenance

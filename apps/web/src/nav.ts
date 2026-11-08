@@ -121,6 +121,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'pick', label: 'Pick', href: '/inventory/pick', perm: 'inventory.stock.view' , group: 'Stock Operations'},
           { id: 'issue', label: 'Issue', href: '/inventory/issue', perm: 'inventory.stock.view' , group: 'Stock Operations'},
           { id: 'demand', label: 'Demand / ATP', href: '/inventory/demand', perm: 'inventory.stock.view' , group: 'Planning'},
+          { id: 'reorder', label: 'Reordering Rules', href: '/inventory/reorder', perm: 'inventory.reorder_rules.view' , group: 'Planning'},
           { id: 'movements', label: 'Movements', href: '/inventory/movements', perm: 'inventory.movements.view' , group: 'Movements'},
           { id: 'transfers', label: 'Transfers', href: '/inventory/transfers', perm: 'inventory.transfers.view' , group: 'Movements'},
           { id: 'adjustments', label: 'Adjustments', href: '/inventory/adjustments', perm: 'inventory.adjustments.view' , group: 'Movements'},
@@ -182,6 +183,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'shifts', label: 'Shift Handover', href: '/plant/shifts', perm: 'production.work_orders.view' , group: 'Scheduling'},
             { id: 'machines', label: 'Machines', href: '/records/production/machines', perm: 'production.machines.view' , group: 'Scheduling'},
 { id: 'boms', label: 'BOMs', href: '/plant/boms', perm: 'production.boms.view' , group: 'Scheduling'},
+          { id: 'work_centres', label: 'Work Centres', href: '/plant/work-centres', perm: 'production.work_centres.view' , group: 'Scheduling'},
           { id: 'costing', label: 'Costing', href: '/plant/costing', perm: 'production.costing.view' , group: 'Costing'},
           { id: 'operator', label: 'Operator Floor', href: '/operator', perm: 'production.work_orders.start' , group: 'Operator'},
         ],
@@ -802,6 +804,7 @@ export function requiredPermForPath(path: string): string | undefined {
   }
   if (parts[0] === 'plant' && parts[1] === 'command') return 'production.kpis.view';
   if (parts[0] === 'plant' && parts[1] === 'mrp') return 'production.plans.view';
+  if (parts[0] === 'plant' && parts[1] === 'work-centres') return 'production.work_centres.view';
   if (parts[0] === 'plant') return 'production.work_orders.view';
   if (parts[0] === 'finance') return 'finance.journals.view';
   if (parts[0] === 'spend') return 'expenditure.dashboards.view';
@@ -833,6 +836,7 @@ export function requiredPermForPath(path: string): string | undefined {
       demand: 'inventory.stock.view',
       putaway: 'inventory.movements.create',
       assets: 'assets.register.view',
+      reorder: 'inventory.reorder_rules.view',
       materials: 'inventory.items.view',
       consumables: 'inventory.items.view',
       office: 'inventory.items.view',

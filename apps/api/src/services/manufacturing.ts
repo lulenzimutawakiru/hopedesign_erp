@@ -2923,6 +2923,7 @@ export async function routingDetail(client: pg.PoolClient, ctx: Ctx, id: number)
   if (hdr.rows.length === 0) throw notFound('Routing not found');
   const ops = await client.query(
     `SELECT ro.id, ro.seq, ro.name, ro.setup_time_min, ro.run_time_per_unit_min, ro.teardown_time_min,
+       ro.work_centre_id, ro.machine_id, ro.alternative_work_centres,
        wc.code AS work_centre_code, wc.name AS work_centre_name,
        m.code AS machine_code, m.name AS machine_name
      FROM routing_operations ro
