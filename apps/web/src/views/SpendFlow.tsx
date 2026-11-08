@@ -6,6 +6,8 @@ import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { DOCUMENT_EXPORT_FORMATS } from '../components/DownloadMenu';
 import { toast } from '../components/toast';
 import RecordExpense from './spend/RecordExpense';
+import { ReportsList, ReportComposer, ReportDesk } from './spend/Reports';
+import { ExpenseProducts } from './spend/Products';
 import {
   CopyButton,
   MetaCard,
@@ -46,6 +48,10 @@ export default function SpendFlow({ path }: { path: string }) {
   if (view === 'claims' && id === 'new') return <ClaimForm />;
   if (view === 'claims' && id) return <ClaimDesk id={Number(id)} />;
   if (view === 'claims') return <ClaimsList />;
+  if (view === 'reports' && id === 'new') return <ReportComposer />;
+  if (view === 'reports' && id) return <ReportDesk id={Number(id)} />;
+  if (view === 'reports') return <ReportsList />;
+  if (view === 'products') return <ExpenseProducts />;
   if (view === 'close') return <DailyCloseDesk />;
   if (view === 'payments') return <ExpensePaymentsDesk />;
   // Employees with universal expense-initiation access land on their own

@@ -206,6 +206,8 @@ const MODULES = {
     payments: ["view","create","approve","post","reconcile","reconcile_approve"],
     daily_close: ["view","create","approve"],
     reports: ["view"],
+    expense_reports: ["view","create","update","submit","approve","reimburse"],
+    expense_products: ["view","create","update"],
     settings: ["manage"],
   },
   hr: {

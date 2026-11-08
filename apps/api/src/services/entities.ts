@@ -60,6 +60,7 @@ export const ENTITIES: Record<
   'ops.requisitions': { table: 'requisitions', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'requested_by' },
   'ops.expenses': { table: 'expense_transactions', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
   'ops.claims': { table: 'employee_expense_claims', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
+  'ops.expense_reports': { table: 'expense_reports', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'created_by' },
   'ops.replenishments': { table: 'petty_cash_replenishments', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'requested_by' },
   'ops.daily_closings': { table: 'daily_cash_closings', statusColumn: 'status', approvedStatus: 'APPROVED', rejectedStatus: 'REJECTED', ownerColumn: 'submitted_by' },
 };

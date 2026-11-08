@@ -10,7 +10,7 @@ import { logAudit } from './audit.js';
 import * as finance from './finance.js';
 import * as statutory from './statutory.js';
 import * as payrollValidation from './payrollValidation.js';
-import { loadModernPayrollInputs, prorateEmployment, prorateBasic, resolveComponentAmount, emptyVariablePay } from './payrollEngine.js';
+import { loadModernPayrollInputs, loadExpenseReimbursements, prorateEmployment, prorateBasic, resolveComponentAmount, emptyVariablePay } from './payrollEngine.js';
 import * as identityLink from './identityLink.js';
 import { mintEmployeeIdentity } from './employeeIdentity.js';
 import * as payrollSettings from './payrollSettings.js';
@@ -1311,6 +1311,9 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
   // salaries) are loaded once for the whole staff; every loader is a no-op
   // when the enterprise tables are empty, keeping legacy runs identical.
   const modern = await loadModernPayrollInputs(client, ctx, staff.rows.map((r) => Number(r.id)), periodStart, periodEnd);
+  // PAYSLIP-mode expense reimbursements settle as a pure net addition on each
+  // payslip (never gross/taxable/NSSF/LST). Loaded once for the whole staff.
+  const reimbursementsByEmployee = await loadExpenseReimbursements(client, ctx, payrollId, staff.rows.map((r) => Number(r.id)));
   // Attendance-derived unpaid days. The terminal alone never marks anyone
   // absent and only LOCKED attendance periods count, so a run whose attendance
   // has not been reviewed produces exactly the numbers it produced before.
@@ -1477,6 +1480,10 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     const otherDeductions = round2(extraDeductions + componentDeductions + employeeDeductions + benefitsEmployee);
     const totalDeductions = round2(paye + nssf.employee + lst + loans + advances + fines + otherDeductions);
     const net = round2(gross - totalDeductions);
+    // Expense reimbursement is a return of the employee's own money: a pure net
+    // addition, outside gross, chargeable income, NSSF, LST and PAYE.
+    const reimbursement = round2(reimbursementsByEmployee.get(employeeId) ?? 0);
+    const netPay = round2(net + reimbursement);
     const slip = await nextDoc(client, ctx, await payrollSettings.getPayslipPrefix(client, ctx));
     const breakdown = {
       paye: {
@@ -1495,6 +1502,7 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
       deductions,
       benefits: { employee: benefitsEmployee, employer: benefitsEmployer },
       proration,
+      ...(reimbursement > 0 ? { reimbursement } : {}),
       ...(attendanceUnpaidDays.has(employeeId)
         ? { attendanceUnpaidDays: attendanceUnpaidDays.get(employeeId) }
         : {}),
@@ -1502,13 +1510,13 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     await client.query(
       `INSERT INTO payroll_items
          (payroll_id, employee_id, basic_pay, allowances, gross_pay, paye, nssf, loans, advances, fines, other_deductions, net_pay, payslip_no,
-          taxable_income, employer_nssf, lst, total_deductions, currency, breakdown)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
-      [payrollId, employeeId, basic, allowances, gross, paye, nssf.employee, loans, advances, fines, otherDeductions, net, slip, taxableIncome, nssf.employer, lst, totalDeductions, currency, JSON.stringify(breakdown)]
+          taxable_income, employer_nssf, lst, total_deductions, currency, breakdown, reimbursement)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+      [payrollId, employeeId, basic, allowances, gross, paye, nssf.employee, loans, advances, fines, otherDeductions, netPay, slip, taxableIncome, nssf.employer, lst, totalDeductions, currency, JSON.stringify(breakdown), reimbursement]
     );
     grossTotal += gross;
     deductionTotal += totalDeductions;
-    netTotal += net;
+    netTotal += netPay;
   }
 
   // Persist component line items so modern reports can reconstruct earnings
@@ -1669,6 +1677,26 @@ export async function postPayrollRun(client: pg.PoolClient, ctx: Ctx, payrollId:
   await client.query(
     `UPDATE payroll_arrears SET status = 'CLOSED' WHERE payroll_id = $1 AND status = 'APPROVED'`,
     [payrollId]
+  );
+  // Settle PAYSLIP-mode expense reimbursements that this run carried (the
+  // net-addition amount on each payslip). Reports and their member claims are
+  // all finalized together.
+  await client.query(
+    `UPDATE expense_reports
+        SET status = 'REIMBURSED', reimbursed_by = $2, reimbursed_at = now()
+      WHERE reimbursement_payroll_id = $1 AND status = 'APPROVED'`,
+    [payrollId, ctx.userId ?? null]
+  );
+  await client.query(
+    `UPDATE employee_expense_claims c
+        SET status = 'REIMBURSED', reimbursed_by = $2, reimbursed_at = now()
+      WHERE c.status = 'APPROVED'
+        AND (c.reimbursement_payroll_id = $1
+             OR EXISTS (
+               SELECT 1 FROM expense_reports r
+               WHERE r.id = c.report_id AND r.reimbursement_payroll_id = $1
+             ))`,
+    [payrollId, ctx.userId ?? null]
   );
   await logAudit(client, ctx, {
     action: 'post',

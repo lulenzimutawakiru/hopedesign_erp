@@ -55,9 +55,12 @@ export default function RecordExpense() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [productId, setProductId] = useState('');
 
   const metaQuery = useApi<{ data: Meta }>('/api/ops/expenditure/meta');
   const meta = metaQuery.data?.data ?? ({} as Meta);
+  const productsQuery = useApi<{ data: Rec[] }>('/api/ops/expenditure/products');
+  const products = productsQuery.data?.data ?? [];
   const cats = meta.categories ?? [];
   const methods = meta.paymentMethods ?? [];
   const depts = meta.departments ?? [];
@@ -162,6 +165,22 @@ export default function RecordExpense() {
       <section className="card card-accent">
         <div className="card-head"><h3>2 · What was it for?</h3></div>
         <div className="form-grid">
+          {products.length > 0 && (
+            <label className="field" style={{ gridColumn: '1 / -1' }}>Quick pick (prefills everything below)
+              <select value={productId} onChange={(e) => {
+                setProductId(e.target.value);
+                const p = products.find((x) => s(x.id) === e.target.value);
+                if (p) {
+                  if (num(p.defaultPrice) > 0) setAmount(String(num(p.defaultPrice)));
+                  setDescription(s(p.name));
+                  if (s(p.categoryId)) setCategoryId(s(p.categoryId));
+                }
+              }}>
+                <option value="">Type it yourself…</option>
+                {products.map((p) => <option key={s(p.id)} value={s(p.id)}>{s(p.name)} {num(p.defaultPrice) > 0 ? `· ${fmtMoney(num(p.defaultPrice))}` : ''}</option>)}
+              </select>
+            </label>
+          )}
           <label className="field field-required">Date
             <input type="date" value={expDate} onChange={(e) => setExpDate(e.target.value)} />
           </label>

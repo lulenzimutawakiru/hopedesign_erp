@@ -1631,10 +1631,10 @@ export async function createClaim(client: pg.PoolClient, ctx: Ctx, b: Record<str
   const ins = await client.query(
     `INSERT INTO employee_expense_claims
        (company_id, tenant_id, branch_id, claim_no, employee_id, created_by, trip, description, expense_date,
-        amount, status, payment_method_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'DRAFT',$11) RETURNING id`,
+        amount, status, payment_method_id, reimbursement_mode)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'DRAFT',$11,$12) RETURNING id`,
     [companyId(ctx), ctx.tenantId, ctx.branchId ?? null, claimNo, n(b.employeeId), ctx.userId ?? null,
-     s(b.trip), s(b.description), isoDate(b.expenseDate), amount, n(b.paymentMethodId)]
+     s(b.trip), s(b.description), isoDate(b.expenseDate), amount, n(b.paymentMethodId), String(b.reimbursementMode ?? 'DIRECT')]
   );
   const claimId = Number(ins.rows[0].id);
   await logAudit(client, ctx, { action: 'create', resource: 'expenses.claims', recordId: claimId, recordCode: claimNo, newValues: { amount } });
@@ -1700,6 +1700,9 @@ export async function submitClaim(client: pg.PoolClient, ctx: Ctx, id: number) {
 export async function reimburseClaim(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown> = {}) {
   const cur = await getClaim(client, ctx, id);
   if (cur.status !== 'APPROVED') throw badRequest(`Only approved claims can be reimbursed (current: ${cur.status})`);
+  if (String(cur.reimbursementMode) === 'PAYSLIP') {
+    throw badRequest('This claim is set to reimburse via payslip — it is settled automatically by the next payroll run.');
+  }
   await client.query(
     `UPDATE employee_expense_claims
         SET status = 'REIMBURSED', reimbursed_by = $1, reimbursed_at = now(), payment_method_id = COALESCE($2, payment_method_id)

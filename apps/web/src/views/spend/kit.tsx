@@ -85,15 +85,23 @@ export const SPEND_TABS: [string, string][] = [
   ['expenses', 'Daily Expenditure'],
   ['petty-cash', 'Petty Cash'],
   ['claims', 'Expense Claims'],
+  ['reports', 'Expense Reports'],
   ['close', 'Daily Close'],
   ['payments', 'Payment Requests'],
+  ['products', 'Expense Products'],
 ];
+
+const TAB_PERMS: Record<string, string | undefined> = {
+  payments: 'expenditure.payments.view',
+  reports: 'expenditure.expense_reports.view',
+  products: 'expenditure.expense_products.view',
+};
 
 export function SpendTabs({ active }: { active: string }) {
   const { user } = useAuth();
   return (
     <nav className="spend-tabs" aria-label="Spend sections">
-      {SPEND_TABS.filter(([key]) => key !== 'payments' || can(user, 'expenditure.payments.view')).map(([key, label]) => (
+      {SPEND_TABS.filter(([key]) => !TAB_PERMS[key] || can(user, TAB_PERMS[key]!)).map(([key, label]) => (
         <button
           key={key}
           type="button"

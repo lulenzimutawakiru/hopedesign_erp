@@ -6,6 +6,8 @@ import { can, requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler, badRequest } from '../../utils.js';
 import { run, runGet } from '../routeHelpers.js';
 import * as exp from '../../services/expenses.js';
+import * as expReports from '../../services/expenseReports.js';
+import * as expProducts from '../../services/expenseProducts.js';
 import * as proc from '../../services/procurement.js';
 
 export const expenditureOpsRouter = Router();
@@ -106,6 +108,26 @@ expenditureOpsRouter.get('/claims/:id', ...runGet('expenditure.claims.view', (c,
 expenditureOpsRouter.post('/claims', ...run('expenditure.claims.create', (c, ctx, b) => exp.createClaim(c, ctx, b)));
 expenditureOpsRouter.post('/claims/:id/submit', ...run('expenditure.claims.create', (c, ctx, _b, p) => exp.submitClaim(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/claims/:id/reimburse', ...run('expenditure.claims.reimburse', (c, ctx, b, p) => exp.reimburseClaim(c, ctx, Number(p.id), b)));
+
+// Expense reports (batch reimbursement sheets grouping employee claims)
+expenditureOpsRouter.get('/expense-reports/meta', ...runGet('expenditure.expense_reports.view', (c, ctx) => expReports.reportsMeta(c, ctx)));
+expenditureOpsRouter.get('/expense-reports', ...runGet('expenditure.expense_reports.view', (c, ctx, q) => expReports.listReports(c, ctx, q)));
+expenditureOpsRouter.get('/expense-reports/:id', ...runGet('expenditure.expense_reports.view', (c, ctx, _q, p) => expReports.getReport(c, ctx, Number(p.id))));
+expenditureOpsRouter.post('/expense-reports', ...run('expenditure.expense_reports.create', (c, ctx, b) => expReports.createReport(c, ctx, b)));
+expenditureOpsRouter.post('/expense-reports/:id/update', ...run('expenditure.expense_reports.update', (c, ctx, b, p) => expReports.updateReport(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/expense-reports/:id/add-claim', ...run('expenditure.expense_reports.update', (c, ctx, b, p) => expReports.addClaimToReport(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/expense-reports/:id/remove-claim', ...run('expenditure.expense_reports.update', (c, ctx, b, p) => expReports.removeClaimFromReport(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/expense-reports/:id/submit', ...run('expenditure.expense_reports.submit', (c, ctx, _b, p) => expReports.submitReport(c, ctx, Number(p.id))));
+expenditureOpsRouter.post('/expense-reports/:id/reimburse', ...run('expenditure.expense_reports.reimburse', (c, ctx, b, p) => expReports.reimburseReport(c, ctx, Number(p.id), b)));
+
+// Expense products (productized, commonly-expensed items)
+expenditureOpsRouter.get('/products/meta', ...runGet('expenditure.expense_products.view', (c, ctx) => expProducts.expenseProductsMeta(c, ctx)));
+expenditureOpsRouter.get('/products', ...runGet('expenditure.expense_products.view', (c, ctx, q) => expProducts.listExpenseProducts(c, ctx, q)));
+expenditureOpsRouter.get('/products/:id', ...runGet('expenditure.expense_products.view', (c, ctx, _q, p) => expProducts.getExpenseProduct(c, ctx, Number(p.id))));
+expenditureOpsRouter.post('/products', ...run('expenditure.expense_products.create', (c, ctx, b) => expProducts.createExpenseProduct(c, ctx, b)));
+expenditureOpsRouter.post('/products/:id/update', ...run('expenditure.expense_products.update', (c, ctx, b, p) => expProducts.updateExpenseProduct(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/products/:id/activate', ...run('expenditure.expense_products.update', (c, ctx, _b, p) => expProducts.setExpenseProductActive(c, ctx, Number(p.id), true)));
+expenditureOpsRouter.post('/products/:id/deactivate', ...run('expenditure.expense_products.update', (c, ctx, _b, p) => expProducts.setExpenseProductActive(c, ctx, Number(p.id), false)));
 
 // Daily close
 expenditureOpsRouter.get('/daily-close/status', ...runGet('expenditure.daily_close.view', (c, ctx, q) => exp.dailyCloseStatus(c, ctx, q.date != null ? String(q.date) : undefined)));
