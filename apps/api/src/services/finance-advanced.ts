@@ -757,7 +757,7 @@ export async function listEfrisDocuments(client: pg.PoolClient, ctx: Ctx, efrisT
   let where = 'WHERE d.tenant_id = $1';
   if (efrisTransactionId) { params.push(efrisTransactionId); where += ` AND d.efris_transaction_id = ${params.length}`; }
   const res = await client.query(
-    `SELECT d.*, t.doc_ref_type, t.doc_ref_code, t.currency, t.gross_amount, t.tax_amount, t.status AS txn_status
+    `SELECT d.*, t.doc_ref_type, t.doc_ref_code, t.doc_ref_id, t.currency, t.gross_amount, t.tax_amount, t.status AS txn_status
      FROM efris_documents d
      JOIN efris_transactions t ON t.id = d.efris_transaction_id
      ${where} ORDER BY d.created_at DESC, d.id DESC`, params

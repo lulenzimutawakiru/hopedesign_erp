@@ -229,6 +229,28 @@ function hrefForDoc(kind: string, id: number): string {
   return `/finance/journals/${id}`;
 }
 
+/**
+ * Where the ERP source document behind a fiscal document lives, so the Fiscal
+ * documents table can link back to the invoice/credit note/receipt that produced
+ * it. Returns null for document types without a known route — those render as
+ * plain text instead of a broken link.
+ */
+function hrefForEfrisSource(docRefType: unknown, docRefId: unknown): string | null {
+  const type = String(docRefType ?? '');
+  const id = Number(docRefId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  switch (type) {
+    case 'customer_invoices': return `/sales/invoices/${id}`;
+    case 'credit_notes': return `/sales/credit_notes/${id}`;
+    case 'debit_notes': return `/sales/debit_notes/${id}`;
+    case 'receipts': return `/sales/receipts/${id}`;
+    case 'goods_receipts': return `/buy/receipts/${id}`;
+    case 'inventory_adjustments': return `/inventory/adjustments/${id}`;
+    case 'ops.expenses': return `/finance/expenses/${id}`;
+    default: return null;
+  }
+}
+
 /** Dependency-free sparkline. Keeps the command center fast on large ledgers. */
 function Sparkline({ values, tone = 'ok', width = 120, height = 34 }: { values: number[]; tone?: 'ok' | 'warn' | 'bad'; width?: number; height?: number }) {
   const pts = values.length > 1 ? values.map(Number) : [0, 0];
@@ -6343,6 +6365,47 @@ function EfrisDesk() {
     </div>
   );
 
+  // CSV export for the error centre and sync log tabs. Rows reflect the current
+  // filters and sort, so the file matches exactly what the operator sees.
+  const exportErrorsCsv = () => {
+    downloadCsv('efris-errors.csv', [
+      ['Time', 'Stage', 'Reference', 'Code', 'Message', 'Retries', 'State'],
+      ...visible.map((r) => [
+        String(r.createdAt ?? '').slice(0, 19).replace('T', ' '),
+        String(r.stage ?? ''),
+        String(r.docRefCode ?? ''),
+        String(r.errorCode ?? ''),
+        String(r.errorMessage ?? ''),
+        String(r.retryCount ?? 0),
+        r.resolved ? 'RESOLVED' : 'OPEN',
+      ]),
+    ]);
+  };
+  const exportLogsCsv = () => {
+    downloadCsv('efris-sync-logs.csv', [
+      ['Time', 'Reference', 'Status', 'Error', 'Request'],
+      ...visible.map((r) => [
+        String(r.createdAt ?? '').slice(0, 19).replace('T', ' '),
+        String(r.docRefCode ?? ''),
+        String(r.status ?? ''),
+        String(r.error ?? ''),
+        r.requestPayload ? JSON.stringify(r.requestPayload) : '',
+      ]),
+    ]);
+  };
+  // The ERP source document behind a fiscal document, rendered as a link when a
+  // route is known; plain text otherwise.
+  const renderEfrisDocLink = (r: Rec) => {
+    const label = String(r.erpDocNo ?? r.docRefCode ?? '');
+    const href = hrefForEfrisSource(r.docRefType, r.docRefId);
+    if (!href || !label) return label;
+    return (
+      <a href={`#${href}`} title={`Open ${label}`} onClick={(e) => { e.preventDefault(); navigate(href); }}>
+        {label}
+      </a>
+    );
+  };
+
   return (
     <div className="page">
       <header className="page-head">
@@ -6544,7 +6607,7 @@ function EfrisDesk() {
                   {visible.map((r) => (
                     <div key={`card-${String(r.id)}`} className="record-card">
                       <div className="record-card-top">
-                        <strong className="cell-mono">{String(r.erpDocNo ?? r.docRefCode ?? '')}</strong>
+                        <strong className="cell-mono">{renderEfrisDocLink(r)}</strong>
                         <Badge value={r.txnStatus} />
                       </div>
                       <div className="record-card-meta">
@@ -6573,7 +6636,7 @@ function EfrisDesk() {
                     <tbody>
                       {visible.map((r) => (
                         <tr key={String(r.id)}>
-                          <td className="cell-mono">{String(r.erpDocNo ?? r.docRefCode ?? '')}</td>
+                          <td className="cell-mono">{renderEfrisDocLink(r)}</td>
                           <td className="cell-mono">{r.fdn ? String(r.fdn) : '\u2014'}</td>
                           <td className="cell-mono">{r.verificationCode ? String(r.verificationCode) : '\u2014'}</td>
                           <td className="cell-mono">{r.qrRef ? String(r.qrRef) : '\u2014'}</td>
@@ -6598,7 +6661,10 @@ function EfrisDesk() {
                 <h3>EFRIS error centre ({filtered.length.toLocaleString()}{countSuffix})</h3>
                 <p className="muted" style={{ margin: 0 }}>Rejections and failures returned by URA. Retry a row, or resolve it with a written reason.</p>
               </div>
-              {!loading && statusNote && <span className="muted" style={{ fontSize: 12 }} role="status" aria-live="polite">{statusNote}</span>}
+              <div className="row-actions">
+                {!loading && statusNote && <span className="muted" style={{ fontSize: 12 }} role="status" aria-live="polite">{statusNote}</span>}
+                <button className="btn btn-sm" disabled={sourceCount === 0} onClick={exportErrorsCsv} title="Download the current error list as CSV">Download CSV</button>
+              </div>
             </div>
             {loading ? <Skeleton rows={6} /> : failedPanel('error centre') ? (
               <EmptyState title="The error centre could not load" body="The server did not return this panel. Retry to ask again." action="Retry" onAction={load} />
@@ -6721,7 +6787,10 @@ function EfrisDesk() {
                 <h3>Sync logs ({filtered.length.toLocaleString()}{countSuffix})</h3>
                 <p className="muted" style={{ margin: 0 }}>Every request and response exchanged with URA. The request column shows the payload the ERP sent.</p>
               </div>
-              {!loading && statusNote && <span className="muted" style={{ fontSize: 12 }} role="status" aria-live="polite">{statusNote}</span>}
+              <div className="row-actions">
+                {!loading && statusNote && <span className="muted" style={{ fontSize: 12 }} role="status" aria-live="polite">{statusNote}</span>}
+                <button className="btn btn-sm" disabled={sourceCount === 0} onClick={exportLogsCsv} title="Download the current sync log as CSV">Download CSV</button>
+              </div>
             </div>
             {loading ? <Skeleton rows={6} /> : failedPanel('sync logs') ? (
               <EmptyState title="Sync logs could not load" body="The server did not return this panel. Retry to ask again." action="Retry" onAction={load} />
