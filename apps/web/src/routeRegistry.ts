@@ -25,6 +25,7 @@ export function routeMatches(path: string): boolean {
 
   const matches: boolean[] = [
     path === '/dashboard' || path === '/' || path === '',
+    path === '/simple',
     path === '/work',
     path === '/approvals',
     path === '/inbox',

@@ -4,6 +4,7 @@ import { informationClass } from '../classification';
 import { useHashRoute, navigate, matchRoute } from '../router';
 import { api } from '../api';
 import Dashboard from './Dashboard';
+import SimpleHome from './SimpleHome';
 import Approvals from './Approvals';
 import Inbox from './Inbox';
 import MyWork from './MyWork';
@@ -58,6 +59,7 @@ import {
 } from '../components/nav';
 import TopHeader from '../components/TopHeader';
 import { isFocusPath, itemVisible, landingModule, normalizePath, requiredPermForPath, track } from '../nav';
+import { effectiveSimpleMode } from '../simpleMode';
 import { ModuleSections } from '../components/ModuleSections';
 import { useCompanyProfile } from '../company';
 
@@ -100,6 +102,15 @@ export default function Shell() {
   useEffect(() => {
     if (rawPath !== path) navigate(path, { replace: true });
   }, [rawPath, path]);
+
+  const simpleMode = effectiveSimpleMode(user, prefs);
+  const isSimplePath = path === '/simple';
+
+  // Users whose role defaults to Simple Mode land on the simple home instead
+  // of the full dashboard. The explicit preference wins either way.
+  useEffect(() => {
+    if (simpleMode && (path === '/' || path === '/dashboard')) navigate('/simple', { replace: true });
+  }, [simpleMode, path]);
 
   const compact = bp === 'mobile' || bp === 'phablet';
   const tablet = bp === 'tablet' || bp === 'laptop';
@@ -217,6 +228,7 @@ export default function Shell() {
     // Keep this list in lock-step with routeMatches() in ../routeRegistry.
     const routes: RouteEntry[] = [
       { match: () => path === '/dashboard' || path === '/' || path === '', render: () => <Dashboard /> },
+      { match: () => path === '/simple', render: () => <SimpleHome /> },
       { match: () => path === '/work', render: () => <MyWork /> },
       { match: () => path === '/approvals', render: () => <Approvals /> },
       { match: () => path === '/inbox', render: () => <Inbox /> },
@@ -279,7 +291,7 @@ export default function Shell() {
     <div className={`app-shell ${collapsed ? 'rail-collapsed' : ''} ${focus ? 'is-focus' : ''} bp-${bp}`}>
       <SkipLink />
       <NetworkBanner />
-      {!focus && (
+      {!focus && !isSimplePath && (
         <Sidebar
           path={path}
           user={user}
@@ -301,23 +313,25 @@ export default function Shell() {
       {sideOpen && <div className="sidebar-scrim" onClick={() => setSideOpen(false)} />}
 
       <div className="main-col">
-        <TopHeader
-          path={path}
-          user={user}
-          approvalCount={approvalCount}
-          compact={compact}
-          focus={focus}
-          company={company}
-          brandCompany={brandCompany}
-          prefs={prefs}
-          onOpenSidebar={() => setSideOpen((s) => !s)}
-          onOpenSearch={() => setCmdOpen(true)}
-          onOpenScanner={() => setScannerOpen(true)}
-          onOpenHelp={() => setHelpOpen(true)}
-          onToggleFocus={() => setPrefs(savePrefs({ focusMode: !prefs.focusMode }))}
-          onPin={() => setPrefs(toggleFavorite(path))}
-          onLogout={logout}
-        />
+        {!isSimplePath && (
+          <TopHeader
+            path={path}
+            user={user}
+            approvalCount={approvalCount}
+            compact={compact}
+            focus={focus}
+            company={company}
+            brandCompany={brandCompany}
+            prefs={prefs}
+            onOpenSidebar={() => setSideOpen((s) => !s)}
+            onOpenSearch={() => setCmdOpen(true)}
+            onOpenScanner={() => setScannerOpen(true)}
+            onOpenHelp={() => setHelpOpen(true)}
+            onToggleFocus={() => setPrefs(savePrefs({ focusMode: !prefs.focusMode }))}
+            onPin={() => setPrefs(toggleFavorite(path))}
+            onLogout={logout}
+          />
+        )}
 
         <main id="main-content" className="content" tabIndex={-1}>
           {informationClass(path) && (
@@ -325,7 +339,7 @@ export default function Shell() {
               {informationClass(path)}
             </p>
           )}
-          {landing && (
+          {!isSimplePath && landing && (
             <div className="page module-sections-page">
               <ModuleSections item={landing} />
             </div>
@@ -333,7 +347,7 @@ export default function Shell() {
           <Suspense fallback={<PageLoader variant="page" />}>{body}</Suspense>
         </main>
 
-        {compact && !focus && (
+        {!isSimplePath && compact && !focus && (
           <MobileDock
             path={path}
             onScan={() => setScannerOpen(true)}

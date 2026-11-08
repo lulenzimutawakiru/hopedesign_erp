@@ -6,6 +6,8 @@ export interface Prefs {
   density: Density;
   sidebarCollapsed: boolean;
   focusMode: boolean;
+  /** Simple Mode: `true`/`false` to force, `undefined` to follow the role default. */
+  simpleMode?: boolean;
   favorites: string[];
   recents: { href: string; label: string; at: number }[];
   savedFilters: Record<string, { name: string; q: string }[]>;
