@@ -67,6 +67,35 @@ inventoryOpsRouter.get('/stock', ...runGet('inventory.stock.view', (c, ctx, q) =
 inventoryOpsRouter.get('/stock/summary', ...runGet('inventory.stock.view', (c, ctx) => inv.stockSummary(c, ctx)));
 inventoryOpsRouter.get('/warehouses', ...runGet('inventory.warehouses.view', (c, ctx) => inv.warehouseBoard(c, ctx)));
 inventoryOpsRouter.get('/products/:id/stock', ...runGet('inventory.stock.view', (c, ctx, _q, p) => inv.productStock(c, ctx, Number(p.id))));
+// Lookup lists for the product editor's FK selects (unit / category / supplier).
+inventoryOpsRouter.get(
+  '/product-options',
+  ...runGet('inventory.items.view', async (c, ctx) => {
+    const [units, categories, suppliers] = await Promise.all([
+      c.query(
+        `SELECT id, code, name, kind FROM units
+         WHERE tenant_id = $1 AND company_id = $2 ORDER BY code`,
+        [ctx.tenantId, ctx.companyId]
+      ),
+      c.query(
+        `SELECT id, code, name, kind FROM product_categories
+         WHERE tenant_id = $1 AND company_id = $2 AND status = 'ACTIVE' ORDER BY name`,
+        [ctx.tenantId, ctx.companyId]
+      ),
+      c.query(
+        `SELECT id, code, name FROM suppliers
+         WHERE tenant_id = $1 AND company_id = $2 AND status = 'ACTIVE' ORDER BY name`,
+        [ctx.tenantId, ctx.companyId]
+      ),
+    ]);
+    return {
+      units: units.rows,
+      categories: categories.rows,
+      suppliers: suppliers.rows,
+    };
+  })
+);
+
 // Product units of measure (multi-UOM) — purchase / production / sales / EFRIS conversions
 inventoryOpsRouter.get('/units', ...runGet('inventory.items.view', (c, ctx) => puoms.listUnits(c, ctx)));
 inventoryOpsRouter.get('/products/:id/uoms', ...runGet('inventory.items.view', (c, ctx, _q, p) => puoms.listProductUoms(c, ctx, Number(p.id))));
