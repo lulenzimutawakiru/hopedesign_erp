@@ -232,7 +232,7 @@ function ruleDetail(rule: Record<string, unknown>, fallback: string): string {
  * up to the stored total, so a slip that does not reconcile is visibly
  * flagged rather than quietly presented as correct.
  */
-function buildCalculationTrace(item: Record<string, unknown>) {
+export function buildCalculationTrace(item: Record<string, unknown>) {
   const b = asObject(item.breakdown);
   const basic = num(item.basic_pay);
   const gross = num(item.gross_pay);

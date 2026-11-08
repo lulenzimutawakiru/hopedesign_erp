@@ -17,6 +17,8 @@ import * as payrollSettings from '../../services/payrollSettings.js';
 import * as payrollLifecycle from '../../services/payrollLifecycle.js';
 import * as payrollPeriods from '../../services/payrollPeriods.js';
 import * as statutoryFilings from '../../services/statutoryFilings.js';
+import * as salaryComponents from '../../services/salaryComponents.js';
+import * as payrollReports from '../../services/payrollReports.js';
 
 export const hrOpsRouter = Router();
 const photoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -390,6 +392,45 @@ hrOpsRouter.post('/payment-batches/:id/export', ...run('hr.payrolls.post', (c, c
 hrOpsRouter.post('/payment-batches/:id/confirm', ...run('hr.payrolls.post', (c, ctx, _b, p) => payments.confirmPaymentBatch(c, ctx, Number(p.id))));
 hrOpsRouter.post('/payrolls/:id/publish-payslips', ...run('hr.payrolls.post', (c, ctx, _b, p) => payments.publishPayslips(c, ctx, Number(p.id))));
 hrOpsRouter.get('/payrolls/:id/payslips', ...runGet('hr.payslips.view', (c, ctx, _q, p) => payments.listPayslips(c, ctx, { payrollId: Number(p.id) })));
+
+// Payslips across every run (Odoo "Payslips" landing) + the HR line-by-line detail.
+hrOpsRouter.get('/payslips', ...runGet('hr.payslips.view', (c, ctx, q) => payments.listPayslips(c, ctx, {
+  payrollId: q.payrollId != null ? Number(q.payrollId) : undefined,
+  employeeId: q.employeeId != null ? Number(q.employeeId) : undefined,
+  status: optionalText(q.status),
+  periodStart: optionalText(q.periodStart),
+  periodEnd: optionalText(q.periodEnd),
+  q: optionalText(q.q),
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+hrOpsRouter.get('/payslips/:id', ...runGet('hr.payslips.view', (c, ctx, _q, p) => payments.getPayslipDetail(c, ctx, Number(p.id))));
+
+// Salary rules — the payroll component catalogue the engine reads.
+hrOpsRouter.get('/salary-components', ...runGet('hr.payroll_components.view', (c, ctx, q) => salaryComponents.listSalaryComponents(c, ctx, {
+  q: optionalText(q.q),
+  type: optionalText(q.type),
+  category: optionalText(q.category),
+  status: optionalText(q.status),
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+hrOpsRouter.post('/salary-components', ...run('hr.payroll_components.create', (c, ctx, b) => salaryComponents.createSalaryComponent(c, ctx, b)));
+hrOpsRouter.get('/salary-components/:id', ...runGet('hr.payroll_components.view', (c, ctx, _q, p) => salaryComponents.getSalaryComponent(c, ctx, Number(p.id))));
+hrOpsRouter.patch('/salary-components/:id', ...run('hr.payroll_components.update', (c, ctx, b, p) => salaryComponents.updateSalaryComponent(c, ctx, Number(p.id), b)));
+
+// Payroll reporting (Odoo "Reporting"): register + payslip analysis.
+hrOpsRouter.get('/payroll-register', ...runGet('hr.payrolls.view', (c, ctx, q) => payrollReports.payrollRegister(c, ctx, {
+  fromDate: optionalText(q.fromDate),
+  toDate: optionalText(q.toDate),
+  employeeId: q.employeeId != null ? Number(q.employeeId) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
+hrOpsRouter.get('/payroll-analysis', ...runGet('hr.payrolls.view', (c, ctx, q) => payrollReports.payslipAnalysis(c, ctx, {
+  fromDate: optionalText(q.fromDate),
+  toDate: optionalText(q.toDate),
+})));
 hrOpsRouter.get('/reconciliation', ...runGet('hr.payrolls.view', (c, ctx) => payments.reconciliationCentre(c, ctx)));
 hrOpsRouter.post('/payrolls/:id/reconcile', ...run('hr.payrolls.approve', (c, ctx, _b, p) => payments.reconcilePayments(c, ctx, { payrollId: Number(p.id) })));
 hrOpsRouter.get('/payment-dashboard', ...runGet('hr.payrolls.view', (c, ctx) => payments.paymentDashboard(c, ctx)));

@@ -12,6 +12,7 @@ import {
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import * as payrollSettings from './payrollSettings.js';
+import { buildCalculationTrace, maskAccountNumber } from './payrollSelfService.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -496,7 +497,7 @@ export async function publishPayslips(client: pg.PoolClient, ctx: Ctx, payrollId
 export async function listPayslips(
   client: pg.PoolClient,
   ctx: Ctx,
-  filters: { payrollId?: number; employeeId?: number; q?: string; page?: number; pageSize?: number } = {}
+  filters: { payrollId?: number; employeeId?: number; status?: string; periodStart?: string; periodEnd?: string; q?: string; page?: number; pageSize?: number } = {}
 ) {
   const { page, pageSize, offset } = parsePagination({ page: filters.page, pageSize: filters.pageSize });
   const params: unknown[] = [ctx.tenantId, ctx.companyId];
@@ -509,6 +510,18 @@ export async function listPayslips(
     params.push(filters.employeeId);
     where.push('s.employee_id = $' + params.length);
   }
+  if (filters.status) {
+    params.push(filters.status);
+    where.push('s.status = $' + params.length);
+  }
+  if (filters.periodStart) {
+    params.push(filters.periodStart);
+    where.push('s.payment_date >= $' + params.length + '::date');
+  }
+  if (filters.periodEnd) {
+    params.push(filters.periodEnd);
+    where.push('s.payment_date <= $' + params.length + '::date');
+  }
   if (filters.q?.trim()) {
     params.push('%' + filters.q.trim() + '%');
     where.push('(s.payslip_no ILIKE $' + params.length + ' OR e.employee_no ILIKE $' + params.length + ' OR e.first_name ILIKE $' + params.length + ' OR e.last_name ILIKE $' + params.length + ')');
@@ -518,8 +531,11 @@ export async function listPayslips(
     `SELECT s.id, s.payslip_no, s.currency, s.gross_total, s.taxable_total, s.deduction_total,
             s.net_total, s.employer_contributions, s.payment_date, s.verification_code,
             s.status, s.published_at, s.viewed_at, s.viewed_count, s.download_count, s.watermark,
-            s.payroll_id, s.employee_id, e.employee_no, e.first_name, e.last_name, e.position
-     FROM payslips s JOIN employees e ON e.id = s.employee_id
+            s.payroll_id, s.employee_id, e.employee_no, e.first_name, e.last_name, e.position,
+            p.payroll_no, p.period_start, p.period_end
+     FROM payslips s
+     JOIN employees e ON e.id = s.employee_id
+     LEFT JOIN payrolls p ON p.id = s.payroll_id
      WHERE ${where.join(' AND ')}
      ORDER BY s.id DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -528,6 +544,8 @@ export async function listPayslips(
   const rows = res.rows.map((r) => {
     const out = toCamelRow(r);
     out.paymentDate = toISODate(r.payment_date);
+    out.periodStart = toISODate(r.period_start);
+    out.periodEnd = toISODate(r.period_end);
     return out;
   });
   const count = await client.query(
@@ -536,6 +554,75 @@ export async function listPayslips(
     params.slice(0, params.length - 2)
   );
   return { rows, page, pageSize, totalCount: Number(count.rows[0].n) || 0 };
+}
+
+/**
+ * HR-side payslip detail: the same line-by-line reconstruction the employee
+ * sees in self-service, but for any payslip in the caller's tenant (rather
+ * than only the caller's own), gated by `hr.payslips.view`.
+ */
+export async function getPayslipDetail(client: pg.PoolClient, ctx: Ctx, payslipId: number) {
+  const slipRes = await client.query(
+    `SELECT s.id, s.payslip_no, s.currency, s.gross_total, s.taxable_total, s.deduction_total,
+            s.net_total, s.employer_contributions, s.payment_date, s.status, s.published_at,
+            s.viewed_at, s.viewed_count, s.download_count, s.verification_code, s.watermark,
+            s.payroll_id, s.employee_id,
+            p.id AS payroll_id, p.payroll_no, p.period_start, p.period_end, p.run_type,
+            p.off_cycle_type, p.status AS payroll_status, p.currency AS payroll_currency,
+            e.employee_no, e.first_name, e.last_name, e.position, e.nssf_no, e.tin,
+            e.bank_name, e.bank_account_no,
+            d.name AS department_name, b.name AS branch_name,
+            c.name AS company_name, c.legal_name AS company_legal_name, c.tin AS company_tin,
+            c.address AS company_address, c.phone AS company_phone, c.email AS company_email
+       FROM payslips s
+       LEFT JOIN payrolls p ON p.id = s.payroll_id
+       LEFT JOIN employees e ON e.id = s.employee_id
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN branches b ON b.id = e.branch_id
+       LEFT JOIN companies c ON c.id = e.company_id
+      WHERE s.id = $1 AND s.tenant_id = $2 AND s.company_id = $3`,
+    [payslipId, ctx.tenantId, ctx.companyId]
+  );
+  if (!slipRes.rows.length) throw notFound('Payslip not found');
+  const slip = slipRes.rows[0];
+
+  const itemRes = await client.query(
+    `SELECT * FROM payroll_items WHERE payroll_id = $1 AND employee_id = $2`,
+    [slip.payroll_id, slip.employee_id]
+  );
+  const item = (itemRes.rows[0] ?? {}) as Record<string, unknown>;
+
+  return {
+    payslip: {
+      ...toCamelRow(slip),
+      paymentDate: toISODate(slip.payment_date),
+      periodStart: toISODate(slip.period_start),
+      periodEnd: toISODate(slip.period_end),
+      publishedAt: slip.published_at == null ? null : String(slip.published_at),
+      viewedAt: slip.viewed_at == null ? null : String(slip.viewed_at),
+    },
+    employee: {
+      id: Number(slip.employee_id),
+      employeeNo: slip.employee_no == null ? null : String(slip.employee_no),
+      name: [slip.first_name, slip.last_name].filter(Boolean).join(' '),
+      position: slip.position == null ? null : String(slip.position),
+      departmentName: slip.department_name == null ? null : String(slip.department_name),
+      branchName: slip.branch_name == null ? null : String(slip.branch_name),
+      nssfNo: slip.nssf_no == null ? null : String(slip.nssf_no),
+      tin: slip.tin == null ? null : String(slip.tin),
+      bankName: slip.bank_name == null ? null : String(slip.bank_name),
+      bankAccountMasked: maskAccountNumber(slip.bank_account_no),
+    },
+    employer: {
+      name: slip.company_name == null ? null : String(slip.company_name),
+      legalName: slip.company_legal_name == null ? null : String(slip.company_legal_name),
+      tin: slip.company_tin == null ? null : String(slip.company_tin),
+      address: slip.company_address == null ? null : String(slip.company_address),
+      phone: slip.company_phone == null ? null : String(slip.company_phone),
+      email: slip.company_email == null ? null : String(slip.company_email),
+    },
+    trace: buildCalculationTrace(item),
+  };
 }
 
 /** Reconcile a confirmed payment batch against payroll, bank and GL totals. */
