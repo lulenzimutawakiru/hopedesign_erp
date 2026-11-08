@@ -10,6 +10,7 @@ import { notFoundHandler, errorHandler } from './middleware/error.js';
 import { healthRouter } from './routes/health.js';
 import { authRouter } from './routes/auth.js';
 import { publicVerificationRouter } from './routes/publicVerification.js';
+import { publicSignRouter } from './routes/publicSign.js';
 import { approvalsRouter } from './routes/approvals.js';
 import { approvalExceptionsRouter } from './routes/approvalExceptions.js';
 import { notificationsRouter } from './routes/notifications.js';
@@ -62,6 +63,7 @@ import { communicationOpsRouter } from './routes/ops/communication.js';
 import { mailOpsRouter } from './routes/ops/mail.js';
 import { documentsOpsRouter } from './routes/ops/documents.js';
 import { governanceOpsRouter } from './routes/ops/governance.js';
+import { signOpsRouter } from './routes/ops/sign.js';
 import { serviceDeskOpsRouter } from './routes/ops/serviceDesk.js';
 import { complianceOpsRouter } from './routes/ops/compliance.js';
 import { organisationSettingsOpsRouter } from './routes/ops/organisationSettings.js';
@@ -161,6 +163,7 @@ app.use('/api', apiLimiter);
 // ---- Public / unauthenticated ----
 app.use('/api', healthRouter);                            // GET /api/health
 app.use('/api/public', publicVerificationRouter);          // POST /api/public/verify
+app.use('/api/public/sign', publicSignRouter);             // public e-signature portal
 app.use('/api/auth', authRouter);                          // /api/auth/login, /refresh, /me ...
 
 // ---- Hikvision device-facing event receiver (public webhook; each terminal is
@@ -229,6 +232,7 @@ app.use('/api/ops/expenditure', expenditureOpsRouter);
         app.use('/api/ops/mail', mailOpsRouter);
         app.use('/api/ops/documents', documentsOpsRouter);
         app.use('/api/ops/governance', governanceOpsRouter);
+        app.use('/api/ops/sign', signOpsRouter);
         app.use('/api/ops/service-desk', serviceDeskOpsRouter);
 app.use('/api/ops/compliance', complianceOpsRouter);
 app.use('/api/ops/organisation-settings', organisationSettingsOpsRouter);

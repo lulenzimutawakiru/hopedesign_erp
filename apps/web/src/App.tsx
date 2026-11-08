@@ -11,6 +11,7 @@ const Shell = lazy(() => import('./views/Shell'));
 const PublicVerify = lazy(() => import('./views/PublicVerify'));
 const AcceptInvite = lazy(() => import('./views/AcceptInvite'));
 const ResetPassword = lazy(() => import('./views/ResetPassword'));
+const SignPortal = lazy(() => import('./views/SignPortal'));
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -74,6 +75,16 @@ export default function App() {
     return (
       <Suspense fallback={<PageLoader />}>
         <PublicVerify />
+      </Suspense>
+    );
+  }
+
+  // Public e-signature portal — reached from the link emailed to a signer.
+  if (path.startsWith('/sign/')) {
+    const signToken = path.slice('/sign/'.length);
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <SignPortal token={signToken} />
       </Suspense>
     );
   }
