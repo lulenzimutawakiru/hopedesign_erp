@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import { assertPostDelivery, assertRequirementReviewed } from './iso/gates.js';
 import { completeTripForDelivery, syncTripForDelivery } from './logistics.js';
 import { resolveAppSettings, settingNumber } from './companyConfig.js';
+import { SELLABLE_PRODUCT_TYPES } from './productTypes.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -1522,16 +1523,6 @@ export async function postDebitNote(client: pg.PoolClient, ctx: Ctx, debitNoteId
   const journalId = await finance.postDebitNote(client, ctx, debitNoteId);
   return { debitNoteId, journalId };
 }
-
-/**
- * Product types that may be sold. "Only finished goods are sold": the factory's
- * sellable output — reams, cut sheets, finished goods and security paper.
- * Raw materials, paper bobbins, packaging, consumables and spares are procured
- * and consumed, never sold, so they stay out of every sales and CRM product
- * picker. Kept in one place so the pickers stay aligned with the `products`
- * catalogue in the route registry (`resource: 'products'`).
- */
-export const SELLABLE_PRODUCT_TYPES: readonly string[] = ['REAM', 'SHEET', 'FINISHED_GOODS', 'SECURITY_ITEM'];
 
 export async function listSellableProducts(client: pg.PoolClient, ctx: Ctx, customerId?: number) {
   const res = await client.query(

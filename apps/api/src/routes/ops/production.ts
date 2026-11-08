@@ -4,6 +4,7 @@ import { tx, query, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler } from '../../utils.js';
 import * as prod from '../../services/production.js';
+import { SELLABLE_PRODUCT_TYPES } from '../../services/productTypes.js';
 
 export const productionOpsRouter = Router();
 
@@ -47,12 +48,12 @@ productionOpsRouter.get(
        FROM products p
        LEFT JOIN units u ON u.id = p.unit_id
        WHERE p.company_id = $1
-         AND p.type IN ('REAM','FINISHED_GOODS','SHEET','SECURITY_ITEM')
+         AND p.type = ANY($3::text[])
          AND p.status = 'ACTIVE'
          AND ($2::text IS NULL OR p.code ILIKE '%' || $2 || '%' OR p.name ILIKE '%' || $2 || '%')
        ORDER BY p.name ASC
        LIMIT 50`,
-      [req.ctx.companyId ?? null, q || null],
+      [req.ctx.companyId ?? null, q || null, SELLABLE_PRODUCT_TYPES],
       req.ctx
     );
     res.json({

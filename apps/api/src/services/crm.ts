@@ -4,6 +4,7 @@ import { badRequest, forbidden, notFound, toCamelRow, toCamelRows } from '../uti
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import * as sales from './sales.js';
+import { SELLABLE_PRODUCT_TYPES } from './productTypes.js';
 
 /** Normalise a TIN to its digits (URA TINs are 10 digits). */
 function normalizeTin(raw: unknown): string {
@@ -1048,7 +1049,7 @@ export async function listSellableProducts(client: pg.PoolClient, ctx: Ctx) {
        AND p.type = ANY($3::text[])
      ORDER BY p.code
      LIMIT 80`,
-    [ctx.tenantId, ctx.companyId, sales.SELLABLE_PRODUCT_TYPES]
+    [ctx.tenantId, ctx.companyId, SELLABLE_PRODUCT_TYPES]
   );
   return toCamelRows(res.rows);
 }
