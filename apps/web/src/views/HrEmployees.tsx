@@ -6,6 +6,7 @@ import { Badge, ErrorBanner, PageLoader, StaffPhoto } from '../components/ui';
 import { ConfirmDialog } from '../components/os';
 import { Avatar, HrEmptyState as EmptyState } from '../components/hrUi';
 import { type Rec, shortDate } from './hrShared';
+import { EmployeeKanban, EmployeePrivate } from './EmployeeDirectory';
 
 function UserAccountLink({
   employeeId, account, matches, canEdit, onChanged,
@@ -93,14 +94,16 @@ export function EmployeeList() {
   const [rows, setRows] = useState<Rec[]>([]);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
+  const [view, setView] = useState<'list' | 'cards'>('list');
   const load = useCallback(() => {
-    const p = new URLSearchParams({ pageSize: '50' });
+    const p = new URLSearchParams({ pageSize: '100' });
     if (q.trim()) p.set('q', q.trim());
     api<{ data: { rows: Rec[] } }>(`/api/ops/hr/employees?${p}`)
       .then((r) => setRows(r.data.rows ?? []))
       .catch((e) => setError(e instanceof Error ? e.message : 'Employees failed'));
   }, [q]);
   useEffect(() => { load(); }, [load]);
+  const manager = (r: Rec) => (r.managerFirstName ? `${String(r.managerFirstName)} ${String(r.managerLastName ?? '')}`.trim() : '—');
   return (
     <div className="page">
       <header className="page-head">
@@ -110,36 +113,45 @@ export function EmployeeList() {
           <p className="muted">Open a file to print contracts, book leave, or start payroll movements.</p>
         </div>
         <div className="head-actions">
+          <button className="btn" onClick={() => setView(view === 'cards' ? 'list' : 'cards')}>{view === 'cards' ? 'List view' : 'Card view'}</button>
           <button className="btn" onClick={() => navigate('/people')}>Board</button>
           <button className="btn btn-primary" onClick={() => navigate('/people/employees/new')}>New employee</button>
         </div>
       </header>
       {error && <ErrorBanner error={error} />}
-      <div className="toolbar">
-        <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or number…" />
-        <span className="muted">{fmtNum(rows.length)} on this page</span>
-      </div>
-      <div className="table-wrap card">
-        <table className="data">
-          <thead><tr><th>No</th><th>Name</th><th>Dept</th><th>Position</th><th>ERP login</th><th>Status</th><th className="cell-num">Basic</th></tr></thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/people/employees/${r.id}`)}>
-                <td className="cell-mono">{String(r.employeeNo)}</td>
-                <td><Avatar name={String(r.firstName) + ' ' + String(r.lastName)} size="sm" /></td>
-                <td>{String(r.departmentName ?? '—')}</td>
-                <td>{String(r.position ?? '—')}</td>
-                <td>{r.userId ? <span className="cell-mono">{String(r.userUsername ?? 'Linked')}</span> : <span className="muted">None</span>}</td>
-                <td><Badge value={r.status} /></td>
-                <td className="cell-num td-strong">{fmtMoney(r.baseSalary)}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr><td colSpan={7}><EmptyState icon="👤" title="No employees match" hint="Try a different search, or hire the first person on the file."><button className="btn btn-primary btn-sm" onClick={() => navigate('/people/employees/new')}>New employee</button></EmptyState></td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      {view === 'cards' ? (
+        <EmployeeKanban />
+      ) : (
+        <>
+          <div className="toolbar">
+            <input className="search-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or number…" />
+            <span className="muted">{fmtNum(rows.length)} on this page</span>
+          </div>
+          <div className="table-wrap card">
+            <table className="data">
+              <thead><tr><th>No</th><th>Name</th><th>Dept</th><th>Position</th><th>Manager</th><th>Location</th><th>ERP login</th><th>Status</th><th className="cell-num">Basic</th></tr></thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={String(r.id)} className="row-click" onClick={() => navigate(`/people/employees/${r.id}`)}>
+                    <td className="cell-mono">{String(r.employeeNo)}</td>
+                    <td><Avatar name={String(r.firstName) + ' ' + String(r.lastName)} size="sm" /></td>
+                    <td>{String(r.departmentName ?? '—')}</td>
+                    <td>{String(r.position ?? '—')}</td>
+                    <td>{manager(r)}</td>
+                    <td>{String(r.locationName ?? '—')}</td>
+                    <td>{r.userId ? <span className="cell-mono">{String(r.userUsername ?? 'Linked')}</span> : <span className="muted">None</span>}</td>
+                    <td><Badge value={r.status} /></td>
+                    <td className="cell-num td-strong">{fmtMoney(r.baseSalary)}</td>
+                  </tr>
+                ))}
+                {rows.length === 0 && (
+                  <tr><td colSpan={9}><EmptyState icon="👤" title="No employees match" hint="Try a different search, or hire the first person on the file."><button className="btn btn-primary btn-sm" onClick={() => navigate('/people/employees/new')}>New employee</button></EmptyState></td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -299,6 +311,7 @@ export function EmployeeDesk({ id }: { id: number }) {
     ['leave', 'Leave'],
     ['pay', 'Pay'],
     ['career', 'Career'],
+    ['private', 'Private'],
   ];
   return (
     <div className="page">
@@ -321,6 +334,9 @@ export function EmployeeDesk({ id }: { id: number }) {
             <div><span className="emp-hero-k">Status</span><span className="emp-hero-v"><Badge value={e.status} /></span></div>
             <div><span className="emp-hero-k">Basic salary</span><span className="emp-hero-v">{fmtMoney(e.baseSalary)}</span></div>
             <div><span className="emp-hero-k">Hire date</span><span className="emp-hero-v">{shortDate(e.hireDate)}</span></div>
+            <div><span className="emp-hero-k">Manager</span><span className="emp-hero-v">{e.managerFirstName ? `${String(e.managerFirstName)} ${String(e.managerLastName ?? '')}`.trim() : '—'}</span></div>
+            <div><span className="emp-hero-k">Work location</span><span className="emp-hero-v">{String(e.locationName ?? '—')}</span></div>
+            {e.badgeId ? <div><span className="emp-hero-k">Badge</span><span className="emp-hero-v cell-mono">{String(e.badgeId)}</span></div> : null}
             <div><span className="emp-hero-k">Current contract</span><span className="emp-hero-v">{currentContract ? String(currentContract.contractNo) : 'None on file'}</span></div>
             <div><span className="emp-hero-k">ERP login</span><span className="emp-hero-v">{doc.account ? String((doc.account as Rec).username || (doc.account as Rec).email) : 'Not linked'}</span></div>
             <div>
@@ -593,6 +609,7 @@ export function EmployeeDesk({ id }: { id: number }) {
           </section>
         </div>
       )}
+      {tab === 'private' && <EmployeePrivate id={id} />}
       {confirm && (
         <ConfirmDialog
           title={confirm.title}

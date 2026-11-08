@@ -7558,3 +7558,35 @@ html[data-theme='dark'] .spend-kpi.is-alert .spend-kpi-value { color: #F4A7A7; }
 .guided-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .guided-choice-text strong { font-size: 0.92rem; color: var(--ink); }
 .guided-choice-text span { font-size: 0.8rem; color: var(--muted); }
+
+/* ============================================================
+   Employee directory (Odoo Employees parity) — kanban + tags
+   ============================================================ */
+.emp-kb-group { margin-bottom: 24px; }
+.emp-kb-group-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
+.emp-kb-group-head h2 { margin: 0; font-size: 15px; font-weight: 650; color: var(--ink); }
+.emp-kb-count { color: var(--muted); font-size: 12px; }
+.emp-kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(262px, 1fr)); gap: 12px; }
+.emp-kb-card {
+  background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 14px; cursor: pointer; text-align: left;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+.emp-kb-card:hover { border-color: var(--mod-hr); box-shadow: var(--shadow); transform: translateY(-1px); }
+.emp-kb-top { display: flex; gap: 12px; align-items: flex-start; }
+.emp-kb-id { display: block; font-size: 11px; color: var(--muted); margin-top: 6px; font-family: var(--mono); }
+.emp-kb-name { margin: 0; font-size: 14px; font-weight: 650; color: var(--ink); }
+.emp-kb-role { color: var(--muted); font-size: 12.5px; margin: 2px 0 0; }
+.emp-kb-meta { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.emp-kb-row { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.emp-kb-row b { color: var(--ink-soft); font-weight: 600; white-space: nowrap; }
+.emp-tag-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.emp-tag {
+  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--sheet); color: var(--ink-soft);
+  font-size: 11px; font-weight: 600; line-height: 1.4;
+}
+.emp-kb-foot { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+@media (max-width: 640px) {
+  .emp-kb-grid { grid-template-columns: 1fr; }
+}

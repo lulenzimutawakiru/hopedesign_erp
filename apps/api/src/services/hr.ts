@@ -218,6 +218,15 @@ export async function createEmployee(
     payrollCurrency?: string | null;
     payrollGroupId?: number | string | null;
     userId?: number | null;
+    managerId?: number | null;
+    coachId?: number | null;
+    locationId?: number | null;
+    workEmail?: string | null;
+    workPhone?: string | null;
+    mobilePhone?: string | null;
+    workPermitNo?: string | null;
+    badgeId?: string | null;
+    tags?: string[] | null;
   }
 ) {
   if (!ctx.companyId) throw badRequest('Company context required');
@@ -240,8 +249,9 @@ export async function createEmployee(
        (company_id, tenant_id, branch_id, department_id, employee_no, first_name, last_name,
         phone, email, tin, nssf_no, position, hire_date, salary_type, base_salary,
         bank_name, bank_account_no, status, payroll_enabled, payment_method, payroll_currency,
-        employee_number, short_employee_number, is_secondary_employment)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING id`,
+        employee_number, short_employee_number, is_secondary_employment,
+        manager_id, coach_id, location_id, work_email, work_phone, mobile_phone, work_permit_no, badge_id, tags)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33) RETURNING id`,
     [
       ctx.companyId, ctx.tenantId, ctx.branchId ?? null, input.departmentId ?? null, no,
       input.firstName.trim(), input.lastName.trim(), input.phone ?? null, input.email ?? null,
@@ -250,6 +260,10 @@ export async function createEmployee(
       input.salaryType ?? 'MONTHLY', Number(input.baseSalary ?? 0),
       input.bankName ?? null, input.bankAccountNo ?? null, status, input.payrollEnabled ?? true,
       paymentMethod, payrollCurrency, official, short, input.isSecondaryEmployment ?? false,
+      input.managerId ?? null, input.coachId ?? null, input.locationId ?? null,
+      input.workEmail ?? null, input.workPhone ?? null,
+      input.mobilePhone ?? null, input.workPermitNo ?? null, input.badgeId ?? null,
+      input.tags && input.tags.length ? input.tags : null,
     ]
   );
   const employeeId = Number(ins.rows[0].id);
@@ -318,6 +332,15 @@ export async function updateEmployee(
     paymentMethod?: string | null;
     payrollCurrency?: string | null;
     payrollGroupId?: number | string | null;
+    managerId?: number | null;
+    coachId?: number | null;
+    locationId?: number | null;
+    workEmail?: string | null;
+    workPhone?: string | null;
+    mobilePhone?: string | null;
+    workPermitNo?: string | null;
+    badgeId?: string | null;
+    tags?: string[] | null;
   }
 ) {
   const exists = await client.query(
@@ -367,6 +390,15 @@ export async function updateEmployee(
   }
   if (input.payrollEnabled !== undefined) push('payroll_enabled', Boolean(input.payrollEnabled));
   if (input.isSecondaryEmployment !== undefined) push('is_secondary_employment', Boolean(input.isSecondaryEmployment));
+  if (input.managerId !== undefined) push('manager_id', input.managerId ? Number(input.managerId) : null);
+  if (input.coachId !== undefined) push('coach_id', input.coachId ? Number(input.coachId) : null);
+  if (input.locationId !== undefined) push('location_id', input.locationId ? Number(input.locationId) : null);
+  if (input.workEmail !== undefined) push('work_email', input.workEmail ? String(input.workEmail) : null);
+  if (input.workPhone !== undefined) push('work_phone', input.workPhone ? String(input.workPhone) : null);
+  if (input.mobilePhone !== undefined) push('mobile_phone', input.mobilePhone ? String(input.mobilePhone) : null);
+  if (input.workPermitNo !== undefined) push('work_permit_no', input.workPermitNo ? String(input.workPermitNo) : null);
+  if (input.badgeId !== undefined) push('badge_id', input.badgeId ? String(input.badgeId) : null);
+  if (input.tags !== undefined) push('tags', input.tags && input.tags.length ? input.tags : null);
   const paymentMethod =
     input.paymentMethod !== undefined && input.paymentMethod !== null && String(input.paymentMethod).trim() !== ''
       ? normalizeEmployeePaymentMethod(input.paymentMethod)
@@ -430,13 +462,20 @@ export async function listEmployees(
   const res = await client.query(
     `SELECT e.id, e.employee_no, e.first_name, e.last_name, e.position, e.status, e.base_salary, e.salary_type,
             e.hire_date, e.phone, e.email, e.photo_path, e.user_id, e.payroll_enabled,
-            e.is_secondary_employment,
+            e.is_secondary_employment, e.manager_id, e.coach_id, e.location_id,
+            e.work_email, e.work_phone, e.mobile_phone, e.work_permit_no, e.badge_id, e.tags,
             d.code AS department_code, d.name AS department_name,
             u.username AS user_username, u.email AS user_email, u.status AS user_status,
+            m.first_name AS manager_first_name, m.last_name AS manager_last_name,
+            c.first_name AS coach_first_name, c.last_name AS coach_last_name,
+            loc.code AS location_code, loc.name AS location_name,
             (e.photo_path IS NOT NULL) AS has_photo
      FROM employees e
      LEFT JOIN departments d ON d.id = e.department_id
      LEFT JOIN users u ON u.id = e.user_id
+     LEFT JOIN employees m ON m.id = e.manager_id
+     LEFT JOIN employees c ON c.id = e.coach_id
+     LEFT JOIN locations loc ON loc.id = e.location_id
      WHERE ${where.join(' AND ')}
      ORDER BY e.last_name, e.first_name
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -449,12 +488,18 @@ export async function getEmployee(client: pg.PoolClient, ctx: Ctx, employeeId: n
   const res = await client.query(
     `SELECT e.*, d.code AS department_code, d.name AS department_name,
             p.payroll_group_id, p.payment_method AS profile_payment_method,
-            p.currency AS payroll_profile_currency, g.name AS payroll_group_name
+            p.currency AS payroll_profile_currency, g.name AS payroll_group_name,
+            m.first_name AS manager_first_name, m.last_name AS manager_last_name,
+            c.first_name AS coach_first_name, c.last_name AS coach_last_name,
+            loc.code AS location_code, loc.name AS location_name
      FROM employees e
      LEFT JOIN departments d ON d.id = e.department_id
      LEFT JOIN employee_payroll_profiles p
             ON p.employee_id = e.id AND p.tenant_id = e.tenant_id AND p.company_id = e.company_id
      LEFT JOIN payroll_groups g ON g.id = p.payroll_group_id
+     LEFT JOIN employees m ON m.id = e.manager_id
+     LEFT JOIN employees c ON c.id = e.coach_id
+     LEFT JOIN locations loc ON loc.id = e.location_id
      WHERE e.id = $1 AND e.tenant_id = $2`,
     [employeeId, ctx.tenantId]
   );
