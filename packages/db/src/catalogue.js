@@ -457,6 +457,9 @@ const MODULES = {
     signature_authority_scopes: ["view","create","update","delete","approve"],
     document_signatures: ["view","create","verify","export"],
   },
+  sign: {
+    sign_requests: ["view","create","update","delete","send","revoke","sign"],
+  },
   efris: {
     dashboard: ["view"],
     transactions: ["view","submit","retry","reprocess","reject"],
@@ -1233,6 +1236,19 @@ for (const code of ["hr_director", "hr_manager"]) {
   EXCEPTION_ROLE_EXTENSIONS[code] = [...(EXCEPTION_ROLE_EXTENSIONS[code] || []), ...EXCEPTION_REVIEW];
 }
 
+// E-Signature (Sign Requests, migration 0239). The `*` executives and super
+// administrator already expand to every sign action. These personas hold the
+// equivalent governance / HR document authority and get the full module, so a
+// sender can draft, send, revoke and sign envelopes without an administrator.
+const SIGN_FULL = ["sign.*"];
+const SIGN_ROLE_EXTENSIONS = {
+  hr_director: SIGN_FULL,
+  hr_manager: SIGN_FULL,
+  operations_manager: SIGN_FULL,
+  md_assistant: SIGN_FULL,
+  system_administrator: SIGN_FULL,
+};
+
 for (const role of ROLES) {
   const extra = [
     ...(SERVICE_DESK_ROLE_EXTENSIONS[role.code] || []),
@@ -1242,6 +1258,7 @@ for (const role of ROLES) {
     ...(CRON_ROLE_EXTENSIONS[role.code] || []),
     ...(FINANCE_CENTRE_ROLE_EXTENSIONS[role.code] || []),
     ...(EXCEPTION_ROLE_EXTENSIONS[role.code] || []),
+    ...(SIGN_ROLE_EXTENSIONS[role.code] || []),
   ];
   if (extra.length) role.grants = [...role.grants, ...extra];
 }

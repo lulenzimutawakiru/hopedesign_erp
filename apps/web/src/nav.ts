@@ -422,6 +422,7 @@ export const NAV_GROUPS: NavGroup[] = [
         ],
       },
       { id: 'reports', label: 'Reports', href: '/reports', accent: 'rpt', keywords: 'report kpi export bi' },
+      { id: 'esign', label: 'Sign Requests', href: '/esign', perm: 'sign.sign_requests.view', accent: 'gov', keywords: 'esign sign signature document contract nda' },
       {
         id: 'communication_center', label: 'Comm Center', href: '/communication', perm: 'communication.command.view', module: 'communication', accent: 'com',
         keywords: 'inbox messages notifications email announcements templates delivery logs chat comms communication health sms test mail mailbox signature outbox approval classification distribution',
@@ -718,6 +719,9 @@ export function crumbsFor(path: string, extra?: Crumb[]): Crumb[] {
 
 export function requiredPermForPath(path: string): string | undefined {
   const parts = path.split('/').filter(Boolean);
+  if (parts[0] === 'esign') {
+    return parts[1] === 'new' ? 'sign.sign_requests.create' : 'sign.sign_requests.view';
+  }
   if (path === '/exports') return 'admin.exports.run';
   if (path === '/settings') return 'admin.settings.view';
   if (parts[0] === 'hikvision') {

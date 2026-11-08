@@ -47,6 +47,7 @@ const OrganisationSettings = lazy(() => import('./OrganisationSettings'));
 const Account = lazy(() => import('./Account'));
 const PayrollSettings = lazy(() => import('./PayrollSettings'));
 const QrScanner = lazy(() => import('./QrScanner'));
+const SignRequests = lazy(() => import('./SignRequests'));
 import { applyPrefs, loadPrefs, savePrefs, toggleFavorite, type Prefs } from '../prefs';
 import {
   AccessDenied,
@@ -266,6 +267,7 @@ export default function Shell() {
       { match: () => path === '/communication/mail' || path.startsWith('/communication/mail/'), render: () => <MailWorkspace path={path} /> },
       { match: () => path === '/communication' || path.startsWith('/communication/'), render: () => <CommunicationFlow path={path} /> },
       { match: () => path === '/documents' || path.startsWith('/documents/'), render: () => <DocumentsFlow path={path} /> },
+      { match: () => path === '/esign' || path.startsWith('/esign/'), render: () => <SignRequests path={path} /> },
       { match: () => !!detailMatch, render: () => <EntityDetail route={detailMatch!} /> },
       { match: () => !!listMatch, render: () => <EntityList route={listMatch!} /> },
     ];
