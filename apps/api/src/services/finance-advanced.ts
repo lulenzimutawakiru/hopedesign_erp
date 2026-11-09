@@ -755,7 +755,7 @@ export async function cancelEfrisTransaction(client: pg.PoolClient, ctx: Ctx, id
 export async function listEfrisDocuments(client: pg.PoolClient, ctx: Ctx, efrisTransactionId?: number) {
   const params: unknown[] = [ctx.tenantId];
   let where = 'WHERE d.tenant_id = $1';
-  if (efrisTransactionId) { params.push(efrisTransactionId); where += ` AND d.efris_transaction_id = ${params.length}`; }
+  if (efrisTransactionId) { params.push(efrisTransactionId); where += ` AND d.efris_transaction_id = $${params.length}`; }
   const res = await client.query(
     `SELECT d.*, t.doc_ref_type, t.doc_ref_code, t.doc_ref_id, t.currency, t.gross_amount, t.tax_amount, t.status AS txn_status
      FROM efris_documents d
@@ -768,7 +768,7 @@ export async function listEfrisDocuments(client: pg.PoolClient, ctx: Ctx, efrisT
 export async function listEfrisSyncLogs(client: pg.PoolClient, ctx: Ctx, efrisTransactionId?: number) {
   const params: unknown[] = [ctx.tenantId];
   let where = 'WHERE l.tenant_id = $1';
-  if (efrisTransactionId) { params.push(efrisTransactionId); where += ` AND l.efris_transaction_id = ${params.length}`; }
+  if (efrisTransactionId) { params.push(efrisTransactionId); where += ` AND l.efris_transaction_id = $${params.length}`; }
   const res = await client.query(
     `SELECT l.*, t.doc_ref_code FROM efris_sync_logs l
      JOIN efris_transactions t ON t.id = l.efris_transaction_id

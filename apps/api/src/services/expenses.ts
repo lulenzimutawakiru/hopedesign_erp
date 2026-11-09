@@ -721,10 +721,10 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
 export async function listExpensePayments(client: pg.PoolClient, ctx: Ctx, q: Record<string, unknown> = {}) {
   const params: unknown[] = [companyId(ctx), ctx.tenantId];
   const where = [`pr.company_id = $1`, `pr.tenant_id = $2`, `pr.ref_type = 'EXPENSE'`];
-  if (s(q.status)) { params.push(s(q.status)); where.push(`pr.status = ${params.length}`); }
+  if (s(q.status)) { params.push(s(q.status)); where.push(`pr.status = $${params.length}`); }
   if (s(q.q)) {
     params.push(`%${s(q.q)}%`);
-    where.push(`(pr.pay_no ILIKE ${params.length} OR pr.ref_code ILIKE ${params.length} OR pr.payee ILIKE ${params.length})`);
+    where.push(`(pr.pay_no ILIKE $${params.length} OR pr.ref_code ILIKE $${params.length} OR pr.payee ILIKE $${params.length})`);
   }
   const rows = await client.query(
     `SELECT pr.id, pr.pay_no, pr.ref_id AS expense_id, pr.ref_code AS expense_no,
@@ -1211,7 +1211,7 @@ export async function listExpenses(client: pg.PoolClient, ctx: Ctx, q: Record<st
       where.push('1 = 0');
     } else {
       params.push(ctx.userId);
-      where.push(`et.created_by = ${params.length}`);
+      where.push(`et.created_by = $${params.length}`);
     }
   }
   if (s(q.status)) { params.push(s(q.status)); where.push(`et.status = $${params.length}`); }
