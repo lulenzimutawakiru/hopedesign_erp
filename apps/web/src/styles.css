@@ -7724,3 +7724,16 @@ html[data-theme='dark'] .spend-kpi.is-alert .spend-kpi-value { color: #F4A7A7; }
 @media (max-width: 640px) {
   .emp-kb-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- Report toolbar presets ---------- */
+.preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.preset-chip {
+  font: inherit; font-size: 12px; font-weight: 600; line-height: 1;
+  color: var(--muted); background: var(--sheet);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 6px 12px; cursor: pointer;
+  transition: color 0.14s ease, border-color 0.14s ease, background 0.14s ease;
+}
+.preset-chip:hover { color: var(--ink); border-color: var(--muted); }
+.preset-chip.is-on { color: #fff; background: var(--hope); border-color: var(--hope); }
+.preset-chip:focus-visible { outline: 2px solid var(--hope); outline-offset: 2px; }

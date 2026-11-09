@@ -11,6 +11,7 @@ import { FinanceKcb } from './FinanceKcb';
 import { FinanceEquity } from './FinanceEquity';
 import { pathForEntity } from '../work';
 import { keyValueText } from '../helpers';
+import { DatePresets, ReportExportMenu, SortableTh, useClientSort } from '../components/report';
 
 type Rec = Record<string, unknown>;
 
@@ -1510,6 +1511,8 @@ function TrialBalance() {
   const [data, setData] = useState<{ rows: Rec[]; totals: Rec } | null>(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [preset, setPreset] = useState('');
+  const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const load = useCallback(() => {
     const p = new URLSearchParams();
@@ -1520,15 +1523,23 @@ function TrialBalance() {
       .catch((e) => setError(e instanceof Error ? e.message : 'TB failed'));
   }, [from, to]);
   useEffect(() => { load(); }, [load]);
-  if (error) return <ErrorBanner error={error} />;
+  const term = search.trim().toLowerCase();
+  const baseRows = useMemo(
+    () => (data?.rows ?? []).filter((r) => !term || `${r.code} ${r.name} ${r.accountType}`.toLowerCase().includes(term)),
+    [data, term]
+  );
+  const { sorted, sortBy, sortDir, toggle } = useClientSort(baseRows);
+  if (error && !data) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader variant="page" label="Preparing trial balance..." />;
   const ok = Math.round(Number(data.totals.debit) * 100) === Math.round(Number(data.totals.credit) * 100);
   const zero = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) !== 0 ? fmtMoney(v) : '-');
-  const exportCsv = () => downloadCsv('trial-balance.csv', [
-    ['Code', 'Account', 'Type', 'Debit', 'Credit', 'Balance'],
-    ...data.rows.map((r) => [String(r.code), String(r.name), String(r.accountType), String(r.debit ?? ''), String(r.credit ?? ''), String(r.balance ?? '')]),
-    ['Total', '', '', String(data.totals.debit ?? ''), String(data.totals.credit ?? ''), String(data.totals.balance ?? '')],
-  ]);
+  const exportParams = () => {
+    const p = new URLSearchParams();
+    if (from) p.set('from', from);
+    if (to) p.set('to', to);
+    return p;
+  };
+  const applyPreset = (f: string, t: string) => { setFrom(f); setTo(t); setPreset(f === '' && t === '' ? 'all' : ''); };
   return (
     <div className="page">
       <header className="page-head">
@@ -1539,24 +1550,33 @@ function TrialBalance() {
         </div>
         <div className="head-actions">
           <button className="btn btn-sm" type="button" onClick={load}>Refresh</button>
+          <ReportExportMenu reportKey="trial-balance" filename="trial-balance" params={exportParams} onError={(m) => setError(m)} />
         </div>
       </header>
       <FinanceGlTabs />
-      <div className="toolbar toolbar-sticky">
+      <div className="toolbar toolbar-sticky" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <DatePresets onApply={applyPreset} active={preset} />
         <div className="toolbar-left">
-          <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From date" />
-          <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To date" />
-          <span className="muted">Leave dates blank for all time</span>
+          <input type="date" className="search-input" value={from} onChange={(e) => { setFrom(e.target.value); setPreset(''); }} aria-label="From date" />
+          <input type="date" className="search-input" value={to} onChange={(e) => { setTo(e.target.value); setPreset(''); }} aria-label="To date" />
+          <input type="search" className="search-input" placeholder="Search accounts" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search" />
         </div>
-        <div className="toolbar-right">
-          <button className="btn btn-sm" type="button" onClick={exportCsv}>Export CSV</button>
-        </div>
+        <span className="muted">{sorted.length} of {data.rows.length} rows</span>
       </div>
       <div className="table-wrap card">
         <table className="data">
-          <thead><tr><th>Code</th><th>Account</th><th>Type</th><th className="cell-num">Debit</th><th className="cell-num">Credit</th><th className="cell-num">Balance</th></tr></thead>
+          <thead>
+            <tr>
+              <SortableTh col="code" label="Code" sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="name" label="Account" sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="accountType" label="Type" sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="debit" label="Debit" numeric sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="credit" label="Credit" numeric sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="balance" label="Balance" numeric sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+            </tr>
+          </thead>
           <tbody>
-            {data.rows.map((r) => (
+            {sorted.map((r) => (
               <tr key={String(r.id)}>
                 <td className="cell-mono">{String(r.code)}</td>
                 <td>{String(r.name)}</td>
@@ -1566,7 +1586,7 @@ function TrialBalance() {
                 <td className="cell-num">{zero(r.balance)}</td>
               </tr>
             ))}
-            {data.rows.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 24 }}>No movements in this range.</td></tr>}
+            {sorted.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 24 }}>No movements in this range.</td></tr>}
             <tr>
               <td colSpan={3}><strong>Total</strong></td>
               <td className="cell-num"><strong>{zero(data.totals.debit)}</strong></td>
@@ -1584,6 +1604,8 @@ function ProfitLoss() {
   const [data, setData] = useState<Rec | null>(null);
   const [from, setFrom] = useState(() => { const t = new Date(); return `${t.getFullYear()}-01-01`; });
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [preset, setPreset] = useState('');
+  const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const load = useCallback(() => {
     const p = new URLSearchParams({ from, to });
@@ -1592,9 +1614,16 @@ function ProfitLoss() {
       .catch((e) => setError(e instanceof Error ? e.message : 'P&L failed'));
   }, [from, to]);
   useEffect(() => { load(); }, [load]);
-  if (error) return <ErrorBanner error={error} />;
+  const term = search.trim().toLowerCase();
+  const baseRows = useMemo(
+    () => ((data?.rows as Rec[]) ?? []).filter((r) => !term || `${r.code} ${r.name} ${r.accountType}`.toLowerCase().includes(term)),
+    [data, term]
+  );
+  const { sorted, sortBy, sortDir, toggle } = useClientSort(baseRows);
+  if (error && !data) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader variant="page" label="Preparing profit and loss..." />;
-  const rows = (data.rows as Rec[]) ?? [];
+  const applyPreset = (f: string, t: string) => { setFrom(f); setTo(t); setPreset(f === '' && t === '' ? 'all' : ''); };
+  const exportParams = () => new URLSearchParams({ from, to });
   return (
     <div className="page">
       <header className="page-head">
@@ -1603,10 +1632,15 @@ function ProfitLoss() {
           <h1>Profit and loss</h1>
           <p className="muted">{String(data.from)} {'\u2192'} {String(data.to)}</p>
         </div>
+        <div className="head-actions">
+          <ReportExportMenu reportKey="profit-loss" filename="profit-loss" params={exportParams} />
+        </div>
       </header>
-      <div className="toolbar">
-        <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
-        <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <DatePresets onApply={applyPreset} active={preset} />
+        <input type="date" className="search-input" value={from} onChange={(e) => { setFrom(e.target.value); setPreset(''); }} aria-label="From" />
+        <input type="date" className="search-input" value={to} onChange={(e) => { setTo(e.target.value); setPreset(''); }} aria-label="To" />
+        <input type="search" className="search-input" placeholder="Search accounts" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search" />
       </div>
       <div className="kpi-grid">
         <div className="kpi-card"><span className="kpi-label">Revenue</span><span className="kpi-value">{fmtMoney(data.revenue)}</span></div>
@@ -1615,9 +1649,16 @@ function ProfitLoss() {
       </div>
       <div className="table-wrap card">
         <table className="data">
-          <thead><tr><th>Code</th><th>Account</th><th>Type</th><th className="cell-num">Amount</th></tr></thead>
+          <thead>
+            <tr>
+              <SortableTh col="code" label="Code" sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="name" label="Account" sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="accountType" label="Type" sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="amount" label="Amount" numeric sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+            </tr>
+          </thead>
           <tbody>
-            {rows.map((r) => (
+            {sorted.map((r) => (
               <tr key={String(r.id)}>
                 <td className="cell-mono">{String(r.code)}</td>
                 <td>{String(r.name)}</td>
@@ -1625,6 +1666,7 @@ function ProfitLoss() {
                 <td className="cell-num">{fmtMoney(r.amount)}</td>
               </tr>
             ))}
+            {sorted.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: 24 }}>No posted revenue or expense lines in this range.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -1635,6 +1677,7 @@ function ProfitLoss() {
 function BalanceSheet() {
   const [data, setData] = useState<Rec | null>(null);
   const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
+  const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/finance/balance-sheet?asOf=${asOf}`)
@@ -1642,9 +1685,14 @@ function BalanceSheet() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Balance sheet failed'));
   }, [asOf]);
   useEffect(() => { load(); }, [load]);
-  if (error) return <ErrorBanner error={error} />;
+  const term = search.trim().toLowerCase();
+  const baseRows = useMemo(
+    () => ((data?.rows as Rec[]) ?? []).filter((r) => !term || `${r.code} ${r.name} ${r.accountType}`.toLowerCase().includes(term)),
+    [data, term]
+  );
+  const { sorted, sortBy, sortDir, toggle } = useClientSort(baseRows);
+  if (error && !data) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader variant="page" label="Preparing balance sheet..." />;
-  const rows = (data.rows as Rec[]) ?? [];
   const currentResult = data.currentResult == null ? null : Number(data.currentResult);
   const ok = Math.round(Number(data.assets) * 100) === Math.round(Number(data.totalLAndE) * 100);
   return (
@@ -1655,9 +1703,13 @@ function BalanceSheet() {
           <h1>Balance sheet</h1>
           <p className="muted">As of {String(data.asOf)}. {ok ? 'Assets equal liabilities + equity.' : 'Equation does not hold - check postings.'}</p>
         </div>
+        <div className="head-actions">
+          <ReportExportMenu reportKey="balance-sheet" filename="balance-sheet" params={() => new URLSearchParams({ asOf })} />
+        </div>
       </header>
-      <div className="toolbar">
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 10 }}>
         <input type="date" className="search-input" value={asOf} onChange={(e) => setAsOf(e.target.value)} aria-label="As of" />
+        <input type="search" className="search-input" placeholder="Search accounts" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search" />
       </div>
       <div className="kpi-grid">
         <div className="kpi-card"><span className="kpi-label">Assets</span><span className="kpi-value">{fmtMoney(data.assets)}</span></div>
@@ -1667,9 +1719,16 @@ function BalanceSheet() {
       </div>
       <div className="table-wrap card">
         <table className="data">
-          <thead><tr><th>Code</th><th>Account</th><th>Type</th><th className="cell-num">Amount</th></tr></thead>
+          <thead>
+            <tr>
+              <SortableTh col="code" label="Code" sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="name" label="Account" sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="accountType" label="Type" sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+              <SortableTh col="amount" label="Amount" numeric sortBy={sortBy} sortDir={sortDir} onSort={toggle} />
+            </tr>
+          </thead>
           <tbody>
-            {rows.map((r) => (
+            {sorted.map((r) => (
               <tr key={String(r.id)}>
                 <td className="cell-mono">{String(r.code)}</td>
                 <td>{String(r.name)}</td>
@@ -1702,6 +1761,7 @@ function CashFlow() {
   const [data, setData] = useState<Rec | null>(null);
   const [from, setFrom] = useState(() => { const t = new Date(); return `${t.getFullYear()}-01-01`; });
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [preset, setPreset] = useState('');
   const [error, setError] = useState('');
   const load = useCallback(() => {
     api<{ data: Rec }>(`/api/ops/finance/cash-flow?from=${from}&to=${to}`)
@@ -1709,19 +1769,10 @@ function CashFlow() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Cash flow failed'));
   }, [from, to]);
   useEffect(() => { load(); }, [load]);
-  if (error) return <ErrorBanner error={error} />;
+  if (error && !data) return <ErrorBanner error={error} />;
   if (!data) return <PageLoader variant="page" label="Preparing cash flow statement..." />;
   const sections = (Array.isArray(data.sections) ? data.sections : []) as Array<{ key: string; label: string; total: number; lines: Array<{ label: string; amount: number }> }>;
-  const exportCsv = () => {
-    const rows: string[][] = [['Section', 'Line', 'Amount']];
-    for (const s of sections) {
-      rows.push([s.label, '', '']);
-      for (const l of s.lines) rows.push(['', l.label, String(l.amount)]);
-      rows.push(['', 'Section total', String(s.total)]);
-    }
-    rows.push(['', 'Net change in cash', String(data.netCashChange)]);
-    downloadCsv('cash-flow.csv', rows);
-  };
+  const applyPreset = (f: string, t: string) => { setFrom(f); setTo(t); setPreset(f === '' && t === '' ? 'all' : ''); };
   return (
     <div className="page">
       <header className="page-head">
@@ -1731,12 +1782,13 @@ function CashFlow() {
           <p className="muted">{String(data.from)} {'→'} {String(data.to)}</p>
         </div>
         <div className="head-actions">
-          <button className="btn btn-sm" onClick={exportCsv}>Export CSV</button>
+          <ReportExportMenu reportKey="cash-flow" filename="cash-flow" params={() => new URLSearchParams({ from, to })} />
         </div>
       </header>
-      <div className="toolbar">
-        <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
-        <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <DatePresets onApply={applyPreset} active={preset} />
+        <input type="date" className="search-input" value={from} onChange={(e) => { setFrom(e.target.value); setPreset(''); }} aria-label="From" />
+        <input type="date" className="search-input" value={to} onChange={(e) => { setTo(e.target.value); setPreset(''); }} aria-label="To" />
       </div>
       <div className="kpi-grid">
         <div className="kpi-card"><span className="kpi-label">Opening cash</span><span className="kpi-value">{fmtMoney(data.openingCash)}</span></div>
@@ -1817,12 +1869,13 @@ function GeneralLedger() {
       lines,
     }));
   }, [rows]);
-  const exportCsv = () => downloadCsv('general-ledger.csv', [
-    ['Account code', 'Account', 'Date', 'Entry', 'Type', 'Source', 'Description', 'Debit', 'Credit', 'Balance'],
-    ...rows.map((r) => [String(r.accountCode), String(r.accountName), String(r.entryDate).slice(0, 10), String(r.entryNo),
-      String(r.journalType).replace(/_/g, ' '), String(r.referenceCode ?? ''), String(r.lineDescription ?? r.entryDescription ?? ''),
-      String(r.debit ?? ''), String(r.credit ?? ''), String(r.balance ?? '')]),
-  ]);
+  const exportParams = () => {
+    const p = new URLSearchParams();
+    if (accountId) p.set('accountId', accountId);
+    if (from) p.set('from', from);
+    if (to) p.set('to', to);
+    return p;
+  };
   return (
     <div className="page">
       <header className="page-head">
@@ -1833,10 +1886,11 @@ function GeneralLedger() {
         </div>
         <div className="head-actions">
           <button className="btn btn-sm" onClick={load}>Refresh</button>
-          <button className="btn btn-sm" onClick={exportCsv}>Export CSV</button>
+          <ReportExportMenu reportKey="general-ledger" filename="general-ledger" params={exportParams} />
         </div>
       </header>
-      <div className="toolbar">
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <DatePresets onApply={(f, t) => { setFrom(f); setTo(t); }} />
         <select className="search-input" style={{ maxWidth: 340 }} value={accountId} onChange={(e) => setAccountId(e.target.value)} aria-label="Account">
           <option value="">All accounts</option>
           {accounts.map((a) => <option key={String(a.id)} value={String(a.id)}>{String(a.code)} — {String(a.name)}</option>)}
@@ -1914,11 +1968,13 @@ function PartnerLedger() {
   }, [partnerType, partnerId, from, to]);
   useEffect(() => { load(); }, [load]);
   const switchType = (t: 'customer' | 'supplier') => { setPartnerType(t); setPartnerId(''); };
-  const exportCsv = () => downloadCsv('partner-ledger.csv', [
-    ['Partner', 'Date', 'Document', 'Type', 'Description', 'Debit', 'Credit', 'Balance'],
-    ...rows.map((r) => [String(r.partnerName), String(r.docDate).slice(0, 10), String(r.docNo ?? ''), String(r.docType),
-      String(r.label ?? ''), String(r.debit ?? ''), String(r.credit ?? ''), String(r.balance ?? '')]),
-  ]);
+  const exportParams = () => {
+    const p = new URLSearchParams({ partnerType });
+    if (partnerId) p.set('partnerId', partnerId);
+    if (from) p.set('from', from);
+    if (to) p.set('to', to);
+    return p;
+  };
   return (
     <div className="page">
       <header className="page-head">
@@ -1928,10 +1984,11 @@ function PartnerLedger() {
           <p className="muted">Per-{partnerType === 'customer' ? 'customer' : 'supplier'} movements, resolved through the AR/AP control accounts.</p>
         </div>
         <div className="head-actions">
-          <button className="btn btn-sm" onClick={exportCsv}>Export CSV</button>
+          <ReportExportMenu reportKey="partner-ledger" filename="partner-ledger" params={exportParams} />
         </div>
       </header>
       <div className="toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <DatePresets onApply={(f, t) => { setFrom(f); setTo(t); }} />
         <div className="tabs" role="tablist" aria-label="Partner type">
           <button type="button" role="tab" aria-selected={partnerType === 'customer'} className={partnerType === 'customer' ? 'tab active' : 'tab'} onClick={() => switchType('customer')}>Customers</button>
           <button type="button" role="tab" aria-selected={partnerType === 'supplier'} className={partnerType === 'supplier' ? 'tab active' : 'tab'} onClick={() => switchType('supplier')}>Suppliers</button>
@@ -2172,6 +2229,13 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {  const { user } = useAuth();
           <p className="mod-kicker" data-mod="fin">{isAr ? 'Receivables' : 'Payables'}</p>
           <h1>{isAr ? 'Accounts receivable' : 'Accounts payable'}</h1>
           <p className="muted">Open balances from posted invoices. Total {fmtMoney(data.total)} {'\u00b7'} overdue {fmtMoney(data.overdue)}.</p>
+        </div>
+        <div className="head-actions">
+          <ReportExportMenu
+            reportKey={isAr ? 'ar' : 'ap'}
+            filename={isAr ? 'aged-receivables' : 'aged-payables'}
+            params={() => new URLSearchParams(bucket ? { bucket } : {})}
+          />
         </div>
       </header>
       {error && <ErrorBanner error={error} />}
@@ -3677,10 +3741,14 @@ function TaxDesk() {
           <h1>VAT control</h1>
           <p className="muted">{String(data.from)} {'\u2192'} {String(data.to)}. Taken from VAT account postings, not from invoice reports alone.</p>
         </div>
-        {can(user, 'finance.taxes.create') && <button className="btn btn-primary" onClick={() => { setModal(null); setModalOpen(true); }}>New tax code</button>}
+        <div className="head-actions">
+          <ReportExportMenu reportKey="tax" filename="tax-summary" params={() => new URLSearchParams({ from, to })} />
+          {can(user, 'finance.taxes.create') && <button className="btn btn-primary" onClick={() => { setModal(null); setModalOpen(true); }}>New tax code</button>}
+        </div>
       </header>
       {error && <ErrorBanner error={error} />}
-      <div className="toolbar">
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <DatePresets onApply={(f, t) => { setFrom(f); setTo(t); }} />
         <input type="date" className="search-input" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
         <input type="date" className="search-input" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To" />
       </div>

@@ -97,6 +97,47 @@ export async function openDocument(
   URL.revokeObjectURL(url);
 }
 
+/** Download or print a computed accounting report from the branded export endpoint. */
+export async function downloadReport(
+  key: string,
+  params: URLSearchParams,
+  format: 'pdf' | 'xlsx' | 'csv' | 'print',
+  filename: string
+): Promise<void> {
+  const p = new URLSearchParams(params);
+  p.set('format', format);
+  const token = getToken();
+  const res = await fetch(`/api/ops/finance/reports/export/${key}?${p}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const msg =
+      body && body.error && body.error.message
+        ? String(body.error.message)
+        : (format === 'print' ? 'Print' : 'Export') + ` failed (${res.status})`;
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  if (format === 'print') {
+    const win = window.open(url, '_blank');
+    if (!win) {
+      URL.revokeObjectURL(url);
+      throw new Error('Popup blocked - allow popups for print.');
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${filename.replace(/\.[a-z0-9]+$/i, '')}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export interface Pagination {
   page: number;
   pageSize: number;
