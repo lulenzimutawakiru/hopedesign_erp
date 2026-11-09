@@ -16,6 +16,21 @@ import { SELLABLE_PRODUCT_TYPES } from './productTypes.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/** Buyer classification selectable on a sales document. Null means "derive". */
+const BUYER_TYPES = ['B2B', 'B2C', 'B2G'] as const;
+export type BuyerType = (typeof BUYER_TYPES)[number];
+
+/** Validate an incoming buyer-type value; returns null when the caller leaves it to be derived. */
+function normalizeBuyerType(v: unknown): BuyerType | null {
+  if (v === null || v === undefined || v === '') return null;
+  const s = String(v).trim().toUpperCase();
+  if (s === '') return null;
+  if (!(BUYER_TYPES as readonly string[]).includes(s)) {
+    throw badRequest('buyerType must be one of B2B, B2C, B2G');
+  }
+  return s as BuyerType;
+}
+
 export interface SalesLineInput {
   productId: number;
   description?: string | null;
@@ -24,6 +39,8 @@ export interface SalesLineInput {
   unitPrice?: number;
   discountPercent?: number;
   taxPercent?: number;
+  /** Tax-category code from `tax_categories` (STANDARD / ZERO / EXEMPT / …). */
+  taxCategory?: string | null;
   deliveryDate?: string | null;
 }
 
@@ -33,6 +50,9 @@ export interface InvoiceLineInput {
   quantity: number;
   unitPrice: number;
   taxPercent?: number;
+  /** Tax-category code from `tax_categories` (STANDARD / ZERO / EXEMPT / …). */
+  taxCategory?: string | null;
+  unitId?: number | null;
 }
 
 async function nextDoc(client: pg.PoolClient, ctx: Ctx, prefix: string): Promise<string> {
@@ -147,24 +167,26 @@ export async function createQuotation(
     currency?: string;
     notes?: string | null;
     terms?: string | null;
+    buyerType?: BuyerType | null;
     items: SalesLineInput[];
   }
 ) {
   const companyId = ctx.companyId;
   if (!companyId) throw badRequest('Company context required');
   if (!input.items?.length) throw badRequest('At least one line item is required');
+  const buyerType = normalizeBuyerType(input.buyerType);
   const quotationNo = await nextDoc(client, ctx, 'QT');
   const ins = await client.query(
     `INSERT INTO sales_quotations
        (company_id, tenant_id, branch_id, quotation_no, customer_id, contact_id, opportunity_id,
-        quotation_date, valid_until, currency, notes, terms, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        quotation_date, valid_until, currency, notes, terms, buyer_type, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, quotationNo, input.customerId,
       input.contactId ?? null, input.opportunityId ?? null,
       input.quotationDate ?? new Date().toISOString().slice(0, 10),
       input.validUntil ?? null, input.currency ?? 'UGX', input.notes ?? null, input.terms ?? null,
-      ctx.userId ?? null,
+      buyerType, ctx.userId ?? null,
     ]
   );
   const quotationId = Number(ins.rows[0].id);
@@ -186,11 +208,11 @@ export async function createQuotation(
     const taxAmt = (lineTotal - discountAmt) * (taxPercent / 100);
     await client.query(
       `INSERT INTO sales_quotation_items
-         (quotation_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, line_total)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+         (quotation_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category, line_total)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
         quotationId, item.productId, item.description ?? product.name, qty, item.unitId ?? product.unit_id ?? null,
-        unitPrice, discountPercent, taxPercent, round2(lineTotal - discountAmt + taxAmt),
+        unitPrice, discountPercent, taxPercent, item.taxCategory ?? null, round2(lineTotal - discountAmt + taxAmt),
       ]
     );
     subtotal += lineTotal;
@@ -348,11 +370,13 @@ export async function createSalesOrder(
     bankAccountNumber?: string | null;
     discountType?: 'AMOUNT' | 'PERCENT' | null;
     discountValue?: number | null;
+    buyerType?: BuyerType | null;
   }
 ) {
   const companyId = ctx.companyId;
   if (!companyId) throw badRequest('Company context required');
   await assertCustomerCanTrade(client, ctx, input.customerId, 0);
+  const buyerType = normalizeBuyerType(input.buyerType);
   const orderNo = await nextDoc(client, ctx, 'SO');
   const bank = await companyBankDefaults(client, ctx);
   const bankName = input.bankName != null ? String(input.bankName) : bank.bankName;
@@ -365,22 +389,22 @@ export async function createSalesOrder(
     `INSERT INTO sales_orders
        (company_id, tenant_id, branch_id, order_no, quotation_id, customer_id, contact_id, customer_po_no,
         order_date, requested_date, delivery_date, currency, notes,
-        bank_name, bank_account_name, bank_account_number, discount_type, discount_value, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+        bank_name, bank_account_name, bank_account_number, discount_type, discount_value, buyer_type, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, orderNo, input.quotationId ?? null, input.customerId,
       input.contactId ?? null, input.customerPoNo ?? null,
       input.orderDate ?? new Date().toISOString().slice(0, 10),
       input.requestedDate ?? null, input.deliveryDate ?? null, input.currency ?? 'UGX', input.notes ?? null,
       bankName || null, bankAccountName || null, bankAccountNumber || null,
-      discountType, discountValue, ctx.userId ?? null,
+      discountType, discountValue, buyerType, ctx.userId ?? null,
     ]
   );
   const orderId = Number(ins.rows[0].id);
   let lines = input.items ?? [];
   if (lines.length === 0 && input.quotationId) {
     const qItems = await client.query(
-      `SELECT product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent
+      `SELECT product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category
        FROM sales_quotation_items WHERE quotation_id = $1 ORDER BY id`,
       [input.quotationId]
     );
@@ -392,6 +416,7 @@ export async function createSalesOrder(
       unitPrice: Number(row.unit_price),
       discountPercent: Number(row.discount_percent ?? 0),
       taxPercent: Number(row.tax_percent ?? 0),
+      taxCategory: row.tax_category != null ? String(row.tax_category) : null,
     }));
   }
   if (lines.length === 0) throw badRequest('At least one line item is required');
@@ -405,6 +430,7 @@ export async function createSalesOrder(
     unitPrice: number;
     discountPercent: number;
     taxPercent: number;
+    taxCategory: string | null;
     lineTotal: number;
     discountAmt: number;
     deliveryDate: string | null;
@@ -429,6 +455,7 @@ export async function createSalesOrder(
       unitPrice,
       discountPercent,
       taxPercent,
+      taxCategory: item.taxCategory ?? null,
       lineTotal,
       discountAmt,
       deliveryDate: item.deliveryDate ?? null,
@@ -446,11 +473,11 @@ export async function createSalesOrder(
     const taxAmt = Math.max(0, spec.lineTotal - spec.discountAmt - headerShare) * (spec.taxPercent / 100);
     await client.query(
       `INSERT INTO sales_order_items
-         (order_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, line_total, delivery_date)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+         (order_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category, line_total, delivery_date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [
         orderId, spec.productId, spec.description, spec.qty, spec.unitId,
-        spec.unitPrice, spec.discountPercent, spec.taxPercent, round2(spec.lineTotal - spec.discountAmt + taxAmt),
+        spec.unitPrice, spec.discountPercent, spec.taxPercent, spec.taxCategory ?? null, round2(spec.lineTotal - spec.discountAmt + taxAmt),
         spec.deliveryDate,
       ]
     );
@@ -729,12 +756,14 @@ export async function createInvoice(
     bankAccountNumber?: string | null;
     discountType?: 'AMOUNT' | 'PERCENT' | null;
     discountValue?: number | null;
+    buyerType?: BuyerType | null;
   }
 ) {
   const companyId = ctx.companyId;
   if (!companyId) throw badRequest('Company context required');
   const bank = await companyBankDefaults(client, ctx);
-  const orderId = input.orderId != null ? Number(input.orderId) : null;
+  let orderId = input.orderId != null ? Number(input.orderId) : null;
+  const buyerType = normalizeBuyerType(input.buyerType);
 
   let customerId: number;
   let currency: string;
@@ -785,19 +814,54 @@ export async function createInvoice(
     validateDiscount(discountType, discountValue);
   }
 
+  // A manual invoice (no order supplied) implies a sale, so create the sales
+  // order it came from and link them for a complete document chain. Description
+  // -only lines cannot map onto an order (orders require a product), so an order
+  // is auto-created only when every line carries a product.
+  if (orderId == null) {
+    const items = input.items ?? [];
+    const allProductLines = items.length > 0 && items.every((it) => it.productId != null && Number(it.productId) > 0);
+    if (allProductLines) {
+      const so = await createSalesOrder(client, ctx, {
+        customerId,
+        notes: input.notes ?? null,
+        currency,
+        items: items.map((it) => ({
+          productId: Number(it.productId),
+          description: it.description ?? null,
+          quantity: Number(it.quantity),
+          unitId: it.unitId ?? null,
+          unitPrice: Number(it.unitPrice),
+          taxPercent: it.taxPercent,
+          taxCategory: it.taxCategory ?? null,
+        })),
+        bankName, bankAccountName, bankAccountNumber,
+        discountType, discountValue,
+        buyerType,
+      });
+      orderId = so.orderId;
+      // The invoice records delivery directly, so mark the generated order fulfilled.
+      await client.query(
+        `UPDATE sales_order_items SET dispatched_qty = quantity, invoiced_qty = quantity WHERE order_id = $1`,
+        [orderId]
+      );
+      await client.query(`UPDATE sales_orders SET status = 'INVOICED' WHERE id = $1`, [orderId]);
+    }
+  }
+
   const invoiceNo = await nextDoc(client, ctx, 'INV');
   const ins = await client.query(
     `INSERT INTO customer_invoices
        (company_id, tenant_id, branch_id, invoice_no, order_id, delivery_note_id, customer_id, invoice_date, due_date, currency, notes,
-        bank_name, bank_account_name, bank_account_number, discount_type, discount_value, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
+        bank_name, bank_account_name, bank_account_number, discount_type, discount_value, buyer_type, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, invoiceNo, orderId,
       input.deliveryNoteId ?? null, customerId,
       input.invoiceDate ?? new Date().toISOString().slice(0, 10),
       input.dueDate ?? null, currency, input.notes ?? null,
       bankName || null, bankAccountName || null, bankAccountNumber || null,
-      discountType, discountValue, ctx.userId ?? null,
+      discountType, discountValue, buyerType, ctx.userId ?? null,
     ]
   );
   const invoiceId = Number(ins.rows[0].id);
@@ -806,8 +870,10 @@ export async function createInvoice(
     productId: number | null;
     description: string;
     qty: number;
+    unitId: number | null;
     unitPrice: number;
     taxPercent: number;
+    taxCategory: string | null;
     lineTotal: number;
     orderItemId: number | null;
   }> = [];
@@ -820,8 +886,10 @@ export async function createInvoice(
         productId: Number(item.product_id),
         description: item.description != null ? String(item.description) : '',
         qty,
+        unitId: item.unit_id != null ? Number(item.unit_id) : null,
         unitPrice,
         taxPercent: Number(item.tax_percent ?? 0),
+        taxCategory: item.tax_category != null ? String(item.tax_category) : null,
         lineTotal,
         orderItemId: Number(item.id),
       });
@@ -835,15 +903,17 @@ export async function createInvoice(
       const unitPrice = Number(item.unitPrice);
       const taxPercent = item.taxPercent != null ? Number(item.taxPercent) : defaultRate;
       let productId: number | null = null;
+      let unitId: number | null = item.unitId != null ? Number(item.unitId) : null;
       let description = item.description != null ? String(item.description).trim() : '';
       if (item.productId != null) {
         const product = await productMeta(client, ctx, Number(item.productId));
         productId = Number(product.id);
+        if (unitId == null) unitId = product.unit_id != null ? Number(product.unit_id) : null;
         if (!description) description = String(product.name);
       }
       if (!description) throw badRequest('Each line needs a product or description');
       const lineTotal = qty * unitPrice;
-      lineSpecs.push({ productId, description, qty, unitPrice, taxPercent, lineTotal, orderItemId: null });
+      lineSpecs.push({ productId, description, qty, unitId, unitPrice, taxPercent, taxCategory: item.taxCategory ?? null, lineTotal, orderItemId: null });
       subtotal += lineTotal;
     }
   }
@@ -862,9 +932,9 @@ export async function createInvoice(
     const headerShare = subtotal > 0 ? invoiceDiscount * (spec.lineTotal / subtotal) : 0;
     const taxAmt = Math.max(0, spec.lineTotal - headerShare) * (spec.taxPercent / 100);
     await client.query(
-      `INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_price, tax_percent, line_total)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [invoiceId, spec.productId, spec.description, spec.qty, spec.unitPrice, spec.taxPercent, spec.lineTotal + taxAmt]
+      `INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_id, unit_price, tax_percent, tax_category, line_total)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [invoiceId, spec.productId, spec.description, spec.qty, spec.unitId, spec.unitPrice, spec.taxPercent, spec.taxCategory, spec.lineTotal + taxAmt]
     );
     tax += taxAmt;
     if (spec.orderItemId != null) {
@@ -1164,9 +1234,11 @@ export async function getQuotation(client: pg.PoolClient, ctx: Ctx, quotationId:
   );
   if (res.rows.length === 0) throw notFound('Quotation not found');
   const items = await client.query(
-    `SELECT i.*, p.code AS product_code, p.name AS product_name
+    `SELECT i.*, p.code AS product_code, p.name AS product_name,
+            u.code AS unit_code, u.name AS unit_name
      FROM sales_quotation_items i
      LEFT JOIN products p ON p.id = i.product_id
+     LEFT JOIN units u ON u.id = i.unit_id
      WHERE i.quotation_id = $1 ORDER BY i.id`,
     [quotationId]
   );
@@ -1192,9 +1264,11 @@ export async function getSalesOrder(client: pg.PoolClient, ctx: Ctx, orderId: nu
   );
   if (res.rows.length === 0) throw notFound('Sales order not found');
   const items = await client.query(
-    `SELECT i.*, p.code AS product_code, p.name AS product_name
+    `SELECT i.*, p.code AS product_code, p.name AS product_name,
+            u.code AS unit_code, u.name AS unit_name
      FROM sales_order_items i
      LEFT JOIN products p ON p.id = i.product_id
+     LEFT JOIN units u ON u.id = i.unit_id
      WHERE i.order_id = $1 ORDER BY i.id`,
     [orderId]
   );
@@ -1496,9 +1570,11 @@ export async function getInvoice(client: pg.PoolClient, ctx: Ctx, invoiceId: num
   );
   if (res.rows.length === 0) throw notFound('Invoice not found');
   const items = await client.query(
-    `SELECT i.*, p.code AS product_code, p.name AS product_name
+    `SELECT i.*, p.code AS product_code, p.name AS product_name,
+            u.code AS unit_code, u.name AS unit_name
      FROM invoice_items i
      LEFT JOIN products p ON p.id = i.product_id
+     LEFT JOIN units u ON u.id = i.unit_id
      WHERE i.invoice_id = $1 ORDER BY i.id`,
     [invoiceId]
   );
@@ -1526,10 +1602,13 @@ export async function postDebitNote(client: pg.PoolClient, ctx: Ctx, debitNoteId
 
 export async function listSellableProducts(client: pg.PoolClient, ctx: Ctx, customerId?: number) {
   const res = await client.query(
-    `SELECT id, code, name, type, standard_price, standard_cost, unit_id
-     FROM products WHERE tenant_id = $1 AND company_id = $2 AND status = 'ACTIVE'
-       AND type = ANY($3::text[])
-     ORDER BY code LIMIT 80`,
+    `SELECT p.id, p.code, p.name, p.type, p.standard_price, p.standard_cost, p.unit_id,
+            u.code AS unit_code, u.name AS unit_name
+     FROM products p
+     LEFT JOIN units u ON u.id = p.unit_id
+     WHERE p.tenant_id = $1 AND p.company_id = $2 AND p.status = 'ACTIVE'
+       AND p.type = ANY($3::text[])
+     ORDER BY p.code LIMIT 80`,
     [ctx.tenantId, ctx.companyId, SELLABLE_PRODUCT_TYPES]
   );
   const rows = res.rows;
@@ -1830,6 +1909,39 @@ export async function listDispatchableOrders(
   return toCamelRows(res.rows);
 }
 
+/**
+ * Sales-line tax options, config-driven. Joins the active `tax_categories`
+ * vocabulary (seeded STANDARD / EXEMPT / ZERO / OUT_OF_SCOPE) with the current
+ * VAT `tax_rates` revision so the invoice/order/quotation line dropdown offers
+ * the real configured rates — never a hard-coded 18%.
+ */
+export async function listSalesTaxOptions(client: pg.PoolClient, ctx: Ctx) {
+  const cats = await client.query(
+    `SELECT id, code, name, description, priority FROM tax_categories
+      WHERE tenant_id = $1 AND company_id = $2 AND is_active = true
+      ORDER BY priority, code`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  const rates = await client.query(
+    `SELECT DISTINCT ON (category_id) category_id, tax_code, rate
+       FROM tax_rates
+      WHERE tenant_id = $1 AND company_id = $2 AND tax_type = 'VAT'
+        AND (effective_to IS NULL OR effective_to > CURRENT_DATE)
+      ORDER BY category_id, effective_from DESC`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  const rateByCat = new Map<number, number>();
+  for (const r of rates.rows) {
+    if (r.category_id != null) rateByCat.set(Number(r.category_id), Number(r.rate ?? 0));
+  }
+  return cats.rows.map((c) => ({
+    code: String(c.code),
+    name: String(c.name),
+    description: c.description != null ? String(c.description) : '',
+    rate: rateByCat.get(Number(c.id)) ?? 0,
+  }));
+}
+
 export async function listInvoices(client: pg.PoolClient, ctx: Ctx, filters: { q?: string; status?: string; customerId?: number } = {}) {
   const params: unknown[] = [ctx.tenantId, ctx.companyId];
   const where = ['inv.tenant_id = $1', 'inv.company_id = $2'];
@@ -1847,7 +1959,7 @@ export async function listInvoices(client: pg.PoolClient, ctx: Ctx, filters: { q
   }
   const res = await client.query(
     `SELECT inv.id, inv.invoice_no, inv.status, inv.invoice_date, inv.due_date, inv.total, inv.amount_paid, inv.gl_posted,
-            c.code AS customer_code, c.name AS customer_name, so.order_no
+            inv.buyer_type, c.code AS customer_code, c.name AS customer_name, so.order_no
      FROM customer_invoices inv
      JOIN customers c ON c.id = inv.customer_id
      LEFT JOIN sales_orders so ON so.id = inv.order_id
