@@ -710,6 +710,7 @@ export default function Settings() {
   const [cats, setCats] = useState<SettingCategory[] | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Record<string, Draft>>>({});
   const [active, setActive] = useState('general');
+  const [view, setView] = useState<'home' | 'category'>('home');
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [savingAll, setSavingAll] = useState(false);
@@ -918,6 +919,7 @@ export default function Settings() {
       if (firstInvalid) {
         setActive(firstInvalid.category);
         setQuery('');
+        setView('category');
       }
     }
   };
@@ -1010,15 +1012,17 @@ export default function Settings() {
         </div>
         <div className={err ? 'setting-control setting-err' : 'setting-control'}>
           {s.type === 'boolean' ? (
-            <label className="check">
-              <input
-                type="checkbox"
-                disabled={!editable}
-                checked={Boolean(draft)}
-                onChange={(e) => setValue(cat.category, key, e.target.checked)}
-              />
-              <span>{draft ? 'Enabled' : 'Disabled'}</span>
-            </label>
+            <button
+              type="button"
+              role="switch"
+              className={'setting-switch' + (Boolean(draft) ? ' is-on' : '')}
+              aria-checked={Boolean(draft)}
+              disabled={!editable}
+              onClick={() => setValue(cat.category, key, !draft)}
+            >
+              <span className="setting-switch-track" />
+              <span>{Boolean(draft) ? 'On' : 'Off'}</span>
+            </button>
           ) : s.type === 'select' ? (
             <select
               disabled={!editable}
@@ -1206,114 +1210,120 @@ export default function Settings() {
         </div>
       )}
 
-      <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Settings categories">
+      {matches != null ? (
+        <div className="settings-main">
+          <div className="settings-crumb">
+            <span className="muted">
+              {matches.length} match{matches.length === 1 ? '' : 'es'} across{' '}
+              {new Set(matches.map((m) => m.cat.category)).size} categor{new Set(matches.map((m) => m.cat.category)).size === 1 ? 'y' : 'ies'}
+            </span>
+            <button className="btn btn-sm" onClick={() => setQuery('')}>Clear search</button>
+          </div>
+          {matches.length === 0 ? (
+            <div className="card">
+              <div className="empty-state">
+                <h3>No matching settings</h3>
+                <p className="muted">Try a different search term.</p>
+              </div>
+            </div>
+          ) : (
+            (() => {
+              const grouped = new Map<string, { cat: SettingCategory; items: { key: string; setting: SettingValue }[] }>();
+              for (const m of matches) {
+                if (!grouped.has(m.cat.category)) grouped.set(m.cat.category, { cat: m.cat, items: [] });
+                grouped.get(m.cat.category)!.items.push({ key: m.key, setting: m.setting });
+              }
+              return Array.from(grouped.values()).map(({ cat, items }) => (
+                <section className="card" key={cat.category}>
+                  <div className="card-head">
+                    <h3>{cat.label}</h3>
+                    <span className="badge badge-neutral">{items.length}</span>
+                  </div>
+                  <div className="card-pad">
+                    <div className="setting-list">
+                      {items.map(({ key, setting }) => renderRow(cat, key, setting))}
+                    </div>
+                  </div>
+                </section>
+              ));
+            })()
+          )}
+        </div>
+      ) : view === 'home' ? (
+        <div className="settings-grid">
           {cats.map((cat) => {
             const isDirty = dirtyCats.has(cat.category);
-            const isActive = !query && active === cat.category;
             const meta = CATEGORY_META[cat.category];
             const custom = Object.values(cat.settings).filter((s) => s.saved).length;
             return (
               <button
                 key={cat.category}
-                className={isActive ? 'settings-nav-item active' : 'settings-nav-item'}
-                onClick={() => { setActive(cat.category); setQuery(''); }}
+                className="settings-card"
+                onClick={() => { setActive(cat.category); setQuery(''); setView('category'); }}
                 title={cat.blurb}
               >
-                <span className={`settings-nav-tile ${meta?.cls ?? 'tile-neutral'}`}>{meta?.icon ?? cat.label.slice(0, 2)}</span>
-                <span className="settings-nav-body">
-                  <span className="settings-nav-label">{cat.label}</span>
-                  <span className="settings-nav-meta">{custom > 0 ? `${custom} custom` : 'Defaults'}</span>
+                <span className={`settings-card-tile ${meta?.cls ?? 'tile-neutral'}`}>{meta?.icon ?? cat.label.slice(0, 2)}</span>
+                <span className="settings-card-body">
+                  <span className="settings-card-title">{cat.label}</span>
+                  <span className="settings-card-blurb">{cat.blurb}</span>
                 </span>
-                {isDirty && <span className="settings-dot" title="Unsaved changes" />}
+                <span className="settings-card-meta">
+                  {custom > 0 ? `${custom} custom` : 'Defaults'}
+                  {isDirty && <span className="settings-dot" title="Unsaved changes" />}
+                </span>
               </button>
             );
           })}
-        </nav>
-
-        <div className="settings-main">
-          {matches ? (
-            matches.length === 0 ? (
-              <div className="card">
-                <div className="empty-state">
-                  <h3>No matching settings</h3>
-                  <p className="muted">Try a different search term.</p>
-                </div>
-              </div>
-            ) : (
-              (() => {
-                const grouped = new Map<string, { cat: SettingCategory; items: { key: string; setting: SettingValue }[] }>();
-                for (const m of matches) {
-                  if (!grouped.has(m.cat.category)) grouped.set(m.cat.category, { cat: m.cat, items: [] });
-                  grouped.get(m.cat.category)!.items.push({ key: m.key, setting: m.setting });
-                }
-                return (
-                  <>
-                    <div className="muted" style={{ marginBottom: 10 }}>
-                      {matches.length} match{matches.length === 1 ? '' : 'es'} across {grouped.size} categor{grouped.size === 1 ? 'y' : 'ies'}
-                    </div>
-                    {Array.from(grouped.values()).map(({ cat, items }) => (
-                      <section className="card" key={cat.category}>
-                        <div className="card-head">
-                          <h3>{cat.label}</h3>
-                          <span className="badge badge-neutral">{items.length}</span>
-                        </div>
-                        <div className="card-pad">
-                          <div className="setting-list">
-                            {items.map(({ key, setting }) => renderRow(cat, key, setting))}
-                          </div>
-                        </div>
-                      </section>
-                    ))}
-                  </>
-                );
-              })()
-            )
-          ) : (
-            <div className="stack">
-              <div className="muted" style={{ fontSize: 13 }}>
-                {activeCat.blurb}
-              </div>
-              {activeCat.category === 'general' && (
-                <>
-                  <LogoUploadCard
-                    editable={editable}
-                    logoUrl={/^https?:\/\//i.test(String(drafts.general?.logo_url ?? '').trim()) ? String(drafts.general?.logo_url ?? '').trim() : ''}
-                    onApplied={onLogoApplied}
-                    showToast={showToast}
-                  />
-                  <SecondaryLogoUploadCard
-                    editable={editable}
-                    secondaryLogoUrl={/^https?:\/\//i.test(String(drafts.general?.secondary_logo_url ?? '').trim()) ? String(drafts.general?.secondary_logo_url ?? '').trim() : ''}
-                    onApplied={onLogoApplied}
-                    showToast={showToast}
-                  />
-                  <FooterLogoUploadCard
-                    editable={editable}
-                    footerLogoUrl={/^https?:\/\//i.test(String(drafts.general?.footer_logo_url ?? '').trim()) ? String(drafts.general?.footer_logo_url ?? '').trim() : ''}
-                    onApplied={onLogoApplied}
-                    showToast={showToast}
-                  />
-                  <FaviconUploadCard
-                    editable={editable}
-                    faviconUrl={/^https?:\/\//i.test(String(drafts.general?.favicon_url ?? '').trim()) ? String(drafts.general?.favicon_url ?? '').trim() : ''}
-                    onApplied={onLogoApplied}
-                    showToast={showToast}
-                  />
-                  <SignatureUploadCard
-                    editable={editable}
-                    signatureUrl={/^https?:\/\//i.test(String(drafts.general?.signature_url ?? '').trim()) ? String(drafts.general?.signature_url ?? '').trim() : ''}
-                    onApplied={onLogoApplied}
-                    showToast={showToast}
-                  />
-                  <CompanyProfilePreview drafts={drafts} />
-                </>
-              )}
-              {renderCategoryCard(activeCat)}
-            </div>
-          )}
         </div>
-      </div>
+      ) : (
+        <div className="settings-main">
+          <div className="settings-crumb">
+            <button className="btn btn-sm btn-ghost" onClick={() => setView('home')}>← All settings</button>
+            <span className="muted">{activeCat.label}</span>
+          </div>
+          <div className="stack">
+            <div className="muted" style={{ fontSize: 13 }}>
+              {activeCat.blurb}
+            </div>
+            {activeCat.category === 'general' && (
+              <>
+                <LogoUploadCard
+                  editable={editable}
+                  logoUrl={/^https?:\/\//i.test(String(drafts.general?.logo_url ?? '').trim()) ? String(drafts.general?.logo_url ?? '').trim() : ''}
+                  onApplied={onLogoApplied}
+                  showToast={showToast}
+                />
+                <SecondaryLogoUploadCard
+                  editable={editable}
+                  secondaryLogoUrl={/^https?:\/\//i.test(String(drafts.general?.secondary_logo_url ?? '').trim()) ? String(drafts.general?.secondary_logo_url ?? '').trim() : ''}
+                  onApplied={onLogoApplied}
+                  showToast={showToast}
+                />
+                <FooterLogoUploadCard
+                  editable={editable}
+                  footerLogoUrl={/^https?:\/\//i.test(String(drafts.general?.footer_logo_url ?? '').trim()) ? String(drafts.general?.footer_logo_url ?? '').trim() : ''}
+                  onApplied={onLogoApplied}
+                  showToast={showToast}
+                />
+                <FaviconUploadCard
+                  editable={editable}
+                  faviconUrl={/^https?:\/\//i.test(String(drafts.general?.favicon_url ?? '').trim()) ? String(drafts.general?.favicon_url ?? '').trim() : ''}
+                  onApplied={onLogoApplied}
+                  showToast={showToast}
+                />
+                <SignatureUploadCard
+                  editable={editable}
+                  signatureUrl={/^https?:\/\//i.test(String(drafts.general?.signature_url ?? '').trim()) ? String(drafts.general?.signature_url ?? '').trim() : ''}
+                  onApplied={onLogoApplied}
+                  showToast={showToast}
+                />
+                <CompanyProfilePreview drafts={drafts} />
+              </>
+            )}
+            {renderCategoryCard(activeCat)}
+          </div>
+        </div>
+      )}
 
       {editable && dirtyTotal > 0 && (
         <div className="settings-bar">
