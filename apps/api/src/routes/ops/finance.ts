@@ -2,8 +2,23 @@ import { Router } from 'express';
 import pg from 'pg';
 import { tx, Ctx } from '../../db.js';
 import { requirePermission } from '../../middleware/authorize.js';
-import { customerLookupLimiter } from '../../middleware/rateLimits.js';
-import { asyncHandler } from '../../utils.js';
+import { customerLookupLimiter, exportLimiter } from '../../middleware/rateLimits.js';
+import { asyncHandler, badRequest, notFound } from '../../utils.js';
+import { logAudit } from '../../services/audit.js';
+import {
+  documentVerifyUrl,
+  issueDocumentToken,
+  loadCompanyProfile,
+  reportFingerprint,
+} from '../../services/branding.js';
+import {
+  renderTableCsv,
+  renderTablePdf,
+  renderTablePrintHtml,
+  renderTableXlsx,
+  type BrandedTableOpts,
+} from '../../services/brandedExport.js';
+import { reportDef } from '../../services/reportExport.js';
 import * as fin from '../../services/finance.js';
 import * as finAdv from '../../services/finance-advanced.js';
 import * as efrisDir from '../../services/efris/directory.js';
@@ -131,6 +146,102 @@ financeOpsRouter.get('/tax', ...runGet(['finance.taxes.view', 'finance.reports.v
   const from = q.from != null ? String(q.from) : `${to.slice(0, 4)}-01-01`;
   return fin.taxSummary(c, ctx, from, to);
 }));
+
+// ---- Branded report export / print (PDF / XLSX / CSV / print HTML) ----
+// Re-runs the same service functions as the interactive endpoints above, then
+// routes the flattened result through the shared branded export pipeline so a
+// report is emitted with the company letterhead, tamper-evident fingerprint and
+// an audit trail — never derived or invented figures.
+financeOpsRouter.get(
+  '/reports/export/:key',
+  exportLimiter,
+  requirePermission(['finance.journals.view', 'finance.reports.view']),
+  asyncHandler(async (req, res) => {
+    const def = reportDef(String(req.params.key));
+    if (!def) throw notFound('Unknown report');
+    const format = String(req.query.format ?? 'pdf').toLowerCase();
+    if (!['pdf', 'xlsx', 'csv', 'print'].includes(format)) {
+      throw badRequest(`Unsupported format: ${format}`);
+    }
+
+    const built = await tx(
+      (client) => def.builder(client, req.ctx, req.query as Record<string, unknown>),
+      req.ctx
+    );
+    const company = await tx(async (client) => loadCompanyProfile(client, req.ctx), req.ctx);
+    const issuedByEmail = req.auth?.email ?? 'unknown';
+    const issuedBy = [req.auth?.first_name, req.auth?.last_name].filter(Boolean).join(' ') || issuedByEmail;
+    const issuedAt = new Date().toISOString();
+    const { columns, rows } = built;
+    const fingerprint = reportFingerprint(def.key, columns.map((c) => c.key), rows);
+    const token = company.verifyEnabled
+      ? issueDocumentToken({
+          type: `report.${def.key}`,
+          kind: 'report',
+          id: 0,
+          code: def.key,
+          title: built.title,
+          fingerprint,
+          issuedAt,
+          tenantId: req.ctx.tenantId ?? 0,
+          companyId: req.ctx.companyId ?? null,
+          companyName: company.name,
+          issuer: issuedByEmail,
+          issuerName: issuedBy,
+        })
+      : '';
+    const verifyUrl = token ? documentVerifyUrl(company, token) : '';
+    const common: BrandedTableOpts = {
+      title: built.title,
+      subtitle: built.subtitle,
+      kicker: built.kicker ?? 'Accounting report',
+      docNo: def.key,
+      company,
+      issuedBy,
+      issuedAt,
+      correlationId: req.ctx.correlationId ?? null,
+      facts: [...built.facts, ['Rows', String(rows.length)]],
+      columns,
+      rows,
+      fingerprint,
+      token,
+      verifyUrl,
+      classification: 'Internal' as const,
+    };
+
+    await tx(async (client) => {
+      await logAudit(client, req.ctx, {
+        action: format === 'print' ? 'print' : 'export',
+        resource: `report.${def.key}`,
+        recordCode: def.key,
+        metadata: { format, rows: rows.length, title: built.title, issuedAt },
+      });
+    }, req.ctx);
+
+    const fileBase = `${def.key}_${Date.now()}`;
+    if (format === 'pdf') {
+      const buf = await renderTablePdf(common);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.pdf"`);
+      return res.send(buf);
+    }
+    if (format === 'xlsx') {
+      const buf = await renderTableXlsx(common);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.xlsx"`);
+      return res.send(buf);
+    }
+    if (format === 'csv') {
+      const csv = renderTableCsv(common);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileBase}.csv"`);
+      return res.send(csv);
+    }
+    const html = await renderTablePrintHtml(common);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  })
+);
 
 financeOpsRouter.get('/periods', ...runGet('finance.periods.view', (c, ctx) => fin.listPeriods(c, ctx)));
 financeOpsRouter.post('/periods/:id/lock', ...run('finance.periods.lock', (c, ctx, _b, p) => fin.setPeriodStatus(c, ctx, Number(p.id), 'LOCKED')));
