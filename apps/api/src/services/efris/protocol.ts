@@ -766,6 +766,8 @@ export function buyerTypeCode(buyer: UraParty | null | undefined, mapping?: Buye
         '(security_flags.buyerTypes.government). Refusing rather than misclassifying the sale as a business buyer.'
     );
   }
+  if (kind === 'business' || kind === 'b2b') return map.business?.trim() || '0';
+  if (kind === 'consumer' || kind === 'b2c') return map.consumer?.trim() || '1';
   if (buyer?.tin) return map.business?.trim() || '0';
   return map.consumer?.trim() || '1';
 }

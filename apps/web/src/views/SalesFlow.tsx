@@ -918,14 +918,19 @@ interface DraftLine {
   productId: number | '';
   productLabel: string;
   quantity: number;
+  unitId: number | '';
+  unitLabel: string;
   unitPrice: number;
   discountPercent: number;
   taxPercent: number;
+  taxCategory: string;
 }
 
 function emptyLine(): DraftLine {
-  return { key: `${Date.now()}-${Math.random()}`, productId: '', productLabel: '', quantity: 1, unitPrice: 0, discountPercent: 0, taxPercent: 18 };
+  return { key: `${Date.now()}-${Math.random()}`, productId: '', productLabel: '', quantity: 1, unitId: '', unitLabel: '', unitPrice: 0, discountPercent: 0, taxPercent: 18, taxCategory: 'STANDARD' };
 }
+
+type TaxOption = { code: string; name: string; rate: number };
 
 function Composer({ resource }: { resource: string }) {
   const isQuote = resource === 'quotations';
@@ -945,7 +950,23 @@ function Composer({ resource }: { resource: string }) {
   const [bankName, setBankName] = useState('');
   const [bankAccountName, setBankAccountName] = useState('');
   const [bankAccountNumber, setBankAccountNumber] = useState('');
+  const [buyerType, setBuyerType] = useState('');
+  const [taxOptions, setTaxOptions] = useState<TaxOption[]>([]);
   const q = useHashQuery();
+  useEffect(() => {
+    api<{ data: TaxOption[] }>('/api/ops/sales/tax-options')
+      .then((r) => setTaxOptions(r.data ?? []))
+      .catch(() => undefined);
+  }, []);
+  const defaultTax = useMemo<TaxOption>(
+    () => taxOptions.find((o) => o.code === 'STANDARD') ?? taxOptions[0] ?? { code: 'STANDARD', name: 'Standard', rate: 18 },
+    [taxOptions]
+  );
+  useEffect(() => {
+    // Reconcile the hard-coded fallback (STANDARD/18) on freshly-added lines with
+    // the configured standard rate once it has loaded.
+    setLines((prev) => prev.map((l) => (l.taxCategory === 'STANDARD' && l.taxPercent === 18 ? { ...l, taxPercent: defaultTax.rate } : l)));
+  }, [defaultTax]);
   useEffect(() => {
     const cid = Number(q.get('customer'));
     const label = q.get('customerLabel');
@@ -994,9 +1015,11 @@ function Composer({ resource }: { resource: string }) {
       .map((l) => ({
         productId: Number(l.productId),
         quantity: l.quantity,
+        unitId: l.unitId ? Number(l.unitId) : null,
         unitPrice: l.unitPrice,
         discountPercent: l.discountPercent,
         taxPercent: l.taxPercent,
+        taxCategory: l.taxCategory || null,
       }));
     if (!items.length) { setError('Add at least one product line'); return; }
     setBusy(true);
@@ -1004,7 +1027,7 @@ function Composer({ resource }: { resource: string }) {
       if (isQuote) {
         const r = await api<{ data: { quotationId: number } }>('/api/ops/sales/quotations', {
           method: 'POST',
-          body: JSON.stringify({ customerId, notes: notes || null, items }),
+          body: JSON.stringify({ customerId, notes: notes || null, buyerType: buyerType || null, items }),
         });
         navigate(`/sales/quotations/${r.data.quotationId}`);
       } else if (isInvoice) {
@@ -1014,6 +1037,7 @@ function Composer({ resource }: { resource: string }) {
             customerId,
             notes: notes || null,
             items,
+            buyerType: buyerType || null,
             invoiceDate: invoiceDate || null,
             dueDate: dueDate || null,
             bankName: bankName || null,
@@ -1032,6 +1056,7 @@ function Composer({ resource }: { resource: string }) {
             notes: notes || null,
             customerPoNo: customerPoNo || null,
             items,
+            buyerType: buyerType || null,
             bankName: bankName || null,
             bankAccountName: bankAccountName || null,
             bankAccountNumber: bankAccountNumber || null,
@@ -1082,6 +1107,15 @@ function Composer({ resource }: { resource: string }) {
             valueLabel={customerLabel}
             onPick={(r) => { setCustomerId(num(r.id)); setCustomerLabel(`${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`); }}
           />
+          <div className="field">
+            <label>Buyer type</label>
+            <select value={buyerType} onChange={(e) => setBuyerType(e.target.value)}>
+              <option value="">— Select —</option>
+              <option value="B2B">B2B (Business)</option>
+              <option value="B2C">B2C (Consumer)</option>
+              <option value="B2G">B2G (Government)</option>
+            </select>
+          </div>
           {!isQuote && !isInvoice && (
             <div className="field">
               <label>Customer PO</label>
@@ -1133,9 +1167,10 @@ function Composer({ resource }: { resource: string }) {
               <tr>
                 <th>Product</th>
                 <th className="cell-num">Qty</th>
+                <th>UoM</th>
                 <th className="cell-num">Unit price</th>
                 {!isInvoice && <th className="cell-num">Disc %</th>}
-                <th className="cell-num">Tax %</th>
+                <th>Tax category</th>
                 <th className="cell-num">Line</th>
                 <th />
               </tr>
@@ -1152,16 +1187,30 @@ function Composer({ resource }: { resource: string }) {
                       onPick={(r) => setLine(l.key, {
                         productId: num(r.id),
                         productLabel: `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`,
+                        unitId: pick(r, 'unitId', 'unit_id') != null ? num(pick(r, 'unitId', 'unit_id')) : '',
+                        unitLabel: [pick(r, 'unitCode', 'unit_code'), pick(r, 'unitName', 'unit_name')].filter(Boolean).join(' · '),
                         unitPrice: num(pick(r, 'listPrice', 'standardPrice', 'standard_price'), l.unitPrice),
                       })}
                     />
                   </td>
                   <td><input className="cell-input" type="number" min={0} value={l.quantity} onChange={(e) => setLine(l.key, { quantity: num(e.target.value) })} /></td>
+                  <td className="cell-num">{l.unitLabel || '—'}</td>
                   <td><input className="cell-input" type="number" min={0} value={l.unitPrice} onChange={(e) => setLine(l.key, { unitPrice: num(e.target.value) })} /></td>
                   {!isInvoice && (
                     <td><input className="cell-input" type="number" min={0} value={l.discountPercent} onChange={(e) => setLine(l.key, { discountPercent: num(e.target.value) })} /></td>
                   )}
-                  <td><input className="cell-input" type="number" min={0} value={l.taxPercent} onChange={(e) => setLine(l.key, { taxPercent: num(e.target.value) })} /></td>
+                  <td>
+                    <select className="cell-input" value={l.taxCategory} onChange={(e) => {
+                      const code = e.target.value;
+                      const rate = taxOptions.find((o) => o.code === code)?.rate ?? 0;
+                      setLine(l.key, { taxCategory: code, taxPercent: rate });
+                    }}>
+                      {taxOptions.map((o) => (
+                        <option key={o.code} value={o.code}>{o.name}{o.rate ? ` (${o.rate}%)` : ''}</option>
+                      ))}
+                      {!taxOptions.some((o) => o.code === l.taxCategory) && <option value={l.taxCategory}>{l.taxCategory}</option>}
+                    </select>
+                  </td>
                   <td className="cell-num">{fmtMoney(lineTotal(l.quantity, l.unitPrice, isInvoice ? 0 : l.discountPercent, l.taxPercent))}</td>
                   <td><button className="btn btn-sm" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key) )}>Remove</button></td>
                 </tr>
@@ -1955,6 +2004,9 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
               <button className="btn btn-sm" onClick={() => openDocument('proof-of-delivery', id, 'print', code + '.pdf').catch((e) => toast.fromError('Could not generate the proof of delivery.', e))}>POD</button>
             </>
           )}
+          {['quotations', 'orders', 'invoices'].includes(resource) && Boolean(pick(doc, 'buyerType', 'buyer_type')) && (
+            <Badge value={String(pick(doc, 'buyerType', 'buyer_type'))} />
+          )}
           <Badge value={status} />
         </div>
       </header>
@@ -2001,7 +2053,10 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
                       {resource === 'orders' && <th className="cell-num">Allocated</th>}
                       {resource === 'orders' && <th className="cell-num">Dispatched</th>}
                       {resource === 'orders' && <th className="cell-num">Invoiced</th>}
+                      <th>UoM</th>
                       <th className="cell-num">Price</th>
+                      <th className="cell-num">Tax %</th>
+                      <th>Category</th>
                       <th className="cell-num">Line</th>
                     </tr>
                   </thead>
@@ -2016,7 +2071,10 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
                         {resource === 'orders' && <td className="cell-num">{fmtNum(pick(item, 'allocatedQty', 'allocated_qty'))}</td>}
                         {resource === 'orders' && <td className="cell-num">{fmtNum(pick(item, 'dispatchedQty', 'dispatched_qty'))}</td>}
                         {resource === 'orders' && <td className="cell-num">{fmtNum(pick(item, 'invoicedQty', 'invoiced_qty'))}</td>}
+                        <td>{String(pick(item, 'unitCode', 'unit_code') ?? pick(item, 'unitName', 'unit_name') ?? '') || '—'}</td>
                         <td className="cell-num">{fmtMoney(pick(item, 'unitPrice', 'unit_price'))}</td>
+                        <td className="cell-num">{fmtNum(pick(item, 'taxPercent', 'tax_percent'))}%</td>
+                        <td>{String(pick(item, 'taxCategory', 'tax_category') ?? '') || '—'}</td>
                         <td className="cell-num">{fmtMoney(pick(item, 'lineTotal', 'line_total'))}</td>
                       </tr>
                     ))}

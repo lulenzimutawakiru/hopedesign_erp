@@ -33,6 +33,7 @@ const runGet = (permission: string | string[], fn: QueryFn) => [
 salesOpsRouter.get('/board', ...runGet('sales.orders.view', (c, ctx) => sales.salesBoard(c, ctx)));
 salesOpsRouter.get('/command-center', ...runGet('sales.orders.view', (c, ctx) => sales.commandCenter(c, ctx)));
 salesOpsRouter.get('/products', ...runGet(['sales.orders.view', 'sales.quotations.create'], (c, ctx, q) => sales.listSellableProducts(c, ctx, q.customerId != null ? Number(q.customerId) : undefined)));
+salesOpsRouter.get('/tax-options', ...runGet(['sales.orders.view', 'sales.quotations.create', 'sales.invoices.create'], (c, ctx) => sales.listSalesTaxOptions(c, ctx)));
 salesOpsRouter.get('/customers', ...runGet('sales.quotations.view', (c, ctx, q) => sales.listCustomers(c, ctx, q.q != null ? String(q.q) : undefined)));
 salesOpsRouter.get('/customers/directory', ...runGet('sales.quotations.view', (c, ctx, q) => sales.customerDirectory(c, ctx, q.q != null ? String(q.q) : undefined)));
 salesOpsRouter.get('/customers/:id/360', ...runGet('sales.quotations.view', (c, ctx, _q, p) => sales.customer360(c, ctx, Number(p.id))));

@@ -62,8 +62,16 @@ interface WorkerRowMeta {
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-/** Map a customer_type onto the buyerKind hint the protocol reads (GAP-3 B2G). */
-function buyerKindFor(customerType: unknown): string | null {
+/**
+ * Map a stored buyer_type (B2B/B2C/B2G) onto the buyerKind hint the protocol
+ * reads, falling back to the customer_type classification when the document did
+ * not record an explicit buyer type (GAP-3 B2G).
+ */
+function buyerKindFor(buyerType: unknown, customerType: unknown): string | null {
+  const bt = String(buyerType ?? '').trim().toUpperCase();
+  if (bt === 'B2G') return 'government';
+  if (bt === 'B2B') return 'business';
+  if (bt === 'B2C') return 'consumer';
   const kind = String(customerType ?? '').trim().toUpperCase();
   return kind === 'GOVERNMENT' ? 'government' : null;
 }
@@ -307,14 +315,15 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
     if (row.doc_ref_type === 'customer_invoices') {
       const inv = await client.query(
         `SELECT c.name AS customer_name, c.tin AS customer_tin, c.address AS customer_address,
-                c.email AS customer_email, c.phone AS customer_phone, c.customer_type AS customer_type, i.notes
+                c.email AS customer_email, c.phone AS customer_phone, c.customer_type AS customer_type,
+                i.buyer_type AS buyer_type, i.notes
            FROM customer_invoices i
            JOIN customers c ON c.id = i.customer_id
           WHERE i.id = $1 AND i.tenant_id = $2`,
         [row.doc_ref_id, row.tenant_id]
       );
       const items = await client.query(
-        `SELECT ii.description, ii.quantity, ii.unit_price, ii.tax_percent, ii.line_total,
+        `SELECT ii.description, ii.quantity, ii.unit_price, ii.tax_percent, ii.tax_category, ii.line_total,
                 p.code AS product_code,
                 p.efris_goods_code, p.efris_goods_name, p.efris_unit_of_measure,
                 p.efris_goods_category_id, p.efris_goods_category_name
@@ -332,7 +341,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
           address: party.customer_address != null ? String(party.customer_address) : null,
           email: party.customer_email != null ? String(party.customer_email) : null,
           phone: party.customer_phone != null ? String(party.customer_phone) : null,
-          buyerKind: buyerKindFor(party.customer_type),
+          buyerKind: buyerKindFor(party.buyer_type, party.customer_type),
         } : null,
         lines: (items.rows as Array<Record<string, unknown>>).map((item) => {
           const taxPercent = Number(item.tax_percent ?? 0);
@@ -350,6 +359,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
             goodsCategoryId: item.efris_goods_category_id != null ? String(item.efris_goods_category_id) : null,
             goodsCategoryName: item.efris_goods_category_name != null ? String(item.efris_goods_category_name) : null,
             vatApplicableFlag: taxPercent > 0 ? '1' : '0',
+            exempt: String(item.tax_category ?? '').toUpperCase() === 'EXEMPT',
           };
         }),
         oriInvoiceNo: null,
@@ -379,7 +389,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
       // URA"). Notes store only a single amount + tax, so map that total onto the
       // first original line's goods identity.
       const items = await client.query(
-        `SELECT ii.description, ii.tax_percent,
+        `SELECT ii.description, ii.tax_percent, ii.tax_category,
                 p.code AS product_code,
                 p.efris_goods_code, p.efris_goods_name, p.efris_unit_of_measure,
                 p.efris_goods_category_id, p.efris_goods_category_name
@@ -405,6 +415,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
         goodsCategoryId: item.efris_goods_category_id != null ? String(item.efris_goods_category_id) : null,
         goodsCategoryName: item.efris_goods_category_name != null ? String(item.efris_goods_category_name) : null,
         vatApplicableFlag: taxPercent > 0 ? '1' : '0',
+        exempt: String(item.tax_category ?? '').toUpperCase() === 'EXEMPT',
       }] : [];
 
       // Only a credit note (T110 red invoice) references the original invoice via
@@ -424,7 +435,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
           address: party.customer_address != null ? String(party.customer_address) : null,
           email: party.customer_email != null ? String(party.customer_email) : null,
           phone: party.customer_phone != null ? String(party.customer_phone) : null,
-          buyerKind: buyerKindFor(party.customer_type),
+          buyerKind: buyerKindFor(null, party.customer_type),
         } : null,
         lines,
         oriInvoiceNo: ref.oriInvoiceNo,
@@ -567,13 +578,13 @@ async function loadReceiptFiscalSource(client: pg.PoolClient, row: ClaimedFiscal
     address: party.customer_address != null ? String(party.customer_address) : null,
     email: party.customer_email != null ? String(party.customer_email) : null,
     phone: party.customer_phone != null ? String(party.customer_phone) : null,
-    buyerKind: buyerKindFor(party.customer_type),
+    buyerKind: buyerKindFor(null, party.customer_type),
   };
   let lines: FiscalLine[] = [];
   const invoiceId = Number(party.invoice_id);
   if (Number.isFinite(invoiceId) && invoiceId > 0) {
     const items = await client.query(
-      `SELECT ii.description, ii.quantity, ii.unit_price, ii.tax_percent, ii.line_total,
+      `SELECT ii.description, ii.quantity, ii.unit_price, ii.tax_percent, ii.tax_category, ii.line_total,
               p.code AS product_code, p.efris_goods_code, p.efris_goods_name, p.efris_unit_of_measure,
               p.efris_goods_category_id, p.efris_goods_category_name
          FROM invoice_items ii
@@ -596,6 +607,7 @@ async function loadReceiptFiscalSource(client: pg.PoolClient, row: ClaimedFiscal
         goodsCategoryId: item.efris_goods_category_id != null ? String(item.efris_goods_category_id) : null,
         goodsCategoryName: item.efris_goods_category_name != null ? String(item.efris_goods_category_name) : null,
         vatApplicableFlag: taxPercent > 0 ? '1' : '0',
+        exempt: String(item.tax_category ?? '').toUpperCase() === 'EXEMPT',
       };
     });
   }
