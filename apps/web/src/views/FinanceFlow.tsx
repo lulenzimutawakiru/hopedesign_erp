@@ -5465,6 +5465,70 @@ function CostCentres() {
 // actually open it.
 // ---------------------------------------------------------------------------
 
+function AdvancedReports() {
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const reports: Array<{ key: string; label: string; hint: string; ranged?: boolean }> = [
+    { key: 'depreciation-schedule', label: 'Depreciation Schedule', hint: 'Asset cost, accumulated depreciation and book value' },
+    { key: 'fiscal-report', label: 'Fiscal Report', hint: 'Daily fiscalised sales and FDN counts (URA-confirmed)', ranged: true },
+    { key: 'invoice-analysis', label: 'Invoice Analysis', hint: 'Recent customer invoices and outstanding balances' },
+    { key: 'analytic-report', label: 'Cost Centre Analysis', hint: 'Charges, recoveries and budget by cost centre', ranged: true },
+    { key: 'profit-centre', label: 'Profit Centre Analysis', hint: 'Charges and recoveries by profit centre', ranged: true },
+    { key: 'executive-summary', label: 'Executive Summary', hint: 'Six-month trend and key financial KPIs' },
+    { key: 'loans-analysis', label: 'Loans Analysis', hint: 'Employee loans, principal and outstanding' },
+    { key: 'cashflow-analysis', label: 'Cash Flow Analysis', hint: 'Direct-method cash movements', ranged: true },
+  ];
+  return (
+    <section className="card fin-panel" style={{ marginBottom: 14 }}>
+      <header className="fin-panel-head">
+        <h2>Branded report exports</h2>
+        <span className="muted fin-panel-hint">PDF · Excel · CSV · print</span>
+      </header>
+      <p className="muted fin-panel-hint">
+        Reports drawn from the assets, sales, EFRIS, payroll and analytic modules, exported with the company letterhead,
+        a tamper-evident fingerprint and an audit trail. Date presets apply to the marked reports.
+      </p>
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 10, margin: '4px 0 10px' }}>
+        <DatePresets onApply={(f, t) => { setFrom(f); setTo(t); }} />
+      </div>
+      <div className="table-wrap">
+        <table className="data">
+          <thead>
+            <tr><th>Report</th><th>Description</th><th style={{ textAlign: 'right' }}>Export / print</th></tr>
+          </thead>
+          <tbody>
+            {reports.map((r) => (
+              <tr key={r.key}>
+                <td>
+                  <b>{r.label}</b>
+                  {r.ranged ? <span className="muted"> · date-filtered</span> : null}
+                </td>
+                <td className="muted">{r.hint}</td>
+                <td style={{ textAlign: 'right' }}>
+                  <ReportExportMenu
+                    reportKey={r.key}
+                    filename={r.key}
+                    params={
+                      r.ranged
+                        ? () => {
+                            const p = new URLSearchParams();
+                            if (from) p.set('from', from);
+                            if (to) p.set('to', to);
+                            return p;
+                          }
+                        : new URLSearchParams()
+                    }
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function ReportsHub() {
   const { user } = useAuth();
   const canJournals = can(user, 'finance.journals.view');
@@ -5591,6 +5655,8 @@ function ReportsHub() {
           <button className="btn btn-sm" onClick={() => navigate('/finance/journals')}>All journals</button>
         </div>
       </section>
+
+      {canJournals && <AdvancedReports />}
 
       {canRegistry && (
         <section className="card fin-panel">
