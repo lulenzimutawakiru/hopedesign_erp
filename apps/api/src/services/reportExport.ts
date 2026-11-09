@@ -18,6 +18,11 @@ import pg from 'pg';
 import type { Ctx } from '../db.js';
 import type { BrandedTableColumn } from './brandedExport.js';
 import * as fin from './finance.js';
+import * as assets from './assets.js';
+import * as loans from './loans.js';
+import * as sales from './sales.js';
+import * as advanced from './finance-advanced.js';
+import * as efrisReports from './efris/reports.js';
 
 export interface ReportBuild {
   title: string;
@@ -434,6 +439,290 @@ const taxBuilder: ReportBuilder = async (client, ctx, q) => {
   };
 };
 
+const depreciationScheduleBuilder: ReportBuilder = async (client, ctx) => {
+  const r = await assets.listDepreciations(client, ctx, { pageSize: 500 });
+  const totals = r.rows.reduce(
+    (acc, x) => ({
+      cost: acc.cost + num(x.purchase_cost),
+      accumulated: acc.accumulated + num(x.accumulated_depreciation),
+      book: acc.book + num(x.current_book_value),
+    }),
+    { cost: 0, accumulated: 0, book: 0 }
+  );
+  return {
+    title: 'Depreciation Schedule',
+    subtitle: `${r.total} asset${r.total === 1 ? '' : 's'} under depreciation`,
+    kicker: 'Assets report',
+    columns: [
+      { key: 'assetNo', label: 'Asset no.' },
+      { key: 'asset', label: 'Asset' },
+      { key: 'method', label: 'Method' },
+      { key: 'capitalized', label: 'Capitalized' },
+      { key: 'usefulLife', label: 'Life (mths)' },
+      { key: 'residual', label: 'Residual', align: RIGHT },
+      { key: 'cost', label: 'Cost', align: RIGHT },
+      { key: 'accumulated', label: 'Acc. depr.', align: RIGHT },
+      { key: 'bookValue', label: 'Book value', align: RIGHT },
+      { key: 'lastPosted', label: 'Last posted' },
+    ],
+    rows: r.rows.map((x) => ({
+      assetNo: str(x.asset_no),
+      asset: str(x.asset_name),
+      method: str(x.method),
+      capitalized: date(x.capitalization_date),
+      usefulLife: str(x.useful_life_months),
+      residual: money(x.residual_value),
+      cost: money(x.purchase_cost),
+      accumulated: money(x.accumulated_depreciation),
+      bookValue: money(x.current_book_value),
+      lastPosted: date(x.last_posted_period),
+    })),
+    facts: [
+      ['Assets', String(r.total)],
+      ['Total cost', money(totals.cost)],
+      ['Accumulated depreciation', money(totals.accumulated)],
+      ['Net book value', money(totals.book)],
+    ],
+  };
+};
+
+const loansAnalysisBuilder: ReportBuilder = async (client, ctx) => {
+  const r = await loans.listLoans(client, ctx, { pageSize: 200 });
+  const principal = r.items.reduce((s, x) => s + num(x.amount), 0);
+  const outstanding = r.items.reduce((s, x) => s + num(x.outstandingBalance), 0);
+  return {
+    title: 'Loans Analysis',
+    subtitle: `${r.total} employee loan${r.total === 1 ? '' : 's'}`,
+    kicker: 'Payroll report',
+    columns: [
+      { key: 'loanNo', label: 'Loan no.' },
+      { key: 'employeeNo', label: 'Employee no.' },
+      { key: 'employee', label: 'Employee' },
+      { key: 'position', label: 'Position' },
+      { key: 'amount', label: 'Principal', align: RIGHT },
+      { key: 'outstanding', label: 'Outstanding', align: RIGHT },
+      { key: 'interestRate', label: 'Interest %' },
+      { key: 'tenure', label: 'Tenure (mths)' },
+      { key: 'monthlyDeduction', label: 'Monthly deduction', align: RIGHT },
+      { key: 'startDate', label: 'Start' },
+      { key: 'endDate', label: 'End' },
+      { key: 'status', label: 'Status' },
+    ],
+    rows: r.items.map((x) => ({
+      loanNo: str(x.loanNo),
+      employeeNo: str(x.employeeNo),
+      employee: `${str(x.firstName)} ${str(x.lastName)}`.trim(),
+      position: str(x.position),
+      amount: money(x.amount),
+      outstanding: money(x.outstandingBalance),
+      interestRate: str(x.interestRate),
+      tenure: str(x.tenureMonths),
+      monthlyDeduction: money(x.monthlyDeduction),
+      startDate: date(x.startDate),
+      endDate: date(x.endDate),
+      status: str(x.status),
+    })),
+    facts: [
+      ['Loans', String(r.total)],
+      ['Principal', money(principal)],
+      ['Repaid', money(principal - outstanding)],
+      ['Outstanding', money(outstanding)],
+    ],
+  };
+};
+
+const invoiceAnalysisBuilder: ReportBuilder = async (client, ctx) => {
+  const rows0 = await sales.listInvoices(client, ctx, {});
+  const totals = rows0.reduce<{ total: number; paid: number }>(
+    (acc, x) => ({ total: acc.total + num(x.total), paid: acc.paid + num(x.amountPaid) }),
+    { total: 0, paid: 0 }
+  );
+  return {
+    title: 'Invoice Analysis',
+    subtitle: `${rows0.length} recent invoice${rows0.length === 1 ? '' : 's'}`,
+    kicker: 'Sales report',
+    columns: [
+      { key: 'invoiceNo', label: 'Invoice' },
+      { key: 'customer', label: 'Customer' },
+      { key: 'code', label: 'Customer code' },
+      { key: 'invoiceDate', label: 'Invoice date' },
+      { key: 'dueDate', label: 'Due date' },
+      { key: 'total', label: 'Total', align: RIGHT },
+      { key: 'paid', label: 'Paid', align: RIGHT },
+      { key: 'balance', label: 'Balance', align: RIGHT },
+      { key: 'status', label: 'Status' },
+      { key: 'orderNo', label: 'Order' },
+    ],
+    rows: rows0.map((x) => ({
+      invoiceNo: str(x.invoiceNo),
+      customer: str(x.customerName),
+      code: str(x.customerCode),
+      invoiceDate: date(x.invoiceDate),
+      dueDate: date(x.dueDate),
+      total: money(x.total),
+      paid: money(x.amountPaid),
+      balance: money(num(x.total) - num(x.amountPaid)),
+      status: str(x.status),
+      orderNo: str(x.orderNo),
+    })),
+    facts: [
+      ['Invoices', String(rows0.length)],
+      ['Invoiced', money(totals.total)],
+      ['Collected', money(totals.paid)],
+      ['Outstanding', money(totals.total - totals.paid)],
+    ],
+  };
+};
+
+const fiscalReportBuilder: ReportBuilder = async (client, ctx, q) => {
+  const from = q.from != null ? String(q.from) : null;
+  const to = q.to != null ? String(q.to) : null;
+  const r = await efrisReports.dailyFiscalizedSales(client, ctx, { from, to });
+  return {
+    title: 'Fiscal Report',
+    subtitle: `Fiscalised sales ${periodLabel(r.range.from, r.range.to)}`,
+    kicker: 'EFRIS report',
+    columns: [
+      { key: 'txnDate', label: 'Date' },
+      { key: 'docCount', label: 'Documents' },
+      { key: 'withFdn', label: 'With FDN' },
+      { key: 'gross', label: 'Gross', align: RIGHT },
+      { key: 'tax', label: 'Tax', align: RIGHT },
+    ],
+    rows: r.days.map((x) => ({
+      txnDate: date(x.txnDate),
+      docCount: str(x.docCount),
+      withFdn: str(x.withFdn),
+      gross: money(x.grossTotal),
+      tax: money(x.taxTotal),
+    })),
+    facts: [
+      ['Period', periodLabel(r.range.from, r.range.to)],
+      ['Documents', String(r.totals.docCount)],
+      ['Gross total', money(r.totals.grossTotal)],
+      ['Tax total', money(r.totals.taxTotal)],
+      ['Scope', 'FISCALIZED sales documents only'],
+    ],
+  };
+};
+
+const analyticReportBuilder: ReportBuilder = async (client, ctx, q) => {
+  const filters = {
+    from: q.from != null ? String(q.from) : undefined,
+    to: q.to != null ? String(q.to) : undefined,
+  };
+  const r = await advanced.costCentreActivity(client, ctx, filters);
+  const col = (budget: boolean) => {
+    const cols: BrandedTableColumn[] = [
+      { key: 'code', label: 'Code' },
+      { key: 'name', label: 'Cost centre' },
+      { key: 'status', label: 'Status' },
+      { key: 'debit', label: 'Charges', align: RIGHT },
+      { key: 'credit', label: 'Recoveries', align: RIGHT },
+      { key: 'net', label: 'Net', align: RIGHT },
+      { key: 'entries', label: 'Entries', align: RIGHT },
+    ];
+    if (budget) cols.push({ key: 'budget', label: 'Budget', align: RIGHT });
+    return cols;
+  };
+  return {
+    title: 'Cost Centre Analysis',
+    subtitle: periodLabel(r.from, r.to),
+    kicker: 'Analytic accounting',
+    columns: col(true),
+    rows: r.rows.map((x) => ({
+      code: str(x.code),
+      name: str(x.name),
+      status: str(x.status),
+      debit: money(x.debit),
+      credit: money(x.credit),
+      net: money(x.net),
+      entries: str(x.entries),
+      budget: x.budget == null ? '' : money(x.budget),
+    })),
+    facts: [
+      ['Period', periodLabel(r.from, r.to)],
+      ['Total charges', money(r.totals.debit)],
+      ['Total recoveries', money(r.totals.credit)],
+      ['Net', money(r.totals.net)],
+      ['Unallocated net', money(r.unallocated.net)],
+    ],
+  };
+};
+
+const profitCentreBuilder: ReportBuilder = async (client, ctx, q) => {
+  const filters = {
+    from: q.from != null ? String(q.from) : undefined,
+    to: q.to != null ? String(q.to) : undefined,
+  };
+  const r = await advanced.profitCentreActivity(client, ctx, filters);
+  return {
+    title: 'Profit Centre Analysis',
+    subtitle: periodLabel(r.from, r.to),
+    kicker: 'Analytic accounting',
+    columns: [
+      { key: 'code', label: 'Code' },
+      { key: 'name', label: 'Profit centre' },
+      { key: 'status', label: 'Status' },
+      { key: 'debit', label: 'Charges', align: RIGHT },
+      { key: 'credit', label: 'Recoveries', align: RIGHT },
+      { key: 'net', label: 'Net', align: RIGHT },
+      { key: 'entries', label: 'Entries', align: RIGHT },
+    ],
+    rows: r.rows.map((x) => ({
+      code: str(x.code),
+      name: str(x.name),
+      status: str(x.status),
+      debit: money(x.debit),
+      credit: money(x.credit),
+      net: money(x.net),
+      entries: str(x.entries),
+    })),
+    facts: [
+      ['Period', periodLabel(r.from, r.to)],
+      ['Total charges', money(r.totals.debit)],
+      ['Total recoveries', money(r.totals.credit)],
+      ['Net', money(r.totals.net)],
+      ['Unallocated net', money(r.unallocated.net)],
+    ],
+  };
+};
+
+const executiveSummaryBuilder: ReportBuilder = async (client, ctx) => {
+  const r = await fin.financeSummary(client, ctx);
+  return {
+    title: 'Executive Summary',
+    subtitle: `As at ${formatDate(r.asOf)}`,
+    kicker: 'Management report',
+    columns: [
+      { key: 'month', label: 'Month' },
+      { key: 'revenue', label: 'Revenue', align: RIGHT },
+      { key: 'expense', label: 'Expense', align: RIGHT },
+      { key: 'profit', label: 'Profit', align: RIGHT },
+    ],
+    rows: r.trend.map((t) => ({
+      month: str(t.month),
+      revenue: money(t.revenue),
+      expense: money(t.expense),
+      profit: money(t.profit),
+    })),
+    facts: [
+      ['As at', formatDate(r.asOf)],
+      ['Month revenue', money(r.monthRevenue)],
+      ['Month expense', money(r.monthExpense)],
+      ['Month profit', money(r.monthProfit)],
+      ['Receivables', money(r.ar)],
+      ['Payables', money(r.ap)],
+      ['Cash', money(r.cash)],
+      ['AR overdue', money(r.arOverdue)],
+      ['AP overdue', money(r.apOverdue)],
+      ['DSO (days)', str(r.dso)],
+      ['DPO (days)', str(r.dpo)],
+      ['Trial balance', r.trialBalanceOk ? 'Balanced' : 'OUT OF BALANCE'],
+    ],
+  };
+};
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -443,12 +732,20 @@ export const REPORT_DEFS: Record<string, ReportDef> = {
   'profit-loss': { key: 'profit-loss', label: 'Profit & Loss', builder: profitLossBuilder },
   'balance-sheet': { key: 'balance-sheet', label: 'Balance Sheet', builder: balanceSheetBuilder },
   'cash-flow': { key: 'cash-flow', label: 'Cash Flow Statement', builder: cashFlowBuilder },
+  'cashflow-analysis': { key: 'cashflow-analysis', label: 'Cash Flow Analysis', builder: cashFlowBuilder },
   'general-ledger': { key: 'general-ledger', label: 'General Ledger', builder: generalLedgerBuilder },
   'partner-ledger': { key: 'partner-ledger', label: 'Partner Ledger', builder: partnerLedgerBuilder },
   'customer-statement': { key: 'customer-statement', label: 'Customer Statement', builder: customerStatementBuilder },
   ar: { key: 'ar', label: 'Aged Receivables', builder: arBuilder },
   ap: { key: 'ap', label: 'Aged Payables', builder: apBuilder },
   tax: { key: 'tax', label: 'Tax Summary', builder: taxBuilder },
+  'depreciation-schedule': { key: 'depreciation-schedule', label: 'Depreciation Schedule', builder: depreciationScheduleBuilder },
+  'loans-analysis': { key: 'loans-analysis', label: 'Loans Analysis', builder: loansAnalysisBuilder },
+  'invoice-analysis': { key: 'invoice-analysis', label: 'Invoice Analysis', builder: invoiceAnalysisBuilder },
+  'fiscal-report': { key: 'fiscal-report', label: 'Fiscal Report', builder: fiscalReportBuilder },
+  'analytic-report': { key: 'analytic-report', label: 'Cost Centre Analysis', builder: analyticReportBuilder },
+  'profit-centre': { key: 'profit-centre', label: 'Profit Centre Analysis', builder: profitCentreBuilder },
+  'executive-summary': { key: 'executive-summary', label: 'Executive Summary', builder: executiveSummaryBuilder },
 };
 
 export function reportDef(key: string): ReportDef | undefined {
