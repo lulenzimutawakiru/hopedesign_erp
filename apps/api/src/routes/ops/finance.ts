@@ -155,7 +155,7 @@ financeOpsRouter.get('/tax', ...runGet(['finance.taxes.view', 'finance.reports.v
 financeOpsRouter.get(
   '/reports/export/:key',
   exportLimiter,
-  requirePermission(['finance.journals.view', 'finance.reports.view']),
+  requirePermission(['finance.journals.view', 'finance.reports.view', 'expenditure.reports.view']),
   asyncHandler(async (req, res) => {
     const def = reportDef(String(req.params.key));
     if (!def) throw notFound('Unknown report');
