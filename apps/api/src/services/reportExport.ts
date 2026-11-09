@@ -23,6 +23,7 @@ import * as loans from './loans.js';
 import * as sales from './sales.js';
 import * as advanced from './finance-advanced.js';
 import * as efrisReports from './efris/reports.js';
+import * as expenses from './expenses.js';
 
 export interface ReportBuild {
   title: string;
@@ -724,6 +725,243 @@ const executiveSummaryBuilder: ReportBuilder = async (client, ctx) => {
 };
 
 // ---------------------------------------------------------------------------
+// Employee expense / reimbursement reports (reuse the spend module services)
+// ---------------------------------------------------------------------------
+
+const EXPENSE_GROUP_LABEL: Record<string, string> = {
+  category: 'Category',
+  department: 'Department',
+  costCentre: 'Cost centre',
+  project: 'Project',
+  supplier: 'Supplier',
+  employee: 'Employee',
+  paymentMethod: 'Payment method',
+};
+
+/** Shared shape for a grouped expense report (by category, department, …). */
+function expenseGroupBuilder(groupBy: string, title: string): ReportBuilder {
+  return async (client, ctx, q) => {
+    const r = await expenses.expenseReports(client, ctx, { from: q.from, to: q.to, groupBy });
+    const rows = (r.grouped ?? []) as Record<string, unknown>[];
+    const grand = rows.reduce((s, x) => s + num(x.total), 0);
+    return {
+      title,
+      subtitle: periodLabel(str(q.from), str(q.to)),
+      kicker: 'Expense report',
+      columns: [
+        { key: 'dimension', label: EXPENSE_GROUP_LABEL[groupBy] ?? 'Group' },
+        { key: 'count', label: 'Count', align: RIGHT },
+        { key: 'total', label: 'Total', align: RIGHT },
+      ],
+      rows: rows.map((x) => ({
+        dimension: str(x.label),
+        count: str(x.count),
+        total: money(x.total),
+      })),
+      facts: [
+        ['Scope', periodLabel(str(q.from), str(q.to))],
+        ['Groups', String(rows.length)],
+        ['Grand total', money(grand)],
+      ],
+    };
+  };
+}
+
+const expenseRegisterBuilder: ReportBuilder = async (client, ctx, q) => {
+  const r = await expenses.listExpenses(client, ctx, {
+    from: q.from,
+    to: q.to,
+    status: q.status,
+    pageSize: 500,
+  });
+  const rows = (r.rows ?? []) as Record<string, unknown>[];
+  const grand = rows.reduce((s, x) => s + num(x.amount), 0);
+  return {
+    title: 'Expense Register',
+    subtitle: `${r.total} expense${r.total === 1 ? '' : 's'}${q.status ? ` · ${str(q.status)}` : ''}`,
+    kicker: 'Expense report',
+    columns: [
+      { key: 'expNo', label: 'Expense no.' },
+      { key: 'expDate', label: 'Date' },
+      { key: 'employee', label: 'Employee' },
+      { key: 'department', label: 'Department' },
+      { key: 'category', label: 'Category' },
+      { key: 'description', label: 'Description' },
+      { key: 'payee', label: 'Payee / supplier' },
+      { key: 'reference', label: 'Reference' },
+      { key: 'amount', label: 'Amount', align: RIGHT },
+      { key: 'status', label: 'Status' },
+      { key: 'paymentStatus', label: 'Payment' },
+    ],
+    rows: rows.map((x) => ({
+      expNo: str(x.expNo),
+      expDate: date(x.expDate),
+      employee: `${str(x.firstName)} ${str(x.lastName)}`.trim() || str(x.employeeNo),
+      department: str(x.departmentName),
+      category: str(x.categoryName),
+      description: str(x.description),
+      payee: str(x.payee) || str(x.supplierName),
+      reference: str(x.reference),
+      amount: money(x.amount),
+      status: str(x.status),
+      paymentStatus: str(x.paymentStatus),
+    })),
+    facts: [
+      ['Scope', periodLabel(str(q.from), str(q.to))],
+      ['Expenses', String(r.total)],
+      ['Total value', money(grand)],
+    ],
+  };
+};
+
+const expenseCashBankBuilder: ReportBuilder = async (client, ctx, q) => {
+  const r = await expenses.expenseReports(client, ctx, { from: q.from, to: q.to });
+  const rows = (r.cashVsBank ?? []) as Record<string, unknown>[];
+  const grand = rows.reduce((s, x) => s + num(x.total), 0);
+  return {
+    title: 'Expenses by Payment Method',
+    subtitle: periodLabel(str(q.from), str(q.to)),
+    kicker: 'Expense report',
+    columns: [
+      { key: 'method', label: 'Payment method' },
+      { key: 'total', label: 'Total', align: RIGHT },
+    ],
+    rows: rows.map((x) => ({ method: str(x.methodType).replace(/_/g, ' '), total: money(x.total) })),
+    facts: [
+      ['Scope', periodLabel(str(q.from), str(q.to))],
+      ['Grand total', money(grand)],
+    ],
+  };
+};
+
+const expenseTrendBuilder: ReportBuilder = async (client, ctx, q) => {
+  const r = await expenses.expenseReports(client, ctx, { from: q.from, to: q.to });
+  const daily = (r.dailyTrend ?? []) as Record<string, unknown>[];
+  const monthly = (r.monthlyTrend ?? []) as Record<string, unknown>[];
+  const dailyTotal = daily.reduce((s, x) => s + num(x.total), 0);
+  const monthlyTotal = monthly.reduce((s, x) => s + num(x.total), 0);
+  return {
+    title: 'Expense Trend',
+    subtitle: periodLabel(str(q.from), str(q.to)),
+    kicker: 'Expense report',
+    columns: [
+      { key: 'period', label: 'Period' },
+      { key: 'total', label: 'Total', align: RIGHT },
+    ],
+    rows: [
+      ...daily.map((x) => ({ period: `Daily · ${date(x.day)}`, total: money(x.total) })),
+      ...monthly.map((x) => ({ period: `Monthly · ${str(x.month)}`, total: money(x.total) })),
+    ],
+    facts: [
+      ['Scope', periodLabel(str(q.from), str(q.to))],
+      ['Daily total (14 days)', money(dailyTotal)],
+      ['Monthly total (6 months)', money(monthlyTotal)],
+    ],
+  };
+};
+
+const expensePlannedBuilder: ReportBuilder = async (client, ctx, q) => {
+  const r = await expenses.expenseReports(client, ctx, { from: q.from, to: q.to });
+  const rows = (r.plannedVsUnplanned ?? []) as Record<string, unknown>[];
+  const grand = rows.reduce((s, x) => s + num(x.total), 0);
+  return {
+    title: 'Planned vs Unplanned Expenses',
+    subtitle: periodLabel(str(q.from), str(q.to)),
+    kicker: 'Expense report',
+    columns: [
+      { key: 'type', label: 'Type' },
+      { key: 'count', label: 'Count', align: RIGHT },
+      { key: 'total', label: 'Total', align: RIGHT },
+    ],
+    rows: rows.map((x) => ({
+      type: x.isPlanned === true ? 'Planned' : 'Unplanned / emergency',
+      count: str(x.count),
+      total: money(x.total),
+    })),
+    facts: [
+      ['Scope', periodLabel(str(q.from), str(q.to))],
+      ['Grand total', money(grand)],
+    ],
+  };
+};
+
+const expenseBudgetBuilder: ReportBuilder = async (client, ctx, q) => {
+  const from = str(q.from);
+  const to = str(q.to);
+  // Distinct GL accounts used by expenses in range, joined to the chart of
+  // accounts for a legible label. Budget math comes from finance.budgetPosition.
+  const params: unknown[] = [ctx.tenantId, ctx.companyId ?? null];
+  const where = ['et.tenant_id = $1', 'et.company_id = $2', "et.status NOT IN ('VOID','REJECTED')", 'et.account_id IS NOT NULL'];
+  if (from) { params.push(from); where.push(`et.exp_date >= $${params.length}`); }
+  if (to) { params.push(to); where.push(`et.exp_date <= $${params.length}`); }
+  const accs = await client.query(
+    `SELECT DISTINCT et.account_id, a.code AS account_code, a.name AS account_name
+       FROM expense_transactions et
+       JOIN chart_of_accounts a ON a.id = et.account_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY a.code`,
+    params
+  );
+  const rows: Array<Record<string, unknown>> = [];
+  for (const a of accs.rows) {
+    const pos = await fin.budgetPosition(client, ctx, Number(a.account_id));
+    if (pos.budgetId == null) continue;
+    rows.push({
+      accountCode: str(a.account_code),
+      account: str(a.account_name),
+      budgetNo: str(pos.budgetNo),
+      result: str(pos.result),
+      approved: money(pos.approved),
+      committed: money(pos.committed),
+      actual: money(pos.actual),
+      available: money(pos.available),
+    });
+  }
+  return {
+    title: 'Budget vs Actual — Expenses',
+    subtitle: periodLabel(str(q.from), str(q.to)),
+    kicker: 'Expense report',
+    columns: [
+      { key: 'accountCode', label: 'Account' },
+      { key: 'account', label: 'Account name' },
+      { key: 'budgetNo', label: 'Budget' },
+      { key: 'result', label: 'Position' },
+      { key: 'approved', label: 'Approved', align: RIGHT },
+      { key: 'committed', label: 'Committed', align: RIGHT },
+      { key: 'actual', label: 'Actual', align: RIGHT },
+      { key: 'available', label: 'Available', align: RIGHT },
+    ],
+    rows,
+    facts: [
+      ['Scope', periodLabel(str(q.from), str(q.to))],
+      ['Budgeted accounts', String(rows.length)],
+    ],
+  };
+};
+
+const expenseClaimsBuilder: ReportBuilder = async (client, ctx) => {
+  const r = await expenses.expenseReports(client, ctx, {});
+  const rows = (r.claims ?? []) as Record<string, unknown>[];
+  const count = rows.reduce((s, x) => s + num(x.count), 0);
+  const grand = rows.reduce((s, x) => s + num(x.total), 0);
+  return {
+    title: 'Expense Claims Register',
+    subtitle: 'Employee expense claims by status',
+    kicker: 'Expense report',
+    columns: [
+      { key: 'status', label: 'Status' },
+      { key: 'count', label: 'Count', align: RIGHT },
+      { key: 'total', label: 'Total', align: RIGHT },
+    ],
+    rows: rows.map((x) => ({ status: str(x.status), count: str(x.count), total: money(x.total) })),
+    facts: [
+      ['Claims', String(count)],
+      ['Total value', money(grand)],
+    ],
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -746,6 +984,18 @@ export const REPORT_DEFS: Record<string, ReportDef> = {
   'analytic-report': { key: 'analytic-report', label: 'Cost Centre Analysis', builder: analyticReportBuilder },
   'profit-centre': { key: 'profit-centre', label: 'Profit Centre Analysis', builder: profitCentreBuilder },
   'executive-summary': { key: 'executive-summary', label: 'Executive Summary', builder: executiveSummaryBuilder },
+  'expense-register': { key: 'expense-register', label: 'Expense Register', builder: expenseRegisterBuilder },
+  'expense-by-category': { key: 'expense-by-category', label: 'Expenses by Category', builder: expenseGroupBuilder('category', 'Expenses by Category') },
+  'expense-by-department': { key: 'expense-by-department', label: 'Expenses by Department', builder: expenseGroupBuilder('department', 'Expenses by Department') },
+  'expense-by-cost-centre': { key: 'expense-by-cost-centre', label: 'Expenses by Cost Centre', builder: expenseGroupBuilder('costCentre', 'Expenses by Cost Centre') },
+  'expense-by-project': { key: 'expense-by-project', label: 'Expenses by Project', builder: expenseGroupBuilder('project', 'Expenses by Project') },
+  'expense-by-supplier': { key: 'expense-by-supplier', label: 'Expenses by Supplier', builder: expenseGroupBuilder('supplier', 'Expenses by Supplier') },
+  'expense-by-employee': { key: 'expense-by-employee', label: 'Expenses by Employee', builder: expenseGroupBuilder('employee', 'Expenses by Employee') },
+  'expense-cash-bank': { key: 'expense-cash-bank', label: 'Expenses by Payment Method', builder: expenseCashBankBuilder },
+  'expense-trend': { key: 'expense-trend', label: 'Expense Trend', builder: expenseTrendBuilder },
+  'expense-planned-vs-unplanned': { key: 'expense-planned-vs-unplanned', label: 'Planned vs Unplanned', builder: expensePlannedBuilder },
+  'expense-budget-vs-actual': { key: 'expense-budget-vs-actual', label: 'Budget vs Actual', builder: expenseBudgetBuilder },
+  'expense-claims': { key: 'expense-claims', label: 'Expense Claims Register', builder: expenseClaimsBuilder },
 };
 
 export function reportDef(key: string): ReportDef | undefined {

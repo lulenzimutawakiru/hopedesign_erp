@@ -330,6 +330,9 @@ export const NAV_GROUPS: NavGroup[] = [
           { id: 'petty-cash', label: 'Petty Cash', href: '/spend/petty-cash', perm: 'expenditure.petty_cash.view' , group: 'Requests'},
           { id: 'claims', label: 'Expense Claims', href: '/spend/claims', perm: 'expenditure.claims.view' , group: 'Requests'},
           { id: 'close', label: 'Daily Close', href: '/spend/close', perm: 'expenditure.daily_close.view' , group: 'Close'},
+          { id: 'approvals', label: 'Expense Management', href: '/spend/approvals', perm: 'expenditure.expenses.view' , group: 'Approvals'},
+          { id: 'reports', label: 'Expense Reports', href: '/spend/reports', perm: 'expenditure.reports.view' , group: 'Reports'},
+          { id: 'policies', label: 'Policies', href: '/spend/policies', perm: 'expenditure.settings.view' , group: 'Settings'},
         ],
       },
     ],
@@ -841,7 +844,20 @@ export function requiredPermForPath(path: string): string | undefined {
   if (parts[0] === 'plant' && parts[1] === 'work-centres') return 'production.work_centres.view';
   if (parts[0] === 'plant') return 'production.work_orders.view';
   if (parts[0] === 'finance') return 'finance.journals.view';
-  if (parts[0] === 'spend') return 'expenditure.dashboards.view';
+  if (parts[0] === 'spend') {
+    const map: Record<string, string> = {
+      requisitions: 'expenditure.requisitions.view',
+      expenses: 'expenditure.expenses.view',
+      'petty-cash': 'expenditure.petty_cash.view',
+      claims: 'expenditure.claims.view',
+      close: 'expenditure.daily_close.view',
+      payments: 'expenditure.payments.view',
+      approvals: 'expenditure.expenses.view',
+      reports: 'expenditure.reports.view',
+      policies: 'expenditure.settings.view',
+    };
+    return map[parts[1] ?? ''] ?? 'expenditure.dashboards.view';
+  }
   if (path === '/packing') return 'qr.packing.scan';
   if (path === '/labels') return 'qr.templates.view';
   if (parts[0] === 'buy') {

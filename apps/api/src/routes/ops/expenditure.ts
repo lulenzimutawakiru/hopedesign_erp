@@ -7,6 +7,8 @@ import { asyncHandler, badRequest } from '../../utils.js';
 import { run, runGet } from '../routeHelpers.js';
 import * as exp from '../../services/expenses.js';
 import * as proc from '../../services/procurement.js';
+import * as expSettings from '../../services/expenseSettings.js';
+import * as expOcr from '../../services/expenseOcr.js';
 
 export const expenditureOpsRouter = Router();
 const expUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -87,6 +89,11 @@ expenditureOpsRouter.post(
   })
 );
 expenditureOpsRouter.post('/receipts/:id/verify', ...run('expenditure.receipts.verify', (c, ctx, b, p) => exp.verifyReceipt(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/receipts/:id/ocr', ...run('expenditure.receipts.verify', (c, ctx, _b, p) => expOcr.runReceiptOcr(c, ctx, Number(p.id))));
+
+// Posting configuration + policies
+expenditureOpsRouter.get('/settings', ...runGet('expenditure.settings.view', (c, ctx) => expSettings.getExpenseSettings(c, ctx)));
+expenditureOpsRouter.post('/settings', ...run('expenditure.settings.update', (c, ctx, b) => expSettings.saveExpenseSettings(c, ctx, b)));
 
 // Petty cash
 expenditureOpsRouter.get('/petty-cash', ...runGet('expenditure.petty_cash.view', (c, ctx) => exp.pettyCashDesk(c, ctx)));

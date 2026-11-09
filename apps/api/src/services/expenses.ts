@@ -7,6 +7,8 @@ import * as financeAdvanced from './finance-advanced.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import { notifyUserAdvanced, notifyRoleAdvanced } from './communication.js';
+import { getExpenseSettings } from './expenseSettings.js';
+import { runReceiptOcr } from './expenseOcr.js';
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 const num0 = (v: unknown) => {
@@ -379,7 +381,7 @@ export async function submitExpense(client: pg.PoolClient, ctx: Ctx, id: number)
   const amount = num0(cur.amount);
   const effectiveAccountId = cur.accountId != null ? Number(cur.accountId) :
     cur.categoryAccountId != null ? Number(cur.categoryAccountId) :
-      await finance.getAccountId(client, ctx, '10254500');
+      await finance.getAccountId(client, ctx, (await getExpenseSettings(client, ctx)).expenseAccountCode);
   const pos = await finance.budgetPosition(client, ctx, effectiveAccountId);
   if (cur.budgetId != null && pos.result === 'NONE') {
     throw badRequest('The selected budget has no approved allocation for this expense GL account in the current period.');
@@ -666,8 +668,9 @@ export async function executeExpensePayment(client: pg.PoolClient, ctx: Ctx, pay
   if (methodType.includes('BANK') && configuredBankGl == null) {
     throw badRequest('A bank payment requires a configured bank GL account.');
   }
-  const payable = await finance.getAccountId(client, ctx, '10121100');
-  const creditCode = creditAccountForMethod(methodType, Number(p.paymentMethodId));
+  const expenseSettings = await getExpenseSettings(client, ctx);
+  const payable = await finance.getAccountId(client, ctx, expenseSettings.expensePayableAccountCode);
+  const creditCode = await creditAccountCodeForMethod(client, ctx, methodType, Number(p.paymentMethodId));
   const cashBank = configuredBankGl ?? await finance.getAccountId(client, ctx, creditCode);
   const paymentJournalId = await finance.postJournalLines(client, ctx, {
     entryDate: isoDate(b.paymentDate ?? new Date()),
@@ -914,17 +917,23 @@ export async function approveExpensePaymentReconciliation(client: pg.PoolClient,
   return { id: reconciliationId, status: 'APPROVED' };
 }
 
-/** Map a payment method type to the credit side of the expense journal. */
-function creditAccountForMethod(methodType: string | null | undefined, paymentMethodId: number | null): string {
+/** Map a payment method type to the configured credit-side GL code for the expense journal. */
+async function creditAccountCodeForMethod(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  methodType: string | null | undefined,
+  paymentMethodId: number | null
+): Promise<string> {
+  const settings = await getExpenseSettings(client, ctx);
   const t = String(methodType ?? '').toUpperCase();
-  if (t.includes('BANK') || t.includes('CARD')) return '10111300';
-  if (t.includes('CREDIT')) return '10121100';
-  if (t.includes('DIRECT_SUPPLIER')) return '10111300';
-  if (t.includes('MOBILE')) return '10111200';
-  if (t.includes('PETTY')) return '10111200';
-  if (t.includes('REIMBURS')) return '10111200';
-  if (paymentMethodId != null) return '10111200';
-  return '10111200';
+  if (t.includes('BANK') || t.includes('CARD')) return settings.bankClearingAccountCode;
+  if (t.includes('CREDIT')) return settings.expensePayableAccountCode;
+  if (t.includes('DIRECT_SUPPLIER')) return settings.bankClearingAccountCode;
+  if (t.includes('MOBILE')) return settings.reimbursementPayableAccountCode;
+  if (t.includes('PETTY')) return settings.reimbursementPayableAccountCode;
+  if (t.includes('REIMBURS')) return settings.reimbursementPayableAccountCode;
+  void paymentMethodId;
+  return settings.reimbursementPayableAccountCode;
 }
 
 /** Independent accounting review before any expense GL posting. */
@@ -978,7 +987,7 @@ export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, i
   if (!category.rows.length) throw badRequest('The expense category is inactive or outside the current company.');
   const accountId = cur.accountId != null ? Number(cur.accountId) :
     category.rows[0].account_id != null ? Number(category.rows[0].account_id) :
-      await finance.getAccountId(client, ctx, '10254500');
+      await finance.getAccountId(client, ctx, (await getExpenseSettings(client, ctx)).expenseAccountCode);
   const account = await client.query(
     `SELECT id FROM chart_of_accounts
       WHERE id = $1 AND company_id = $2 AND tenant_id = $3 AND is_active = true AND is_posting = true`,
@@ -1020,14 +1029,15 @@ export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
   }
   const amount = num0(cur.amount);
   const taxAmount = round2(num0(cur.taxAmount));
+  const expenseSettings = await getExpenseSettings(client, ctx);
   const expenseAccountId = cur.accountId != null ? Number(cur.accountId) : cur.categoryAccountId != null ? Number(cur.categoryAccountId) : null;
-  const expenseAccount = expenseAccountId ?? (await finance.getAccountId(client, ctx, '10254500'));
+  const expenseAccount = expenseAccountId ?? (await finance.getAccountId(client, ctx, expenseSettings.expenseAccountCode));
   // An approved but unpaid expense creates a liability, not a cash/bank
   // movement. Actual settlement is posted separately by payExpense.
   const isPaid = String(cur.paymentStatus) === 'PAID' || String(cur.status) === 'PAID';
   const creditCode = isPaid
-    ? creditAccountForMethod(String(cur.paymentMethodType ?? ''), cur.paymentMethodId != null ? Number(cur.paymentMethodId) : null)
-    : '10121100';
+    ? await creditAccountCodeForMethod(client, ctx, String(cur.paymentMethodType ?? ''), cur.paymentMethodId != null ? Number(cur.paymentMethodId) : null)
+    : expenseSettings.expensePayableAccountCode;
   const creditAccount = await finance.getAccountId(client, ctx, creditCode);
   const lines: finance.JournalLine[] = [
     {
@@ -1037,7 +1047,7 @@ export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
     },
   ];
   if (taxAmount > 0) {
-    const vat = await finance.getAccountId(client, ctx, '10111900');
+    const vat = await finance.getAccountId(client, ctx, expenseSettings.inputVatAccountCode);
     lines.push({ account_id: vat, debit: taxAmount, credit: 0, description: `Input VAT ${cur.expNo}` });
   }
   lines.push({ account_id: creditAccount, debit: 0, credit: round2(amount), description: isPaid ? `Payment ${cur.expNo}` : `Accounts payable ${cur.expNo}` });
@@ -1149,7 +1159,7 @@ export async function getExpense(client: pg.PoolClient, ctx: Ctx, id: number, ow
   );
   const receipts = await client.query(
     `SELECT id, file_name, mime_type, file_url, content_hash, supplier, invoice_no, receipt_date,
-            tax_amount, total, currency, ocr_data, verified, is_primary, created_by, created_at
+            tax_amount, total, currency, ocr_data, ocr_status, ocr_confidence, verified, is_primary, created_by, created_at
      FROM expense_receipts WHERE ref_type = 'EXPENSE' AND ref_id = $1 ORDER BY is_primary DESC, id DESC`,
     [id]
   );
@@ -1331,7 +1341,7 @@ export async function listReceipts(client: pg.PoolClient, ctx: Ctx, q: Record<st
   params.push(50, 0);
   const rows = await client.query(
     `SELECT id, ref_type, ref_id, file_name, mime_type, file_url, content_hash, supplier, invoice_no,
-            receipt_date, tax_amount, total, currency, ocr_data, verified, is_primary, created_by, created_at
+            receipt_date, tax_amount, total, currency, ocr_data, ocr_status, ocr_confidence, verified, is_primary, created_by, created_at
      FROM expense_receipts WHERE ${where.join(' AND ')}
      ORDER BY id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
@@ -1397,8 +1407,8 @@ export async function uploadReceipt(client: pg.PoolClient, ctx: Ctx, b: Record<s
   );
   const receiptId = Number(ins.rows[0].id);
   await logAudit(client, ctx, { action: 'upload_receipt', resource: 'expenses.receipts', recordId: receiptId, recordCode: fileName, newValues: { refType, refId, checksum } });
-  const row = await client.query(`SELECT * FROM expense_receipts WHERE id = $1`, [receiptId]);
-  return { ...toCamelRow(row.rows[0]), possibleDuplicate: dup.possibleDuplicate, duplicateMatches: dup.hashMatches };
+  const scanned = await runReceiptOcr(client, ctx, receiptId);
+  return { ...scanned, possibleDuplicate: dup.possibleDuplicate, duplicateMatches: dup.hashMatches };
 }
 
 export async function verifyReceipt(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown> = {}) {
@@ -1408,13 +1418,16 @@ export async function verifyReceipt(client: pg.PoolClient, ctx: Ctx, id: number,
   if (!row.rows.length) throw notFound('Receipt not found');
   const sets: string[] = [];
   const params: unknown[] = [];
+  let manualEdit = false;
   for (const [camel, col] of Object.entries({ supplier: 'supplier', invoiceNo: 'invoice_no', receiptDate: 'receipt_date', taxAmount: 'tax_amount', total: 'total', currency: 'currency' })) {
     if (camel in b) {
+      manualEdit = true;
       params.push(camel === 'receiptDate' ? isoDate(b[camel]) : camel === 'taxAmount' || camel === 'total' ? round2(num0(b[camel])) : s(b[camel]));
       sets.push(`${col} = $${params.length}`);
     }
   }
-  if (b.ocrData) { params.push(JSON.stringify(b.ocrData)); sets.push(`ocr_data = $${params.length}`); }
+  if (b.ocrData) { manualEdit = true; params.push(JSON.stringify(b.ocrData)); sets.push(`ocr_data = $${params.length}`); }
+  if (manualEdit) sets.push(`ocr_status = 'MANUAL'`);
   if (b.verified === true || b.verified === 'true') {
     params.push(ctx.userId ?? null);
     sets.push(`verified = true, verified_by = $${params.length}, verified_at = now()`);
@@ -1706,13 +1719,14 @@ export async function reimburseClaim(client: pg.PoolClient, ctx: Ctx, id: number
       WHERE id = $3`,
     [ctx.userId ?? null, n(b.paymentMethodId), id]
   );
+  const expenseSettings = await getExpenseSettings(client, ctx);
   const journalId = await finance.postJournalLines(client, ctx, {
     entryDate: new Date().toISOString().slice(0, 10),
     journalType: 'EXPENSE',
     description: `Employee claim reimbursement ${cur.claimNo}`,
     lines: [
-      { account_id: await finance.getAccountId(client, ctx, '10254500'), debit: num0(cur.amount), credit: 0, description: `Claim ${cur.claimNo}` },
-      { account_id: await finance.getAccountId(client, ctx, '10111200'), debit: 0, credit: num0(cur.amount), description: `Reimbursement ${cur.claimNo}` },
+      { account_id: await finance.getAccountId(client, ctx, expenseSettings.expenseAccountCode), debit: num0(cur.amount), credit: 0, description: `Claim ${cur.claimNo}` },
+      { account_id: await finance.getAccountId(client, ctx, expenseSettings.reimbursementPayableAccountCode), debit: 0, credit: num0(cur.amount), description: `Reimbursement ${cur.claimNo}` },
     ],
     refType: 'claim', refId: id, refCode: String(cur.claimNo),
   });

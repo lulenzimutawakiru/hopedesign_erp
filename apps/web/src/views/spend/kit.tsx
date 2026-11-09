@@ -87,13 +87,20 @@ export const SPEND_TABS: [string, string][] = [
   ['claims', 'Expense Claims'],
   ['close', 'Daily Close'],
   ['payments', 'Payment Requests'],
+  ['approvals', 'Expense Management'],
+  ['reports', 'Reports'],
+  ['policies', 'Policies'],
 ];
 
 export function SpendTabs({ active }: { active: string }) {
   const { user } = useAuth();
   return (
     <nav className="spend-tabs" aria-label="Spend sections">
-      {SPEND_TABS.filter(([key]) => key !== 'payments' || can(user, 'expenditure.payments.view')).map(([key, label]) => (
+      {SPEND_TABS.filter(([key]) => key !== 'payments' || can(user, 'expenditure.payments.view'))
+        .filter(([key]) => key !== 'approvals' || can(user, 'expenditure.expenses.view'))
+        .filter(([key]) => key !== 'reports' || can(user, 'expenditure.reports.view'))
+        .filter(([key]) => key !== 'policies' || can(user, 'expenditure.settings.view'))
+        .map(([key, label]) => (
         <button
           key={key}
           type="button"
@@ -212,9 +219,25 @@ export function ReceiptChips({ receipts }: { receipts: Rec[] }) {
             {s(r.supplier) || 'Unknown supplier'}{r.invoiceNo ? ` · INV ${s(r.invoiceNo)}` : ''}
           </span>
           {num(r.total) > 0 && <span style={{ color: 'var(--muted)', fontSize: 12 }}>{fmtMoney(num(r.total))}</span>}
+          <OcrBadge row={r} />
           {r.verified === true || r.verified === 'true' ? <Badge value="VERIFIED" /> : <Badge value="UNVERIFIED" />}
         </div>
       ))}
     </div>
+  );
+}
+
+/** OCR extraction lifecycle for a receipt, kept separate from the verify flag. */
+export function OcrBadge({ row }: { row: Rec }) {
+  const st = s(row.ocrStatus);
+  if (!st) return null;
+  const tone = st === 'EXTRACTED' ? 'badge-green' : st === 'FAILED' ? 'badge-red' : st === 'PENDING' ? 'badge-amber' : 'badge-neutral';
+  const icon = st === 'EXTRACTED' ? '✓' : st === 'FAILED' ? '✕' : st === 'PENDING' ? '⚠' : '●';
+  const label = st === 'EXTRACTED' ? 'OCR' : st === 'PENDING' ? 'OCR PENDING' : st === 'FAILED' ? 'OCR FAILED' : st;
+  return (
+    <span className={`badge ${tone}`} title={`OCR status: ${st}`}>
+      <span className="badge-icon" aria-hidden>{icon}</span>
+      {label}
+    </span>
   );
 }

@@ -6,6 +6,9 @@ import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { DOCUMENT_EXPORT_FORMATS } from '../components/DownloadMenu';
 import { toast } from '../components/toast';
 import RecordExpense from './spend/RecordExpense';
+import ExpenseReports from './spend/ExpenseReports';
+import ExpenseApprovals from './spend/ExpenseApprovals';
+import ExpensePolicies from './spend/ExpensePolicies';
 import {
   CopyButton,
   MetaCard,
@@ -48,6 +51,9 @@ export default function SpendFlow({ path }: { path: string }) {
   if (view === 'claims') return <ClaimsList />;
   if (view === 'close') return <DailyCloseDesk />;
   if (view === 'payments') return <ExpensePaymentsDesk />;
+  if (view === 'approvals') return <ExpenseApprovals />;
+  if (view === 'reports') return <ExpenseReports />;
+  if (view === 'policies') return <ExpensePolicies />;
   // Employees with universal expense-initiation access land on their own
   // expense register, not the organisation-wide finance command centre.
   if (!can(user, 'expenditure.dashboards.view')) return <ExpenseList />;
