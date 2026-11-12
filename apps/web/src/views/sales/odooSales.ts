@@ -42,6 +42,14 @@ export function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Calendar date in the browser timezone. Overdue checks use this, not UTC. */
+export function localToday(): string {
+  const d = new Date();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
 export function quotationTotals(lines: DraftLine[]) {
   let untaxed = 0;
   let tax = 0;

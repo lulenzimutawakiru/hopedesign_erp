@@ -2195,7 +2195,7 @@ function ArAp({ kind }: { kind: 'ar' | 'ap' }) {  const { user } = useAuth();
   const matched = isAp && matchFilter
     ? searched.filter((r) => apMatchState(r) === matchFilter)
     : searched;
-  const rows = sortBy    ? [...searched].sort((a, b) => {
+  const rows = sortBy ? [...matched].sort((a, b) => {
         const av = SORTS[sortBy](a); const bv = SORTS[sortBy](b);
         const cmp = typeof av === 'number' && typeof bv === 'number'
           ? av - bv

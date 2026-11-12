@@ -208,6 +208,36 @@ function addDaysIso(iso: string, days: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
+/** Stored payment terms. Missing or out-of-range values are ignored so a bad column cannot block invoicing. */
+function storedTermsDays(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  const days = Math.trunc(n);
+  if (days < 0 || days > 3650) return null;
+  return days;
+}
+
+/** Order terms win when the invoice comes from a sales order. Otherwise use the customer. */
+async function dueDateFromTerms(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  invoiceDate: string,
+  customerId: number,
+  orderTerms: unknown,
+): Promise<string | null> {
+  let days = storedTermsDays(orderTerms);
+  if (days == null) {
+    const cust = await client.query(
+      `SELECT payment_terms_days FROM customers WHERE id = $1 AND tenant_id = $2`,
+      [customerId, ctx.tenantId],
+    );
+    days = storedTermsDays(cust.rows[0]?.payment_terms_days);
+  }
+  if (days == null) return null;
+  return addDaysIso(invoiceDate, days);
+}
+
 function textOrNull(v: unknown): string | null {
   if (v == null) return null;
   const s = String(v).trim();
@@ -1164,6 +1194,7 @@ export async function createInvoice(
   let orderLines: Array<Record<string, unknown>> | null = null;
   let orderSubtotal = 0;
   let orderDiscountAmount = 0;
+  let sourceOrderTerms: unknown = null;
 
   if (orderId != null) {
     const res = await client.query(
@@ -1180,6 +1211,7 @@ export async function createInvoice(
     if (orderLines.length === 0) throw badRequest('Nothing to invoice (all dispatched quantities already invoiced)');
     customerId = Number(so.customer_id);
     currency = String(so.currency ?? 'UGX');
+    sourceOrderTerms = so.payment_terms_days;
     bankName = input.bankName != null ? String(input.bankName) : so.bank_name != null ? String(so.bank_name) : bank.bankName;
     bankAccountName = input.bankAccountName != null ? String(input.bankAccountName) : so.bank_account_name != null ? String(so.bank_account_name) : bank.bankAccountName;
     bankAccountNumber = input.bankAccountNumber != null ? String(input.bankAccountNumber) : so.bank_account_number != null ? String(so.bank_account_number) : bank.bankAccountNumber;
@@ -1239,6 +1271,13 @@ export async function createInvoice(
   }
 
   const invoiceNo = await nextDoc(client, ctx, 'INV');
+  const invoiceDate = input.invoiceDate != null && String(input.invoiceDate).trim()
+    ? String(input.invoiceDate).slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+  const explicitDue = input.dueDate != null && String(input.dueDate).trim()
+    ? String(input.dueDate).slice(0, 10)
+    : null;
+  const dueDate = explicitDue ?? await dueDateFromTerms(client, ctx, invoiceDate, customerId, sourceOrderTerms);
   const ins = await client.query(
     `INSERT INTO customer_invoices
        (company_id, tenant_id, branch_id, invoice_no, order_id, delivery_note_id, customer_id, invoice_date, due_date, currency, notes,
@@ -1247,8 +1286,8 @@ export async function createInvoice(
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, invoiceNo, orderId,
       input.deliveryNoteId ?? null, customerId,
-      input.invoiceDate ?? new Date().toISOString().slice(0, 10),
-      input.dueDate ?? null, currency, input.notes ?? null,
+      invoiceDate,
+      dueDate, currency, input.notes ?? null,
       bankName || null, bankAccountName || null, bankAccountNumber || null,
       discountType, discountValue, buyerType, ctx.userId ?? null,
     ]
@@ -1853,7 +1892,7 @@ export async function commandCenter(client: pg.PoolClient, ctx: Ctx) {
     alerts.push({
       kind: 'ar', severity: 'crit', title: 'Overdue invoices',
       meta: `${String(k.overdue_invoices)} invoices past due`, count: Number(k.overdue_invoices),
-      href: '/sales/invoices', rows: toCamelRows(overdueInv.rows),
+      href: '/sales/invoices?scope=overdue', rows: toCamelRows(overdueInv.rows),
     });
   }
   if (Number(k.overdue_deliveries ?? 0) > 0) {
@@ -2403,6 +2442,72 @@ export async function listInvoices(client: pg.PoolClient, ctx: Ctx, filters: { q
     params
   );
   return toCamelRows(res.rows);
+}
+
+/** Customer invoice desk. listInvoices stays a flat array for exports and receipt lookup. */
+export async function invoiceDesk(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  filters: { q?: string; customerId?: number; scope?: string; page?: number; pageSize?: number } = {},
+) {
+  const page = Math.max(1, Number(filters.page) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(filters.pageSize) || 40));
+  const scope = String(filters.scope ?? 'unpaid').trim().toLowerCase();
+  const params: unknown[] = [ctx.tenantId, ctx.companyId];
+  const where = ['inv.tenant_id = $1', 'inv.company_id = $2'];
+  const openBalance = `inv.status NOT IN ('VOID','PAID','DRAFT') AND inv.total - inv.amount_paid > 0.005`;
+  if (scope === 'overdue') {
+    where.push(`${openBalance} AND COALESCE(inv.due_date, inv.invoice_date) < CURRENT_DATE`);
+  } else if (scope === 'paid') {
+    where.push(`(inv.status = 'PAID' OR (inv.total - inv.amount_paid <= 0.005 AND inv.status <> 'VOID'))`);
+  } else if (scope === 'drafts') {
+    where.push(`inv.status IN ('DRAFT','SUBMITTED')`);
+  } else if (scope !== 'all') {
+    where.push(openBalance);
+  }
+  if (filters.q?.trim()) {
+    params.push(`%${filters.q.trim()}%`);
+    where.push(`(inv.invoice_no ILIKE $${params.length} OR c.name ILIKE $${params.length})`);
+  }
+  if (filters.customerId) {
+    params.push(filters.customerId);
+    where.push(`inv.customer_id = $${params.length}`);
+  }
+  const count = await client.query(
+    `SELECT count(*)::int AS total
+     FROM customer_invoices inv
+     JOIN customers c ON c.id = inv.customer_id
+     WHERE ${where.join(' AND ')}`,
+    params,
+  );
+  const agg = await client.query(
+    `SELECT
+       COALESCE(sum(total - amount_paid) FILTER (WHERE status NOT IN ('VOID','PAID','DRAFT') AND total > amount_paid), 0) AS outstanding,
+       count(*) FILTER (WHERE status NOT IN ('VOID','PAID','DRAFT') AND total > amount_paid AND COALESCE(due_date, invoice_date) < CURRENT_DATE) AS overdue_count
+     FROM customer_invoices
+     WHERE tenant_id = $1 AND company_id = $2`,
+    [ctx.tenantId, ctx.companyId],
+  );
+  params.push(pageSize, (page - 1) * pageSize);
+  const res = await client.query(
+    `SELECT inv.id, inv.invoice_no, inv.status, inv.invoice_date, inv.due_date, inv.total, inv.amount_paid,
+            (inv.total - inv.amount_paid) AS amount_due,
+            c.code AS customer_code, c.name AS customer_name
+     FROM customer_invoices inv
+     JOIN customers c ON c.id = inv.customer_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY inv.id DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
+  );
+  return {
+    rows: toCamelRows(res.rows),
+    total: Number(count.rows[0]?.total ?? 0),
+    outstanding: Number(agg.rows[0]?.outstanding ?? 0),
+    overdueCount: Number(agg.rows[0]?.overdue_count ?? 0),
+    page,
+    pageSize,
+  };
 }
 
 export async function listReceipts(client: pg.PoolClient, ctx: Ctx, filters: { customerId?: number } = {}) {
