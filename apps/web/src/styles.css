@@ -6666,6 +6666,62 @@ html[data-theme='dark'] .tile-neutral { background: #163247; color: #A8B6C4; }
 }
 
 /* ---------- Requisitions & Spend workspace ---------- */
+.exp-app .page-head { align-items: center; }
+.exp-banner {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--sheet);
+  margin-bottom: 12px;
+}
+.exp-banner button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 12px 16px;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--line);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+}
+.exp-banner button:last-child { border-right: 0; }
+.exp-banner button.is-on { background: var(--paper-2); }
+.exp-banner-label { font-size: 12px; color: var(--muted); font-weight: 650; }
+.exp-banner-value { font-size: 18px; font-weight: 750; letter-spacing: -0.02em; }
+.exp-control { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.exp-control .search-input { flex: 1; min-width: 180px; }
+.exp-draft { color: var(--hope); font-weight: 650; }
+.exp-drop { outline: 2px dashed var(--hope); outline-offset: -6px; }
+.exp-sheet { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px 24px; }
+.exp-sheet fieldset.field { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 0; }
+.modal fieldset.field { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; }
+.exp-sheet fieldset.field legend, .modal fieldset.field legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.exp-sheet .check, .modal .check { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 14px; }
+.exp-statusline { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.exp-process { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; }
+.exp-side { display: flex; flex-direction: column; padding: 8px; }
+.exp-side-btn {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.exp-side-btn.is-on { background: var(--paper-2); font-weight: 700; }
+@media (max-width: 800px) {
+  .exp-banner { grid-template-columns: 1fr; }
+  .exp-banner button { border-right: 0; border-bottom: 1px solid var(--line); }
+  .exp-sheet, .exp-process { grid-template-columns: 1fr; }
+}
 .spend-page .page-head { margin-bottom: 12px; }
 .spend-page .page-head h1 { font-size: 24px; }
 .spend-tabs {

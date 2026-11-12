@@ -326,13 +326,15 @@ export const NAV_GROUPS: NavGroup[] = [
         children: [
           { id: 'board', label: 'Command Center', href: '/spend', perm: 'expenditure.dashboards.view' , group: 'Command Center'},
           { id: 'requisitions', label: 'Requisitions', href: '/spend/requisitions', perm: 'expenditure.requisitions.view' , group: 'Requests'},
-          { id: 'expenses', label: 'My Expenses', href: '/spend/expenses', perm: 'expenditure.expenses.view_own' , group: 'Requests'},
+          { id: 'expenses', label: 'My Expenses', href: '/spend/expenses', perm: 'expenditure.expenses.view_own' , group: 'My Expenses'},
+          { id: 'to-process', label: 'Expenses to Process', href: '/spend/to-process', perm: 'expenditure.expenses.view' , group: 'My Expenses'},
           { id: 'petty-cash', label: 'Petty Cash', href: '/spend/petty-cash', perm: 'expenditure.petty_cash.view' , group: 'Requests'},
           { id: 'claims', label: 'Expense Claims', href: '/spend/claims', perm: 'expenditure.claims.view' , group: 'Requests'},
           { id: 'close', label: 'Daily Close', href: '/spend/close', perm: 'expenditure.daily_close.view' , group: 'Close'},
           { id: 'approvals', label: 'Expense Management', href: '/spend/approvals', perm: 'expenditure.expenses.view' , group: 'Approvals'},
-          { id: 'reports', label: 'Expense Reports', href: '/spend/reports', perm: 'expenditure.reports.view' , group: 'Reports'},
-          { id: 'policies', label: 'Policies', href: '/spend/policies', perm: 'expenditure.settings.view' , group: 'Settings'},
+          { id: 'reports', label: 'Expenses Analysis', href: '/spend/reports', perm: 'expenditure.reports.view' , group: 'Reporting'},
+          { id: 'categories', label: 'Expense Categories', href: '/spend/categories', perm: 'expenditure.settings.view' , group: 'Configuration'},
+          { id: 'policies', label: 'Settings', href: '/spend/policies', perm: 'expenditure.settings.view' , group: 'Configuration'},
         ],
       },
     ],
@@ -847,13 +849,15 @@ export function requiredPermForPath(path: string): string | undefined {
   if (parts[0] === 'spend') {
     const map: Record<string, string> = {
       requisitions: 'expenditure.requisitions.view',
-      expenses: 'expenditure.expenses.view',
+      expenses: 'expenditure.expenses.view_own',
+      'to-process': 'expenditure.expenses.view',
       'petty-cash': 'expenditure.petty_cash.view',
       claims: 'expenditure.claims.view',
       close: 'expenditure.daily_close.view',
       payments: 'expenditure.payments.view',
       approvals: 'expenditure.expenses.view',
       reports: 'expenditure.reports.view',
+      categories: 'expenditure.settings.view',
       policies: 'expenditure.settings.view',
     };
     return map[parts[1] ?? ''] ?? 'expenditure.dashboards.view';

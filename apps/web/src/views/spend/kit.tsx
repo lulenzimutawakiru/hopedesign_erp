@@ -82,7 +82,7 @@ export function RiskBadge({ row }: { row: Rec }) {
 export const SPEND_TABS: [string, string][] = [
   ['board', 'Command Center'],
   ['requisitions', 'Requisitions'],
-  ['expenses', 'Daily Expenditure'],
+  ['expenses', 'My Expenses'],
   ['petty-cash', 'Petty Cash'],
   ['claims', 'Expense Claims'],
   ['close', 'Daily Close'],

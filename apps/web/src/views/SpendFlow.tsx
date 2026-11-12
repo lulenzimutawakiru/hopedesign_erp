@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, fmtDate, fmtMoney, fmtNum, getToken } from '../api';
+import { api, fmtMoney, fmtNum, getToken } from '../api';
 import { useAuth, can } from '../auth';
 import { navigate } from '../router';
 import { Badge, ErrorBanner, Modal, PageLoader, Pager } from '../components/ui';
 import { DOCUMENT_EXPORT_FORMATS } from '../components/DownloadMenu';
 import { toast } from '../components/toast';
-import RecordExpense from './spend/RecordExpense';
+import MyExpenses from './spend/MyExpenses';
+import ExpenseSheet from './spend/ExpenseSheet';
+import ExpensesToProcess from './spend/ExpensesToProcess';
+import ExpenseCategories from './spend/ExpenseCategories';
 import ExpenseReports from './spend/ExpenseReports';
 import ExpenseApprovals from './spend/ExpenseApprovals';
 import ExpensePolicies from './spend/ExpensePolicies';
@@ -41,9 +44,11 @@ export default function SpendFlow({ path }: { path: string }) {
   if (view === 'requisitions' && id && action === 'edit') return <RequisitionComposer editId={Number(id)} />;
   if (view === 'requisitions' && id) return <RequisitionDesk id={Number(id)} />;
   if (view === 'requisitions') return <RequisitionList />;
-  if (view === 'expenses' && id === 'new') return <RecordExpense />;
-  if (view === 'expenses' && id) return <ExpenseDesk id={Number(id)} />;
-  if (view === 'expenses') return <ExpenseList />;
+  if (view === 'expenses' && id === 'new') return <ExpenseSheet />;
+  if (view === 'expenses' && id) return <ExpenseSheet id={Number(id)} />;
+  if (view === 'expenses') return <MyExpenses />;
+  if (view === 'to-process') return <ExpensesToProcess />;
+  if (view === 'categories') return <ExpenseCategories />;
   if (view === 'petty-cash' && id) return <PettyCashFund id={Number(id)} />;
   if (view === 'petty-cash') return <PettyCashDesk />;
   if (view === 'claims' && id === 'new') return <ClaimForm />;
@@ -56,7 +61,7 @@ export default function SpendFlow({ path }: { path: string }) {
   if (view === 'policies') return <ExpensePolicies />;
   // Employees with universal expense-initiation access land on their own
   // expense register, not the organisation-wide finance command centre.
-  if (!can(user, 'expenditure.dashboards.view')) return <ExpenseList />;
+  if (!can(user, 'expenditure.dashboards.view')) return <MyExpenses />;
   return <SpendBoard />;
 }function SpendBoard() {
   const { user } = useAuth();
@@ -965,86 +970,6 @@ function RequisitionComposer({ editId }: { editId?: number }) {
   );
 }
 
-// ---------- Daily Expenditure ----------
-
-const EXP_STATUSES = ['DRAFT', 'SUBMITTED', 'APPROVED', 'PAID', 'POSTED', 'VOID', 'REJECTED'];
-
-function ExpenseList() {
-  const { user } = useAuth();
-  const [items, setItems] = useState<Rec[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [q, setQ] = useState('');
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    const params = new URLSearchParams();
-    if (q) params.set('q', q);
-    if (status) params.set('status', status);
-    if (page > 1) params.set('page', String(page));
-    api<{ data: { rows: Rec[]; total: number } }>(`/api/ops/expenditure/expenses?${params.toString()}`)
-      .then((r) => { setItems(r.data.rows); setTotal(r.data.total); })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [q, status, page]);
-  useEffect(load, [load]);
-
-  return (
-    <SpendShell
-      title="Daily Expenditure"
-      blurb="Record, submit and pay day-to-day expenses against budget."
-      active="expenses"
-      actions={
-        can(user, 'expenditure.expenses.create') ? (
-          <button type="button" className="btn btn-primary" onClick={() => navigate('/spend/expenses/new')}>+ Record Expense</button>
-        ) : null
-      }
-    >
-      <div className="spend-toolbar">
-        <input className="search-input" placeholder="Search exp no / payee…" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} style={{ maxWidth: 260 }} />
-        <StatusFilter value={status} onChange={(v) => { setStatus(v); setPage(1); }} options={EXP_STATUSES} />
-        <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{total} in this view</span>
-      </div>
-      {error && <ErrorBanner error={error} />}
-      {loading ? <PageLoader /> : (
-        <section className="card">
-          <div className="card-head"><h3>{total} expenses</h3></div>
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Exp No</th><th>Date</th><th>Description</th><th>Category</th><th>Department</th>
-                  <th>Payee</th><th>Amount</th><th>Status</th><th>Payment</th><th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((e) => (
-                  <tr key={s(e.id)} className="row-click" onClick={() => navigate(`/spend/expenses/${s(e.id)}`)}>
-                    <td className="cell-mono">{s(e.expNo)}</td>
-                    <td>{fmtDay(e.expDate)}</td>
-                    <td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s(e.description)}</td>
-                    <td>{s(e.categoryName) || '—'}</td>
-                    <td>{s(e.departmentName) || '—'}</td>
-                    <td>{s(e.payee) || s(e.supplierName) || '—'}</td>
-                    <td>{fmtMoney(num(e.amount))}</td>
-                    <td><Badge value={e.status} /></td>
-                    <td><Badge value={e.paymentStatus} /></td>
-                    <td><RiskBadge row={e} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!items.length && <p className="empty-state">No expenses match. Record a payment or petty-cash spend to start the register.</p>}
-          </div>
-          {total > 30 && <Pager page={page} pageSize={30} total={total} onPage={setPage} />}
-        </section>
-      )}
-    </SpendShell>
-  );
-}
 
 function ExpensePaymentsDesk() {
   const { user } = useAuth();
@@ -1135,266 +1060,6 @@ function ExpensePaymentsDesk() {
     </SpendShell>
   );
 }
-
-function ExpenseDesk({ id }: { id: number }) {
-  const { user } = useAuth();
-  const [row, setRow] = useState<Rec | null>(null);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState('');
-  const [msg, setMsg] = useState('');
-  const [payMethod, setPayMethod] = useState('');
-  const [payAmount, setPayAmount] = useState('');
-  const [payBankAccount, setPayBankAccount] = useState('');
-  const [showPay, setShowPay] = useState(false);
-  const [voidReason, setVoidReason] = useState('');
-  const [showVoid, setShowVoid] = useState(false);
-  const [methods, setMethods] = useState<Rec[]>([]);
-  const [bankAccounts, setBankAccounts] = useState<Rec[]>([]);
-
-  const load = useCallback(() => {
-    api<{ data: Rec }>(`/api/ops/expenditure/expenses/${id}`)
-      .then((r) => setRow(r.data))
-      .catch((e) => setError(e.message));
-  }, [id]);
-  useEffect(load, [load]);
-  useEffect(() => {
-    let alive = true;
-    api<{ data: Rec }>('/api/ops/expenditure/payments/meta')
-      .then((r) => { if (!alive) return; setMethods((r.data.paymentMethods as Rec[] | undefined) ?? []); setBankAccounts((r.data.bankAccounts as Rec[] | undefined) ?? []); })
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, []);
-
-  const act = (action: string, label: string, body?: Rec) => {
-    setBusy(action);
-    setMsg('');
-    api<{ data: Rec }>(`/api/ops/expenditure/expenses/${id}/${action}`, { method: 'POST', body: JSON.stringify(body ?? {}) })
-      .then(() => { setMsg(`${label} — saved.`); setShowPay(false); setShowVoid(false); setVoidReason(''); load(); })
-      .catch((e) => setMsg(e.message))
-      .finally(() => setBusy(''));
-  };
-
-  const attach = async (file: File | undefined) => {
-    if (!file) return;
-    setBusy('receipt');
-    setMsg('');
-    try {
-      await uploadReceiptInput(file, 'EXPENSE', id);
-      setMsg('Receipt uploaded.');
-      load();
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  if (!row && !error) return <PageLoader variant="page" />;
-  if (error) return <ErrorBanner error={error} />;
-  const e = row as Rec;
-  const lines = (e.lines as Rec[] | undefined) ?? [];
-  const receipts = (e.receipts as Rec[] | undefined) ?? [];
-  const timeline = (e.timeline as Rec[] | undefined) ?? [];
-  const paymentRows = (e.payments as Rec[] | undefined) ?? [];
-  const reservedPayments = paymentRows
-    .filter((p) => ['SUBMITTED', 'APPROVED', 'PAID'].includes(s(p.status)))
-    .reduce((sum, p) => sum + num(p.amount), 0);
-  const outstandingBalance = Math.max(0, Math.round((num(e.amount) - reservedPayments) * 100) / 100);
-  const dup = e.duplicateOf as Rec | null | undefined;
-  const isDraft = e.status === 'DRAFT';
-  const isPosted = s(e.accountingStatus) === 'POSTED';
-  const canSubmit = isDraft && can(user, 'expenditure.expenses.submit');
-  const canVerify = e.status === 'APPROVED' && e.accountingVerified !== true && can(user, 'expenditure.expenses.verify');
-  const pipelineStatus = e.status === 'APPROVED' && e.accountingVerified === true ? 'VERIFIED' : s(e.status);
-  const canPay = s(e.accountingStatus) === 'POSTED' && outstandingBalance > 0 && can(user, 'expenditure.payments.create');
-  const canPost = (e.status === 'APPROVED' || e.status === 'PAID') && e.accountingVerified === true && !isPosted && can(user, 'expenditure.expenses.post');
-  const canVoid = !['VOID', 'REJECTED', 'CANCELLED'].includes(s(e.status)) && can(user, 'expenditure.expenses.void');
-
-  return (
-    <div>
-      <div className="toolbar">
-        <button className="btn btn-ghost" onClick={() => navigate('/spend/expenses')}>← Daily Expenditure</button>
-        <h1 style={{ margin: 0, flex: 1 }}><span className="cell-mono">{s(e.expNo)}</span> <Badge value={e.status} /> <RiskBadge row={e} /></h1>
-        {canSubmit && <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('submit', 'Expense submitted')}>{busy === 'submit' ? 'Working…' : 'Submit for Approval'}</button>}
-        {canVerify && <button className="btn btn-primary" disabled={busy !== ''} onClick={() => { const comment = window.prompt('Accounting verification notes (coding, tax, receipt and line checks):'); if (comment?.trim()) act('verify', 'Expense accounting verified', { comment }); }}>Verify Accounting</button>}
-        {canPay && <button className="btn btn-primary" disabled={busy !== ''} onClick={() => setShowPay(true)}>Request Payment</button>}
-        {canPost && <button className="btn btn-ghost" disabled={busy !== ''} onClick={() => act('post', 'Posted to ledger')}>{busy === 'post' ? 'Working…' : 'Post to Ledger'}</button>}
-        {canVoid && <button className="btn btn-ghost-danger" disabled={busy !== ''} onClick={() => setShowVoid(true)}>Void</button>}
-      </div>
-      <SpendTabs active="expenses" />
-      {error && <ErrorBanner error={error} />}
-      {msg && <div className="notice-banner">{msg}</div>}
-      {dup && (
-        <div className="notice-banner" style={{ color: 'var(--clay)' }}>
-          ⚠ Possible duplicate: <span className="cell-mono">{s(dup.expNo)}</span> ({fmtMoney(num(dup.amount))}, {s(dup.status)}).
-        </div>
-      )}
-      <Pipeline steps={['DRAFT', 'SUBMITTED', 'APPROVED', 'VERIFIED', 'POSTED']} status={pipelineStatus} />
-
-      <div className="form-grid">
-        <section className="card">
-          <div className="card-head"><h3>Expense</h3></div>
-          <dl className="detail-list">
-            <div className="detail-row"><dt>Description</dt><dd>{s(e.description)}</dd></div>
-            <div className="detail-row"><dt>Amount</dt><dd>{fmtMoney(num(e.amount))} {s(e.currency) || 'UGX'}</dd></div>
-            <div className="detail-row"><dt>Tax</dt><dd>{fmtMoney(num(e.taxAmount))}</dd></div>
-            <div className="detail-row"><dt>Date</dt><dd>{fmtDay(e.expDate)}</dd></div>
-            <div className="detail-row"><dt>Category</dt><dd>{s(e.categoryName) || '—'}</dd></div>
-            <div className="detail-row"><dt>Department</dt><dd>{s(e.departmentName) || '—'}</dd></div>
-            <div className="detail-row"><dt>Cost centre</dt><dd>{s(e.costCentreName) || '—'}</dd></div>
-            <div className="detail-row"><dt>Payee</dt><dd>{s(e.payee) || s(e.supplierName) || s(e.employeeName) || '—'}</dd></div>
-            <div className="detail-row"><dt>Supplier</dt><dd>{s(e.supplierName) || '—'}</dd></div>
-            <div className="detail-row"><dt>Employee</dt><dd>{s(e.employeeName) || '—'}</dd></div>
-            <div className="detail-row"><dt>Project</dt><dd>{s(e.projectName) || '—'}</dd></div>
-            <div className="detail-row"><dt>Payment method</dt><dd>{s(e.paymentMethodName) || '—'}</dd></div>
-            <div className="detail-row"><dt>Payment status</dt><dd><Badge value={e.paymentStatus} /></dd></div>
-            <div className="detail-row"><dt>Accounting verification</dt><dd><Badge value={e.accountingVerified ? 'VERIFIED' : 'PENDING'} /></dd></div>
-            <div className="detail-row"><dt>Verified by</dt><dd>{s(e.verifiedBy) || '—'}</dd></div>
-            <div className="detail-row"><dt>Verification notes</dt><dd>{s(e.verificationComment) || '—'}</dd></div>
-            <div className="detail-row"><dt>Accounting</dt><dd><Badge value={e.accountingStatus} /></dd></div>
-            <div className="detail-row"><dt>Reference</dt><dd><span className="cell-mono">{s(e.reference) || '—'}</span></dd></div>
-            <div className="detail-row"><dt>Vehicle</dt><dd>{s(e.vehicle) || '—'}</dd></div>
-            <div className="detail-row"><dt>Requisition</dt><dd><span className="cell-mono">{s(e.reqNo) || '—'}</span></dd></div>
-            <div className="detail-row"><dt>Planned</dt><dd>{e.isPlanned === true || e.isPlanned === 'true' ? 'Yes' : 'No'}</dd></div>
-            <div className="detail-row"><dt>Created by</dt><dd>{s(e.createdByName) || '—'}</dd></div>
-          </dl>
-        </section>
-
-        <section className="card">
-          <div className="card-head">
-            <h3>Receipts</h3>
-            {(can(user, 'expenditure.expenses.create') || can(user, 'expenditure.receipts.upload')) && (
-              <label className="btn btn-sm">
-                {busy === 'receipt' ? 'Uploading…' : 'Upload receipt'}
-                <input type="file" hidden disabled={busy !== ''} onChange={(ev) => { const f = ev.target.files?.[0]; ev.target.value = ''; void attach(f); }} />
-              </label>
-            )}
-          </div>
-          <ReceiptChips receipts={receipts} />
-        </section>
-      </div>
-
-      {lines.length > 0 && (
-        <section className="card">
-          <div className="card-head"><h3>Line breakdown</h3></div>
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr><th>Line</th><th>Description</th><th>Qty</th><th>Unit cost</th><th>Amount</th></tr>
-              </thead>
-              <tbody>
-                {lines.map((l) => (
-                  <tr key={s(l.id)}>
-                    <td>{s(l.lineNo)}</td>
-                    <td>{s(l.description)}</td>
-                    <td>{fmtNum(l.quantity)}</td>
-                    <td>{fmtMoney(num(l.unitCost))}</td>
-                    <td>{fmtMoney(num(l.amount))}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      <section className="card">
-        <div className="card-head"><h3>Payment history</h3></div>
-        {paymentRows.length === 0 && <p className="empty-state">No payment vouchers have been requested.</p>}
-        {paymentRows.length > 0 && (
-          <div className="table-wrap">
-            <table className="data">
-              <thead><tr><th>Voucher</th><th>Amount</th><th>Method</th><th>Status</th><th>Payment date</th><th>Execution reference</th><th>GL journal</th><th>Bank line</th></tr></thead>
-              <tbody>{paymentRows.map((p) => (
-                <tr key={s(p.id)}>
-                  <td className="cell-mono">{s(p.payNo)}</td>
-                  <td>{fmtMoney(num(p.amount))} {s(p.currency)}</td>
-                  <td>{s(p.paymentMethodName) || '—'}</td>
-                  <td><Badge value={p.status} /></td>
-                  <td>{p.paymentDate ? fmtDay(p.paymentDate) : '—'}</td>
-                  <td className="cell-mono">{s(p.executionReference) || '—'}</td>
-                  <td className="cell-mono">{p.glPosted ? s(p.glJournalId) : 'Not posted'}</td>
-                  <td className="cell-mono">{s(p.bankTransactionId) || '—'}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="card">
-        <div className="card-head"><h3>Approval timeline</h3></div>
-        {timeline.length === 0 && <p className="empty-state">No approval actions yet.</p>}
-        {timeline.length > 0 && (
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr><th>Action</th><th>By</th><th>Comment</th><th>At</th></tr>
-              </thead>
-              <tbody>
-                {timeline.map((a) => (
-                  <tr key={s(a.id)}>
-                    <td><Badge value={a.action} /></td>
-                    <td>{s(a.actorName) || '—'}</td>
-                    <td>{s(a.comment) || '—'}</td>
-                    <td>{fmtDate(a.createdAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {showPay && (
-        <Modal title={`Request payment for ${s(e.expNo)}`} onClose={() => setShowPay(false)}
-          footer={<>
-            <button className="btn btn-ghost" onClick={() => setShowPay(false)}>Cancel</button>
-            <button className="btn btn-primary" disabled={busy !== ''} onClick={() => act('pay', 'Payment request submitted', { paymentMethodId: num(payMethod) || undefined, amount: num(payAmount) || undefined, bankAccountId: num(payBankAccount) || undefined })}>
-              {busy === 'pay' ? 'Working…' : 'Submit Payment Request'}
-            </button>
-          </>}>
-          <div className="form-grid">
-            <label className="field">Request amount (leave blank for full outstanding balance)
-              <input type="number" min="1" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder={fmtMoney(outstandingBalance)} />
-            </label>
-            <label className="field">Payment method
-              <select value={payMethod} onChange={(e) => {
-                setPayMethod(e.target.value);
-                const selected = methods.find((m) => s(m.id) === e.target.value);
-                setPayBankAccount(s(selected?.bankAccountId));
-              }}>
-                <option value="">Use default ({s(e.paymentMethodName) || 'not set'})</option>
-                {methods.map((m) => <option key={s(m.id)} value={s(m.id)}>{s(m.name)}</option>)}
-              </select>
-            </label>
-            <label className="field">Bank account (required for bank/direct supplier payments)
-              <select value={payBankAccount} onChange={(e) => setPayBankAccount(e.target.value)}>
-                <option value="">Use payment-method account / not applicable</option>
-                {bankAccounts.filter((b) => s(b.currency) === (s(e.currency) || 'UGX')).map((b) => <option key={s(b.id)} value={s(b.id)}>{s(b.name)} · {s(b.code)}</option>)}
-              </select>
-            </label>
-            <p className="empty-state">This submits a payment request for independent approval. The expense is not marked paid and no bank or cash journal is posted until a different authorised user executes the approved request.</p>
-          </div>
-        </Modal>
-      )}
-      {showVoid && (
-        <Modal title={`Void ${s(e.expNo)}?`} onClose={() => setShowVoid(false)}
-          footer={<>
-            <button className="btn btn-ghost" onClick={() => setShowVoid(false)}>Cancel</button>
-            <button className="btn btn-ghost-danger" disabled={busy !== '' || !voidReason.trim()} onClick={() => act('void', 'Expense voided', { reason: voidReason })}>
-              {busy === 'void' ? 'Working…' : 'Void Expense'}
-            </button>
-          </>}>
-          <label className="field field-required">Reason for voiding
-            <textarea rows={3} value={voidReason} onChange={(e) => setVoidReason(e.target.value)} placeholder="Explain why this expense is being voided" />
-          </label>
-        </Modal>
-      )}
-    </div>
-  );
-}
-// ---------- Petty Cash ----------
 
 const PC_TX_TYPES = ['RECEIPT', 'EXPENSE', 'TOP_UP', 'RETURN', 'ADJUSTMENT', 'REPLENISHMENT'];
 

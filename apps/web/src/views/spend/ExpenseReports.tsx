@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api, fmtMoney } from '../../api';
 import { useAuth, can } from '../../auth';
 import { DatePresets, ReportExportMenu } from '../../components/report';
-import { SpendShell } from './kit';
+import { ErrorBanner } from '../../components/ui';
+import { SpendShell, num, s, type Rec } from './kit';
 
 /**
  * Branded export/print surface for the twelve employee-expense reports. Each
@@ -14,6 +16,20 @@ export default function ExpenseReports() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [status, setStatus] = useState('');
+  const [groupBy, setGroupBy] = useState<'employee' | 'category'>('employee');
+  const [grouped, setGrouped] = useState<Rec[]>([]);
+  const [analysisError, setAnalysisError] = useState('');
+
+  useEffect(() => {
+    if (!can(user, 'expenditure.reports.view')) return;
+    const params = new URLSearchParams();
+    params.set('groupBy', groupBy);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    api<{ data: { grouped?: Rec[] } }>(`/api/ops/expenditure/reports?${params.toString()}`)
+      .then((r) => { setGrouped(r.data.grouped ?? []); setAnalysisError(''); })
+      .catch((e) => setAnalysisError(e instanceof Error ? e.message : String(e)));
+  }, [user, groupBy, from, to]);
 
   const reports: Array<{ key: string; label: string; hint: string; ranged?: boolean; statusFiltered?: boolean }> = [
     { key: 'expense-register', label: 'Expense Register', hint: 'Every expense with employee, department, category and payment state', ranged: true, statusFiltered: true },
@@ -40,13 +56,39 @@ export default function ExpenseReports() {
 
   return (
     <SpendShell
-      title="Expense Reports"
-      blurb="Branded PDF, Excel, CSV and print exports for employee expenses and reimbursements — drawn from the same live data as the register."
+      title="Expenses Analysis"
+      blurb="Expenses by employee and by category, with the same branded exports as the register."
       active="reports"
     >
       {!can(user, 'expenditure.reports.view') ? (
-        <p className="empty-state">You don&apos;t have permission to view expenditure reports.</p>
+        <p className="empty-state">You don&apos;t have permission to view expense analysis.</p>
       ) : (
+        <>
+        <section className="card">
+          <div className="card-head">
+            <h3>{groupBy === 'employee' ? 'Expenses by Employee' : 'Expenses by Category'}</h3>
+            <div>
+              <button type="button" className={groupBy === 'employee' ? 'btn btn-sm btn-primary' : 'btn btn-sm'} onClick={() => setGroupBy('employee')}>By Employee</button>{' '}
+              <button type="button" className={groupBy === 'category' ? 'btn btn-sm btn-primary' : 'btn btn-sm'} onClick={() => setGroupBy('category')}>By Category</button>
+            </div>
+          </div>
+          {analysisError && <ErrorBanner error={analysisError} />}
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>{groupBy === 'employee' ? 'Employee' : 'Category'}</th><th>Count</th><th>Total</th></tr></thead>
+              <tbody>
+                {grouped.map((row) => (
+                  <tr key={s(row.label) || 'blank'}>
+                    <td>{s(row.label) || 'Unassigned'}</td>
+                    <td>{num(row.count)}</td>
+                    <td>{fmtMoney(num(row.total))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!grouped.length && <p className="empty-state">No expenses in this period.</p>}
+          </div>
+        </section>
         <section className="card">
           <div className="card-head"><h3>Branded report exports</h3></div>
           <p className="muted" style={{ margin: '0 0 12px' }}>
@@ -89,6 +131,7 @@ export default function ExpenseReports() {
             </table>
           </div>
         </section>
+        </>
       )}
     </SpendShell>
   );

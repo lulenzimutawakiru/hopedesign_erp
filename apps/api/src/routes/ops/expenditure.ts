@@ -44,12 +44,23 @@ expenditureOpsRouter.get('/expenses', ...runExpenseGet((c, ctx, q, _p, viewAll) 
   to: q.to != null ? String(q.to) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  paymentMode: q.paymentMode != null ? String(q.paymentMode) : undefined,
   ownOnly: !viewAll,
+  mine: q.mine === '1' || q.mine === 'true',
 })));
 expenditureOpsRouter.get('/expenses/:id', ...runExpenseGet((c, ctx, _q, p, viewAll) => exp.getExpense(c, ctx, Number(p.id), !viewAll)));
 expenditureOpsRouter.post('/expenses', ...run('expenditure.expenses.create', (c, ctx, b) => exp.createExpense(c, ctx, b)));
+expenditureOpsRouter.post('/expenses/submit-bulk', ...run('expenditure.expenses.submit', (c, ctx, b) => exp.submitExpenses(c, ctx, b.ids)));
+expenditureOpsRouter.post('/expenses/post-bulk', ...run('expenditure.expenses.post', (c, ctx, b) => exp.postExpenses(c, ctx, b.ids, b)));
+expenditureOpsRouter.post('/expenses/payslip', ...run('expenditure.expenses.post', (c, ctx, b) => exp.reportExpensesOnPayslip(c, ctx, b.ids)));
+expenditureOpsRouter.post('/expenses/payslip-remove', ...run('expenditure.expenses.post', (c, ctx, b) => exp.removeExpensesFromPayslip(c, ctx, b.ids)));
 expenditureOpsRouter.post('/expenses/:id/update', ...run('expenditure.expenses.update', (c, ctx, b, p) => exp.updateExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/expenses/:id/submit', ...run('expenditure.expenses.submit', (c, ctx, _b, p) => exp.submitExpense(c, ctx, Number(p.id))));
+expenditureOpsRouter.post('/expenses/:id/reset', ...run('expenditure.expenses.update', (c, ctx, _b, p) => exp.resetExpense(c, ctx, Number(p.id))));
+expenditureOpsRouter.post('/expenses/:id/split', ...run('expenditure.expenses.update', (c, ctx, b, p) => exp.splitExpense(c, ctx, Number(p.id), b.parts)));
+expenditureOpsRouter.get('/categories', ...runGet('expenditure.settings.view', (c, ctx) => exp.listExpenseCategories(c, ctx)));
+expenditureOpsRouter.post('/categories', ...run('expenditure.settings.update', (c, ctx, b) => exp.saveExpenseCategory(c, ctx, b)));
+expenditureOpsRouter.post('/categories/:id/update', ...run('expenditure.settings.update', (c, ctx, b, p) => exp.saveExpenseCategory(c, ctx, b, Number(p.id))));
 expenditureOpsRouter.post('/expenses/:id/pay', ...run('expenditure.payments.create', (c, ctx, b, p) => exp.payExpense(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/payments/:id/approve', ...run('expenditure.payments.approve', (c, ctx, b, p) => exp.approveExpensePayment(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : undefined)));
 expenditureOpsRouter.get('/payments/meta', ...runGet('expenditure.payments.create', (c, ctx) => exp.expensePaymentMeta(c, ctx)));
@@ -59,7 +70,10 @@ expenditureOpsRouter.post('/payments/:id/execute', ...run('expenditure.payments.
 expenditureOpsRouter.post('/payments/:id/reconcile', ...run('expenditure.payments.reconcile', (c, ctx, b, p) => exp.reconcileExpensePayment(c, ctx, Number(p.id), b)));
 expenditureOpsRouter.post('/payment-reconciliations/:id/approve', ...run('expenditure.payments.reconcile_approve', (c, ctx, b, p) => exp.approveExpensePaymentReconciliation(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : undefined)));
 expenditureOpsRouter.post('/expenses/:id/verify', ...run('expenditure.expenses.verify', (c, ctx, b, p) => exp.verifyExpenseForPosting(c, ctx, Number(p.id), b.comment != null ? String(b.comment) : undefined)));
-expenditureOpsRouter.post('/expenses/:id/post', ...run('expenditure.expenses.post', (c, ctx, _b, p) => exp.postExpense(c, ctx, Number(p.id))));
+expenditureOpsRouter.post('/expenses/:id/post', ...run('expenditure.expenses.post', (c, ctx, b, p) => exp.postExpense(c, ctx, Number(p.id), b)));
+expenditureOpsRouter.post('/expenses/:id/payslip', ...run('expenditure.expenses.post', (c, ctx, _b, p) => exp.reportExpensesOnPayslip(c, ctx, [Number(p.id)])));
+expenditureOpsRouter.post('/expenses/:id/payslip-remove', ...run('expenditure.expenses.post', (c, ctx, _b, p) => exp.removeExpensesFromPayslip(c, ctx, [Number(p.id)])));
+expenditureOpsRouter.post('/expenses/:id/reinvoice', ...run('sales.invoices.create', (c, ctx, _b, p) => exp.reinvoiceExpense(c, ctx, Number(p.id))));
 expenditureOpsRouter.post('/expenses/:id/void', ...run('expenditure.expenses.void', (c, ctx, b, p) => exp.voidExpense(c, ctx, Number(p.id), b.reason != null ? String(b.reason) : null)));
 expenditureOpsRouter.get('/board', ...runGet('expenditure.expenses.view', (c, ctx) => exp.expenseBoard(c, ctx)));
 expenditureOpsRouter.get('/summary', ...runGet('expenditure.expenses.view', (c, ctx) => exp.expenseSummary(c, ctx)));
