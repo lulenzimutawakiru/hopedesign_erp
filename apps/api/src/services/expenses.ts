@@ -9,6 +9,7 @@ import { logAudit } from './audit.js';
 import { notifyUserAdvanced, notifyRoleAdvanced } from './communication.js';
 import { getExpenseSettings } from './expenseSettings.js';
 import { runReceiptOcr } from './expenseOcr.js';
+import { createInvoice } from './sales.js';
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 const num0 = (v: unknown) => {
@@ -31,6 +32,71 @@ async function nextDoc(client: pg.PoolClient, ctx: Ctx, prefix: string): Promise
 function companyId(ctx: Ctx): number {
   if (!ctx.companyId) throw badRequest('Company context required');
   return ctx.companyId;
+}
+
+function paymentModeOf(v: unknown): 'employee' | 'company' {
+  const x = String(v ?? 'employee').trim().toLowerCase();
+  if (x === 'company' || x === 'company_account') return 'company';
+  if (x === 'employee' || x === 'own_account' || x === '') return 'employee';
+  throw badRequest('Paid by must be Employee or Company');
+}
+
+const REINVOICE_MODES = ['none', 'at_cost', 'sales_price'] as const;
+type ReinvoiceMode = (typeof REINVOICE_MODES)[number];
+
+function reinvoiceModeOf(raw: unknown, reinvoice?: unknown): ReinvoiceMode {
+  const mode = String(raw ?? '').trim().toLowerCase();
+  if ((REINVOICE_MODES as readonly string[]).includes(mode)) return mode as ReinvoiceMode;
+  return reinvoice === true || reinvoice === 'true' ? 'at_cost' : 'none';
+}
+
+/** Unit price charged to the customer. Null when the category is not reinvoiced. */
+function billableUnitPrice(input: { mode: ReinvoiceMode; cost: number; salesPrice: number; amount: number; quantity: number }): number | null {
+  if (input.mode === 'none') return null;
+  const qty = input.quantity > 0 ? input.quantity : 1;
+  if (input.mode === 'sales_price') return input.salesPrice > 0 ? input.salesPrice : null;
+  if (input.cost > 0) return input.cost;
+  return round2(input.amount / qty);
+}
+
+async function salesOrderCustomer(client: pg.PoolClient, ctx: Ctx, salesOrderId: number): Promise<number> {
+  const res = await client.query(
+    `SELECT customer_id FROM sales_orders
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3
+        AND status NOT IN ('CANCELLED','REJECTED')`,
+    [salesOrderId, companyId(ctx), ctx.tenantId]
+  );
+  if (!res.rows.length) throw badRequest('Sales order not found');
+  return Number(res.rows[0].customer_id);
+}
+
+async function assertCategoryCanReinvoice(client: pg.PoolClient, ctx: Ctx, categoryId: number | null) {
+  if (categoryId == null) throw badRequest('Expense category is required');
+  const res = await client.query(
+    `SELECT reinvoice, reinvoice_mode FROM expense_categories
+      WHERE id = $1 AND company_id = $2 AND tenant_id = $3`,
+    [categoryId, companyId(ctx), ctx.tenantId]
+  );
+  if (!res.rows.length) throw badRequest('Expense category not found');
+  if (reinvoiceModeOf(res.rows[0].reinvoice_mode, res.rows[0].reinvoice) === 'none') {
+    throw badRequest('This category cannot be reinvoiced to a customer');
+  }
+}
+
+function idList(ids: unknown): number[] {
+  if (!Array.isArray(ids)) throw badRequest('Select at least one expense');
+  const list = [...new Set(ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+  if (list.length === 0) throw badRequest('Select at least one expense');
+  if (list.length > 50) throw badRequest('Select at most 50 expenses');
+  return list;
+}
+
+async function commentExpense(client: pg.PoolClient, ctx: Ctx, cur: Record<string, unknown>, comment: string) {
+  await client.query(
+    `INSERT INTO approval_actions (company_id, tenant_id, entity_type, entity_id, entity_code, action, actor_user_id, comment)
+     VALUES ($1,$2,'ops.expenses',$3,$4,'COMMENT',$5,$6)`,
+    [companyId(ctx), ctx.tenantId, cur.id, String(cur.expNo), ctx.userId ?? null, comment]
+  );
 }
 
 async function departments(client: pg.PoolClient, ctx: Ctx) {
@@ -97,12 +163,23 @@ async function budgets(client: pg.PoolClient, ctx: Ctx) {
 }
 
 /** Form metadata: categories, payment channels, departments, centres, projects, employees, suppliers, funds, budgets. */
+const CATEGORY_LIST_SQL = `
+  SELECT c.id, c.code, c.name, c.category_group, c.account_id, a.code AS account_code,
+         a.name AS account_name, c.description, c.is_active, c.unit_price, c.tax_id, c.reinvoice,
+         c.reinvoice_mode, c.guideline, c.uom_id, uom.code AS uom_code, uom.name AS uom_name,
+         c.sales_price, c.sales_tax_id, t.rate AS tax_rate, t.name AS tax_name,
+         st.rate AS sales_tax_rate, st.name AS sales_tax_name
+  FROM expense_categories c
+  LEFT JOIN chart_of_accounts a ON a.id = c.account_id
+  LEFT JOIN taxes t ON t.id = c.tax_id
+  LEFT JOIN taxes st ON st.id = c.sales_tax_id
+  LEFT JOIN units uom ON uom.id = c.uom_id
+`;
+
 export async function expenseMeta(client: pg.PoolClient, ctx: Ctx) {
-  const [cats, methods, depts, centres, projs, emps, sups, funds, bdgs] = await Promise.all([
+  const [cats, methods, depts, centres, projs, emps, sups, funds, bdgs, accounts, taxes, customers, orders, units, settings] = await Promise.all([
     client.query(
-      `SELECT c.id, c.code, c.name, c.category_group, c.account_id, a.code AS account_code,
-              a.name AS account_name, c.description, c.is_active
-       FROM expense_categories c LEFT JOIN chart_of_accounts a ON a.id = c.account_id
+      `${CATEGORY_LIST_SQL}
        WHERE c.company_id = $1 AND c.tenant_id = $2 AND c.is_active = true
        ORDER BY c.category_group, c.name`,
       [companyId(ctx), ctx.tenantId]
@@ -127,6 +204,41 @@ export async function expenseMeta(client: pg.PoolClient, ctx: Ctx) {
       [companyId(ctx), ctx.tenantId]
     ),
     budgets(client, ctx),
+    client.query(
+      `SELECT id, code, name FROM chart_of_accounts
+       WHERE company_id = $1 AND tenant_id = $2 AND is_active = true AND is_posting = true
+         AND account_type = 'EXPENSE'
+       ORDER BY code LIMIT 400`,
+      [companyId(ctx), ctx.tenantId]
+    ),
+    client.query(
+      `SELECT id, code, name, rate FROM taxes
+       WHERE company_id = $1 AND tenant_id = $2 AND is_active = true
+       ORDER BY code`,
+      [companyId(ctx), ctx.tenantId]
+    ),
+    client.query(
+      `SELECT id, code, name FROM customers
+       WHERE company_id = $1 AND tenant_id = $2 AND status = 'ACTIVE'
+       ORDER BY name LIMIT 300`,
+      [companyId(ctx), ctx.tenantId]
+    ),
+    client.query(
+      `SELECT so.id, so.order_no, so.customer_id, cu.name AS customer_name
+       FROM sales_orders so
+       JOIN customers cu ON cu.id = so.customer_id
+       WHERE so.company_id = $1 AND so.tenant_id = $2
+         AND so.status NOT IN ('CANCELLED','REJECTED')
+       ORDER BY so.id DESC LIMIT 200`,
+      [companyId(ctx), ctx.tenantId]
+    ),
+    client.query(
+      `SELECT id, code, name FROM units
+        WHERE company_id = $1 AND tenant_id = $2
+        ORDER BY name`,
+      [companyId(ctx), ctx.tenantId]
+    ),
+    getExpenseSettings(client, ctx),
   ]);
   return {
     categories: toCamelRows(cats.rows),
@@ -138,6 +250,12 @@ export async function expenseMeta(client: pg.PoolClient, ctx: Ctx) {
     suppliers: sups,
     pettyCashFunds: toCamelRows(funds.rows),
     budgets: bdgs,
+    accounts: toCamelRows(accounts.rows),
+    taxes: toCamelRows(taxes.rows),
+    customers: toCamelRows(customers.rows),
+    salesOrders: toCamelRows(orders.rows),
+    units: toCamelRows(units.rows),
+    reimburseInPayslip: settings.reimburseInPayslip,
   };
 }
 
@@ -283,20 +401,40 @@ export async function createExpense(client: pg.PoolClient, ctx: Ctx, b: Record<s
     isPlanned: b.isPlanned,
   });
   const dup = b.duplicateOfId != null ? n(b.duplicateOfId) : null;
+  let employeeId = n(b.employeeId);
+  if (employeeId == null && !('employeeId' in b) && ctx.userId != null) {
+    const linked = await client.query(
+      `SELECT employee_id FROM users WHERE id = $1 AND tenant_id = $2`,
+      [ctx.userId, ctx.tenantId]
+    );
+    employeeId = n(linked.rows[0]?.employee_id);
+  }
+  const mode = paymentModeOf(b.paymentMode);
+  const quantity = n(b.quantity) != null && num0(b.quantity) > 0 ? num0(b.quantity) : 1;
+  const unitPrice = n(b.unitPrice);
+  let customerId = n(b.customerId);
+  const salesOrderId = n(b.salesOrderId);
+  if (salesOrderId != null) {
+    await assertCategoryCanReinvoice(client, ctx, categoryId);
+    customerId = await salesOrderCustomer(client, ctx, salesOrderId);
+  }
+  const salesPrice = n(b.salesPrice) != null && num0(b.salesPrice) > 0 ? round2(num0(b.salesPrice)) : null;
   const ins = await client.query(
     `INSERT INTO expense_transactions
        (company_id, tenant_id, branch_id, exp_no, exp_date, department_id, cost_centre_id, category_id,
         description, amount, currency, payment_method_id, payee, supplier_id, employee_id, project_id,
         budget_id, account_id, tax_id, tax_amount, vehicle, receipt_ref, reference, is_planned,
-        requisition_id, duplicate_of_id, risk_score, risk_level, risk_flags, status, payment_status,
-        accounting_status, created_by, updated_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,'DRAFT','UNPAID','UNPOSTED',$30,$30)
+        requisition_id, duplicate_of_id, risk_score, risk_level, risk_flags,
+        payment_mode, quantity, unit_price, notes, customer_id, sales_order_id, sales_price,
+        status, payment_status, accounting_status, created_by, updated_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,'DRAFT','UNPAID','UNPOSTED',$37,$37)
      RETURNING id`,
     [company, ctx.tenantId, ctx.branchId ?? null, expNo, isoDate(b.expDate), n(b.departmentId), n(b.costCentreId),
      categoryId, s(b.description), round2(amount), s(b.currency) ?? 'UGX', paymentMethodId, s(b.payee),
-     n(b.supplierId), n(b.employeeId), n(b.projectId), n(b.budgetId), accountId, n(b.taxId), round2(num0(b.taxAmount)),
+     n(b.supplierId), employeeId, n(b.projectId), n(b.budgetId), accountId, n(b.taxId), round2(num0(b.taxAmount)),
      s(b.vehicle), s(b.receiptRef), s(b.reference), b.isPlanned === true || b.isPlanned === 'true',
-     n(b.requisitionId), dup, risk.score, risk.level, JSON.stringify(risk.flags), ctx.userId ?? null]
+     n(b.requisitionId), dup, risk.score, risk.level, JSON.stringify(risk.flags),
+     mode, quantity, unitPrice, s(b.notes), customerId, salesOrderId, salesPrice, ctx.userId ?? null]
   );
   const expenseId = Number(ins.rows[0].id);
   if (Array.isArray(b.lines)) {
@@ -325,7 +463,9 @@ const EXPENSE_EDIT = {
   paymentMethodId: 'payment_method_id', payee: 'payee', supplierId: 'supplier_id',
   employeeId: 'employee_id', projectId: 'project_id', budgetId: 'budget_id', accountId: 'account_id',
   taxId: 'tax_id', taxAmount: 'tax_amount', vehicle: 'vehicle', receiptRef: 'receipt_ref',
-  reference: 'reference', isPlanned: 'is_planned',
+  reference: 'reference', isPlanned: 'is_planned', paymentMode: 'payment_mode',
+  quantity: 'quantity', unitPrice: 'unit_price', notes: 'notes',
+  customerId: 'customer_id', salesOrderId: 'sales_order_id', salesPrice: 'sales_price',
 } as const;
 
 export async function updateExpense(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown>) {
@@ -334,7 +474,17 @@ export async function updateExpense(client: pg.PoolClient, ctx: Ctx, id: number,
     [id, companyId(ctx), ctx.tenantId]
   );
   const cur = await getExpense(client, ctx, id, true);
-  if (cur.status !== 'DRAFT') throw badRequest(`Only your own draft expenses can be edited (current: ${cur.status})`);
+  const status = String(cur.status);
+  const keys = Object.keys(b).filter((key) => key in EXPENSE_EDIT);
+  const reinvoiceKeys = new Set(['customerId', 'salesOrderId', 'salesPrice']);
+  const onlyReinvoice = keys.length > 0 && keys.every((key) => reinvoiceKeys.has(key));
+  if (status !== 'DRAFT' && !(status === 'SUBMITTED' && onlyReinvoice)) {
+    throw badRequest(`Only your own draft expenses can be edited (current: ${status})`);
+  }
+  if (n(b.salesOrderId) != null) {
+    await assertCategoryCanReinvoice(client, ctx, n(b.categoryId) ?? n(cur.categoryId));
+    b.customerId = await salesOrderCustomer(client, ctx, Number(b.salesOrderId));
+  }
   const sets: string[] = [];
   const params: unknown[] = [];
   const changes: Record<string, unknown> = {};
@@ -345,8 +495,9 @@ export async function updateExpense(client: pg.PoolClient, ctx: Ctx, id: number,
     changes[col] = val;
     oldChanges[col] = oldValue;
   };
+  if ('paymentMode' in b) b.paymentMode = paymentModeOf(b.paymentMode);
   for (const [camel, col] of Object.entries(EXPENSE_EDIT)) {
-    if (camel in b) push(col, col === 'amount' || col === 'tax_amount' ? round2(num0(b[camel])) : col === 'is_planned' ? b[camel] === true || b[camel] === 'true' : col === 'exp_date' ? isoDate(b[camel]) : n(b[camel]) ?? s(b[camel]), cur[camel]);
+    if (camel in b) push(col, col === 'amount' || col === 'tax_amount' || col === 'unit_price' || col === 'sales_price' ? (b[camel] == null || b[camel] === '' ? null : round2(num0(b[camel]))) : col === 'quantity' ? (num0(b[camel]) > 0 ? num0(b[camel]) : 1) : col === 'is_planned' ? b[camel] === true || b[camel] === 'true' : col === 'exp_date' ? isoDate(b[camel]) : n(b[camel]) ?? s(b[camel]), cur[camel]);
   }
   if (sets.length === 0) return cur;
   params.push(ctx.userId ?? null, id);
@@ -1010,7 +1161,7 @@ export async function verifyExpenseForPosting(client: pg.PoolClient, ctx: Ctx, i
   return getExpense(client, ctx, id);
 }
 
-export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
+export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number, body: Record<string, unknown> = {}) {
   await client.query(
     `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
     [id, companyId(ctx), ctx.tenantId]
@@ -1051,8 +1202,13 @@ export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
     lines.push({ account_id: vat, debit: taxAmount, credit: 0, description: `Input VAT ${cur.expNo}` });
   }
   lines.push({ account_id: creditAccount, debit: 0, credit: round2(amount), description: isPaid ? `Payment ${cur.expNo}` : `Accounts payable ${cur.expNo}` });
+  const requestedJournal = String(body.journalType ?? 'EXPENSE').trim().toUpperCase() || 'EXPENSE';
+  if (requestedJournal !== 'EXPENSE') throw badRequest('Expenses post to the Expense journal');
+  const entryDate = body.accountingDate != null && String(body.accountingDate).trim() !== ''
+    ? isoDate(body.accountingDate)
+    : isoDate(cur.expDate);
   const journalId = await finance.postJournalLines(client, ctx, {
-    entryDate: isoDate(cur.expDate),
+    entryDate,
     journalType: 'EXPENSE',
     description: `Expense ${cur.expNo} - ${String(cur.description)}`,
     lines,
@@ -1065,17 +1221,136 @@ export async function postExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
   await client.query(
     `UPDATE expense_transactions
         SET status = $4, accounting_status = 'POSTED', gl_posted = true, gl_journal_id = $1,
-            posted_by = $2, posted_at = now(), updated_by = $2
+            posted_by = $2, posted_at = now(), updated_by = $2,
+            accounting_date = $5, journal_type = 'EXPENSE'
       WHERE id = $3`,
-    [journalId, ctx.userId ?? null, id, postedStatus]
+    [journalId, ctx.userId ?? null, id, postedStatus, entryDate]
   );
   await client.query(
     `INSERT INTO financial_postings (company_id, tenant_id, ref_type, ref_id, ref_code, journal_id, posting_type, amount, posted_by)
      VALUES ($1,$2,'EXPENSE',$3,$4,$5,'EXPENSE',$6,$7)`,
     [companyId(ctx), ctx.tenantId, id, String(cur.expNo), journalId, round2(amount), ctx.userId ?? null]
   );
-  await logAudit(client, ctx, { action: 'post', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), newValues: { journalId, status: 'POSTED', accountingStatus: 'POSTED' } });
-  await emitEvent(client, ctx, { eventType: 'expense.posted', entityType: 'ops.expenses', entityId: id, entityCode: String(cur.expNo), payload: { journalId, amount } });
+  await logAudit(client, ctx, { action: 'post', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), newValues: { journalId, status: 'POSTED', accountingStatus: 'POSTED', accountingDate: entryDate } });
+  await emitEvent(client, ctx, { eventType: 'expense.posted', entityType: 'ops.expenses', entityId: id, entityCode: String(cur.expNo), payload: { journalId, amount, accountingDate: entryDate } });
+  return getExpense(client, ctx, id);
+}
+
+/** Post every selected approved expense. One accounting date applies to the batch. */
+export async function postExpenses(client: pg.PoolClient, ctx: Ctx, ids: unknown, body: Record<string, unknown> = {}) {
+  const list = idList(ids);
+  for (const id of list) {
+    const cur = await getExpense(client, ctx, id);
+    if (String(cur.status) !== 'APPROVED') {
+      throw badRequest(`Only approved expenses can be posted together (${cur.expNo} is ${cur.status})`);
+    }
+    await postExpense(client, ctx, id, body);
+  }
+  return { posted: list.length };
+}
+
+function assertPayslipCandidate(cur: Record<string, unknown>, enabled: boolean) {
+  if (!enabled) throw badRequest('Turn on Reimburse in Payslip in Expenses settings first');
+  if (String(cur.paymentMode) !== 'employee') throw badRequest(`${cur.expNo} was paid by the company and is not reimbursed on a payslip`);
+  const status = String(cur.status);
+  if (status !== 'APPROVED' && status !== 'POSTED') {
+    throw badRequest(`${cur.expNo} must be approved or posted before it can go on a payslip`);
+  }
+  if (String(cur.paymentStatus) === 'PAID') throw badRequest(`${cur.expNo} is already paid`);
+  if (cur.employeeId == null) throw badRequest(`${cur.expNo} has no employee`);
+}
+
+/** Flag expenses for the next payslip. Does not create a payroll earning or a payment. */
+export async function reportExpensesOnPayslip(client: pg.PoolClient, ctx: Ctx, ids: unknown) {
+  const settings = await getExpenseSettings(client, ctx);
+  const list = idList(ids);
+  for (const id of list) {
+    await client.query(
+      `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+      [id, companyId(ctx), ctx.tenantId]
+    );
+    const cur = await getExpense(client, ctx, id);
+    assertPayslipCandidate(cur, settings.reimburseInPayslip);
+    if (cur.payslipReimburse === true) throw badRequest(`${cur.expNo} is already on the next payslip`);
+    await client.query(
+      `UPDATE expense_transactions
+          SET payslip_reimburse = true, payslip_reported_at = now(), payslip_reported_by = $1, updated_by = $1
+        WHERE id = $2`,
+      [ctx.userId ?? null, id]
+    );
+    await commentExpense(client, ctx, cur, 'Reported for the next payslip. This does not pay the employee. Include the amount on the next payslip, or remove the flag before paying by cash, cheque or bank transfer.');
+    await logAudit(client, ctx, { action: 'payslip', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), newValues: { payslipReimburse: true } });
+  }
+  return { reported: list.length };
+}
+
+export async function removeExpensesFromPayslip(client: pg.PoolClient, ctx: Ctx, ids: unknown) {
+  const list = idList(ids);
+  for (const id of list) {
+    await client.query(
+      `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+      [id, companyId(ctx), ctx.tenantId]
+    );
+    const cur = await getExpense(client, ctx, id);
+    if (cur.payslipReimburse !== true) throw badRequest(`${cur.expNo} is not on a payslip`);
+    if (String(cur.paymentStatus) === 'PAID' || String(cur.status) === 'PAID') throw badRequest(`${cur.expNo} is already paid`);
+    await client.query(
+      `UPDATE expense_transactions
+          SET payslip_reimburse = false, payslip_reported_at = NULL, payslip_reported_by = NULL, updated_by = $1
+        WHERE id = $2`,
+      [ctx.userId ?? null, id]
+    );
+    await commentExpense(client, ctx, cur, 'Removed from the next payslip.');
+    await logAudit(client, ctx, { action: 'payslip_remove', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), newValues: { payslipReimburse: false } });
+  }
+  return { removed: list.length };
+}
+
+/** Create a customer invoice through the sales invoice service after the expense is posted. */
+export async function reinvoiceExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
+  await client.query(
+    `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
+  const cur = await getExpense(client, ctx, id);
+  if (cur.glPosted !== true && String(cur.accountingStatus) !== 'POSTED') {
+    throw badRequest('Post the expense before reinvoicing it');
+  }
+  if (cur.customerInvoiceId != null) throw badRequest('This expense already has a customer invoice');
+  const mode = reinvoiceModeOf(cur.categoryReinvoiceMode, cur.categoryReinvoice);
+  if (mode === 'none') throw badRequest('This category cannot be reinvoiced');
+  const customerId = n(cur.customerId);
+  if (customerId == null) throw badRequest('Choose a customer to reinvoice');
+  const qty = num0(cur.quantity) > 0 ? num0(cur.quantity) : 1;
+  const salesPrice = num0(cur.salesPrice) > 0 ? num0(cur.salesPrice) : num0(cur.categorySalesPrice);
+  const unit = billableUnitPrice({
+    mode,
+    cost: num0(cur.categoryUnitPrice),
+    salesPrice,
+    amount: num0(cur.amount),
+    quantity: qty,
+  });
+  if (unit == null || unit < 0) throw badRequest('Set a sales price before reinvoicing at sales price');
+  const orderNote = cur.salesOrderNo ? ` on sales order ${cur.salesOrderNo}` : '';
+  const invoice = await createInvoice(client, ctx, {
+    customerId,
+    invoiceDate: isoDate(cur.accountingDate ?? cur.expDate),
+    currency: s(cur.currency) ?? 'UGX',
+    notes: `Expense ${cur.expNo}${orderNote}`,
+    items: [{
+      description: String(cur.description),
+      quantity: qty,
+      unitPrice: unit,
+      taxPercent: num0(cur.categorySalesTaxRate),
+      unitId: n(cur.categoryUomId),
+    }],
+  });
+  await client.query(
+    `UPDATE expense_transactions SET customer_invoice_id = $1, updated_by = $2 WHERE id = $3`,
+    [invoice.invoiceId, ctx.userId ?? null, id]
+  );
+  await commentExpense(client, ctx, cur, `Customer invoice ${invoice.invoiceNo} created for this expense.`);
+  await logAudit(client, ctx, { action: 'reinvoice', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), newValues: { invoiceId: invoice.invoiceId, invoiceNo: invoice.invoiceNo } });
   return getExpense(client, ctx, id);
 }
 
@@ -1107,7 +1382,8 @@ export async function voidExpense(client: pg.PoolClient, ctx: Ctx, id: number, r
   await client.query(
     `UPDATE expense_transactions
         SET status = 'VOID', accounting_status = CASE WHEN gl_posted THEN 'REVERSED' ELSE accounting_status END,
-            voided_by = $1, voided_at = now(), void_reason = $2, updated_by = $1
+            voided_by = $1, voided_at = now(), void_reason = $2, updated_by = $1,
+            payslip_reimburse = false, payslip_reported_at = NULL, payslip_reported_by = NULL
       WHERE id = $3`,
     [ctx.userId ?? null, reason, id]
   );
@@ -1131,7 +1407,24 @@ const EXPENSE_SELECT = `
          e.employee_no, e.first_name, e.last_name,
          b.budget_no,
          r.req_no,
-         (u.first_name || ' ' || u.last_name) AS created_by_name
+         (u.first_name || ' ' || u.last_name) AS created_by_name,
+         cu.name AS customer_name,
+         so.order_no AS sales_order_no,
+         c.unit_price AS category_unit_price,
+         c.reinvoice AS category_reinvoice,
+         c.reinvoice_mode AS category_reinvoice_mode,
+         c.guideline AS category_guideline,
+         c.sales_price AS category_sales_price,
+         c.uom_id AS category_uom_id,
+         uom.name AS category_uom_name,
+         c.tax_id AS category_tax_id,
+         tx.rate AS category_tax_rate,
+         tx.name AS category_tax_name,
+         st.rate AS category_sales_tax_rate,
+         st.name AS category_sales_tax_name,
+         a.code AS account_code,
+         a.name AS account_name,
+         ci.invoice_no AS customer_invoice_no
   FROM expense_transactions et
   LEFT JOIN departments d ON d.id = et.department_id
   LEFT JOIN cost_centres cc ON cc.id = et.cost_centre_id
@@ -1143,6 +1436,13 @@ const EXPENSE_SELECT = `
   LEFT JOIN budgets b ON b.id = et.budget_id
   LEFT JOIN requisitions r ON r.id = et.requisition_id
   LEFT JOIN users u ON u.id = et.created_by
+  LEFT JOIN customers cu ON cu.id = et.customer_id
+  LEFT JOIN sales_orders so ON so.id = et.sales_order_id
+  LEFT JOIN taxes tx ON tx.id = COALESCE(et.tax_id, c.tax_id)
+  LEFT JOIN taxes st ON st.id = c.sales_tax_id
+  LEFT JOIN units uom ON uom.id = c.uom_id
+  LEFT JOIN customer_invoices ci ON ci.id = et.customer_invoice_id
+  LEFT JOIN chart_of_accounts a ON a.id = COALESCE(et.account_id, c.account_id)
 `;
 
 export async function getExpense(client: pg.PoolClient, ctx: Ctx, id: number, ownOnly = false): Promise<Record<string, unknown>> {
@@ -1214,7 +1514,16 @@ export async function listExpenses(client: pg.PoolClient, ctx: Ctx, q: Record<st
       where.push(`et.created_by = $${params.length}`);
     }
   }
+  if (q.mine === true) {
+    if (ctx.userId == null) {
+      where.push('1 = 0');
+    } else {
+      params.push(ctx.userId);
+      where.push(`(et.created_by = $${params.length} OR et.employee_id = (SELECT u.employee_id FROM users u WHERE u.id = $${params.length}))`);
+    }
+  }
   if (s(q.status)) { params.push(s(q.status)); where.push(`et.status = $${params.length}`); }
+  if (s(q.paymentMode)) { params.push(paymentModeOf(q.paymentMode)); where.push(`et.payment_mode = $${params.length}`); }
   if (s(q.paymentStatus)) { params.push(s(q.paymentStatus)); where.push(`et.payment_status = $${params.length}`); }
   if (n(q.departmentId) != null) { params.push(n(q.departmentId)); where.push(`et.department_id = $${params.length}`); }
   if (n(q.costCentreId) != null) { params.push(n(q.costCentreId)); where.push(`et.cost_centre_id = $${params.length}`); }
@@ -1226,7 +1535,10 @@ export async function listExpenses(client: pg.PoolClient, ctx: Ctx, q: Record<st
   if (s(q.to)) { params.push(s(q.to)); where.push(`et.exp_date <= $${params.length}`); }
   if (s(q.q)) {
     params.push(`%${s(q.q)}%`);
-    where.push(`(et.exp_no ILIKE $${params.length} OR et.description ILIKE $${params.length} OR et.payee ILIKE $${params.length} OR et.reference ILIKE $${params.length})`);
+    const like = `$${params.length}`;
+    where.push(`(et.exp_no ILIKE ${like} OR et.description ILIKE ${like} OR et.payee ILIKE ${like} OR et.reference ILIKE ${like}
+      OR EXISTS (SELECT 1 FROM employees emp WHERE emp.id = et.employee_id AND (emp.first_name ILIKE ${like} OR emp.last_name ILIKE ${like}))
+      OR EXISTS (SELECT 1 FROM expense_categories cat WHERE cat.id = et.category_id AND (cat.name ILIKE ${like} OR cat.code ILIKE ${like})))`);
   }
   params.push(pageSize, (page - 1) * pageSize);
   const rows = await client.query(
@@ -1234,11 +1546,212 @@ export async function listExpenses(client: pg.PoolClient, ctx: Ctx, q: Record<st
      ORDER BY et.exp_date DESC, et.id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
+  const scopeParams = params.slice(0, params.length - 2);
   const cnt = await client.query(
     `SELECT count(*)::int AS total FROM expense_transactions et WHERE ${where.join(' AND ')}`,
-    params.slice(0, params.length - 2)
+    scopeParams
   );
-  return { rows: toCamelRows(rows.rows), total: cnt.rows[0].total, page, pageSize };
+  // Banner totals ignore the status / payment filters so the three Odoo figures stay stable while the list is filtered.
+  const bannerBinds: unknown[] = [];
+  const bannerClauses = ['et.tenant_id = $1', 'et.company_id = $2'];
+  bannerBinds.push(ctx.tenantId, companyId(ctx));
+  if (q.ownOnly === true) {
+    if (ctx.userId == null) bannerClauses.push('1 = 0');
+    else {
+      bannerBinds.push(ctx.userId);
+      bannerClauses.push(`et.created_by = $${bannerBinds.length}`);
+    }
+  }
+  if (q.mine === true && ctx.userId != null) {
+    bannerBinds.push(ctx.userId);
+    bannerClauses.push(`(et.created_by = $${bannerBinds.length} OR et.employee_id = (SELECT u.employee_id FROM users u WHERE u.id = $${bannerBinds.length}))`);
+  }
+  const banner = await client.query(
+    `SELECT
+       COALESCE(SUM(amount) FILTER (WHERE status = 'DRAFT'), 0)::numeric AS to_submit,
+       COALESCE(SUM(amount) FILTER (WHERE status = 'SUBMITTED'), 0)::numeric AS waiting_approval,
+       COALESCE(SUM(amount) FILTER (WHERE status = 'APPROVED' AND payment_mode = 'employee' AND payment_status <> 'PAID'), 0)::numeric AS waiting_reimbursement
+     FROM expense_transactions et
+     WHERE ${bannerClauses.join(' AND ')}`,
+    bannerBinds
+  );
+  return {
+    rows: toCamelRows(rows.rows),
+    total: cnt.rows[0].total,
+    page,
+    pageSize,
+    banner: toCamelRow(banner.rows[0] ?? {}),
+  };
+}
+
+export async function submitExpenses(client: pg.PoolClient, ctx: Ctx, ids: unknown) {
+  const list = Array.isArray(ids) ? ids.map((id) => Number(id)).filter((id) => Number.isFinite(id)) : [];
+  if (list.length === 0) throw badRequest('Select at least one draft expense to submit');
+  if (list.length > 50) throw badRequest('Submit at most 50 expenses at a time');
+  for (const id of list) await submitExpense(client, ctx, id);
+  return { submitted: list.length };
+}
+
+export async function resetExpense(client: pg.PoolClient, ctx: Ctx, id: number) {
+  await client.query(
+    `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
+  const cur = await getExpense(client, ctx, id, true);
+  if (cur.createdBy == null || Number(cur.createdBy) !== Number(ctx.userId)) {
+    throw forbidden('Only the person who logged the expense can reset it to draft');
+  }
+  if (!['SUBMITTED', 'REJECTED'].includes(String(cur.status))) {
+    throw badRequest(`Only submitted or refused expenses can be reset (current: ${cur.status})`);
+  }
+  if (String(cur.accountingStatus) === 'POSTED') throw badRequest('A posted expense cannot be reset to draft');
+  await client.query(
+    `UPDATE budget_commitments
+        SET status = 'RELEASED', released_at = now()
+      WHERE tenant_id = $1 AND doc_type = 'EXPENSE' AND doc_ref_type = 'ops.expenses'
+        AND doc_ref_id = $2 AND status = 'COMMITTED'`,
+    [ctx.tenantId, id]
+  );
+  await client.query(
+    `UPDATE approval_tasks SET status = 'REJECTED', comment = 'Reset to draft', decided_at = now()
+      WHERE status IN ('PENDING','ESCALATED')
+        AND instance_id IN (
+          SELECT id FROM workflow_instances
+           WHERE entity_type = 'ops.expenses' AND entity_id = $1
+             AND status IN ('RUNNING','ESCALATED','EXECUTION_PENDING')
+        )`,
+    [id]
+  );
+  await client.query(
+    `UPDATE workflow_instances SET status = 'CANCELLED', completed_at = now()
+      WHERE entity_type = 'ops.expenses' AND entity_id = $1
+        AND status IN ('RUNNING','ESCALATED','EXECUTION_PENDING')`,
+    [id]
+  );
+  await client.query(
+    `UPDATE expense_transactions SET status = 'DRAFT', updated_by = $1 WHERE id = $2`,
+    [ctx.userId ?? null, id]
+  );
+  await logAudit(client, ctx, { action: 'reset', resource: 'expenses', recordId: id, recordCode: String(cur.expNo), newValues: { status: 'DRAFT' } });
+  return getExpense(client, ctx, id);
+}
+
+export async function splitExpense(client: pg.PoolClient, ctx: Ctx, id: number, parts: unknown) {
+  await client.query(
+    `SELECT id FROM expense_transactions WHERE id = $1 AND company_id = $2 AND tenant_id = $3 FOR UPDATE`,
+    [id, companyId(ctx), ctx.tenantId]
+  );
+  const cur = await getExpense(client, ctx, id, true);
+  if (String(cur.status) !== 'DRAFT') throw badRequest('Only a draft expense can be split');
+  if (!Array.isArray(parts) || parts.length < 2) throw badRequest('Split the expense into at least two amounts');
+  const slices = parts.map((part) => {
+    const row = part as Record<string, unknown>;
+    const amount = round2(num0(row.amount));
+    if (amount <= 0) throw badRequest('Each split amount must be greater than zero');
+    return { amount, description: s(row.description) || String(cur.description) };
+  });
+  const sum = round2(slices.reduce((total, part) => total + part.amount, 0));
+  if (Math.abs(sum - num0(cur.amount)) > 0.009) {
+    throw badRequest(`Split amounts must add up to the expense total (${num0(cur.amount)})`);
+  }
+  await client.query(
+    `UPDATE expense_transactions
+        SET amount = $1, quantity = 1, unit_price = NULL, tax_amount = 0, description = $2, updated_by = $3
+      WHERE id = $4`,
+    [slices[0].amount, slices[0].description, ctx.userId ?? null, id]
+  );
+  const ids = [id];
+  for (const part of slices.slice(1)) {
+    const created = await createExpense(client, ctx, {
+      description: part.description,
+      amount: part.amount,
+      categoryId: cur.categoryId,
+      expDate: cur.expDate,
+      currency: cur.currency,
+      departmentId: cur.departmentId,
+      costCentreId: cur.costCentreId,
+      paymentMethodId: cur.paymentMethodId,
+      payee: cur.payee,
+      supplierId: cur.supplierId,
+      employeeId: cur.employeeId,
+      projectId: cur.projectId,
+      budgetId: cur.budgetId,
+      accountId: cur.accountId,
+      taxId: cur.taxId,
+      taxAmount: 0,
+      vehicle: cur.vehicle,
+      reference: cur.reference,
+      paymentMode: cur.paymentMode,
+      notes: cur.notes,
+      customerId: cur.customerId,
+      salesOrderId: cur.salesOrderId,
+      salesPrice: cur.salesPrice,
+      isPlanned: cur.isPlanned,
+    });
+    ids.push(Number(created.id));
+  }
+  return { ids };
+}
+
+const CATEGORY_GROUPS = ['OPERATIONS', 'FACTORY', 'ADMINISTRATION', 'STAFF', 'SALES_MARKETING', 'LOGISTICS'];
+
+export async function listExpenseCategories(client: pg.PoolClient, ctx: Ctx) {
+  const res = await client.query(
+    `${CATEGORY_LIST_SQL}
+     WHERE c.company_id = $1 AND c.tenant_id = $2
+     ORDER BY c.is_active DESC, c.name`,
+    [companyId(ctx), ctx.tenantId]
+  );
+  return toCamelRows(res.rows);
+}
+
+export async function saveExpenseCategory(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>, id?: number) {
+  const code = s(b.code)?.trim();
+  const name = s(b.name)?.trim();
+  if (!code) throw badRequest('Reference is required');
+  if (!name) throw badRequest('Category name is required');
+  const group = String(b.categoryGroup ?? 'OPERATIONS').toUpperCase();
+  if (!CATEGORY_GROUPS.includes(group)) throw badRequest('Choose a category group');
+  const unitPrice = b.unitPrice == null || b.unitPrice === '' ? null : round2(num0(b.unitPrice));
+  if (unitPrice != null && unitPrice < 0) throw badRequest('Cost cannot be negative');
+  const mode = reinvoiceModeOf(b.reinvoiceMode, b.reinvoice);
+  const salesPrice = b.salesPrice == null || b.salesPrice === '' ? null : round2(num0(b.salesPrice));
+  if (salesPrice != null && salesPrice < 0) throw badRequest('Sales price cannot be negative');
+  if (mode === 'sales_price' && !(salesPrice != null && salesPrice > 0)) {
+    throw badRequest('Sales price is required when re-invoicing at sales price');
+  }
+  const values = [
+    code, name, group, n(b.accountId), s(b.description),
+    b.isActive === false || b.isActive === 'false' ? false : true,
+    unitPrice, n(b.taxId), mode !== 'none', mode, s(b.guideline)?.trim() || null, n(b.uomId), salesPrice, n(b.salesTaxId),
+  ];
+  try {
+    if (id == null) {
+      const ins = await client.query(
+        `INSERT INTO expense_categories
+           (company_id, tenant_id, code, name, category_group, account_id, description, is_active,
+            unit_price, tax_id, reinvoice, reinvoice_mode, guideline, uom_id, sales_price, sales_tax_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+        [companyId(ctx), ctx.tenantId, ...values]
+      );
+      return { id: Number(ins.rows[0].id) };
+    }
+    const upd = await client.query(
+      `UPDATE expense_categories
+          SET code = $3, name = $4, category_group = $5, account_id = $6, description = $7,
+              is_active = $8, unit_price = $9, tax_id = $10, reinvoice = $11, reinvoice_mode = $12,
+              guideline = $13, uom_id = $14, sales_price = $15, sales_tax_id = $16
+        WHERE id = $17 AND company_id = $1 AND tenant_id = $2
+        RETURNING id`,
+      [companyId(ctx), ctx.tenantId, ...values, id]
+    );
+    if (!upd.rows.length) throw notFound('Expense category not found');
+    return { id };
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === '23505') throw badRequest('An expense category with this reference already exists');
+    throw err;
+  }
 }
 
 export async function expenseBoard(client: pg.PoolClient, ctx: Ctx) {

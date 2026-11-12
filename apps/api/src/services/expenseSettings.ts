@@ -22,6 +22,8 @@ export interface ExpenseSettings {
   inputVatAccountCode: string;
   approvalLimitAmount: number;
   allowOverBudget: boolean;
+  /** When on, approved employee-paid expenses can be flagged for the next payslip. */
+  reimburseInPayslip: boolean;
 }
 
 const CATEGORY = 'expenditure';
@@ -34,6 +36,7 @@ export const EXPENSE_SETTING_DEFAULTS: ExpenseSettings = {
   inputVatAccountCode: '10111900',
   approvalLimitAmount: 0,
   allowOverBudget: false,
+  reimburseInPayslip: false,
 };
 
 const KEY_MAP: Array<[keyof ExpenseSettings, string]> = [
@@ -44,6 +47,7 @@ const KEY_MAP: Array<[keyof ExpenseSettings, string]> = [
   ['inputVatAccountCode', 'input_vat_account_code'],
   ['approvalLimitAmount', 'approval_limit_amount'],
   ['allowOverBudget', 'allow_over_budget'],
+  ['reimburseInPayslip', 'reimburse_in_payslip'],
 ];
 
 export async function getExpenseSettings(client: pg.PoolClient, ctx: Ctx): Promise<ExpenseSettings> {
@@ -57,6 +61,7 @@ export async function getExpenseSettings(client: pg.PoolClient, ctx: Ctx): Promi
     inputVatAccountCode: s('expenditure.input_vat_account_code', EXPENSE_SETTING_DEFAULTS.inputVatAccountCode),
     approvalLimitAmount: settingNumber(settings, 'expenditure.approval_limit_amount'),
     allowOverBudget: settingBool(settings, 'expenditure.allow_over_budget'),
+    reimburseInPayslip: settingBool(settings, 'expenditure.reimburse_in_payslip'),
   };
 }
 
@@ -69,7 +74,7 @@ export async function saveExpenseSettings(client: pg.PoolClient, ctx: Ctx, body:
       const amt = Number(value);
       if (!Number.isFinite(amt) || amt < 0) throw badRequest('Approval limit must be a non-negative number');
       value = amt;
-    } else if (camel === 'allowOverBudget') {
+    } else if (camel === 'allowOverBudget' || camel === 'reimburseInPayslip') {
       value = value === true || value === 'true' || value === 1 || value === '1';
     } else {
       const code = String(value ?? '').trim();

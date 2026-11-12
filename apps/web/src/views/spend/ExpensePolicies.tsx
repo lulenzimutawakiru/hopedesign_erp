@@ -43,6 +43,7 @@ export default function ExpensePolicies() {
           inputVatAccountCode: s(settings.inputVatAccountCode),
           approvalLimitAmount: num(settings.approvalLimitAmount),
           allowOverBudget: settings.allowOverBudget === true,
+          reimburseInPayslip: settings.reimburseInPayslip === true,
         }),
       });
       setMsg('Policies saved.');
@@ -64,8 +65,8 @@ export default function ExpensePolicies() {
 
   return (
     <SpendShell
-      title="Expense Policies"
-      blurb="Posting accounts and approval policy for employee expenses and reimbursements."
+      title="Settings"
+      blurb="Default expense accounts, approval limit, payslip reimbursement and posting policy for the Expenses app."
       active="policies"
     >
       {!can(user, 'expenditure.settings.view') ? (
@@ -111,6 +112,19 @@ export default function ExpensePolicies() {
                       <input type="checkbox" checked={settings.allowOverBudget === true} disabled={!mayEdit} onChange={(e) => patch('allowOverBudget', e.target.checked)} />
                       <span className="muted">{settings.allowOverBudget === true ? 'Enabled' : 'Disabled'}</span>
                     </div>
+                  </label>
+                </div>
+              </section>
+              <section className="card">
+                <div className="card-head"><h3>Reimbursement</h3></div>
+                <div className="form-grid">
+                  <label className="field">
+                    <span>Reimburse in payslip</span>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 38 }}>
+                      <input type="checkbox" checked={settings.reimburseInPayslip === true} disabled={!mayEdit} onChange={(e) => patch('reimburseInPayslip', e.target.checked)} />
+                      <span className="muted">{settings.reimburseInPayslip === true ? 'Enabled' : 'Disabled'}</span>
+                    </div>
+                    <span className="field-hint">Approved or posted expenses paid by the employee can be flagged for the next payslip. The flag does not create a payroll payment. Cash, cheque and bank transfer still use Register Payment after the expense is posted.</span>
                   </label>
                 </div>
               </section>
