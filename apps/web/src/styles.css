@@ -7823,3 +7823,4 @@ html[data-theme='dark'] .spend-kpi.is-alert .spend-kpi-value { color: #F4A7A7; }
 }
 .sale-members { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; }
 .sale-members .check { display: flex; align-items: center; gap: 6px; }
+.sale-overdue { color: var(--danger); font-weight: 600; }

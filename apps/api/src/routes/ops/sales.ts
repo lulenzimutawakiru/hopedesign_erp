@@ -113,6 +113,13 @@ salesOpsRouter.post('/delivery-notes/:id/deliver', ...run('sales.delivery_notes.
   deliveredAt: b.deliveredAt != null ? String(b.deliveredAt) : undefined,
 })));
 
+salesOpsRouter.get('/invoice-desk', ...runGet('sales.invoices.view', (c, ctx, q) => sales.invoiceDesk(c, ctx, {
+  q: q.q != null ? String(q.q) : undefined,
+  scope: q.scope != null ? String(q.scope) : undefined,
+  customerId: q.customerId != null ? Number(q.customerId) : undefined,
+  page: q.page != null ? Number(q.page) : undefined,
+  pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+})));
 salesOpsRouter.get('/invoices', ...runGet('sales.invoices.view', (c, ctx, q) => sales.listInvoices(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,

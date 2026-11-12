@@ -232,7 +232,7 @@ export const CREATE_ITEMS: CreateItem[] = [
 export function interpretCommand(raw: string): string | null {
   const q = raw.trim().toLowerCase();
   if (!q) return null;
-  if (/overdue invoice|overdue ar|receivable/.test(q)) return '/sales/invoices';
+  if (/overdue invoice|overdue ar|receivable/.test(q)) return '/sales/invoices?scope=overdue';
   if (/pending approval|approvals?$/.test(q)) return '/inbox';
   if (/low stock|below reorder|stock alert/.test(q)) return '/inventory/stock';
   if (/today.?s? production|plant|work order/.test(q)) return '/plant';

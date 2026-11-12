@@ -10,9 +10,10 @@ import { toast } from '../components/toast';
 import PriceLists from './sales/PriceLists';
 import SalesProducts from './sales/Products';
 import Quotations from './sales/Quotations';
+import Invoices from './sales/Invoices';
 import QuotationForm, { QuotationProforma } from './sales/QuotationForm';
 import TemplateForm from './sales/TemplateForm';
-import { shippingPolicyLabel } from './sales/odooSales';
+import { addDays, localToday, shippingPolicyLabel, todayIso } from './sales/odooSales';
 import {
   OrdersToInvoice,
   OrdersToUpsell,
@@ -114,6 +115,11 @@ export default function SalesFlow({ path }: { path: string }) {
     if (id != null && Number(id) > 0) return <QuotationForm id={Number(id)} />;
     return <Quotations />;
   }
+  if (resource === 'invoices') {
+    if (id === 'new') return <Composer resource="invoices" />;
+    if (id != null && Number(id) > 0) return <DocumentDetail resource="invoices" id={Number(id)} />;
+    return <Invoices />;
+  }
   if (id === 'new') return <Composer resource={resource} />;
   if (resource === 'customers' && id && Number(id) > 0) return <CustomerDesk id={Number(id)} />;
   if (resource === 'customers') return <CustomerDirectory />;
@@ -157,7 +163,7 @@ function SalesBoard() {
     { key: 'target', icon: '🎯', label: 'Target', value: targetPct != null ? `${fmtNum(targetPct)}%` : '—', sub: `of ${fmtMoney(target)} monthly`, accent: 'var(--warning)', href: '/sales/orders' },
     { key: 'orders', icon: '🧾', label: 'Open orders', value: fmtNum(n(k.openOrders)), sub: `${fmtNum(n(k.awaitingStock))} await stock`, accent: 'var(--hope)', href: '/sales/orders' },
     { key: 'quotes', icon: '📝', label: 'Open quotes', value: fmtNum(n(k.openQuotes)), sub: conversion != null ? `${fmtNum(conversion)}% converted` : 'no conversions yet', accent: '#8B5CF6', href: '/sales/quotations' },
-    { key: 'ar', icon: '⏳', label: 'Outstanding AR', value: fmtMoney(n(k.openAr)), sub: `${fmtNum(n(k.overdueInvoices))} overdue`, accent: 'var(--danger)', href: '/sales/invoices' },
+    { key: 'ar', icon: '⏳', label: 'Outstanding AR', value: fmtMoney(n(k.openAr)), sub: `${fmtNum(n(k.overdueInvoices))} overdue`, accent: 'var(--danger)', href: '/sales/invoices?scope=overdue' },
     { key: 'mfg', icon: '🏭', label: 'In production', value: fmtNum(n(k.awaitingProduction)), sub: `${fmtNum(n(k.awaitingDispatch))} ready to dispatch`, accent: '#D97706', href: '/records/production/work_orders' },
     { key: 'aov', icon: '🧮', label: 'Average order', value: fmtMoney(n(k.averageOrderValue)), sub: 'per invoice this month', accent: '#0E7490', href: '/sales/invoices' },
     { key: 'margin', icon: '💹', label: 'Gross margin', value: grossMargin != null ? `${fmtNum(grossMargin)}%` : '—', sub: `GP ${fmtMoney(grossProfit)} this month`, accent: '#166534', href: '/sales/invoices' },
@@ -1137,7 +1143,16 @@ function Composer({ resource }: { resource: string }) {
             endpoint="/api/ops/sales/customers"
             display={(r) => `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`}
             valueLabel={customerLabel}
-            onPick={(r) => { setCustomerId(num(r.id)); setCustomerLabel(`${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`); }}
+            onPick={(r) => {
+              setCustomerId(num(r.id));
+              setCustomerLabel(`${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`);
+              if (!isInvoice || dueDate) return;
+              const raw = pick(r, 'paymentTermsDays', 'payment_terms_days');
+              if (raw == null || raw === '') return;
+              const days = Number(raw);
+              if (!Number.isFinite(days) || days < 0 || days > 3650) return;
+              setDueDate(addDays(invoiceDate || todayIso(), Math.trunc(days)));
+            }}
           />
           <div className="field">
             <label>Buyer type</label>
@@ -2085,9 +2100,25 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
     <button className="btn btn-success btn-block" disabled={busy} onClick={() => setDeliverOpen(true)}>Mark delivered</button>
   );
 
-  const invActions = resource === 'invoices' && can(user, 'sales.receipts.create') && !['VOID', 'PAID'].includes(status) && (
+  const invoiceTotal = num(pick(doc, 'total'));
+  const amountPaid = num(pick(doc, 'amountPaid', 'amount_paid'));
+  const amountDue = invoiceTotal - amountPaid;
+  const dueRaw = pick(doc, 'dueDate', 'due_date');
+  const dueIso = dueRaw != null && String(dueRaw).trim() ? String(dueRaw).slice(0, 10) : '';
+  const termsRaw = pick(doc, 'customerPaymentTermsDays', 'customer_payment_terms_days');
+  const invoiceOverdue = resource === 'invoices'
+    && amountDue > 0.004
+    && dueIso !== ''
+    && dueIso < localToday()
+    && !['VOID', 'DRAFT', 'PAID'].includes(status);
+  const postAction = resource === 'invoices' && status === 'APPROVED' && can(user, 'sales.invoices.post') && !pick(doc, 'glPosted', 'gl_posted') ? (
+    <button className="btn btn-primary btn-block" disabled={busy} onClick={() => act('Posted to the ledger', async () => {
+      await api(`/api/ops/sales/invoices/${id}/post`, { method: 'POST', body: '{}' });
+    })}>Post to ledger</button>
+  ) : null;
+  const invActions = resource === 'invoices' && can(user, 'sales.receipts.create') && !['VOID', 'PAID'].includes(status) ? (
     <button className="btn btn-success btn-block" disabled={busy} onClick={() => setPayOpen(true)}>Record payment</button>
-  );
+  ) : null;
 
   return (
     <div className="page">
@@ -2118,6 +2149,9 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
       </header>
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <ErrorBanner error={error} />}
+      {invoiceOverdue && (
+        <div className="sale-banner">This invoice is overdue. Amount due {fmtMoney(amountDue)}.</div>
+      )}
       {resource === 'orders' && locked && (
         <div className="sale-banner">This confirmed sales order is locked. Dispatch, delivery, and invoicing stay available.</div>
       )}
@@ -2205,6 +2239,29 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
           {resource === 'orders' && (
             <OrderCommercial doc={doc} optionals={optionals} />
           )}
+          {resource === 'invoices' && (
+            <section className="card" style={{ marginTop: 14 }}>
+              <div className="card-head"><h3>Billing</h3></div>
+              <dl className="detail-list">
+                <div className="detail-row">
+                  <dt>Due date</dt>
+                  <dd className={invoiceOverdue ? 'sale-overdue' : undefined}>{dueIso ? fmtDate(dueIso) : '—'}</dd>
+                </div>
+                <div className="detail-row">
+                  <dt>Amount due</dt>
+                  <dd>{fmtMoney(amountDue)}</dd>
+                </div>
+                <div className="detail-row">
+                  <dt>Amount paid</dt>
+                  <dd>{fmtMoney(amountPaid)}</dd>
+                </div>
+                <div className="detail-row">
+                  <dt>Payment terms</dt>
+                  <dd>{termsRaw == null || termsRaw === '' ? '—' : `${fmtNum(termsRaw)} days`}</dd>
+                </div>
+              </dl>
+            </section>
+          )}
         </div>
         {(resource === 'orders' || resource === 'invoices') && (() => {
           const bankName = String(pick(doc, 'bankName', 'bank_name') ?? '');
@@ -2247,11 +2304,12 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
               {quoteActions}
               {orderActions}
               {dnActions}
+              {postAction}
               {invActions}
               {status === 'SUBMITTED' && (
                 <button className="btn btn-block" onClick={() => navigate('/approvals')}>Open approvals queue</button>
               )}
-              {!quoteActions && !orderActions && !dnActions && !invActions && status !== 'SUBMITTED' && (
+              {!quoteActions && !orderActions && !dnActions && !postAction && !invActions && status !== 'SUBMITTED' && (
                 <p className="muted">No actions available in this status for your role.</p>
               )}
             </div>

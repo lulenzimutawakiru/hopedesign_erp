@@ -233,7 +233,7 @@ dashboardRouter.get(
       { code: 'ncr', label: 'Close NCRs', hint: 'Quality records still open', count: n(ncrs.rows[0], 'c'), href: '/records/quality/ncrs', severity: 'high' as const, persona: 'quality' },
       { code: 'secure', label: 'Move secure jobs', hint: 'In production, not yet delivered', count: n(secJobs.rows[0], 'c'), href: '/security-jobs', severity: 'high' as const, persona: 'security' },
       { code: 'qr', label: 'Investigate QR flags', hint: 'Open authenticity anomalies', count: n(qrAnom.rows[0], 'c'), href: '/qr/scan', severity: 'critical' as const, persona: 'security' },
-      { code: 'ar', label: 'Collect overdue invoices', hint: 'Past due receivables', count: n(overdueAr.rows[0], 'c'), href: '/sales/invoices', severity: 'high' as const, persona: 'finance' },
+      { code: 'ar', label: 'Collect overdue invoices', hint: 'Past due receivables', count: n(overdueAr.rows[0], 'c'), href: '/sales/invoices?scope=overdue', severity: 'high' as const, persona: 'finance' },
       { code: 'leave', label: 'Approve leave requests', hint: 'Submitted and awaiting a decision', count: n(pendingLeave.rows[0], 'c'), href: '/people/leave', severity: 'high' as const, persona: 'people' },
       { code: 'contracts', label: 'Renew expiring contracts', hint: 'Ending within 60 days', count: n(expiringContracts.rows[0], 'c'), href: '/people/contracts/expiring', severity: 'medium' as const, persona: 'people' },
       { code: 'payroll', label: 'Approve payroll runs', hint: 'In review or pending approval', count: n(pendingPayrolls.rows[0], 'c'), href: '/people/payrolls/runs', severity: 'high' as const, persona: 'people' },

@@ -564,7 +564,14 @@ export async function postCreditNote(client: pg.PoolClient, ctx: Ctx, creditNote
   await markPosted(client, 'credit_notes', creditNoteId, entryId, { status: 'POSTED' });
   if (cn.invoice_id) {
     await client.query(
-      `UPDATE customer_invoices SET amount_paid = amount_paid - $1 WHERE id = $2 AND status NOT IN ('VOID')`,
+      `UPDATE customer_invoices SET amount_paid = amount_paid + $1,
+         status = CASE
+           WHEN status = 'VOID' THEN status
+           WHEN amount_paid + $1 >= total - 0.005 THEN 'PAID'
+           WHEN amount_paid + $1 > 0 THEN 'PARTIALLY_PAID'
+           ELSE status
+         END
+       WHERE id = $2 AND status NOT IN ('VOID')`,
       [amount, cn.invoice_id]
     );
   }
@@ -617,7 +624,8 @@ export async function postDebitNote(client: pg.PoolClient, ctx: Ctx, debitNoteId
          status = CASE
            WHEN status = 'VOID' THEN status
            WHEN amount_paid >= total + $1 - 0.005 THEN 'PAID'
-           ELSE 'PARTIALLY_PAID'
+           WHEN amount_paid > 0 THEN 'PARTIALLY_PAID'
+           ELSE status
          END
        WHERE id = $2 AND status NOT IN ('VOID')`,
       [amount, dn.invoice_id]
