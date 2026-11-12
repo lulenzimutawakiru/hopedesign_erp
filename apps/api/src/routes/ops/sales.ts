@@ -5,6 +5,8 @@ import { requirePermission } from '../../middleware/authorize.js';
 import { asyncHandler } from '../../utils.js';
 import * as sales from '../../services/sales.js';
 import * as priceLists from '../../services/salesPriceLists.js';
+import * as salesOdoo from '../../services/salesOdoo.js';
+import { getSalesSettings, saveSalesSettings } from '../../services/salesSettings.js';
 
 export const salesOpsRouter = Router();
 
@@ -38,15 +40,36 @@ salesOpsRouter.get('/customers', ...runGet('sales.quotations.view', (c, ctx, q) 
 salesOpsRouter.get('/customers/directory', ...runGet('sales.quotations.view', (c, ctx, q) => sales.customerDirectory(c, ctx, q.q != null ? String(q.q) : undefined)));
 salesOpsRouter.get('/customers/:id/360', ...runGet('sales.quotations.view', (c, ctx, _q, p) => sales.customer360(c, ctx, Number(p.id))));
 
+salesOpsRouter.get('/settings', ...runGet('sales.settings.view', (c, ctx) => getSalesSettings(c, ctx)));
+salesOpsRouter.put('/settings', ...run('sales.settings.update', (c, ctx, b) => saveSalesSettings(c, ctx, b)));
+salesOpsRouter.get('/salespeople', ...runGet('sales.quotations.view', (c, ctx) => salesOdoo.listSalespeople(c, ctx)));
+salesOpsRouter.get('/teams', ...runGet('sales.teams.view', (c, ctx) => salesOdoo.listTeams(c, ctx)));
+salesOpsRouter.post('/teams', ...run('sales.teams.create', (c, ctx, b) => salesOdoo.saveTeam(c, ctx, b)));
+salesOpsRouter.put('/teams/:id', ...run('sales.teams.update', (c, ctx, b, p) => salesOdoo.saveTeam(c, ctx, { ...b, id: Number(p.id) })));
+salesOpsRouter.get('/templates', ...runGet('sales.templates.view', (c, ctx) => salesOdoo.listTemplates(c, ctx)));
+salesOpsRouter.get('/templates/:id', ...runGet('sales.templates.view', (c, ctx, _q, p) => salesOdoo.getTemplate(c, ctx, Number(p.id))));
+salesOpsRouter.post('/templates', ...run('sales.templates.create', (c, ctx, b) => salesOdoo.saveTemplate(c, ctx, b)));
+salesOpsRouter.put('/templates/:id', ...run('sales.templates.update', (c, ctx, b, p) => salesOdoo.saveTemplate(c, ctx, { ...b, id: Number(p.id) })));
+salesOpsRouter.get('/to-invoice', ...runGet('sales.orders.view', (c, ctx) => salesOdoo.listOrdersToInvoice(c, ctx)));
+salesOpsRouter.get('/to-upsell', ...runGet('sales.orders.view', (c, ctx) => salesOdoo.listOrdersToUpsell(c, ctx)));
+salesOpsRouter.get('/analysis', ...runGet('sales.orders.view', (c, ctx, q) => salesOdoo.salesAnalysis(c, ctx, {
+  groupBy: q.groupBy != null ? String(q.groupBy) : undefined,
+  from: q.from != null ? String(q.from) : undefined,
+  to: q.to != null ? String(q.to) : undefined,
+})));
+
 salesOpsRouter.get('/quotations', ...runGet('sales.quotations.view', (c, ctx, q) => sales.listQuotations(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
   customerId: q.customerId != null ? Number(q.customerId) : undefined,
   page: q.page != null ? Number(q.page) : undefined,
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
+  scope: q.scope != null ? String(q.scope) : undefined,
 })));
 salesOpsRouter.get('/quotations/:id', ...runGet('sales.quotations.view', (c, ctx, _q, p) => sales.getQuotation(c, ctx, Number(p.id))));
 salesOpsRouter.post('/quotations', ...run('sales.quotations.create', (c, ctx, b) => sales.createQuotation(c, ctx, b)));
+salesOpsRouter.put('/quotations/:id', ...run('sales.quotations.update', (c, ctx, b, p) => sales.updateQuotation(c, ctx, Number(p.id), b)));
+salesOpsRouter.post('/quotations/:id/cancel', ...run('sales.quotations.update', (c, ctx, _b, p) => sales.cancelQuotation(c, ctx, Number(p.id))));
 salesOpsRouter.post('/quotations/:id/submit', ...run('sales.quotations.submit', (c, ctx, _b, p) => sales.submitQuotation(c, ctx, Number(p.id))));
 salesOpsRouter.post('/quotations/:id/convert', ...run('sales.quotations.convert', (c, ctx, _b, p) => sales.convertQuotation(c, ctx, Number(p.id))));
 salesOpsRouter.post('/quotations/:id/send', ...run('sales.quotations.send', (c, ctx, b, p) => sales.sendQuotationToCustomer(c, ctx, Number(p.id), {

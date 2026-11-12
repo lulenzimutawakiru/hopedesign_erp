@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import { assertPostDelivery, assertRequirementReviewed } from './iso/gates.js';
 import { completeTripForDelivery, syncTripForDelivery } from './logistics.js';
 import { resolveAppSettings, settingNumber } from './companyConfig.js';
+import { getSalesSettings } from './salesSettings.js';
 import { SELLABLE_PRODUCT_TYPES } from './productTypes.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -32,7 +33,7 @@ function normalizeBuyerType(v: unknown): BuyerType | null {
 }
 
 export interface SalesLineInput {
-  productId: number;
+  productId?: number | null;
   description?: string | null;
   quantity: number;
   unitId?: number | null;
@@ -42,6 +43,39 @@ export interface SalesLineInput {
   /** Tax-category code from `tax_categories` (STANDARD / ZERO / EXEMPT / …). */
   taxCategory?: string | null;
   deliveryDate?: string | null;
+  /** PRODUCT lines sell a product. SECTION and NOTE are document text and are not invoiced. */
+  lineKind?: 'PRODUCT' | 'SECTION' | 'NOTE' | string | null;
+  sequence?: number;
+}
+
+export interface SalesOptionalInput {
+  productId: number;
+  description?: string | null;
+  quantity?: number;
+  unitPrice?: number;
+  sequence?: number;
+}
+
+/** Commercial header shared by a quotation and the sales order it becomes. */
+export interface SalesCommercialInput {
+  invoiceAddress?: string | null;
+  deliveryAddress?: string | null;
+  priceListId?: number | null;
+  paymentTermsDays?: number | null;
+  customerReference?: string | null;
+  salespersonId?: number | null;
+  salesTeamId?: number | null;
+  sourceDocument?: string | null;
+  tags?: string | null;
+  shippingPolicy?: string | null;
+  incoterm?: string | null;
+  incotermLocation?: string | null;
+  campaign?: string | null;
+  medium?: string | null;
+  source?: string | null;
+  templateId?: number | null;
+  deliveryDate?: string | null;
+  optionals?: SalesOptionalInput[];
 }
 
 export interface InvoiceLineInput {
@@ -154,6 +188,230 @@ async function assertCustomerCanTrade(
   }
 }
 
+function lineKindOf(v: unknown): 'PRODUCT' | 'SECTION' | 'NOTE' {
+  const s = String(v ?? 'PRODUCT').trim().toUpperCase();
+  if (s === 'SECTION' || s === 'NOTE' || s === 'PRODUCT') return s;
+  throw badRequest('lineKind must be PRODUCT, SECTION, or NOTE');
+}
+
+function shippingPolicyOf(v: unknown): 'ASAP' | 'WHEN_ALL' {
+  if (v == null || String(v).trim() === '') return 'ASAP';
+  const s = String(v).trim().toUpperCase();
+  if (s === 'ASAP' || s === 'WHEN_ALL') return s;
+  throw badRequest('shippingPolicy must be ASAP or WHEN_ALL');
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const [y, m, d] = iso.slice(0, 10).split('-').map((n) => Number(n));
+  const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+function textOrNull(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s ? s : null;
+}
+
+function idOrNull(v: unknown, label: string): number | null {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0) throw badRequest(`${label} is not a valid id`);
+  return n;
+}
+
+function daysOrNull(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > 3650) throw badRequest('Payment terms must be a whole number of days');
+  return n;
+}
+
+async function priceFromList(client: pg.PoolClient, ctx: Ctx, priceListId: number | null, productId: number): Promise<number | null> {
+  if (priceListId == null) return null;
+  const res = await client.query(
+    `SELECT pli.unit_price::numeric AS price
+     FROM price_list_items pli
+     JOIN price_lists pl ON pl.id = pli.price_list_id AND pl.tenant_id = $3 AND pl.is_active = true
+     WHERE pli.price_list_id = $1 AND pli.product_id = $2
+       AND (pl.valid_from IS NULL OR pl.valid_from <= CURRENT_DATE)
+       AND (pl.valid_to IS NULL OR pl.valid_to >= CURRENT_DATE)
+       AND (pli.effective_from IS NULL OR pli.effective_from <= CURRENT_DATE)
+       AND (pli.effective_to IS NULL OR pli.effective_to >= CURRENT_DATE)
+     ORDER BY pli.min_quantity NULLS FIRST, pli.id
+     LIMIT 1`,
+    [priceListId, productId, ctx.tenantId]
+  );
+  return res.rows.length ? Number(res.rows[0].price) : null;
+}
+
+async function assertSalesRefs(client: pg.PoolClient, ctx: Ctx, input: SalesCommercialInput) {
+  const priceListId = idOrNull(input.priceListId, 'Price list');
+  if (priceListId != null) {
+    const row = await client.query(`SELECT id FROM price_lists WHERE id = $1 AND tenant_id = $2`, [priceListId, ctx.tenantId]);
+    if (row.rows.length === 0) throw badRequest('Price list not found');
+  }
+  const teamId = idOrNull(input.salesTeamId, 'Sales team');
+  if (teamId != null) {
+    const row = await client.query(`SELECT id FROM sales_teams WHERE id = $1 AND tenant_id = $2`, [teamId, ctx.tenantId]);
+    if (row.rows.length === 0) throw badRequest('Sales team not found');
+  }
+  const templateId = idOrNull(input.templateId, 'Quotation template');
+  if (templateId != null) {
+    const row = await client.query(`SELECT id FROM quotation_templates WHERE id = $1 AND tenant_id = $2`, [templateId, ctx.tenantId]);
+    if (row.rows.length === 0) throw badRequest('Quotation template not found');
+  }
+  const salespersonId = idOrNull(input.salespersonId, 'Salesperson');
+  if (salespersonId != null) {
+    const row = await client.query(`SELECT id FROM users WHERE id = $1 AND tenant_id = $2`, [salespersonId, ctx.tenantId]);
+    if (row.rows.length === 0) throw badRequest('Salesperson not found');
+  }
+}
+
+async function persistQuoteCommercial(client: pg.PoolClient, quotationId: number, input: SalesCommercialInput, salespersonId: number | null) {
+  await client.query(
+    `UPDATE sales_quotations SET
+       invoice_address = $2, delivery_address = $3, price_list_id = $4, payment_terms_days = $5,
+       customer_reference = $6, salesperson_id = $7, sales_team_id = $8, source_document = $9,
+       tags = $10, shipping_policy = $11, incoterm = $12, incoterm_location = $13,
+       campaign = $14, medium = $15, source = $16, template_id = $17, delivery_date = $18
+     WHERE id = $1`,
+    [
+      quotationId,
+      textOrNull(input.invoiceAddress), textOrNull(input.deliveryAddress),
+      idOrNull(input.priceListId, 'Price list'), daysOrNull(input.paymentTermsDays),
+      textOrNull(input.customerReference), salespersonId, idOrNull(input.salesTeamId, 'Sales team'),
+      textOrNull(input.sourceDocument), textOrNull(input.tags), shippingPolicyOf(input.shippingPolicy),
+      textOrNull(input.incoterm), textOrNull(input.incotermLocation),
+      textOrNull(input.campaign), textOrNull(input.medium), textOrNull(input.source),
+      idOrNull(input.templateId, 'Quotation template'),
+      input.deliveryDate ? String(input.deliveryDate).slice(0, 10) : null,
+    ]
+  );
+}
+
+async function persistOrderCommercial(client: pg.PoolClient, orderId: number, input: SalesCommercialInput, salespersonId: number | null) {
+  await client.query(
+    `UPDATE sales_orders SET
+       invoice_address = $2, delivery_address = $3, price_list_id = $4, payment_terms_days = $5,
+       salesperson_id = $6, sales_team_id = $7, source_document = $8, tags = $9,
+       shipping_policy = $10, incoterm = $11, incoterm_location = $12,
+       campaign = $13, medium = $14, source = $15,
+       customer_po_no = COALESCE($16, customer_po_no),
+       delivery_date = COALESCE($17, delivery_date)
+     WHERE id = $1`,
+    [
+      orderId,
+      textOrNull(input.invoiceAddress), textOrNull(input.deliveryAddress),
+      idOrNull(input.priceListId, 'Price list'), daysOrNull(input.paymentTermsDays),
+      salespersonId, idOrNull(input.salesTeamId, 'Sales team'),
+      textOrNull(input.sourceDocument), textOrNull(input.tags), shippingPolicyOf(input.shippingPolicy),
+      textOrNull(input.incoterm), textOrNull(input.incotermLocation),
+      textOrNull(input.campaign), textOrNull(input.medium), textOrNull(input.source),
+      textOrNull(input.customerReference),
+      input.deliveryDate ? String(input.deliveryDate).slice(0, 10) : null,
+    ]
+  );
+}
+
+async function replaceOptionals(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  parent: { quotationId?: number; orderId?: number },
+  optionals: SalesOptionalInput[] | undefined
+) {
+  if (!optionals) return;
+  if (parent.quotationId) await client.query(`DELETE FROM sales_quotation_optionals WHERE quotation_id = $1`, [parent.quotationId]);
+  if (parent.orderId) await client.query(`DELETE FROM sales_order_optionals WHERE order_id = $1`, [parent.orderId]);
+  for (let i = 0; i < optionals.length; i++) {
+    const row = optionals[i];
+    const productId = Number(row.productId);
+    if (!Number.isInteger(productId) || productId <= 0) throw badRequest('Each optional product needs a product');
+    const product = await productMeta(client, ctx, productId);
+    const qty = Number(row.quantity ?? 1);
+    if (!(qty > 0)) throw badRequest('Optional product quantity must be positive');
+    const price = row.unitPrice != null ? Number(row.unitPrice) : Number(product.standard_price);
+    const sequence = Number.isFinite(Number(row.sequence)) ? Number(row.sequence) : i;
+    if (parent.quotationId) {
+      await client.query(
+        `INSERT INTO sales_quotation_optionals (quotation_id, product_id, description, quantity, unit_price, sequence)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [parent.quotationId, productId, textOrNull(row.description) ?? String(product.name), qty, price, sequence]
+      );
+    } else if (parent.orderId) {
+      await client.query(
+        `INSERT INTO sales_order_optionals (order_id, product_id, description, quantity, unit_price, sequence)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [parent.orderId, productId, textOrNull(row.description) ?? String(product.name), qty, price, sequence]
+      );
+    }
+  }
+}
+
+async function writeQuotationLines(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  quotationId: number,
+  customerId: number,
+  priceListId: number | null,
+  items: SalesLineInput[]
+) {
+  if (!items?.length) throw badRequest('At least one line item is required');
+  let subtotal = 0;
+  let discount = 0;
+  let tax = 0;
+  let productLines = 0;
+  const defaultRate = await defaultTaxRate(client, ctx);
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    const kind = lineKindOf(item.lineKind);
+    const sequence = Number.isFinite(Number(item.sequence)) ? Number(item.sequence) : index;
+    if (kind !== 'PRODUCT') {
+      const description = textOrNull(item.description);
+      if (!description) throw badRequest(kind === 'SECTION' ? 'A section needs a title' : 'A note needs text');
+      await client.query(
+        `INSERT INTO sales_quotation_items
+           (quotation_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category, line_total, line_kind, sequence)
+         VALUES ($1,NULL,$2,0,NULL,0,0,0,NULL,0,$3,$4)`,
+        [quotationId, description, kind, sequence]
+      );
+      continue;
+    }
+    const productId = Number(item.productId);
+    if (!Number.isInteger(productId) || productId <= 0) throw badRequest('Each product line needs a product');
+    const product = await productMeta(client, ctx, productId);
+    const qty = Number(item.quantity);
+    if (!(qty > 0)) throw badRequest('Quantity must be positive');
+    const unitPrice = item.unitPrice != null
+      ? Number(item.unitPrice)
+      : (await priceFromList(client, ctx, priceListId, productId))
+        ?? (await resolveUnitPrice(client, ctx, customerId, productId))
+        ?? Number(product.standard_price);
+    const discountPercent = Number(item.discountPercent ?? 0);
+    const taxPercent = item.taxPercent != null ? Number(item.taxPercent) : defaultRate;
+    const lineTotal = qty * unitPrice;
+    const discountAmt = lineTotal * (discountPercent / 100);
+    const taxAmt = (lineTotal - discountAmt) * (taxPercent / 100);
+    await client.query(
+      `INSERT INTO sales_quotation_items
+         (quotation_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category, line_total, line_kind, sequence)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PRODUCT',$11)`,
+      [
+        quotationId, productId, item.description ?? product.name, qty, item.unitId ?? product.unit_id ?? null,
+        unitPrice, discountPercent, taxPercent, item.taxCategory ?? null, round2(lineTotal - discountAmt + taxAmt),
+        sequence,
+      ]
+    );
+    subtotal += lineTotal;
+    discount += discountAmt;
+    tax += taxAmt;
+    productLines++;
+  }
+  if (productLines === 0) throw badRequest('Add at least one product');
+  return { subtotal, discount, tax };
+}
+
 /** Create a sales quotation (DRAFT). */
 export async function createQuotation(
   client: pg.PoolClient,
@@ -169,13 +427,23 @@ export async function createQuotation(
     terms?: string | null;
     buyerType?: BuyerType | null;
     items: SalesLineInput[];
-  }
+  } & SalesCommercialInput
 ) {
   const companyId = ctx.companyId;
   if (!companyId) throw badRequest('Company context required');
   if (!input.items?.length) throw badRequest('At least one line item is required');
+  await assertSalesRefs(client, ctx, input);
   const buyerType = normalizeBuyerType(input.buyerType);
   const quotationNo = await nextDoc(client, ctx, 'QT');
+  const quotationDate = input.quotationDate ?? new Date().toISOString().slice(0, 10);
+  let validUntil = input.validUntil;
+  if (validUntil === undefined) {
+    const settings = await getSalesSettings(client, ctx);
+    validUntil = settings.defaultQuotationValidityDays > 0
+      ? addDaysIso(quotationDate, settings.defaultQuotationValidityDays)
+      : null;
+  }
+  const salespersonId = input.salespersonId === undefined ? (ctx.userId ?? null) : idOrNull(input.salespersonId, 'Salesperson');
   const ins = await client.query(
     `INSERT INTO sales_quotations
        (company_id, tenant_id, branch_id, quotation_no, customer_id, contact_id, opportunity_id,
@@ -184,50 +452,106 @@ export async function createQuotation(
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, quotationNo, input.customerId,
       input.contactId ?? null, input.opportunityId ?? null,
-      input.quotationDate ?? new Date().toISOString().slice(0, 10),
-      input.validUntil ?? null, input.currency ?? 'UGX', input.notes ?? null, input.terms ?? null,
+      quotationDate, validUntil, input.currency ?? 'UGX', input.notes ?? null, input.terms ?? null,
       buyerType, ctx.userId ?? null,
     ]
   );
   const quotationId = Number(ins.rows[0].id);
-  let subtotal = 0;
-  let discount = 0;
-  let tax = 0;
-  const defaultRate = await defaultTaxRate(client, ctx);
-  for (const item of input.items) {
-    const product = await productMeta(client, ctx, item.productId);
-    const qty = Number(item.quantity);
-    if (qty <= 0) throw badRequest('Quantity must be positive');
-    const unitPrice = item.unitPrice != null
-      ? Number(item.unitPrice)
-      : (await resolveUnitPrice(client, ctx, input.customerId, item.productId)) ?? Number(product.standard_price);
-    const discountPercent = Number(item.discountPercent ?? 0);
-    const taxPercent = item.taxPercent != null ? Number(item.taxPercent) : defaultRate;
-    const lineTotal = qty * unitPrice;
-    const discountAmt = lineTotal * (discountPercent / 100);
-    const taxAmt = (lineTotal - discountAmt) * (taxPercent / 100);
-    await client.query(
-      `INSERT INTO sales_quotation_items
-         (quotation_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category, line_total)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [
-        quotationId, item.productId, item.description ?? product.name, qty, item.unitId ?? product.unit_id ?? null,
-        unitPrice, discountPercent, taxPercent, item.taxCategory ?? null, round2(lineTotal - discountAmt + taxAmt),
-      ]
-    );
-    subtotal += lineTotal;
-    discount += discountAmt;
-    tax += taxAmt;
-  }
-  await assertCustomerCanTrade(client, ctx, input.customerId, subtotal);
-  const total = round2(subtotal - discount + tax);
+  const priceListId = idOrNull(input.priceListId, 'Price list');
+  const totals = await writeQuotationLines(client, ctx, quotationId, input.customerId, priceListId, input.items);
+  await assertCustomerCanTrade(client, ctx, input.customerId, totals.subtotal);
+  const total = round2(totals.subtotal - totals.discount + totals.tax);
   await client.query(
     `UPDATE sales_quotations SET subtotal = $1, discount_amount = $2, tax_amount = $3, total = $4 WHERE id = $5`,
-    [round2(subtotal), round2(discount), round2(tax), total, quotationId]
+    [round2(totals.subtotal), round2(totals.discount), round2(totals.tax), total, quotationId]
   );
+  await persistQuoteCommercial(client, quotationId, input, salespersonId);
+  await replaceOptionals(client, ctx, { quotationId }, input.optionals ?? []);
   await emitEvent(client, ctx, { eventType: 'sales.quotation_created', entityType: 'sales_quotations', entityId: quotationId, entityCode: quotationNo });
   await logAudit(client, ctx, { action: 'create', resource: 'sales_quotations', recordId: quotationId, recordCode: quotationNo, newValues: { customerId: input.customerId, total } });
   return { quotationId, quotationNo, total };
+}
+
+/** Replace a DRAFT quotation. Submitted and approved quotations stay as approved. */
+export async function updateQuotation(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  quotationId: number,
+  input: {
+    customerId: number;
+    contactId?: number | null;
+    opportunityId?: number | null;
+    quotationDate?: string;
+    validUntil?: string | null;
+    currency?: string;
+    notes?: string | null;
+    terms?: string | null;
+    buyerType?: BuyerType | null;
+    items: SalesLineInput[];
+  } & SalesCommercialInput
+) {
+  const res = await client.query(
+    `SELECT * FROM sales_quotations WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+    [quotationId, ctx.tenantId]
+  );
+  if (res.rows.length === 0) throw notFound('Quotation not found');
+  const q = res.rows[0];
+  if (q.status !== 'DRAFT') throw badRequest(`Quotation is ${q.status} and can no longer be edited`);
+  if (!input.items?.length) throw badRequest('At least one line item is required');
+  await assertSalesRefs(client, ctx, input);
+  const buyerType = normalizeBuyerType(input.buyerType);
+  const salespersonId = input.salespersonId === undefined
+    ? (q.salesperson_id != null ? Number(q.salesperson_id) : ctx.userId ?? null)
+    : idOrNull(input.salespersonId, 'Salesperson');
+  await client.query(
+    `UPDATE sales_quotations SET
+       customer_id = $2, contact_id = $3, opportunity_id = $4, quotation_date = $5, valid_until = $6,
+       currency = $7, notes = $8, terms = $9, buyer_type = $10, updated_at = now()
+     WHERE id = $1`,
+    [
+      quotationId, input.customerId, input.contactId ?? null, input.opportunityId ?? null,
+      input.quotationDate ?? q.quotation_date, input.validUntil === undefined ? q.valid_until : input.validUntil,
+      input.currency ?? q.currency, input.notes ?? null, input.terms ?? null, buyerType,
+    ]
+  );
+  await client.query(`DELETE FROM sales_quotation_items WHERE quotation_id = $1`, [quotationId]);
+  const priceListId = idOrNull(input.priceListId, 'Price list');
+  const totals = await writeQuotationLines(client, ctx, quotationId, input.customerId, priceListId, input.items);
+  await assertCustomerCanTrade(client, ctx, input.customerId, totals.subtotal);
+  const total = round2(totals.subtotal - totals.discount + totals.tax);
+  await client.query(
+    `UPDATE sales_quotations SET subtotal = $1, discount_amount = $2, tax_amount = $3, total = $4 WHERE id = $5`,
+    [round2(totals.subtotal), round2(totals.discount), round2(totals.tax), total, quotationId]
+  );
+  await persistQuoteCommercial(client, quotationId, input, salespersonId);
+  await replaceOptionals(client, ctx, { quotationId }, input.optionals ?? []);
+  await logAudit(client, ctx, { action: 'update', resource: 'sales_quotations', recordId: quotationId, recordCode: String(q.quotation_no), newValues: { total } });
+  return { quotationId, quotationNo: String(q.quotation_no), total };
+}
+
+/** Cancel a quotation that has not already become a sales order. */
+export async function cancelQuotation(client: pg.PoolClient, ctx: Ctx, quotationId: number) {
+  const res = await client.query(
+    `SELECT * FROM sales_quotations WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+    [quotationId, ctx.tenantId]
+  );
+  if (res.rows.length === 0) throw notFound('Quotation not found');
+  const q = res.rows[0];
+  if (q.status === 'CONVERTED') throw badRequest('A confirmed quotation cannot be cancelled. Cancel the sales order instead.');
+  if (q.status === 'CANCELLED') return { quotationId, quotationNo: String(q.quotation_no), status: 'CANCELLED' };
+  if (!['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED', 'EXPIRED'].includes(String(q.status))) {
+    throw badRequest(`Quotation is ${q.status} and cannot be cancelled`);
+  }
+  await client.query(`UPDATE sales_quotations SET status = 'CANCELLED', updated_at = now() WHERE id = $1`, [quotationId]);
+  await logAudit(client, ctx, {
+    action: 'cancel',
+    resource: 'sales_quotations',
+    recordId: quotationId,
+    recordCode: String(q.quotation_no),
+    oldValues: { status: q.status },
+    newValues: { status: 'CANCELLED' },
+  });
+  return { quotationId, quotationNo: String(q.quotation_no), status: 'CANCELLED' };
 }
 
 /** Submit a quotation for approval (auto-approves when no workflow configured). */
@@ -371,10 +695,11 @@ export async function createSalesOrder(
     discountType?: 'AMOUNT' | 'PERCENT' | null;
     discountValue?: number | null;
     buyerType?: BuyerType | null;
-  }
+  } & SalesCommercialInput
 ) {
   const companyId = ctx.companyId;
   if (!companyId) throw badRequest('Company context required');
+  await assertSalesRefs(client, ctx, input);
   await assertCustomerCanTrade(client, ctx, input.customerId, 0);
   const buyerType = normalizeBuyerType(input.buyerType);
   const orderNo = await nextDoc(client, ctx, 'SO');
@@ -404,12 +729,13 @@ export async function createSalesOrder(
   let lines = input.items ?? [];
   if (lines.length === 0 && input.quotationId) {
     const qItems = await client.query(
-      `SELECT product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category
-       FROM sales_quotation_items WHERE quotation_id = $1 ORDER BY id`,
+      `SELECT product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category,
+              line_kind, sequence, delivery_date
+       FROM sales_quotation_items WHERE quotation_id = $1 ORDER BY sequence, id`,
       [input.quotationId]
     );
     lines = qItems.rows.map((row) => ({
-      productId: Number(row.product_id),
+      productId: row.product_id != null ? Number(row.product_id) : null,
       description: row.description != null ? String(row.description) : null,
       quantity: Number(row.quantity),
       unitId: row.unit_id != null ? Number(row.unit_id) : null,
@@ -417,6 +743,9 @@ export async function createSalesOrder(
       discountPercent: Number(row.discount_percent ?? 0),
       taxPercent: Number(row.tax_percent ?? 0),
       taxCategory: row.tax_category != null ? String(row.tax_category) : null,
+      lineKind: row.line_kind != null ? String(row.line_kind) : 'PRODUCT',
+      sequence: row.sequence != null ? Number(row.sequence) : undefined,
+      deliveryDate: row.delivery_date != null ? String(row.delivery_date).slice(0, 10) : null,
     }));
   }
   if (lines.length === 0) throw badRequest('At least one line item is required');
@@ -434,21 +763,41 @@ export async function createSalesOrder(
     lineTotal: number;
     discountAmt: number;
     deliveryDate: string | null;
+    sequence: number;
   }> = [];
   const defaultRate = await defaultTaxRate(client, ctx);
+  const priceListId = idOrNull(input.priceListId, 'Price list');
+  let sequence = 0;
   for (const item of lines) {
-    const product = await productMeta(client, ctx, item.productId);
+    const kind = lineKindOf(item.lineKind);
+    if (kind !== 'PRODUCT') {
+      const description = textOrNull(item.description);
+      if (!description) throw badRequest(kind === 'SECTION' ? 'A section needs a title' : 'A note needs text');
+      await client.query(
+        `INSERT INTO sales_order_items
+           (order_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category, line_total, delivery_date, line_kind, sequence)
+         VALUES ($1,NULL,$2,0,NULL,0,0,0,NULL,0,NULL,$3,$4)`,
+        [orderId, description, kind, sequence]
+      );
+      sequence++;
+      continue;
+    }
+    const productId = Number(item.productId);
+    if (!Number.isInteger(productId) || productId <= 0) throw badRequest('Each product line needs a product');
+    const product = await productMeta(client, ctx, productId);
     const qty = Number(item.quantity);
     if (qty <= 0) throw badRequest('Quantity must be positive');
     const unitPrice = item.unitPrice != null
       ? Number(item.unitPrice)
-      : (await resolveUnitPrice(client, ctx, input.customerId, item.productId)) ?? Number(product.standard_price);
+      : (await priceFromList(client, ctx, priceListId, productId))
+        ?? (await resolveUnitPrice(client, ctx, input.customerId, productId))
+        ?? Number(product.standard_price);
     const discountPercent = Number(item.discountPercent ?? 0);
     const taxPercent = item.taxPercent != null ? Number(item.taxPercent) : defaultRate;
     const lineTotal = qty * unitPrice;
     const discountAmt = lineTotal * (discountPercent / 100);
     lineSpecs.push({
-      productId: item.productId,
+      productId,
       description: item.description ?? product.name,
       qty,
       unitId: item.unitId ?? product.unit_id ?? null,
@@ -459,10 +808,13 @@ export async function createSalesOrder(
       lineTotal,
       discountAmt,
       deliveryDate: item.deliveryDate ?? null,
+      sequence,
     });
+    sequence++;
     subtotal += lineTotal;
     discount += discountAmt;
   }
+  if (lineSpecs.length === 0) throw badRequest('Add at least one product');
   const orderDiscount = discountType === 'AMOUNT'
     ? Math.min(discountValue, subtotal)
     : (subtotal * discountValue) / 100;
@@ -473,12 +825,12 @@ export async function createSalesOrder(
     const taxAmt = Math.max(0, spec.lineTotal - spec.discountAmt - headerShare) * (spec.taxPercent / 100);
     await client.query(
       `INSERT INTO sales_order_items
-         (order_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category, line_total, delivery_date)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+         (order_id, product_id, description, quantity, unit_id, unit_price, discount_percent, tax_percent, tax_category, line_total, delivery_date, line_kind, sequence)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'PRODUCT',$12)`,
       [
         orderId, spec.productId, spec.description, spec.qty, spec.unitId,
         spec.unitPrice, spec.discountPercent, spec.taxPercent, spec.taxCategory ?? null, round2(spec.lineTotal - spec.discountAmt + taxAmt),
-        spec.deliveryDate,
+        spec.deliveryDate, spec.sequence,
       ]
     );
     tax += taxAmt;
@@ -488,6 +840,24 @@ export async function createSalesOrder(
     `UPDATE sales_orders SET subtotal = $1, discount_amount = $2, tax_amount = $3, total = $4 WHERE id = $5`,
     [round2(subtotal), totalDiscount, round2(tax), total, orderId]
   );
+  const salespersonId = input.salespersonId === undefined ? (ctx.userId ?? null) : idOrNull(input.salespersonId, 'Salesperson');
+  await persistOrderCommercial(client, orderId, input, salespersonId);
+  let optionals = input.optionals;
+  if (optionals === undefined && input.quotationId) {
+    const copied = await client.query(
+      `SELECT product_id, description, quantity, unit_price, sequence
+       FROM sales_quotation_optionals WHERE quotation_id = $1 ORDER BY sequence, id`,
+      [input.quotationId]
+    );
+    optionals = copied.rows.map((row) => ({
+      productId: Number(row.product_id),
+      description: row.description != null ? String(row.description) : null,
+      quantity: Number(row.quantity),
+      unitPrice: Number(row.unit_price),
+      sequence: Number(row.sequence ?? 0),
+    }));
+  }
+  await replaceOptionals(client, ctx, { orderId }, optionals ?? []);
   await emitEvent(client, ctx, { eventType: 'sales.order_created', entityType: 'sales_orders', entityId: orderId, entityCode: orderNo });
   await logAudit(client, ctx, { action: 'create', resource: 'sales_orders', recordId: orderId, recordCode: orderNo, newValues: { customerId: input.customerId, total } });
   return { orderId, orderNo, total };
@@ -507,9 +877,27 @@ export async function convertQuotation(client: pg.PoolClient, ctx: Ctx, quotatio
     quotationId,
     customerId: Number(q.customer_id),
     contactId: q.contact_id != null ? Number(q.contact_id) : null,
+    customerPoNo: q.customer_reference != null ? String(q.customer_reference) : null,
     currency: q.currency != null ? String(q.currency) : 'UGX',
     notes: q.notes != null ? String(q.notes) : null,
+    deliveryDate: q.delivery_date != null ? String(q.delivery_date).slice(0, 10) : null,
     items: [],
+    invoiceAddress: q.invoice_address != null ? String(q.invoice_address) : null,
+    deliveryAddress: q.delivery_address != null ? String(q.delivery_address) : null,
+    priceListId: q.price_list_id != null ? Number(q.price_list_id) : null,
+    paymentTermsDays: q.payment_terms_days != null ? Number(q.payment_terms_days) : null,
+    customerReference: q.customer_reference != null ? String(q.customer_reference) : null,
+    salespersonId: q.salesperson_id != null ? Number(q.salesperson_id) : (q.created_by != null ? Number(q.created_by) : null),
+    salesTeamId: q.sales_team_id != null ? Number(q.sales_team_id) : null,
+    sourceDocument: q.source_document != null ? String(q.source_document) : null,
+    tags: q.tags != null ? String(q.tags) : null,
+    shippingPolicy: q.shipping_policy != null ? String(q.shipping_policy) : null,
+    incoterm: q.incoterm != null ? String(q.incoterm) : null,
+    incotermLocation: q.incoterm_location != null ? String(q.incoterm_location) : null,
+    campaign: q.campaign != null ? String(q.campaign) : null,
+    medium: q.medium != null ? String(q.medium) : null,
+    source: q.source != null ? String(q.source) : null,
+    templateId: q.template_id != null ? Number(q.template_id) : null,
   });
   await client.query(`UPDATE sales_quotations SET status = 'CONVERTED' WHERE id = $1`, [quotationId]);
   await emitEvent(client, ctx, {
@@ -556,6 +944,7 @@ export async function allocateOrder(client: pg.PoolClient, ctx: Ctx, orderId: nu
   const items = await client.query(`SELECT * FROM sales_order_items WHERE order_id = $1`, [orderId]);
   const reservations: number[] = [];
   for (const item of items.rows) {
+    if (item.product_id == null || (item.line_kind && item.line_kind !== 'PRODUCT')) continue;
     const product = await productMeta(client, ctx, Number(item.product_id));
     const warehouseId = await warehouseByType(client, ctx, String(product.type));
     const avail = await client.query(
@@ -787,7 +1176,7 @@ export async function createInvoice(
       throw badRequest(`Invoice requires dispatched goods (current: ${so.status})`);
     }
     const items = await client.query(`SELECT * FROM sales_order_items WHERE order_id = $1`, [orderId]);
-    orderLines = items.rows.filter((i) => Number(i.dispatched_qty) - Number(i.invoiced_qty) > 0);
+    orderLines = items.rows.filter((i) => i.product_id != null && (i.line_kind == null || i.line_kind === 'PRODUCT') && Number(i.dispatched_qty) - Number(i.invoiced_qty) > 0);
     if (orderLines.length === 0) throw badRequest('Nothing to invoice (all dispatched quantities already invoiced)');
     customerId = Number(so.customer_id);
     currency = String(so.currency ?? 'UGX');
@@ -1226,27 +1615,45 @@ export async function getQuotation(client: pg.PoolClient, ctx: Ctx, quotationId:
             c.address AS customer_address, c.billing_address AS customer_billing_address,
             c.shipping_address AS customer_shipping_address, c.phone AS customer_phone,
             c.email AS customer_email, c.tin AS customer_tin, c.vrn AS customer_vrn,
-            c.payment_terms_days AS customer_payment_terms_days
+            c.payment_terms_days AS customer_payment_terms_days, c.credit_limit AS customer_credit_limit,
+            c.status AS customer_status,
+            TRIM(BOTH FROM COALESCE(sp.first_name,'') || ' ' || COALESCE(sp.last_name,'')) AS salesperson_name,
+            st.name AS sales_team_name, pl.name AS price_list_name
      FROM sales_quotations q
      JOIN customers c ON c.id = q.customer_id
+     LEFT JOIN users sp ON sp.id = COALESCE(q.salesperson_id, q.created_by)
+     LEFT JOIN sales_teams st ON st.id = q.sales_team_id
+     LEFT JOIN price_lists pl ON pl.id = q.price_list_id
      WHERE q.id = $1 AND q.tenant_id = $2`,
     [quotationId, ctx.tenantId]
   );
   if (res.rows.length === 0) throw notFound('Quotation not found');
   const items = await client.query(
-    `SELECT i.*, p.code AS product_code, p.name AS product_name,
+    `SELECT i.*, p.code AS product_code, p.name AS product_name, p.standard_cost, p.weight_per_unit,
             u.code AS unit_code, u.name AS unit_name
      FROM sales_quotation_items i
      LEFT JOIN products p ON p.id = i.product_id
      LEFT JOIN units u ON u.id = i.unit_id
-     WHERE i.quotation_id = $1 ORDER BY i.id`,
+     WHERE i.quotation_id = $1 ORDER BY i.sequence, i.id`,
     [quotationId]
   );
   const orders = await client.query(
     `SELECT id, order_no, status, total FROM sales_orders WHERE quotation_id = $1 ORDER BY id`,
     [quotationId]
   );
-  return { quotation: camelDoc(res.rows[0]), items: toCamelRows(items.rows), orders: toCamelRows(orders.rows) };
+  const optionals = await client.query(
+    `SELECT o.*, p.code AS product_code, p.name AS product_name, p.standard_price, p.standard_cost, p.weight_per_unit
+     FROM sales_quotation_optionals o
+     JOIN products p ON p.id = o.product_id
+     WHERE o.quotation_id = $1 ORDER BY o.sequence, o.id`,
+    [quotationId]
+  );
+  return {
+    quotation: camelDoc(res.rows[0]),
+    items: toCamelRows(items.rows),
+    orders: toCamelRows(orders.rows),
+    optionals: toCamelRows(optionals.rows),
+  };
 }
 
 export async function getSalesOrder(client: pg.PoolClient, ctx: Ctx, orderId: number) {
@@ -1264,12 +1671,19 @@ export async function getSalesOrder(client: pg.PoolClient, ctx: Ctx, orderId: nu
   );
   if (res.rows.length === 0) throw notFound('Sales order not found');
   const items = await client.query(
-    `SELECT i.*, p.code AS product_code, p.name AS product_name,
+    `SELECT i.*, p.code AS product_code, p.name AS product_name, p.standard_cost, p.weight_per_unit,
             u.code AS unit_code, u.name AS unit_name
      FROM sales_order_items i
      LEFT JOIN products p ON p.id = i.product_id
      LEFT JOIN units u ON u.id = i.unit_id
-     WHERE i.order_id = $1 ORDER BY i.id`,
+     WHERE i.order_id = $1 ORDER BY i.sequence, i.id`,
+    [orderId]
+  );
+  const optionals = await client.query(
+    `SELECT o.*, p.code AS product_code, p.name AS product_name
+     FROM sales_order_optionals o
+     JOIN products p ON p.id = o.product_id
+     WHERE o.order_id = $1 ORDER BY o.sequence, o.id`,
     [orderId]
   );
   const deliveries = await client.query(
@@ -1281,11 +1695,15 @@ export async function getSalesOrder(client: pg.PoolClient, ctx: Ctx, orderId: nu
      FROM customer_invoices WHERE order_id = $1 ORDER BY id`,
     [orderId]
   );
+  const settings = await getSalesSettings(client, ctx);
+  const locked = settings.lockConfirmedSales && !['DRAFT', 'CANCELLED', 'REJECTED'].includes(String(res.rows[0].status));
   return {
     order: camelDoc(res.rows[0]),
     items: toCamelRows(items.rows),
     deliveries: toCamelRows(deliveries.rows),
     invoices: toCamelRows(invoices.rows),
+    optionals: toCamelRows(optionals.rows),
+    locked,
   };
 }
 
@@ -1602,7 +2020,7 @@ export async function postDebitNote(client: pg.PoolClient, ctx: Ctx, debitNoteId
 
 export async function listSellableProducts(client: pg.PoolClient, ctx: Ctx, customerId?: number) {
   const res = await client.query(
-    `SELECT p.id, p.code, p.name, p.type, p.standard_price, p.standard_cost, p.unit_id,
+    `SELECT p.id, p.code, p.name, p.type, p.standard_price, p.standard_cost, p.unit_id, p.weight_per_unit,
             u.code AS unit_code, u.name AS unit_name
      FROM products p
      LEFT JOIN units u ON u.id = p.unit_id
@@ -1644,7 +2062,8 @@ export async function listCustomers(client: pg.PoolClient, ctx: Ctx, q?: string)
     where.push(`(c.code ILIKE $${params.length} OR c.name ILIKE $${params.length})`);
   }
   const res = await client.query(
-    `SELECT c.id, c.code, c.name, c.status, c.credit_limit
+    `SELECT c.id, c.code, c.name, c.status, c.credit_limit, c.payment_terms_days, c.price_list_id,
+            c.billing_address, c.shipping_address, c.address
      FROM customers c WHERE ${where.join(' AND ')} ORDER BY c.name LIMIT 80`,
     params
   );
@@ -1810,15 +2229,22 @@ export async function customer360(client: pg.PoolClient, ctx: Ctx, customerId: n
 export async function listQuotations(
   client: pg.PoolClient,
   ctx: Ctx,
-  filters: { q?: string; status?: string; page?: number; pageSize?: number; customerId?: number }
+  filters: { q?: string; status?: string; page?: number; pageSize?: number; customerId?: number; scope?: string }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 40));
   const params: unknown[] = [ctx.tenantId, ctx.companyId];
   const where = ['q.tenant_id = $1', 'q.company_id = $2'];
+  const scope = String(filters.scope ?? '').toLowerCase();
+  if (scope === 'my' && ctx.userId) {
+    params.push(ctx.userId);
+    where.push(`COALESCE(q.salesperson_id, q.created_by) = $${params.length}`);
+  } else if (scope === 'open') {
+    where.push(`q.status IN ('DRAFT','SUBMITTED','APPROVED')`);
+  }
   if (filters.q?.trim()) {
     params.push(`%${filters.q.trim()}%`);
-    where.push(`(q.quotation_no ILIKE $${params.length} OR c.name ILIKE $${params.length})`);
+    where.push(`(q.quotation_no ILIKE $${params.length} OR c.name ILIKE $${params.length} OR COALESCE(q.customer_reference,'') ILIKE $${params.length})`);
   }
   if (filters.status) {
     params.push(filters.status);
@@ -1828,17 +2254,26 @@ export async function listQuotations(
     params.push(filters.customerId);
     where.push(`q.customer_id = $${params.length}`);
   }
+  const count = await client.query(
+    `SELECT count(*)::int AS total
+     FROM sales_quotations q JOIN customers c ON c.id = q.customer_id
+     WHERE ${where.join(' AND ')}`,
+    params
+  );
   params.push(pageSize, (page - 1) * pageSize);
   const res = await client.query(
-    `SELECT q.id, q.quotation_no, q.status, q.quotation_date, q.valid_until, q.total,
-            c.code AS customer_code, c.name AS customer_name
-     FROM sales_quotations q JOIN customers c ON c.id = q.customer_id
+    `SELECT q.id, q.quotation_no, q.status, q.quotation_date, q.valid_until, q.total, q.customer_reference,
+            c.code AS customer_code, c.name AS customer_name,
+            TRIM(BOTH FROM COALESCE(sp.first_name,'') || ' ' || COALESCE(sp.last_name,'')) AS salesperson_name
+     FROM sales_quotations q
+     JOIN customers c ON c.id = q.customer_id
+     LEFT JOIN users sp ON sp.id = COALESCE(q.salesperson_id, q.created_by)
      WHERE ${where.join(' AND ')}
      ORDER BY q.id DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
-  return { rows: toCamelRows(res.rows), page, pageSize };
+  return { rows: toCamelRows(res.rows), page, pageSize, total: Number(count.rows[0]?.total ?? 0) };
 }
 
 export async function listOrders(

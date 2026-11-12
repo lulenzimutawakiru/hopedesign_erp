@@ -83,20 +83,26 @@ export const NAV_GROUPS: NavGroup[] = [
         id: 'sales', label: 'Sales', href: '/sales', perm: 'sales.orders.view', module: 'sales', accent: 'sales',
         keywords: 'quote order invoice cash otc',
         children: [
-          { id: 'overview', label: 'Command Center', href: '/sales', perm: 'sales.orders.view' , group: 'Command Center'},
-          { id: 'customers', label: 'Customers', href: '/sales/customers', perm: 'sales.quotations.view' , group: 'Order Intake'},
-          { id: 'quotations', label: 'Quotations', href: '/sales/quotations', perm: 'sales.quotations.view' , group: 'Order Intake'},
-          { id: 'orders', label: 'Sales Orders', href: '/sales/orders', perm: 'sales.orders.view' , group: 'Order Intake'},
-          { id: 'production', label: 'Production Orders', href: '/records/production/work_orders', perm: 'production.work_orders.view' , group: 'Fulfilment'},
-          { id: 'pick', label: 'Warehouse Pick', href: '/inventory/pick', perm: 'inventory.stock.view' , group: 'Fulfilment'},
-          { id: 'deliveries', label: 'Delivery Notes', href: '/sales/delivery_notes', perm: 'sales.delivery_notes.view' , group: 'Fulfilment'},
-          { id: 'invoices', label: 'Invoices', href: '/sales/invoices', perm: 'sales.invoices.view' , group: 'Billing'},
-          { id: 'receipts', label: 'Receipts', href: '/sales/receipts', perm: 'sales.receipts.view' , group: 'Billing'},
-          { id: 'credits', label: 'Credit Notes', href: '/sales/credit_notes', perm: 'sales.credit_notes.view' , group: 'Billing'},
-          { id: 'debits', label: 'Debit Notes', href: '/sales/debit_notes', perm: 'sales.debit_notes.view' , group: 'Billing'},
-          { id: 'returns', label: 'Returns', href: '/sales/returns', perm: 'sales.returns.view' , group: 'Billing'},
-          { id: 'price_lists', label: 'Price Lists', href: '/sales/price_lists', perm: 'sales.price_lists.view' , group: 'Pricing'},
-          { id: 'products', label: 'Products', href: '/sales/products', perm: 'sales.orders.view' , group: 'Master Data'},
+          { id: 'quotations', label: 'Quotations', href: '/sales', perm: 'sales.quotations.view', group: 'Orders' },
+          { id: 'orders', label: 'Orders', href: '/sales/orders', perm: 'sales.orders.view', group: 'Orders' },
+          { id: 'customers', label: 'Customers', href: '/sales/customers', perm: 'sales.quotations.view', group: 'Orders' },
+          { id: 'to_invoice', label: 'Orders to Invoice', href: '/sales/to_invoice', perm: 'sales.orders.view', group: 'To Invoice' },
+          { id: 'to_upsell', label: 'Orders to Upsell', href: '/sales/to_upsell', perm: 'sales.orders.view', group: 'To Invoice' },
+          { id: 'products', label: 'Products', href: '/sales/products', perm: 'sales.orders.view', group: 'Products' },
+          { id: 'price_lists', label: 'Pricelists', href: '/sales/price_lists', perm: 'sales.price_lists.view', group: 'Products' },
+          { id: 'reporting', label: 'Sales', href: '/sales/reporting', perm: 'sales.orders.view', group: 'Reporting' },
+          { id: 'command', label: 'Command Center', href: '/sales/command', perm: 'sales.orders.view', group: 'Reporting' },
+          { id: 'production', label: 'Production Orders', href: '/records/production/work_orders', perm: 'production.work_orders.view', group: 'Fulfilment' },
+          { id: 'pick', label: 'Warehouse Pick', href: '/inventory/pick', perm: 'inventory.stock.view', group: 'Fulfilment' },
+          { id: 'deliveries', label: 'Delivery Notes', href: '/sales/delivery_notes', perm: 'sales.delivery_notes.view', group: 'Fulfilment' },
+          { id: 'invoices', label: 'Invoices', href: '/sales/invoices', perm: 'sales.invoices.view', group: 'Billing' },
+          { id: 'receipts', label: 'Receipts', href: '/sales/receipts', perm: 'sales.receipts.view', group: 'Billing' },
+          { id: 'credits', label: 'Credit Notes', href: '/sales/credit_notes', perm: 'sales.credit_notes.view', group: 'Billing' },
+          { id: 'debits', label: 'Debit Notes', href: '/sales/debit_notes', perm: 'sales.debit_notes.view', group: 'Billing' },
+          { id: 'returns', label: 'Returns', href: '/sales/returns', perm: 'sales.returns.view', group: 'Billing' },
+          { id: 'settings', label: 'Settings', href: '/sales/settings', perm: 'sales.settings.view', group: 'Configuration' },
+          { id: 'teams', label: 'Sales Teams', href: '/sales/teams', perm: 'sales.teams.view', group: 'Configuration' },
+          { id: 'templates', label: 'Quotation Templates', href: '/sales/templates', perm: 'sales.templates.view', group: 'Configuration' },
         ],
       },
       {
@@ -880,9 +886,22 @@ export function requiredPermForPath(path: string): string | undefined {
     };
     return map[parts[1] ?? ''] ?? 'procurement.orders.view';
   }
-  if (parts[0] === 'sales' && parts[1] === 'customers') return 'sales.quotations.view';
-  if (parts[0] === 'sales' && parts[1] === 'products') return 'sales.orders.view';
-  if (parts[0] === 'sales' && parts[1]) return `sales.${parts[1]}.view`;
+  if (parts[0] === 'sales') {
+    if (!parts[1]) return 'sales.orders.view';
+    if (parts[1] === 'quotations') return 'sales.quotations.view';
+    const salesPerm: Record<string, string> = {
+      customers: 'sales.quotations.view',
+      products: 'sales.orders.view',
+      to_invoice: 'sales.orders.view',
+      to_upsell: 'sales.orders.view',
+      reporting: 'sales.orders.view',
+      command: 'sales.orders.view',
+      settings: 'sales.settings.view',
+      teams: 'sales.teams.view',
+      templates: 'sales.templates.view',
+    };
+    return salesPerm[parts[1]] ?? `sales.${parts[1]}.view`;
+  }
   if (parts[0] === 'inventory-intel') return 'inventory.stock.view';
   if (parts[0] === 'inventory' && parts[1]) {
     const map: Record<string, string> = {
