@@ -9,11 +9,23 @@ import { Badge, ErrorBanner, Modal, PageLoader } from '../components/ui';
 import { toast } from '../components/toast';
 import PriceLists from './sales/PriceLists';
 import SalesProducts from './sales/Products';
+import Quotations from './sales/Quotations';
+import QuotationForm, { QuotationProforma } from './sales/QuotationForm';
+import TemplateForm from './sales/TemplateForm';
+import { shippingPolicyLabel } from './sales/odooSales';
+import {
+  OrdersToInvoice,
+  OrdersToUpsell,
+  QuotationTemplatesPage,
+  SalesAnalysisPage,
+  SalesSettingsPage,
+  SalesTeamsPage,
+} from './sales/SalesSetup';
 
 const RESOURCES: { resource: string; label: string; perm: string }[] = [
   { resource: 'quotations', label: 'Quotations', perm: 'sales.quotations.view' },
   { resource: 'customers', label: 'Customers', perm: 'sales.quotations.view' },
-  { resource: 'orders', label: 'Sales Orders', perm: 'sales.orders.view' },
+  { resource: 'orders', label: 'Orders', perm: 'sales.orders.view' },
   { resource: 'delivery_notes', label: 'Delivery Notes', perm: 'sales.delivery_notes.view' },
   { resource: 'invoices', label: 'Invoices', perm: 'sales.invoices.view' },
   { resource: 'receipts', label: 'Receipts', perm: 'sales.receipts.view' },
@@ -57,12 +69,13 @@ const ORDER_STEPS = ['DRAFT', 'SUBMITTED', 'APPROVED', 'ALLOCATED', 'DISPATCHED'
 
 type Rec = Record<string, unknown>;
 
-export function parseSalesPath(path: string): { resource: string; id: string | null } {
+export function parseSalesPath(path: string): { resource: string; id: string | null; tail: string | null } {
   const parts = path.split('/').filter(Boolean);
   const start = parts[0] === 'records' ? 1 : 0;
   return {
-    resource: parts[start + 1] ?? 'board',
+    resource: parts[start + 1] ?? 'home',
     id: parts[start + 2] ?? null,
+    tail: parts[start + 3] ?? null,
   };
 }
 
@@ -78,10 +91,29 @@ function lineTotal(qty: number, price: number, disc: number, tax: number): numbe
 }
 
 export default function SalesFlow({ path }: { path: string }) {
-  const { resource, id } = parseSalesPath(path);
-  if (resource === 'board' || resource === '') return <SalesBoard />;
+  const { user } = useAuth();
+  const { resource, id, tail } = parseSalesPath(path);
+  if (resource === 'home' || resource === 'board' || resource === '') {
+    return can(user, 'sales.quotations.view') ? <Quotations /> : <SalesBoard />;
+  }
+  if (resource === 'command') return <SalesBoard />;
   if (resource === 'price_lists') return <PriceLists />;
   if (resource === 'products') return <SalesProducts />;
+  if (resource === 'to_invoice') return <OrdersToInvoice />;
+  if (resource === 'to_upsell') return <OrdersToUpsell />;
+  if (resource === 'reporting') return <SalesAnalysisPage />;
+  if (resource === 'settings') return <SalesSettingsPage />;
+  if (resource === 'teams') return <SalesTeamsPage />;
+  if (resource === 'templates') {
+    if (id === 'new' || (id != null && Number(id) > 0)) return <TemplateForm id={id === 'new' ? null : Number(id)} />;
+    return <QuotationTemplatesPage />;
+  }
+  if (resource === 'quotations') {
+    if (id === 'new') return <QuotationForm id={null} />;
+    if (id != null && Number(id) > 0 && tail === 'proforma') return <QuotationProforma id={Number(id)} />;
+    if (id != null && Number(id) > 0) return <QuotationForm id={Number(id)} />;
+    return <Quotations />;
+  }
   if (id === 'new') return <Composer resource={resource} />;
   if (resource === 'customers' && id && Number(id) > 0) return <CustomerDesk id={Number(id)} />;
   if (resource === 'customers') return <CustomerDirectory />;
@@ -1797,10 +1829,66 @@ function Related({ label, rows, resource, codeKeys }: { label: string; rows: Rec
   );
 }
 
+function OrderCommercial({ doc, optionals }: { doc: Rec; optionals: Rec[] }) {
+  const rows: [string, string][] = [];
+  const invoiceAddress = String(pick(doc, 'invoiceAddress', 'invoice_address') ?? '');
+  const deliveryAddress = String(pick(doc, 'deliveryAddress', 'delivery_address') ?? '');
+  const terms = pick(doc, 'paymentTermsDays', 'payment_terms_days');
+  const reference = String(pick(doc, 'customerPoNo', 'customer_po_no') ?? '');
+  const policy = String(pick(doc, 'shippingPolicy', 'shipping_policy') ?? '');
+  const incoterm = String(pick(doc, 'incoterm') ?? '');
+  const incotermLocation = String(pick(doc, 'incotermLocation', 'incoterm_location') ?? '');
+  if (invoiceAddress) rows.push(['Invoice address', invoiceAddress]);
+  if (deliveryAddress) rows.push(['Delivery address', deliveryAddress]);
+  if (terms != null && terms !== '') rows.push(['Payment terms', `${terms} days`]);
+  if (reference) rows.push(['Customer reference', reference]);
+  if (policy) rows.push(['Shipping policy', shippingPolicyLabel(policy)]);
+  if (incoterm) rows.push(['Incoterm', incotermLocation ? `${incoterm} ${incotermLocation}` : incoterm]);
+  if (!rows.length && optionals.length === 0) return null;
+  return (
+    <>
+      {rows.length > 0 && (
+        <section className="card" style={{ marginTop: 14 }}>
+          <div className="card-head"><h3>Order</h3></div>
+          <dl className="detail-list">
+            {rows.map(([label, value]) => (
+              <div className="detail-row" key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+      {optionals.length > 0 && (
+        <section className="card" style={{ marginTop: 14 }}>
+          <div className="card-head"><h3>Optional products</h3></div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Product</th><th className="cell-num">Qty</th><th className="cell-num">Price</th></tr></thead>
+              <tbody>
+                {optionals.map((row) => (
+                  <tr key={String(row.id ?? row.productId)}>
+                    <td>{String(pick(row, 'description', 'productName', 'product_name') ?? '')}</td>
+                    <td className="cell-num">{fmtNum(pick(row, 'quantity'))}</td>
+                    <td className="cell-num">{fmtMoney(pick(row, 'unitPrice', 'unit_price'))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
 function DocumentDetail({ resource, id }: { resource: string; id: number }) {
   const { user } = useAuth();
   const [doc, setDoc] = useState<Rec | null>(null);
   const [items, setItems] = useState<Rec[]>([]);
+  const [optionals, setOptionals] = useState<Rec[]>([]);
+  const [locked, setLocked] = useState(false);
   const [related, setRelated] = useState<{ orders?: Rec[]; deliveries?: Rec[]; invoices?: Rec[]; receipts?: Rec[] }>({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -1821,21 +1909,29 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
       const r = await api<{ data: { quotation: Rec; items: Rec[]; orders: Rec[] } }>(`/api/ops/sales/quotations/${id}`);
       setDoc(r.data.quotation);
       setItems(r.data.items);
+      setOptionals([]);
+      setLocked(false);
       setRelated({ orders: r.data.orders });
     } else if (resource === 'orders') {
-      const r = await api<{ data: { order: Rec; items: Rec[]; deliveries: Rec[]; invoices: Rec[] } }>(`/api/ops/sales/orders/${id}`);
+      const r = await api<{ data: { order: Rec; items: Rec[]; deliveries: Rec[]; invoices: Rec[]; optionals?: Rec[]; locked?: boolean } }>(`/api/ops/sales/orders/${id}`);
       setDoc(r.data.order);
       setItems(r.data.items);
+      setOptionals(r.data.optionals ?? []);
+      setLocked(Boolean(r.data.locked));
       setRelated({ deliveries: r.data.deliveries, invoices: r.data.invoices });
     } else if (resource === 'delivery_notes') {
       const r = await api<{ data: { deliveryNote: Rec; items: Rec[]; invoices?: Rec[] } }>(`/api/ops/sales/delivery-notes/${id}`);
       setDoc(r.data.deliveryNote);
       setItems(r.data.items);
+      setOptionals([]);
+      setLocked(false);
       setRelated({ invoices: r.data.invoices ?? [] });
     } else if (resource === 'invoices') {
       const r = await api<{ data: { invoice: Rec; items: Rec[]; receipts: Rec[] } }>(`/api/ops/sales/invoices/${id}`);
       setDoc(r.data.invoice);
       setItems(r.data.items);
+      setOptionals([]);
+      setLocked(false);
       setRelated({ receipts: r.data.receipts });
       const remaining = num(r.data.invoice.total) - num(r.data.invoice.amountPaid ?? r.data.invoice.amount_paid);
       setPayAmount(String(remaining));
@@ -1843,23 +1939,33 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
       const r = await api<{ data: { receipt: Rec; allocations: Rec[] } }>(`/api/ops/sales/receipts/${id}`);
       setDoc(r.data.receipt);
       setItems(r.data.allocations ?? []);
+      setOptionals([]);
+      setLocked(false);
       setRelated({ invoices: (r.data.allocations ?? []).map((a) => ({ id: a.invoiceId ?? a.invoice_id, invoiceNo: a.invoiceNo ?? a.invoice_no, status: a.invoiceStatus ?? a.invoice_status, total: a.amount })) });
     } else if (resource === 'credit_notes') {
       const r = await api<{ data: { creditNote: Rec } }>(`/api/ops/sales/credit-notes/${id}`);
       setDoc(r.data.creditNote);
       setItems([]);
+      setOptionals([]);
+      setLocked(false);
     } else if (resource === 'debit_notes') {
       const r = await api<{ data: { debitNote: Rec } }>(`/api/ops/sales/debit-notes/${id}`);
       setDoc(r.data.debitNote);
       setItems([]);
+      setOptionals([]);
+      setLocked(false);
     } else if (resource === 'returns') {
       const r = await api<{ data: { salesReturn: Rec; items: Rec[] } }>(`/api/ops/sales/returns/${id}`);
       setDoc(r.data.salesReturn);
       setItems(r.data.items ?? []);
+      setOptionals([]);
+      setLocked(false);
     } else {
       const r = await api<{ data: Rec }>(`/api/sales/${resource}/${id}`);
       setDoc(r.data);
       setItems([]);
+      setOptionals([]);
+      setLocked(false);
     }
   }, [id, resource]);
 
@@ -2012,6 +2118,9 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
       </header>
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <ErrorBanner error={error} />}
+      {resource === 'orders' && locked && (
+        <div className="sale-banner">This confirmed sales order is locked. Dispatch, delivery, and invoicing stay available.</div>
+      )}
       {(resource === 'quotations' || resource === 'orders') && (
         <Pipeline steps={resource === 'quotations' ? QUOTE_STEPS : ORDER_STEPS} status={status} />
       )}
@@ -2061,7 +2170,16 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map((item) => (
+                    {items.map((item) => {
+                      const kind = String(item.lineKind ?? item.line_kind ?? 'PRODUCT');
+                      if (kind === 'SECTION' || kind === 'NOTE') {
+                        return (
+                          <tr key={String(item.id)} className={kind === 'SECTION' ? 'sale-section' : 'sale-note'}>
+                            <td colSpan={resource === 'orders' ? 10 : 7}>{String(pick(item, 'description') ?? '')}</td>
+                          </tr>
+                        );
+                      }
+                      return (
                       <tr key={String(item.id)}>
                         <td>
                           <div className="cell-mono">{String(pick(item, 'productCode', 'product_code') ?? '')}</div>
@@ -2077,12 +2195,16 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
                         <td>{String(pick(item, 'taxCategory', 'tax_category') ?? '') || '—'}</td>
                         <td className="cell-num">{fmtMoney(pick(item, 'lineTotal', 'line_total'))}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
           </section>
+          {resource === 'orders' && (
+            <OrderCommercial doc={doc} optionals={optionals} />
+          )}
         </div>
         {(resource === 'orders' || resource === 'invoices') && (() => {
           const bankName = String(pick(doc, 'bankName', 'bank_name') ?? '');
@@ -2184,7 +2306,10 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => {
+                {items.filter((item) => {
+                  const kind = String(item.lineKind ?? item.line_kind ?? 'PRODUCT');
+                  return kind === 'PRODUCT' && (item.productId ?? item.product_id) != null;
+                }).map((item) => {
                   const rem = num(item.quantity) - num(item.dispatchedQty ?? item.dispatched_qty);
                   return (
                     <tr key={String(item.id)}>
