@@ -6,6 +6,7 @@ import { applyPrefs } from './prefs';
 import { startBuildWatch } from './buildwatch';
 import './tokens.css';
 import './styles.css';
+import './natex-brand.css';
 import './styles/auth.css';
 import './print.css';
 
