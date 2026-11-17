@@ -669,13 +669,22 @@ export async function recordOutput(
 export async function recordLabour(
   client: pg.PoolClient,
   ctx: Ctx,
-  input: { workOrderId: number; operatorUserId: number; hours: number; hourlyRate?: number | null; notes?: string | null }
+  input: { workOrderId: number; operatorUserId: number; hours: number; hourlyRate?: number | null; employeeId?: number | null; notes?: string | null }
 ) {
   const wo = await getWorkOrder(client, ctx, input.workOrderId);
   if (String(wo.status) !== 'IN_PROGRESS') throw badRequest(`Work order must be IN_PROGRESS to record labour`);
   const hours = Number(input.hours);
   if (hours <= 0) throw badRequest('Hours must be positive');
+  const employeeId = input.employeeId != null ? Number(input.employeeId) : null;
+  // Rate precedence: explicit rate > employee.hourly_rate > MC-LABOUR work-centre cost.
   let rate = input.hourlyRate != null ? Number(input.hourlyRate) : 0;
+  if (rate === 0 && employeeId != null) {
+    const emp = (await client.query(
+      `SELECT hourly_rate FROM employees WHERE id = $1 AND company_id = $2 AND tenant_id = $3`,
+      [employeeId, ctx.companyId, ctx.tenantId ?? 0]
+    )).rows[0];
+    rate = emp ? Number(emp.hourly_rate) : 0;
+  }
   if (rate === 0) {
     const wc = (await client.query(
       `SELECT hourly_cost FROM work_centres WHERE company_id = $1 AND code = 'MC-LABOUR'`,
@@ -683,20 +692,22 @@ export async function recordLabour(
     )).rows[0];
     rate = wc ? Number(wc.hourly_cost) : 8000;
   }
-  const cost = round2(hours * rate);
-  await client.query(
-    `INSERT INTO work_order_labour (work_order_id, operator_user_id, hours, hourly_rate, cost, notes)
-     VALUES ($1,$2,$3,$4,$5,$6)`,
-    [input.workOrderId, input.operatorUserId, hours, rate, cost, input.notes ?? null]
+  // Authoritative labour cost computed server-side in NUMERIC (no JS float rounding).
+  const ins = await client.query(
+    `INSERT INTO work_order_labour (work_order_id, operator_user_id, employee_id, hours, hourly_rate, cost, notes)
+     VALUES ($1,$2,$3,$4::numeric,$5::numeric, round($4::numeric * $5::numeric, 2), $6)
+     RETURNING cost`,
+    [input.workOrderId, input.operatorUserId, employeeId, hours, rate, input.notes ?? null]
   );
+  const cost = Number(ins.rows[0].cost);
   await emitEvent(client, ctx, {
     eventType: 'production.labour_recorded',
     entityType: 'work_orders',
     entityId: input.workOrderId,
     entityCode: String(wo.wo_no),
-    payload: { operatorUserId: input.operatorUserId, hours, cost },
+    payload: { operatorUserId: input.operatorUserId, employeeId, hours, cost },
   });
-  return { workOrderId: input.workOrderId, hours, cost };
+  return { workOrderId: input.workOrderId, employeeId, hours, cost };
 }
 
 export async function recordDowntime(
@@ -775,6 +786,35 @@ export async function completeWorkOrder(client: pg.PoolClient, ctx: Ctx, workOrd
   // uncosted waste (`waste_qty` at product standard cost). Rework cost is rolled into
   // `actual_other_cost`. Variance = standard − actual (positive = favourable).
   const productStandardCost = Number(product.standard_cost) || 0;
+
+  // Overhead is absorbed from active allocation_rules (rate × driver), falling back to the
+  // legacy work-centre multiplier only when no rules are configured for this company. Fully
+  // SQL NUMERIC; unsupported drivers (FLOOR_SPACE/REVENUE/CUSTOM) contribute 0 until wired.
+  const overheadRes = (await client.query(
+    `SELECT COALESCE(SUM(ar.rate * CASE ar.driver
+        WHEN 'MACHINE_HOURS' THEN d.machine_hours
+        WHEN 'LABOUR_HOURS' THEN d.labour_hours
+        WHEN 'PRODUCTION_QUANTITY' THEN d.produced_qty
+        WHEN 'MATERIAL_COST' THEN d.material_cost
+        ELSE 0 END), 0) AS overhead,
+      count(ar.id)::int AS rule_count
+     FROM allocation_rules ar
+     CROSS JOIN (
+       SELECT
+         (SELECT COALESCE(SUM(
+            CASE WHEN o.actual_started_at IS NOT NULL AND o.actual_ended_at IS NOT NULL
+                 THEN GREATEST(0, EXTRACT(EPOCH FROM (o.actual_ended_at - o.actual_started_at)))/3600.0
+                 ELSE (COALESCE(o.planned_setup_min,0)+COALESCE(o.planned_run_min,0))/60.0 END),0)
+            FROM work_order_operations o WHERE o.work_order_id = $1) AS machine_hours,
+         (SELECT COALESCE(SUM(hours),0) FROM work_order_labour WHERE work_order_id = $1) AS labour_hours,
+         (SELECT COALESCE(produced_qty,0) FROM work_orders WHERE id = $1) AS produced_qty,
+         (SELECT COALESCE(SUM(issued_qty * unit_cost),0) FROM work_order_materials WHERE work_order_id = $1) AS material_cost
+     ) d
+     WHERE ar.tenant_id = $2 AND ar.company_id = $3 AND ar.is_active = true`,
+    [workOrderId, ctx.tenantId ?? 0, ctx.companyId]
+  )).rows[0];
+  const allocatedOverhead = Number(overheadRes.rule_count) > 0 ? Number(overheadRes.overhead) : null;
+
   const c = (await client.query(
     `WITH c AS (
        SELECT
@@ -782,14 +822,16 @@ export async function completeWorkOrder(client: pg.PoolClient, ctx: Ctx, workOrd
          (SELECT COALESCE(SUM(cost), 0) FROM work_order_labour WHERE work_order_id = $1) AS labour,
          (SELECT COALESCE(SUM(rework_cost), 0) FROM rework_orders WHERE source_work_order_id = $1) AS rework,
          (SELECT COALESCE(actual_waste_cost, 0) + COALESCE(waste_qty, 0) * $2 FROM work_orders WHERE id = $1) AS waste,
-         COALESCE(SUM(hours * COALESCE(m.hourly_rate, 0)), 0) AS machine,
-         COALESCE(SUM(hours * COALESCE(wc.hourly_cost, 0) * COALESCE(wc.overhead_rate, 0)), 0) AS overhead
+         COALESCE(SUM(o.hours * COALESCE(m.hourly_rate, 0)
+                    + COALESCE(o.kwh_consumed, 0) * COALESCE(m.utility_rate_per_kwh, 0)), 0) AS machine,
+         COALESCE($3::numeric,
+           COALESCE(SUM(o.hours * COALESCE(wc.hourly_cost, 0) * COALESCE(wc.overhead_rate, 0)), 0)) AS overhead
        FROM (
          SELECT
            (CASE WHEN actual_started_at IS NOT NULL AND actual_ended_at IS NOT NULL
                  THEN GREATEST(0, EXTRACT(EPOCH FROM (actual_ended_at - actual_started_at))) / 3600.0
                  ELSE (COALESCE(planned_setup_min, 0) + COALESCE(planned_run_min, 0)) / 60.0 END) AS hours,
-           work_centre_id, machine_id
+           work_centre_id, machine_id, kwh_consumed
          FROM work_order_operations WHERE work_order_id = $1
        ) o
        LEFT JOIN work_centres wc ON wc.id = o.work_centre_id
@@ -807,7 +849,7 @@ export async function completeWorkOrder(client: pg.PoolClient, ctx: Ctx, workOrd
        CASE WHEN COALESCE(wo.quantity, 0) > 0 THEN round((COALESCE(wo.produced_qty, 0) / wo.quantity) * 100, 2) ELSE 0 END AS yield_percent
      FROM c, work_orders wo
      WHERE wo.id = $1`,
-    [workOrderId, productStandardCost]
+    [workOrderId, productStandardCost, allocatedOverhead]
   )).rows[0];
 
   const actualMaterialCost = Number(c.material_cost);
