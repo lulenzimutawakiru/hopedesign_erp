@@ -22,7 +22,8 @@ const COA = {
   REVENUE: '10241200',
   RAW_INV: '10111400',
   FG_INV: '10111400',
-  WIP: '10111400',
+  WIP: '10111410',
+  ABNORMAL_LOSS: '10251820',
   COGS: '10251100',
   DIRECT_PROD: '10251200',
   ADMIN_EXP: '10254500',
@@ -1060,6 +1061,33 @@ export async function postInventoryValueChange(client: pg.PoolClient, ctx: Ctx, 
     lines,
     refType: input.refType ?? null,
     refId: input.refId ?? null,
+    refCode: input.refCode ?? null,
+  });
+}
+
+/** Recognise abnormal production loss as a period expense: Dr Abnormal loss / Cr WIP.
+ *  The abnormal portion is taken out of the in-progress value so it does not inflate
+ *  finished-goods inventory. Idempotency is the caller's responsibility (the waste
+ *  record is created once, so this is posted once per record). */
+export async function postAbnormalLoss(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  input: { amount: number; description: string; refType: string; refId: number; refCode?: string | null }
+) {
+  const abs = Math.round(Math.abs(input.amount) * 100) / 100;
+  if (abs === 0) return null;
+  const lossId = await getAccountId(client, ctx, COA.ABNORMAL_LOSS);
+  const wipId = await getAccountId(client, ctx, COA.WIP);
+  return postJournalLines(client, ctx, {
+    entryDate: new Date().toISOString().slice(0, 10),
+    journalType: 'PRODUCTION',
+    description: input.description,
+    lines: [
+      { account_id: lossId, debit: abs, description: input.description },
+      { account_id: wipId, credit: abs, description: input.description },
+    ],
+    refType: input.refType,
+    refId: input.refId,
     refCode: input.refCode ?? null,
   });
 }

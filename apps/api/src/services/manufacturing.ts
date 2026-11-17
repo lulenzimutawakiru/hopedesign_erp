@@ -4,6 +4,7 @@ import { badRequest, notFound, toCamelRow, toCamelRows, toISODate } from '../uti
 import { postMove, reserve, consume } from './inventory.js';
 import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
+import { postAbnormalLoss } from './finance.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const num = (v: unknown): number => Number(v ?? 0);
@@ -1356,6 +1357,13 @@ export async function recordWaste(
     severity: isAbnormal ? 'WARN' : 'INFO',
   });
   if (isAbnormal) {
+    await postAbnormalLoss(client, ctx, {
+      amount: wasteQty * num(wo.standard_cost),
+      description: `Abnormal waste ${category} on ${wo.wo_no}`,
+      refType: 'waste_records',
+      refId: id,
+      refCode: `WST-${id}`,
+    });
     await upsertAlert(client, ctx, {
       alertType: 'HIGH_WASTE',
       severity: 'WARNING',

@@ -3,6 +3,7 @@ import pg from 'pg';
 import { pool } from './helpers.js';
 import type { Ctx } from '../src/db.js';
 import { completeWorkOrder, recordLabour } from '../src/services/production.js';
+import { postInventoryValueChange, postAbnormalLoss } from '../src/services/finance.js';
 
 /**
  * Production cost accounting — the costing engine.
@@ -147,6 +148,86 @@ describe('production cost accounting (costing engine)', () => {
       expect(Number(row.hourly_rate)).toBe(7500);
       // cost = 8 * 7500 = 60000, computed in SQL NUMERIC
       expect(Number(row.cost)).toBe(60000);
+    } finally {
+      await client.query('ROLLBACK');
+    }
+  });
+});
+
+describe('production cost accounting (WIP general-ledger postings)', () => {
+  let client: pg.PoolClient;
+
+  beforeAll(async () => {
+    client = await pool.connect();
+  });
+
+  afterAll(async () => {
+    if (client) client.release();
+  });
+
+  it('posts Dr FG / Cr WIP for a production completion move (WIP is now a distinct account)', async () => {
+    await client.query('BEGIN');
+    try {
+      const product = (await client.query(
+        `SELECT id, type FROM products WHERE tenant_id = $1 LIMIT 1`,
+        [CTX.tenantId]
+      )).rows[0];
+      expect(product).toBeTruthy();
+
+      const entryId = await postInventoryValueChange(client, CTX, {
+        productId: Number(product.id),
+        productType: String(product.type),
+        amount: 50000,
+        entryDate: '2026-11-17',
+        description: 'Production output GL test',
+        journalType: 'PRODUCTION',
+        refType: 'work_orders',
+        refId: 999999,
+        refCode: 'TEST-GL',
+      });
+      expect(entryId).toBeTruthy();
+
+      const lines = (await client.query(
+        `SELECT a.code, l.debit, l.credit
+         FROM journal_lines l
+         JOIN chart_of_accounts a ON a.id = l.account_id
+         WHERE l.entry_id = $1`,
+        [entryId]
+      )).rows;
+
+      const fg = lines.find((l) => l.code === '10111400');
+      const wip = lines.find((l) => l.code === '10111410');
+      expect(fg).toBeTruthy();
+      expect(wip).toBeTruthy();
+      expect(Number(fg.debit)).toBe(50000);
+      expect(Number(wip.credit)).toBe(50000);
+    } finally {
+      await client.query('ROLLBACK');
+    }
+  });
+
+  it('posts Dr Abnormal loss / Cr WIP for abnormal production loss', async () => {
+    await client.query('BEGIN');
+    try {
+      const entryId = await postAbnormalLoss(client, CTX, {
+        amount: 7000,
+        description: 'Abnormal waste GL test',
+        refType: 'waste_records',
+        refId: 999998,
+        refCode: 'WST-TEST',
+      });
+      expect(entryId).toBeTruthy();
+
+      const lines = (await client.query(
+        `SELECT a.code, l.debit, l.credit
+         FROM journal_lines l
+         JOIN chart_of_accounts a ON a.id = l.account_id
+         WHERE l.entry_id = $1`,
+        [entryId]
+      )).rows;
+
+      expect(lines.find((l) => l.code === '10251820' && Number(l.debit) === 7000)).toBeTruthy();
+      expect(lines.find((l) => l.code === '10111410' && Number(l.credit) === 7000)).toBeTruthy();
     } finally {
       await client.query('ROLLBACK');
     }
