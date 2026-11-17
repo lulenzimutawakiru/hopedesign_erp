@@ -2953,6 +2953,54 @@ export async function routingDetail(client: pg.PoolClient, ctx: Ctx, id: number)
   return { ...toCamelRow(hdr.rows[0]), operations: toCamelRows(ops.rows) };
 }
 
+interface BomItemInput {
+  productId: number;
+  quantity: number;
+  unitId: number | null;
+  scrapPercent: number;
+  isConsumable: boolean;
+}
+
+/**
+ * Normalize a BOM `items` payload into validated rows. `quantity` must be a
+ * positive number and `scrapPercent` is clamped to 0–100; anything else is
+ * rejected up-front so a bad line cannot half-commit a BOM.
+ */
+function parseBomItems(raw: unknown): BomItemInput[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw badRequest('items must be an array');
+  const out: BomItemInput[] = [];
+  for (const entry of raw) {
+    const o = (entry ?? {}) as Record<string, unknown>;
+    const productId = Number(o.productId);
+    if (!productId) throw badRequest('each BOM item requires a numeric productId');
+    const quantity = o.quantity != null ? Number(o.quantity) : 0;
+    if (!(quantity > 0)) throw badRequest('each BOM item requires a positive quantity');
+    const scrap = o.scrapPercent != null ? Number(o.scrapPercent) : 0;
+    out.push({
+      productId,
+      quantity,
+      unitId: o.unitId != null ? Number(o.unitId) : null,
+      scrapPercent: Number.isFinite(scrap) ? Math.min(100, Math.max(0, scrap)) : 0,
+      isConsumable: o.isConsumable === true,
+    });
+  }
+  return out;
+}
+
+/** Insert BOM component lines for a freshly-created header. Returns the count written. */
+async function writeBomItems(client: pg.PoolClient, bomId: number, raw: unknown): Promise<number> {
+  const items = parseBomItems(raw);
+  for (const it of items) {
+    await client.query(
+      `INSERT INTO bom_items (bom_id, product_id, quantity, unit_id, scrap_percent, is_consumable)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [bomId, it.productId, it.quantity, it.unitId, it.scrapPercent, it.isConsumable]
+    );
+  }
+  return items.length;
+}
+
 export async function createBom(client: pg.PoolClient, ctx: Ctx, b: Record<string, unknown>) {
   const productId = Number(b.productId);
   if (!productId) throw badRequest('productId is required');
@@ -2977,7 +3025,16 @@ export async function createBom(client: pg.PoolClient, ctx: Ctx, b: Record<strin
       String(b.status ?? 'DRAFT'),
     ]
   );
-  return toCamelRow(res.rows[0]);
+  const bomId = Number(res.rows[0].id);
+  const itemsWritten = await writeBomItems(client, bomId, b.items);
+  await logAudit(client, ctx, {
+    action: 'create',
+    resource: 'boms',
+    recordId: bomId,
+    recordCode: code,
+    newValues: { productId, name: String(b.name ?? 'BOM'), version: Number(b.version ?? 1), itemsWritten },
+  });
+  return { ...toCamelRow(res.rows[0]), itemCount: itemsWritten };
 }
 
 /**
@@ -3010,26 +3067,45 @@ export async function updateBom(client: pg.PoolClient, ctx: Ctx, id: number, b: 
     vals.push(value);
     sets.push(`${column} = $${vals.length}`);
   }
-  if (sets.length === 0) throw badRequest('No BOM fields to update');
-  vals.push(id);
-  const idIdx = vals.length;
-  vals.push(ctx.tenantId ?? 0);
-  const tenantIdx = vals.length;
-  const res = await client.query(
-    `UPDATE boms SET ${sets.join(', ')}, updated_at = now()
-     WHERE id = $${idIdx} AND tenant_id = $${tenantIdx}
-     RETURNING id, code, name`,
-    vals
-  );
-  if (res.rowCount === 0) throw notFound('BOM not found');
+  const replacingItems = 'items' in b;
+  if (sets.length === 0 && !replacingItems) throw badRequest('No BOM fields to update');
+  let row: Record<string, unknown>;
+  if (sets.length > 0) {
+    vals.push(id);
+    const idIdx = vals.length;
+    vals.push(ctx.tenantId ?? 0);
+    const tenantIdx = vals.length;
+    const res = await client.query(
+      `UPDATE boms SET ${sets.join(', ')}, updated_at = now()
+       WHERE id = $${idIdx} AND tenant_id = $${tenantIdx}
+       RETURNING id, code, name`,
+      vals
+    );
+    if (res.rowCount === 0) throw notFound('BOM not found');
+    row = res.rows[0];
+  } else {
+    // Items-only update: still verify the header exists within this tenant.
+    const chk = await client.query(
+      `SELECT id, code, name FROM boms WHERE id = $1 AND tenant_id = $2`,
+      [id, ctx.tenantId ?? 0]
+    );
+    if (chk.rowCount === 0) throw notFound('BOM not found');
+    row = chk.rows[0];
+  }
+  let itemsWritten: number | null = null;
+  if (replacingItems) {
+    // Replace semantics: the submitted array is the new bill of materials.
+    await client.query(`DELETE FROM bom_items WHERE bom_id = $1`, [id]);
+    itemsWritten = await writeBomItems(client, id, b.items);
+  }
   await logAudit(client, ctx, {
     action: 'update',
     resource: 'boms',
     recordId: id,
-    recordCode: res.rows[0].code != null ? String(res.rows[0].code) : null,
-    newValues: changes,
+    recordCode: row.code != null ? String(row.code) : null,
+    newValues: { ...changes, ...(replacingItems ? { itemsWritten } : {}) },
   });
-  return toCamelRow(res.rows[0]);
+  return { ...toCamelRow(row), ...(replacingItems ? { itemCount: itemsWritten } : {}) };
 }
 
 /**
