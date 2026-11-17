@@ -140,8 +140,17 @@ describe('queryTaxpayerByTin', () => {
     expect(body.data.signature).not.toBe('');
   });
 
-  it('returns found:false when URA has no taxpayer for the TIN', async () => {
-    mockFetch(uraEnvelope({ message: 'The taxpayer does not exist or the state is abnormal!' }));
+  it('returns found:false when URA reports the taxpayer does not exist (2261)', async () => {
+    // Real T119 shape: the "not found" answer is a returnStateInfo business
+    // rejection (2261), not a success envelope with an empty body.
+    mockFetch(uraEnvelope({}, { returnCode: '2261', returnMessage: 'The taxpayer does not exist or the state is abnormal!' }));
+    const result = await queryTaxpayerByTin(baseOptions());
+    expect(result.found).toBe(false);
+    expect(result.taxpayer).toBeNull();
+  });
+
+  it('returns found:false when the success envelope carries no taxpayer object', async () => {
+    mockFetch(uraEnvelope({ message: 'no record' }));
     const result = await queryTaxpayerByTin(baseOptions());
     expect(result.found).toBe(false);
     expect(result.taxpayer).toBeNull();
@@ -158,8 +167,8 @@ describe('queryTaxpayerByTin', () => {
       .rejects.toMatchObject({ code: 'EFRIS_LOOKUP_TRANSPORT' });
   });
 
-  it('surfaces a URA business rejection', async () => {
-    mockFetch(uraEnvelope({}, { returnCode: '99', returnMessage: 'TIN not found' }));
+  it('surfaces a non-not-found URA business rejection', async () => {
+    mockFetch(uraEnvelope({}, { returnCode: '99', returnMessage: 'Unauthorized device' }));
     await expect(queryTaxpayerByTin(baseOptions())).rejects.toMatchObject({ code: 'EFRIS_BIZ_REJECT' });
   });
 

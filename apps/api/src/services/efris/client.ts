@@ -269,6 +269,23 @@ function rejectBusinessFailure(raw: unknown): void {
   });
 }
 
+/**
+ * A T119 lookup is a query, so URA's "taxpayer does not exist" business
+ * rejection is the expected not-found answer, not an error. URA returns it as a
+ * returnStateInfo failure (e.g. code 2261) rather than a success envelope with an
+ * empty body, which is why `postUraEnvelope` throws before the caller can read
+ * the content. Recognise that specific rejection so the caller can answer
+ * `found: false` instead of surfacing a 500.
+ */
+function isTaxpayerNotFoundRejection(err: unknown): boolean {
+  if (!(err instanceof EfrisClientError)) return false;
+  if (err.code !== 'EFRIS_BIZ_REJECT') return false;
+  const state = readReturnState(err.payload);
+  if (!state) return false;
+  const text = `${state.code} ${state.message}`.toLowerCase();
+  return /2261|does not exist|不存在/.test(text);
+}
+
 function s2sIdentity(opts: SubmitFiscalOptions): { tin: string; deviceNo: string; privateKey: string; flags: Record<string, unknown> } {
   const flags = flagsOf(opts);
   const tin = (opts.tin ?? '').trim();
@@ -793,7 +810,15 @@ export async function queryTaxpayerByTin(opts: TaxpayerLookupOptions): Promise<T
     privateKey,
     offline ? { offlineEnabler: true } : undefined
   );
-  const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
+  let raw: unknown;
+  try {
+    raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
+  } catch (err) {
+    if (isTaxpayerNotFoundRejection(err)) {
+      return { found: false, taxpayer: null, raw: undefined };
+    }
+    throw err;
+  }
   let unwrapped: unknown = raw;
   try {
     unwrapped = unwrapResponse(raw);
