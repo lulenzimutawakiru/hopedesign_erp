@@ -9,41 +9,44 @@
 | Phase | Commit | Content |
 |---|---|---|
 | 1 — Audit & gap analysis | `f95aa94` | Six-domain repository audit; gap matrix, ranked defects, plan, open decisions. |
-| 2 — Costing engine consolidation | `f95aa94` | `completeWorkOrder` now totals material/labour/machine/overhead/waste/rework in a single SQL NUMERIC CTE (no JS-float accumulation); rework rolls into `actual_other_cost`; variance standardised to **standard − actual** (positive = favourable) across `completeWorkOrder`, `workOrderCosting`, `captureProductionCost`. |
-| 3a — BOM line CRUD | `fd3880a` | `createBom`/`updateBom` now persist `bom_items` (validate + replace semantics + audit). |
-| 3b — Labour / machine / overhead | `da0ef4d` | Migration `0248`: `machines.power_kw`/`utility_rate_per_kwh`, `work_order_operations.kwh_consumed`, `employees.hourly_rate`, `work_order_labour.employee_id`, `wip_balances.value`. `recordLabour` links to employees, defaults rate from `employees.hourly_rate`, computes cost in SQL NUMERIC. `completeWorkOrder` adds electricity (kWh × tariff) to machine cost and absorbs overhead from active `allocation_rules` (rate × driver) with a legacy work-centre fallback. |
-| 6 — Reports | `0b27069` | Migration `0249`: 14 production-cost views + registry entries (`reports.production.view`). |
+| 2 — Costing engine consolidation | `f95aa94` | `completeWorkOrder` totals material/labour/machine/overhead/waste/rework in a single SQL NUMERIC CTE; variance = **standard − actual** (positive = favourable). |
+| 3a — BOM line CRUD | `fd3880a` | `createBom`/`updateBom` persist `bom_items`. |
+| 3b — Labour / machine / overhead | `da0ef4d` | Migration `0248`; `recordLabour` links employees + SQL-computed cost; electricity + rule-based overhead absorption. |
+| 6 — Reports | `0b27069` | Migration `0249`: 14 production-cost views + registry. |
+| 4 — WIP GL postings | `c3e63c6` | Migration `0250`: distinct WIP asset `10111410` + abnormal-loss `10251820`. `COA.WIP` repointed → `Dr WIP/Cr Raw`, `Dr FG/Cr WIP`, and `Dr Abnormal loss/Cr WIP` are live. |
+| 5 — Filter set | `9845c39` | Server-side filters for `/plant/costing` + `/finance/costing`: date range, MO, product, department (facility), status, costing status. |
+| 6 — Posting gate | `9845c39` | `postProductionCost` refuses to post finished-goods value for an in-progress work order. |
+| 7 — Lifecycle test | `9845c39` | Full lifecycle regression test (issue → labour → output → complete → GL). |
 
 ## Verification status
 
 - **Typecheck:** `npx tsc --noEmit -p tsconfig.json` — clean.
-- **Migrations:** `0248` and `0249` apply cleanly against the local Postgres (Docker `hopedesign_postgres`, now running).
-- **New regression test:** `apps/api/tests/productionCosting.test.ts` — **2/2 pass** (pins machine+electricity, rule-based overhead, variance, yield; and employee-rate labour with SQL-computed cost).
-- **Existing suites:** run but fail on **missing seed fixtures**, not on this work:
-  - `production.test.ts` — `output` step 400s because the dev DB has no `FINISHED_GOODS` warehouse (only `PACK-WH`).
-  - `mes.test.ts` / `reports.analytics.test.ts` — login 401s for unseeded users (`qiana.qc`, `sarah.sales`, …) and a missing seeded work order `1180`.
-  - These are the long-standing "dev DB unseeded" issue from project memory; not regressions.
+- **Migrations:** `0248`, `0249`, `0250` apply cleanly against local Postgres (Docker, now running).
+- **New regression suite:** `apps/api/tests/productionCosting.test.ts` — **8/8 pass**:
+  - machine + electricity, rule-based overhead, variance, yield (SQL NUMERIC);
+  - employee-rate labour (SQL-computed cost);
+  - `Dr FG / Cr WIP` production move (WIP distinct from inventory);
+  - `Dr Abnormal loss / Cr WIP`;
+  - costing-desk + finance costing filter sets;
+  - posting gate (in-progress WO → refuse);
+  - full lifecycle with GL assertions.
+- **Existing suites:** fail only on the long-standing unseeded-dev-DB fixtures (no `FINISHED_GOODS` warehouse; missing users `qiana.qc`/`sarah.sales`; missing WO `1180`), not on this work.
 
-## Blocked — needs a decision before Phase 4 (GL postings)
+## Remaining (not implemented)
 
-The WIP→FG general-ledger chain is a **no-op today** because the Hope Design chart maps
-`RAW_INV`, `FG_INV` and `WIP` to the same account `10111400` (`finance.ts:23-25`), and
-`postInventoryValueChange` returns `null` when the stock and contra accounts collide
-(`finance.ts:1043-1044`). Real double-entry WIP accounting requires a chart change:
+- **Phase 4 (labour/overhead absorption into FG at *actual* cost):** the GL holds FG at **standard** cost (existing `recordOutput` GOOD posting) while the engine computes actual cost for variance reporting — a coherent *standard-costing* model. Absorbing actual conversion cost into the ledger (a *normal-costing* switch) and posting the period variance to P&L remain a finance-policy decision (which variance account, favourable/unfavourable treatment).
+- **Phase 5 (frontend filter UI):** the API now exposes the full filter set; the web costing-desk/finance views still filter client-side and have not been wired to the new query params.
+- **Phase 6 (full approval workflow on production cost sheets):** `production_costs` is not a workflow entity; approval gating today is the completion gate above. A full maker–checker workflow (submit/approve on the cost sheet, re-approval invalidation via the existing material-hash machinery) would require registering `production_costs` in `ENTITIES` with its own status semantics.
+- **Phase 7 (end-to-end HTTP lifecycle test):** blocked by unseeded dev fixtures (FINISHED_GOODS warehouse); covered at the service layer instead.
 
-- **(A) Separate accounts** — add a distinct `WIP` account (and optionally a distinct FG account), point `COA.WIP`/`COA.FG_INV` at them, then implement idempotent journals: `Dr WIP / Cr Raw` (material issue), `Dr FG / Cr WIP` (completion), `Dr Expense / Cr WIP` (abnormal loss).
-- **(B) Auxiliary-only** — keep the single inventory account and track WIP/FG *value* only in `wip_balances.value` + `wip_ledger` (no GL reclassification).
-- **(C) Defer** — ship Phases 2/3/6 now; revisit GL before Phase 4.
+## Deploy / rollback notes
 
-This is a **finance sign-off** (account codes + reclassification policy), so it has not been implemented unilaterally.
+**Deploy** (production is a single node with `deploy/auto-deploy.sh` watching the repo; pushing `main` triggers a ~20 min rollout):
+1. Migrations run automatically on boot (`packages/db/src/migrate.js`, advisory lock 88100). `0250` is idempotent (`ON CONFLICT (company_id, code) DO NOTHING`) and adds accounts for **every** company.
+2. No data migration: new columns have defaults; existing journals are untouched.
 
-## Remaining (not yet done)
+**Behaviour change to review:** once `0250` is applied, material issues and good-output postings **start posting to the GL** (`Dr WIP/Cr Raw`, `Dr FG/Cr WIP`) where they previously no-oped. For a company that already runs production without WIP on the chart, this will begin moving balances through `10111410`. Confirm finance has signed off on the account codes before relying on the trial balance.
 
-- **Phase 4** — WIP value engine (maintain `wip_balances.value` on material issue/output; the MES table is currently read-only/dormant) and the GL postings above (blocked on the chart decision).
-- **Phase 5** — `/plant/costing` + `/finance/costing` filter set (date range, MO, product, department, status, costing status) and indicator additions.
-- **Phase 6 (remainder)** — approval gating + re-approval invalidation on cost adjustment / overhead allocation / completion.
-- **Phase 7** — full-lifecycle test (order → issue → labour/machine/overhead → WIP → FG → GL) + deployment/rollback notes.
-
-## Deploy note
-
-Nothing here is pushed. All four commits are additive (new columns with defaults, new views, new report registrations) and the core costing is covered by a passing regression test, but the broader API suite cannot be run green locally until the dev DB is seeded. Recommend seeding fixtures (or a dedicated test DB) before relying on the full CI gate, then push to trigger auto-deploy.
+**Rollback:**
+- Revert `COA.WIP` to `10111400` in `finance.ts` (single line) to restore the old no-op behaviour without touching the migration.
+- The `10111410`/`10251820` accounts can be left in the chart (they are harmless and zero-balance) or deactivated via `is_active = false`.
