@@ -753,15 +753,46 @@ export async function queryTaxpayerByTin(opts: TaxpayerLookupOptions): Promise<T
     throw err;
   }
   // Reuse the same identity resolution as fiscal submission (seller TIN, device
-  // number, private key). T119 signs the envelope with the company device key.
-  const identity = s2sIdentity(opts as unknown as SubmitFiscalOptions);
-  const global: UraGlobalOptions = {
-    interfaceCode: 'T119',
-    tin: identity.tin,
-    deviceNo: identity.deviceNo,
-    flags: identity.flags,
-  };
-  const envelope = buildUnencryptedEnvelope({ tin: opts.lookupTin, ninBrn: '' }, global, identity.privateKey);
+  // number, private key). T119 signs the envelope with the company device key —
+  // except on the offline enabler (Aisino TCS), which owns that key and receives
+  // a plaintext envelope instead (mirrors postUraContent's T111/T108 path).
+  const submitOpts = opts as unknown as SubmitFiscalOptions;
+  const offline = usesOfflineEnabler(submitOpts);
+  let global: UraGlobalOptions;
+  let privateKey: string | undefined;
+  if (offline) {
+    const tin = (opts.tin ?? '').trim();
+    if (!tin) {
+      throw new EfrisClientError({
+        code: 'EFRIS_TIN_MISSING',
+        stage: 'config',
+        message: 'EFRIS taxpayer TIN is required before a document can be sent to URA',
+        retryable: false,
+      });
+    }
+    global = {
+      interfaceCode: 'T119',
+      tin,
+      deviceNo: resolveDeviceNo(flags, opts.clientId) ?? '',
+      flags,
+    };
+    privateKey = undefined;
+  } else {
+    const identity = s2sIdentity(submitOpts);
+    global = {
+      interfaceCode: 'T119',
+      tin: identity.tin,
+      deviceNo: identity.deviceNo,
+      flags: identity.flags,
+    };
+    privateKey = identity.privateKey;
+  }
+  const envelope = buildUnencryptedEnvelope(
+    { tin: opts.lookupTin, ninBrn: '' },
+    global,
+    privateKey,
+    offline ? { offlineEnabler: true } : undefined
+  );
   const raw = await postUraEnvelope(endpoint, envelope, opts.timeoutSeconds);
   let unwrapped: unknown = raw;
   try {

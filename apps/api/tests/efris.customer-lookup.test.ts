@@ -168,4 +168,25 @@ describe('queryTaxpayerByTin', () => {
     await expect(queryTaxpayerByTin(baseOptions({ clientSecret: undefined })))
       .rejects.toMatchObject({ code: 'EFRIS_PRIVATE_KEY_MISSING' });
   });
+
+  it('routes T119 through the offline enabler without a private key', async () => {
+    const fetchFn = mockFetch(uraEnvelope({
+      taxpayer: { tin: '1000000001', legalName: 'Acme Uganda Ltd' },
+    }));
+    const result = await queryTaxpayerByTin(baseOptions({
+      clientSecret: undefined,
+      securityFlags: { protocol: 'offline_enabler', deviceNo: 'TCS-DEV-001' },
+    }));
+    expect(result.found).toBe(true);
+    expect(result.taxpayer?.tin).toBe('1000000001');
+
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('efristest.ura.go.ug');
+    const body = JSON.parse(String(init.body)) as { globalInfo: { interfaceCode: string }; data: { content: string; signature: string } };
+    expect(body.globalInfo.interfaceCode).toBe('T119');
+    // The TCS owns the key, so the envelope is plaintext (empty signature).
+    expect(body.data.signature).toBe('');
+    const decoded = JSON.parse(Buffer.from(body.data.content, 'base64').toString('utf8'));
+    expect(decoded).toEqual({ tin: '1000000001', ninBrn: '' });
+  });
 });
