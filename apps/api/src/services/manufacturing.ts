@@ -1497,7 +1497,38 @@ export async function productionCosting(client: pg.PoolClient, ctx: Ctx, workOrd
 
 // Costing desk: standard vs actual cost across every work order, cost mix
 // components and per-unit economics driven by the packaging hierarchy.
-export async function costingDesk(client: pg.PoolClient, ctx: Ctx) {
+export async function costingDesk(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  filters: {
+    from?: string;
+    to?: string;
+    workOrderId?: number;
+    productId?: number;
+    facilityId?: number;
+    status?: string;
+    costingStatus?: string;
+  } = {}
+) {
+  // Shared filter set for the row list and the summary KPIs (Phase 5): date
+  // range (completed/created), MO, product, department (facility), work-order
+  // status, and costing status (production_costs.status, or NONE = not costed).
+  const params: unknown[] = [ctx.tenantId];
+  let where = `wo.tenant_id = $1 AND wo.status <> 'DRAFT'`;
+  if (filters.from) { params.push(filters.from); where += ` AND COALESCE(wo.completed_at, wo.created_at) >= $${params.length}::date`; }
+  if (filters.to) { params.push(filters.to); where += ` AND COALESCE(wo.completed_at, wo.created_at) <= $${params.length}::date`; }
+  if (filters.workOrderId != null) { params.push(filters.workOrderId); where += ` AND wo.id = $${params.length}`; }
+  if (filters.productId != null) { params.push(filters.productId); where += ` AND wo.product_id = $${params.length}`; }
+  if (filters.facilityId != null) { params.push(filters.facilityId); where += ` AND wo.facility_id = $${params.length}`; }
+  if (filters.status) { params.push(filters.status); where += ` AND wo.status = $${params.length}`; }
+  if (filters.costingStatus) {
+    if (filters.costingStatus === 'NONE') {
+      where += ` AND NOT EXISTS (SELECT 1 FROM production_costs pc WHERE pc.work_order_id = wo.id)`;
+    } else {
+      params.push(filters.costingStatus);
+      where += ` AND EXISTS (SELECT 1 FROM production_costs pc WHERE pc.work_order_id = wo.id AND pc.status = $${params.length})`;
+    }
+  }
   const rows = await client.query(
     `SELECT wo.id, wo.wo_no, wo.status, wo.priority, wo.quantity, wo.produced_qty, wo.scrapped_qty,
             wo.rework_qty, wo.waste_qty, wo.standard_cost, wo.actual_material_cost, wo.actual_labour_cost,
@@ -1511,9 +1542,9 @@ export async function costingDesk(client: pg.PoolClient, ctx: Ctx) {
      JOIN products p ON p.id = wo.product_id
      LEFT JOIN machines m ON m.id = wo.machine_id
      LEFT JOIN units u ON u.id = wo.unit_id
-     WHERE wo.tenant_id = $1 AND wo.status <> 'DRAFT'
+     WHERE ${where}
      ORDER BY wo.id DESC LIMIT 400`,
-    [ctx.tenantId]
+    params
   );
   const sum = await client.query(
     `SELECT COUNT(*)::int AS orders,
@@ -1529,8 +1560,8 @@ export async function costingDesk(client: pg.PoolClient, ctx: Ctx) {
             COALESCE(SUM(wo.actual_machine_cost),0)::numeric AS total_machine,
             COALESCE(SUM(wo.actual_overhead_cost),0)::numeric AS total_overhead,
             COALESCE(SUM(wo.actual_waste_cost),0)::numeric AS total_waste
-     FROM work_orders wo WHERE wo.tenant_id = $1 AND wo.status <> 'DRAFT'`,
-    [ctx.tenantId]
+     FROM work_orders wo WHERE ${where}`,
+    params
   );
   const posted = await client.query(
     `SELECT COUNT(*)::int AS count, COALESCE(SUM(pc.actual_cost),0)::numeric AS value

@@ -4,6 +4,8 @@ import { pool } from './helpers.js';
 import type { Ctx } from '../src/db.js';
 import { completeWorkOrder, recordLabour } from '../src/services/production.js';
 import { postInventoryValueChange, postAbnormalLoss } from '../src/services/finance.js';
+import { costingDesk } from '../src/services/manufacturing.js';
+import { listProductionCosts, postProductionCost } from '../src/services/finance-advanced.js';
 
 /**
  * Production cost accounting — the costing engine.
@@ -152,6 +154,114 @@ describe('production cost accounting (costing engine)', () => {
       await client.query('ROLLBACK');
     }
   });
+
+  it('full lifecycle: issue material -> labour -> good output -> complete -> GL postings', async () => {
+    await client.query('BEGIN');
+    try {
+      const product = (await client.query(
+        `SELECT id, type FROM products WHERE tenant_id = $1 LIMIT 1`,
+        [CTX.tenantId]
+      )).rows[0];
+      expect(product).toBeTruthy();
+
+      const machine = (await client.query(
+        `INSERT INTO machines (company_id, tenant_id, code, name, hourly_rate, utility_rate_per_kwh)
+         VALUES ($1,$2,'TEST-MACH-LIFE','Lifecycle machine',10000,200) RETURNING id`,
+        [CTX.companyId, CTX.tenantId]
+      )).rows[0];
+
+      const wo = (await client.query(
+        `INSERT INTO work_orders (company_id, tenant_id, wo_no, product_id, quantity, produced_qty, standard_cost, status)
+         VALUES ($1,$2,'TEST-WO-LIFE',$3,100,80,70000,'IN_PROGRESS') RETURNING id`,
+        [CTX.companyId, CTX.tenantId, product.id]
+      )).rows[0];
+      const woId = Number(wo.id);
+
+      await client.query(
+        `INSERT INTO work_order_operations (work_order_id, seq, name, machine_id, planned_run_min, kwh_consumed)
+         VALUES ($1, 1, 'Cut', $2, 120, 50)`,
+        [woId, machine.id]
+      );
+      await client.query(
+        `INSERT INTO work_order_materials (work_order_id, product_id, required_qty, issued_qty, unit_cost)
+         VALUES ($1, $2, 10, 10, 300)`,
+        [woId, product.id]
+      );
+      await client.query(
+        `INSERT INTO work_order_labour (work_order_id, hours, hourly_rate, cost)
+         VALUES ($1, 5, 5000, 25000)`,
+        [woId]
+      );
+      await client.query(
+        `INSERT INTO allocation_rules (company_id, tenant_id, code, name, driver, rate, is_active)
+         VALUES ($1,$2,'TEST-OH-LIFE','Lifecycle overhead','MACHINE_HOURS',1000,true)`,
+        [CTX.companyId, CTX.tenantId]
+      );
+
+      // Material issue -> Dr WIP / Cr Raw (negative = credit the stock account).
+      const issueEntry = await postInventoryValueChange(client, CTX, {
+        productId: Number(product.id),
+        productType: String(product.type),
+        amount: -(10 * 300),
+        entryDate: '2026-11-17',
+        description: 'Material issue TEST-WO-LIFE',
+        journalType: 'PRODUCTION',
+        refType: 'work_orders',
+        refId: woId,
+        refCode: 'TEST-WO-LIFE',
+      });
+      expect(issueEntry).toBeTruthy();
+
+      // Good output -> Dr FG / Cr WIP (positive = debit the stock account).
+      const outputEntry = await postInventoryValueChange(client, CTX, {
+        productId: Number(product.id),
+        productType: String(product.type),
+        amount: 80 * 300,
+        entryDate: '2026-11-17',
+        description: 'Good output TEST-WO-LIFE',
+        journalType: 'PRODUCTION',
+        refType: 'work_orders',
+        refId: woId,
+        refCode: 'TEST-WO-LIFE',
+      });
+      expect(outputEntry).toBeTruthy();
+
+      await completeWorkOrder(client, CTX, woId);
+
+      const row = (await client.query(
+        `SELECT actual_material_cost, actual_labour_cost, actual_machine_cost, actual_overhead_cost,
+                actual_cost, cost_variance, yield_percent, status
+         FROM work_orders WHERE id = $1`,
+        [woId]
+      )).rows[0];
+      expect(row.status).toBe('COMPLETED');
+      expect(Number(row.actual_machine_cost)).toBe(30000);
+      // overhead = 2h * 1000 = 2000 (single rule in this lifecycle)
+      expect(Number(row.actual_overhead_cost)).toBe(2000);
+      expect(Number(row.actual_material_cost)).toBe(3000);
+      expect(Number(row.actual_labour_cost)).toBe(25000);
+      expect(Number(row.actual_cost)).toBe(60000);
+      expect(Number(row.cost_variance)).toBe(10000);
+      expect(Number(row.yield_percent)).toBe(80);
+
+      // The two production journals must have hit distinct WIP vs inventory accounts.
+      const issueLines = (await client.query(
+        `SELECT a.code, l.debit, l.credit FROM journal_lines l JOIN chart_of_accounts a ON a.id = l.account_id WHERE l.entry_id = $1`,
+        [issueEntry]
+      )).rows;
+      expect(issueLines.find((l) => l.code === '10111410' && Number(l.debit) === 3000)).toBeTruthy();
+      expect(issueLines.find((l) => l.code === '10111400' && Number(l.credit) === 3000)).toBeTruthy();
+
+      const outputLines = (await client.query(
+        `SELECT a.code, l.debit, l.credit FROM journal_lines l JOIN chart_of_accounts a ON a.id = l.account_id WHERE l.entry_id = $1`,
+        [outputEntry]
+      )).rows;
+      expect(outputLines.find((l) => l.code === '10111400' && Number(l.debit) === 24000)).toBeTruthy();
+      expect(outputLines.find((l) => l.code === '10111410' && Number(l.credit) === 24000)).toBeTruthy();
+    } finally {
+      await client.query('ROLLBACK');
+    }
+  });
 });
 
 describe('production cost accounting (WIP general-ledger postings)', () => {
@@ -228,6 +338,58 @@ describe('production cost accounting (WIP general-ledger postings)', () => {
 
       expect(lines.find((l) => l.code === '10251820' && Number(l.debit) === 7000)).toBeTruthy();
       expect(lines.find((l) => l.code === '10111410' && Number(l.credit) === 7000)).toBeTruthy();
+    } finally {
+      await client.query('ROLLBACK');
+    }
+  });
+});
+
+describe('production cost accounting (Phase 5 filter set)', () => {
+  let client: pg.PoolClient;
+
+  beforeAll(async () => {
+    client = await pool.connect();
+  });
+
+  afterAll(async () => {
+    if (client) client.release();
+  });
+
+  it('costingDesk accepts the date/MO/product/facility/status/costing-status filters', async () => {
+    const desk = await costingDesk(client, CTX, {
+      from: '2020-01-01',
+      workOrderId: 999999, // impossible id -> empty set, proves the filter is applied
+      status: 'COMPLETED',
+    });
+    expect(desk).toHaveProperty('summary');
+    expect(desk).toHaveProperty('rows');
+    expect(desk.rows).toHaveLength(0);
+  });
+
+  it('listProductionCosts accepts the work-order and product filters', async () => {
+    const rows = await listProductionCosts(client, CTX, { workOrderId: 999999, productId: 999999 });
+    expect(Array.isArray(rows)).toBe(true);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('refuses to post finished-goods value for an in-progress work order', async () => {
+    await client.query('BEGIN');
+    try {
+      const product = (await client.query(
+        `SELECT id FROM products WHERE tenant_id = $1 LIMIT 1`,
+        [CTX.tenantId]
+      )).rows[0];
+      const wo = (await client.query(
+        `INSERT INTO work_orders (company_id, tenant_id, wo_no, product_id, quantity, status)
+         VALUES ($1,$2,$3,$4,10,'IN_PROGRESS') RETURNING id`,
+        [CTX.companyId, CTX.tenantId, 'TEST-WO-POSTGATE', product.id]
+      )).rows[0];
+      const pc = (await client.query(
+        `INSERT INTO production_costs (company_id, tenant_id, work_order_id, product_id, cost_date, quantity, expected_cost, actual_cost, variance, status)
+         VALUES ($1,$2,$3,$4,'2026-11-17',10,1000,1000,0,'CALCULATED') RETURNING id`,
+        [CTX.companyId, CTX.tenantId, Number(wo.id), product.id]
+      )).rows[0];
+      await expect(postProductionCost(client, CTX, Number(pc.id))).rejects.toThrow(/completed/i);
     } finally {
       await client.query('ROLLBACK');
     }

@@ -1144,19 +1144,23 @@ export async function captureProductionCost(
 
 export async function listProductionCosts(
   client: pg.PoolClient, ctx: Ctx,
-  filters: { from?: string; to?: string; status?: string } = {}
+  filters: { from?: string; to?: string; status?: string; workOrderId?: number; productId?: number; facilityId?: number } = {}
 ) {
   const params: unknown[] = [ctx.tenantId, ctx.companyId];
   let where = 'WHERE pc.tenant_id = $1 AND pc.company_id = $2';
   if (filters.status) { params.push(filters.status); where += ` AND pc.status = $${params.length}`; }
   if (filters.from) { params.push(filters.from); where += ` AND pc.cost_date >= $${params.length}::date`; }
   if (filters.to) { params.push(filters.to); where += ` AND pc.cost_date <= $${params.length}::date`; }
+  if (filters.workOrderId != null) { params.push(filters.workOrderId); where += ` AND pc.work_order_id = $${params.length}`; }
+  if (filters.productId != null) { params.push(filters.productId); where += ` AND pc.product_id = $${params.length}`; }
+  if (filters.facilityId != null) { params.push(filters.facilityId); where += ` AND wo.facility_id = $${params.length}`; }
   const res = await client.query(
     `SELECT pc.*, p.name AS product_name, p.sku AS product_sku,
             p2.code AS period_code
      FROM production_costs pc
      LEFT JOIN products p ON p.id = pc.product_id
      LEFT JOIN financial_periods p2 ON p2.id = pc.period_id
+     LEFT JOIN work_orders wo ON wo.id = pc.work_order_id
      ${where} ORDER BY pc.cost_date DESC, pc.id DESC`, params
   );
   return toCamelRows(res.rows);
@@ -1198,6 +1202,18 @@ export async function postProductionCost(client: pg.PoolClient, ctx: Ctx, id: nu
   }
   if (pc.status !== 'CALCULATED') {
     throw badRequest(`Production cost is ${pc.status}; only calculated costs can be posted`);
+  }
+  // Control (Phase 6): finished-goods value may only be posted once the work
+  // order is complete. A cost sheet for an in-progress order must not clear
+  // WIP to finished goods, otherwise FG would absorb a still-movable cost.
+  if (pc.work_order_id != null) {
+    const woRes = await client.query(
+      `SELECT status FROM work_orders WHERE id = $1 AND tenant_id = $2`,
+      [pc.work_order_id, ctx.tenantId]
+    );
+    if (woRes.rows.length && !['COMPLETED', 'CLOSED'].includes(String(woRes.rows[0].status))) {
+      throw badRequest(`Work order is ${woRes.rows[0].status} — cannot post finished-goods value until it is completed`);
+    }
   }
   const out = await applyPostingRule(client, ctx, {
     event: 'PRODUCTION_COMPLETE', code: 'FG_WIP', amount: n(pc.actual_cost),

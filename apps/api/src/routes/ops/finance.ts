@@ -733,6 +733,9 @@ financeOpsRouter.get('/costing/production', ...runGet('finance.production_costs.
   status: q.status != null ? String(q.status) : undefined,
   from: q.from != null ? String(q.from) : undefined,
   to: q.to != null ? String(q.to) : undefined,
+  workOrderId: q.workOrderId != null ? Number(q.workOrderId) : undefined,
+  productId: q.productId != null ? Number(q.productId) : undefined,
+  facilityId: q.facilityId != null ? Number(q.facilityId) : undefined,
 })));
 financeOpsRouter.post('/costing/production', ...run('finance.production_costs.create', (c, ctx, b) => finAdv.captureProductionCost(c, ctx, {
   workOrderId: b.workOrderId != null ? Number(b.workOrderId) : null,

@@ -186,7 +186,15 @@ manufacturingOpsRouter.post('/subcontract/:id/status', ...run('production.work_o
 // ---------------------------------------------------------------------------
 // 29/45. Costing + documents
 // ---------------------------------------------------------------------------
-manufacturingOpsRouter.get('/costing', ...runGet('production.costing.view', (c, ctx) => mfg.costingDesk(c, ctx)));
+manufacturingOpsRouter.get('/costing', ...runGet('production.costing.view', (c, ctx, q) => mfg.costingDesk(c, ctx, {
+  from: q.from != null ? String(q.from) : undefined,
+  to: q.to != null ? String(q.to) : undefined,
+  workOrderId: q.workOrderId != null ? Number(q.workOrderId) : undefined,
+  productId: q.productId != null ? Number(q.productId) : undefined,
+  facilityId: q.facilityId != null ? Number(q.facilityId) : undefined,
+  status: q.status != null ? String(q.status) : undefined,
+  costingStatus: q.costingStatus != null ? String(q.costingStatus) : undefined,
+})));
 manufacturingOpsRouter.get('/costing/:workOrderId', ...runGet('production.costing.view', (c, ctx, _q, p) => mfg.workOrderCosting(c, ctx, Number(p.workOrderId))));
 manufacturingOpsRouter.get('/documents', ...runGet('production.work_orders.print', (c, ctx) => mfg.listProductionDocuments(c, ctx)));
 manufacturingOpsRouter.get('/documents/:workOrderId', ...runGet('production.work_orders.print', (c, ctx, _q, p) => mfg.listProductionDocuments(c, ctx, Number(p.workOrderId))));
