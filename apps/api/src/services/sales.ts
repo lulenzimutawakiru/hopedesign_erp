@@ -32,6 +32,15 @@ function normalizeBuyerType(v: unknown): BuyerType | null {
   return s as BuyerType;
 }
 
+/** Normalise an optional buyer-TIN override. Empty → null; otherwise 10 digits. */
+function normalizeBuyerTin(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).replace(/\D/g, '');
+  if (s === '') return null;
+  if (!/^\d{10}$/.test(s)) throw badRequest('buyerTin must be a 10-digit URA TIN');
+  return s;
+}
+
 export interface SalesLineInput {
   productId?: number | null;
   description?: string | null;
@@ -456,6 +465,7 @@ export async function createQuotation(
     notes?: string | null;
     terms?: string | null;
     buyerType?: BuyerType | null;
+    buyerTin?: string | null;
     items: SalesLineInput[];
   } & SalesCommercialInput
 ) {
@@ -464,6 +474,7 @@ export async function createQuotation(
   if (!input.items?.length) throw badRequest('At least one line item is required');
   await assertSalesRefs(client, ctx, input);
   const buyerType = normalizeBuyerType(input.buyerType);
+  const buyerTin = normalizeBuyerTin(input.buyerTin);
   const quotationNo = await nextDoc(client, ctx, 'QT');
   const quotationDate = input.quotationDate ?? new Date().toISOString().slice(0, 10);
   let validUntil = input.validUntil;
@@ -477,13 +488,13 @@ export async function createQuotation(
   const ins = await client.query(
     `INSERT INTO sales_quotations
        (company_id, tenant_id, branch_id, quotation_no, customer_id, contact_id, opportunity_id,
-        quotation_date, valid_until, currency, notes, terms, buyer_type, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+        quotation_date, valid_until, currency, notes, terms, buyer_type, buyer_tin, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, quotationNo, input.customerId,
       input.contactId ?? null, input.opportunityId ?? null,
       quotationDate, validUntil, input.currency ?? 'UGX', input.notes ?? null, input.terms ?? null,
-      buyerType, ctx.userId ?? null,
+      buyerType, buyerTin, ctx.userId ?? null,
     ]
   );
   const quotationId = Number(ins.rows[0].id);
@@ -517,6 +528,7 @@ export async function updateQuotation(
     notes?: string | null;
     terms?: string | null;
     buyerType?: BuyerType | null;
+    buyerTin?: string | null;
     items: SalesLineInput[];
   } & SalesCommercialInput
 ) {
@@ -530,18 +542,19 @@ export async function updateQuotation(
   if (!input.items?.length) throw badRequest('At least one line item is required');
   await assertSalesRefs(client, ctx, input);
   const buyerType = normalizeBuyerType(input.buyerType);
+  const buyerTin = normalizeBuyerTin(input.buyerTin);
   const salespersonId = input.salespersonId === undefined
     ? (q.salesperson_id != null ? Number(q.salesperson_id) : ctx.userId ?? null)
     : idOrNull(input.salespersonId, 'Salesperson');
   await client.query(
     `UPDATE sales_quotations SET
        customer_id = $2, contact_id = $3, opportunity_id = $4, quotation_date = $5, valid_until = $6,
-       currency = $7, notes = $8, terms = $9, buyer_type = $10, updated_at = now()
+       currency = $7, notes = $8, terms = $9, buyer_type = $10, buyer_tin = $11, updated_at = now()
      WHERE id = $1`,
     [
       quotationId, input.customerId, input.contactId ?? null, input.opportunityId ?? null,
       input.quotationDate ?? q.quotation_date, input.validUntil === undefined ? q.valid_until : input.validUntil,
-      input.currency ?? q.currency, input.notes ?? null, input.terms ?? null, buyerType,
+      input.currency ?? q.currency, input.notes ?? null, input.terms ?? null, buyerType, buyerTin,
     ]
   );
   await client.query(`DELETE FROM sales_quotation_items WHERE quotation_id = $1`, [quotationId]);
@@ -725,6 +738,7 @@ export async function createSalesOrder(
     discountType?: 'AMOUNT' | 'PERCENT' | null;
     discountValue?: number | null;
     buyerType?: BuyerType | null;
+    buyerTin?: string | null;
   } & SalesCommercialInput
 ) {
   const companyId = ctx.companyId;
@@ -732,6 +746,7 @@ export async function createSalesOrder(
   await assertSalesRefs(client, ctx, input);
   await assertCustomerCanTrade(client, ctx, input.customerId, 0);
   const buyerType = normalizeBuyerType(input.buyerType);
+  const buyerTin = normalizeBuyerTin(input.buyerTin);
   const orderNo = await nextDoc(client, ctx, 'SO');
   const bank = await companyBankDefaults(client, ctx);
   const bankName = input.bankName != null ? String(input.bankName) : bank.bankName;
@@ -744,15 +759,15 @@ export async function createSalesOrder(
     `INSERT INTO sales_orders
        (company_id, tenant_id, branch_id, order_no, quotation_id, customer_id, contact_id, customer_po_no,
         order_date, requested_date, delivery_date, currency, notes,
-        bank_name, bank_account_name, bank_account_number, discount_type, discount_value, buyer_type, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+        bank_name, bank_account_name, bank_account_number, discount_type, discount_value, buyer_type, buyer_tin, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, orderNo, input.quotationId ?? null, input.customerId,
       input.contactId ?? null, input.customerPoNo ?? null,
       input.orderDate ?? new Date().toISOString().slice(0, 10),
       input.requestedDate ?? null, input.deliveryDate ?? null, input.currency ?? 'UGX', input.notes ?? null,
       bankName || null, bankAccountName || null, bankAccountNumber || null,
-      discountType, discountValue, buyerType, ctx.userId ?? null,
+      discountType, discountValue, buyerType, buyerTin, ctx.userId ?? null,
     ]
   );
   const orderId = Number(ins.rows[0].id);
@@ -928,6 +943,8 @@ export async function convertQuotation(client: pg.PoolClient, ctx: Ctx, quotatio
     medium: q.medium != null ? String(q.medium) : null,
     source: q.source != null ? String(q.source) : null,
     templateId: q.template_id != null ? Number(q.template_id) : null,
+    buyerType: q.buyer_type != null ? (String(q.buyer_type) as BuyerType) : null,
+    buyerTin: q.buyer_tin != null ? String(q.buyer_tin) : null,
   });
   await client.query(`UPDATE sales_quotations SET status = 'CONVERTED' WHERE id = $1`, [quotationId]);
   await emitEvent(client, ctx, {
@@ -1176,6 +1193,7 @@ export async function createInvoice(
     discountType?: 'AMOUNT' | 'PERCENT' | null;
     discountValue?: number | null;
     buyerType?: BuyerType | null;
+    buyerTin?: string | null;
   }
 ) {
   const companyId = ctx.companyId;
@@ -1183,6 +1201,7 @@ export async function createInvoice(
   const bank = await companyBankDefaults(client, ctx);
   let orderId = input.orderId != null ? Number(input.orderId) : null;
   const buyerType = normalizeBuyerType(input.buyerType);
+  let buyerTin = normalizeBuyerTin(input.buyerTin);
 
   let customerId: number;
   let currency: string;
@@ -1212,6 +1231,8 @@ export async function createInvoice(
     customerId = Number(so.customer_id);
     currency = String(so.currency ?? 'UGX');
     sourceOrderTerms = so.payment_terms_days;
+    // Inherit the buyer TIN from the order unless the caller supplied an override.
+    if (buyerTin == null && so.buyer_tin != null) buyerTin = String(so.buyer_tin);
     bankName = input.bankName != null ? String(input.bankName) : so.bank_name != null ? String(so.bank_name) : bank.bankName;
     bankAccountName = input.bankAccountName != null ? String(input.bankAccountName) : so.bank_account_name != null ? String(so.bank_account_name) : bank.bankAccountName;
     bankAccountNumber = input.bankAccountNumber != null ? String(input.bankAccountNumber) : so.bank_account_number != null ? String(so.bank_account_number) : bank.bankAccountNumber;
@@ -1259,6 +1280,7 @@ export async function createInvoice(
         bankName, bankAccountName, bankAccountNumber,
         discountType, discountValue,
         buyerType,
+        buyerTin,
       });
       orderId = so.orderId;
       // The invoice records delivery directly, so mark the generated order fulfilled.
@@ -1281,15 +1303,15 @@ export async function createInvoice(
   const ins = await client.query(
     `INSERT INTO customer_invoices
        (company_id, tenant_id, branch_id, invoice_no, order_id, delivery_note_id, customer_id, invoice_date, due_date, currency, notes,
-        bank_name, bank_account_name, bank_account_number, discount_type, discount_value, buyer_type, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+        bank_name, bank_account_name, bank_account_number, discount_type, discount_value, buyer_type, buyer_tin, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
     [
       companyId, ctx.tenantId, ctx.branchId ?? null, invoiceNo, orderId,
       input.deliveryNoteId ?? null, customerId,
       invoiceDate,
       dueDate, currency, input.notes ?? null,
       bankName || null, bankAccountName || null, bankAccountNumber || null,
-      discountType, discountValue, buyerType, ctx.userId ?? null,
+      discountType, discountValue, buyerType, buyerTin, ctx.userId ?? null,
     ]
   );
   const invoiceId = Number(ins.rows[0].id);
@@ -2102,7 +2124,7 @@ export async function listCustomers(client: pg.PoolClient, ctx: Ctx, q?: string)
   }
   const res = await client.query(
     `SELECT c.id, c.code, c.name, c.status, c.credit_limit, c.payment_terms_days, c.price_list_id,
-            c.billing_address, c.shipping_address, c.address
+            c.billing_address, c.shipping_address, c.address, c.tin
      FROM customers c WHERE ${where.join(' AND ')} ORDER BY c.name LIMIT 80`,
     params
   );
@@ -2119,7 +2141,7 @@ export async function customerDirectory(client: pg.PoolClient, ctx: Ctx, q?: str
   }
   const res = await client.query(
     `SELECT c.id, c.code, c.name, c.customer_type, c.status, c.credit_limit, c.payment_terms_days,
-            c.phone, c.email, c.branch_id, c.owner_user_id,
+            c.phone, c.email, c.branch_id, c.owner_user_id, c.tin,
             TRIM(BOTH FROM COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS owner_name,
             COALESCE((SELECT sum(i.total - i.amount_paid) FROM customer_invoices i
                       WHERE i.customer_id = c.id AND i.status NOT IN ('VOID','PAID')), 0)::numeric AS outstanding,
@@ -2433,7 +2455,7 @@ export async function listInvoices(client: pg.PoolClient, ctx: Ctx, filters: { q
   }
   const res = await client.query(
     `SELECT inv.id, inv.invoice_no, inv.status, inv.invoice_date, inv.due_date, inv.total, inv.amount_paid, inv.gl_posted,
-            inv.buyer_type, c.code AS customer_code, c.name AS customer_name, so.order_no
+            inv.buyer_type, inv.buyer_tin, c.code AS customer_code, c.name AS customer_name, so.order_no
      FROM customer_invoices inv
      JOIN customers c ON c.id = inv.customer_id
      LEFT JOIN sales_orders so ON so.id = inv.order_id

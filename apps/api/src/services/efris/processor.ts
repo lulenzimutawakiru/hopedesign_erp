@@ -314,7 +314,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
   try {
     if (row.doc_ref_type === 'customer_invoices') {
       const inv = await client.query(
-        `SELECT c.name AS customer_name, c.tin AS customer_tin, c.address AS customer_address,
+        `SELECT c.name AS customer_name, COALESCE(i.buyer_tin, c.tin) AS customer_tin, c.address AS customer_address,
                 c.email AS customer_email, c.phone AS customer_phone, c.customer_type AS customer_type,
                 i.buyer_type AS buyer_type, i.notes
            FROM customer_invoices i
@@ -373,7 +373,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
     if (row.doc_ref_type === 'credit_notes' || row.doc_ref_type === 'debit_notes') {
       const table = row.doc_ref_type === 'credit_notes' ? 'credit_notes' : 'debit_notes';
       const note = await client.query(
-        `SELECT n.invoice_id, n.reason, n.reason_code, c.name AS customer_name, c.tin AS customer_tin,
+        `SELECT n.invoice_id, n.reason, n.reason_code, c.name AS customer_name, COALESCE(i.buyer_tin, c.tin) AS customer_tin,
                 c.address AS customer_address, c.email AS customer_email, c.phone AS customer_phone,
                 c.customer_type AS customer_type, i.buyer_type AS buyer_type
            FROM ${table} n

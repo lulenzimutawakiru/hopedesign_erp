@@ -213,6 +213,9 @@ export default function QuotationForm({ id }: { id: number | null }) {
   const [validUntil, setValidUntil] = useState('');
   const [currency, setCurrency] = useState('UGX');
   const [buyerType, setBuyerType] = useState('');
+  const [buyerTin, setBuyerTin] = useState('');
+  const [lookingUp, setLookingUp] = useState(false);
+  const [tinLookup, setTinLookup] = useState<{ found: boolean; taxpayer: { legalName?: string; businessName?: string } | null } | null>(null);
   const [invoiceAddress, setInvoiceAddress] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [priceListId, setPriceListId] = useState<number | ''>('');
@@ -265,7 +268,29 @@ export default function QuotationForm({ id }: { id: number | null }) {
     setPaymentTermsDays(termsDays != null && termsDays !== '' ? num(termsDays) : '');
     const listId = pick(row, 'priceListId', 'price_list_id');
     setPriceListId(listId != null && listId !== '' ? num(listId) : '');
+    const tin = pick(row, 'tin');
+    if (tin != null && String(tin).trim()) {
+      setBuyerTin(String(tin).replace(/\D/g, ''));
+      setTinLookup(null);
+    }
     mark();
+  };
+
+  const runTinLookup = async () => {
+    const d = buyerTin.replace(/\D/g, '');
+    if (!/^\d{10}$/.test(d)) return;
+    setLookingUp(true);
+    try {
+      const r = await api<{ data: { found: boolean; taxpayer: { legalName?: string; businessName?: string } | null } }>(
+        '/api/ops/finance/efris/customer-lookup',
+        { method: 'POST', body: JSON.stringify({ tin: d }) }
+      );
+      setTinLookup(r.data);
+    } catch {
+      setTinLookup(null);
+    } finally {
+      setLookingUp(false);
+    }
   };
 
   const applyTemplate = useCallback(async (nextId: number) => {
@@ -296,6 +321,7 @@ export default function QuotationForm({ id }: { id: number | null }) {
     setValidUntil(day(q.validUntil));
     setCurrency(String(q.currency ?? 'UGX'));
     setBuyerType(String(q.buyerType ?? ''));
+    setBuyerTin(String(q.buyerTin ?? ''));
     setInvoiceAddress(String(q.invoiceAddress ?? ''));
     setDeliveryAddress(String(q.deliveryAddress ?? ''));
     setPriceListId(q.priceListId != null ? num(q.priceListId) : '');
@@ -420,6 +446,7 @@ export default function QuotationForm({ id }: { id: number | null }) {
       notes: notes || null,
       terms: terms || null,
       buyerType: buyerType || null,
+      buyerTin: buyerTin.replace(/\D/g, '') || null,
       items,
       optionals: buildOptionals(optionals),
       invoiceAddress: invoiceAddress || null,
@@ -909,6 +936,24 @@ export default function QuotationForm({ id }: { id: number | null }) {
                 <option value="B2G">B2G (Government)</option>
               </select>
             </label>
+            {(buyerType === 'B2B' || buyerType === 'B2G') && (
+              <div className="field">
+                <span>Buyer TIN <span className="muted">(defaults to the customer's TIN)</span></span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input inputMode="numeric" value={buyerTin} disabled={!editable} onChange={(e) => { setBuyerTin(e.target.value); setTinLookup(null); mark(); }} placeholder="10-digit URA TIN" style={{ flex: 1 }} />
+                  <button type="button" className="btn btn-sm" disabled={!editable || lookingUp || !/^\d{10}$/.test(buyerTin.replace(/\D/g, ''))} onClick={runTinLookup}>
+                    {lookingUp ? 'Searching…' : 'Search EFRIS'}
+                  </button>
+                </div>
+                {tinLookup && (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {tinLookup.found && tinLookup.taxpayer
+                      ? `✓ ${tinLookup.taxpayer.businessName || tinLookup.taxpayer.legalName || 'Taxpayer found'}`
+                      : 'URA has no taxpayer registered under this TIN.'}
+                  </span>
+                )}
+              </div>
+            )}
             <label className="field">
               <span>Currency</span>
               <input value={currency} disabled={!editable} onChange={(e) => { setCurrency(e.target.value.toUpperCase()); mark(); }} />

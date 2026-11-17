@@ -989,6 +989,9 @@ function Composer({ resource }: { resource: string }) {
   const [bankAccountName, setBankAccountName] = useState('');
   const [bankAccountNumber, setBankAccountNumber] = useState('');
   const [buyerType, setBuyerType] = useState('');
+  const [buyerTin, setBuyerTin] = useState('');
+  const [lookingUp, setLookingUp] = useState(false);
+  const [tinLookup, setTinLookup] = useState<{ found: boolean; taxpayer: { legalName?: string; businessName?: string } | null } | null>(null);
   const [taxOptions, setTaxOptions] = useState<TaxOption[]>([]);
   const q = useHashQuery();
   useEffect(() => {
@@ -1045,6 +1048,23 @@ function Composer({ resource }: { resource: string }) {
     setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   };
 
+  const runTinLookup = async () => {
+    const d = buyerTin.replace(/\D/g, '');
+    if (!/^\d{10}$/.test(d)) return;
+    setLookingUp(true);
+    try {
+      const r = await api<{ data: { found: boolean; taxpayer: { legalName?: string; businessName?: string } | null } }>(
+        '/api/ops/finance/efris/customer-lookup',
+        { method: 'POST', body: JSON.stringify({ tin: d }) }
+      );
+      setTinLookup(r.data);
+    } catch {
+      setTinLookup(null);
+    } finally {
+      setLookingUp(false);
+    }
+  };
+
   const submit = async () => {
     setError('');
     if (!customerId) { setError('Select a customer'); return; }
@@ -1060,12 +1080,13 @@ function Composer({ resource }: { resource: string }) {
         taxCategory: l.taxCategory || null,
       }));
     if (!items.length) { setError('Add at least one product line'); return; }
+    const buyerTinDigits = buyerTin.replace(/\D/g, '');
     setBusy(true);
     try {
       if (isQuote) {
         const r = await api<{ data: { quotationId: number } }>('/api/ops/sales/quotations', {
           method: 'POST',
-          body: JSON.stringify({ customerId, notes: notes || null, buyerType: buyerType || null, items }),
+          body: JSON.stringify({ customerId, notes: notes || null, buyerType: buyerType || null, buyerTin: buyerTinDigits || null, items }),
         });
         navigate(`/sales/quotations/${r.data.quotationId}`);
       } else if (isInvoice) {
@@ -1076,6 +1097,7 @@ function Composer({ resource }: { resource: string }) {
             notes: notes || null,
             items,
             buyerType: buyerType || null,
+            buyerTin: buyerTinDigits || null,
             invoiceDate: invoiceDate || null,
             dueDate: dueDate || null,
             bankName: bankName || null,
@@ -1095,6 +1117,7 @@ function Composer({ resource }: { resource: string }) {
             customerPoNo: customerPoNo || null,
             items,
             buyerType: buyerType || null,
+            buyerTin: buyerTinDigits || null,
             bankName: bankName || null,
             bankAccountName: bankAccountName || null,
             bankAccountNumber: bankAccountNumber || null,
@@ -1146,6 +1169,11 @@ function Composer({ resource }: { resource: string }) {
             onPick={(r) => {
               setCustomerId(num(r.id));
               setCustomerLabel(`${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`);
+              const tin = pick(r, 'tin');
+              if (tin != null && String(tin).trim()) {
+                setBuyerTin(String(tin).replace(/\D/g, ''));
+                setTinLookup(null);
+              }
               if (!isInvoice || dueDate) return;
               const raw = pick(r, 'paymentTermsDays', 'payment_terms_days');
               if (raw == null || raw === '') return;
@@ -1163,6 +1191,24 @@ function Composer({ resource }: { resource: string }) {
               <option value="B2G">B2G (Government)</option>
             </select>
           </div>
+          {(buyerType === 'B2B' || buyerType === 'B2G') && (
+            <div className="field">
+              <label>Buyer TIN <span className="muted">(defaults to the customer's TIN)</span></label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input inputMode="numeric" value={buyerTin} onChange={(e) => { setBuyerTin(e.target.value); setTinLookup(null); }} placeholder="10-digit URA TIN" style={{ flex: 1 }} />
+                <button type="button" className="btn btn-sm" disabled={lookingUp || !/^\d{10}$/.test(buyerTin.replace(/\D/g, ''))} onClick={runTinLookup}>
+                  {lookingUp ? 'Searching…' : 'Search EFRIS'}
+                </button>
+              </div>
+              {tinLookup && (
+                <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                  {tinLookup.found && tinLookup.taxpayer
+                    ? <>✓ {tinLookup.taxpayer.businessName || tinLookup.taxpayer.legalName || 'Taxpayer found'}</>
+                    : 'URA has no taxpayer registered under this TIN.'}
+                </div>
+              )}
+            </div>
+          )}
           {!isQuote && !isInvoice && (
             <div className="field">
               <label>Customer PO</label>
