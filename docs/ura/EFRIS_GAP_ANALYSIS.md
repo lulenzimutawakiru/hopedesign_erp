@@ -63,7 +63,7 @@ Consequences:
 ### GAP-3 — B2G is not explicitly modelled
 `buyerDetails.buyerType` is derived solely from the presence of a buyer TIN: `'0'` (registered business) when a TIN is present, `'1'` (consumer) otherwise. There is no distinct B2G (business-to-government) classification.
 - **Severity:** Medium.
-- **Remediation:** **Implemented (this branch, code-side).** `buyerKind` is plumbed from `customers.customer_type = 'GOVERNMENT'` through the builder into `UraParty.buyerKind`, and `protocol.ts → buyerTypeCode()` resolves it fail-closed: business/consumer keep the proven `'0'`/`'1'`, and a government buyer throws `EFRIS_B2G_BUYER_TYPE_UNMAPPED` unless `security_flags.buyerTypes.government` is configured. **The URA government buyer-type code itself still requires official confirmation** before it is populated.
+- **Remediation:** **Implemented.** `buyerKind` is plumbed from the sales document's `buyer_type` (or `customers.customer_type = 'GOVERNMENT'`) through the builder into `UraParty.buyerKind`, and `protocol.ts → buyerTypeCode()` resolves business/consumer/government to `'0'`/`'1'`/`'2'`. Each code is overridable via `security_flags.buyerTypes`. Credit and debit notes inherit the original invoice's `buyer_type`, so a B2G reversal keeps the government classification.
 
 ### GAP-4 — Uncertain-submission (timeout) reconciliation is not automatic (REQUIRES URA CONFIRMATION)
 On a network/unknown-outcome failure the worker marks the row `RETRYING` and re-submits the **same** payload on the next attempt. It does **not** first query URA for the original transaction's outcome before re-submitting.
@@ -119,7 +119,7 @@ No `docs/ura/` existed before this branch. Section 18 requires six documents plu
 1. **Documentation + traceability** (GAP-1, GAP-7, GAP-8) — ✅ complete on this branch.
 2. **Automatic health/device monitoring** (GAP-6) — ✅ complete on this branch.
 3. **Reports** (GAP-5) — ✅ complete on this branch (transaction-level splits; per-line URA category codes remain blocked on GAP-2).
-4. **Tax-category / B2G code plumbing** (GAP-2 / GAP-3) — ✅ code-side complete: config-driven, fail-closed. The exempt category code and the government buyer code still require official URA confirmation.
+4. **Tax-category / B2G code plumbing** (GAP-2 / GAP-3) — ✅ complete: config-driven tax categories, fail-closed; buyer types resolve to `'0'`/`'1'`/`'2'` with `security_flags.buyerTypes` overrides. The exempt category code and any excise fields still require official URA confirmation.
 5. **Uncertain-submission reconciliation** (GAP-4) — 🟡 data-exchange id now stable; the status-query-before-resubmit still **REQUIRES the official status-query interface**.
 
 ---

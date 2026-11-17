@@ -19,7 +19,7 @@ Status legend:
 | REQ-5 | Goods & services registration | ✅ | `goods.ts` catalogue + product mapping lifecycle | REGISTERED is operator-confirmed |
 | REQ-6 | Stock management & reconciliation | 🟡 | T131 stock-in + reconciliation; report | See GAP-5 for report breadth |
 | REQ-7 | Fiscal invoices & receipts | ✅ | T109 (invoice) + B2C e-receipt via `receipts` | FDN+VRC required before FISCALIZED |
-| REQ-8 | B2B / B2C / B2G transactions | 🟡 | B2B (`0`) / B2C (`1`) / B2G configurable via `buyerTypeCode` + `security_flags.buyerTypes.government` (fail-closed) | B2G code still needs URA confirmation (GAP-3) |
+| REQ-8 | B2B / B2C / B2G transactions | ✅ | B2B (`0`) / B2C (`1`) / B2G (`2`) via `buyerTypeCode`; overridable through `security_flags.buyerTypes` | Codes follow URA's scheme (0 business / 1 consumer / 2 government) |
 | REQ-9 | Credit notes & approval | ✅ | T110 → T111 → T108 two-step; `pollCreditNoteApplications` | Debit notes stay positive T109 |
 | REQ-10 | Cancellation / reversal / correction | 🟡 | ERP cancel (`cancelEfrisTransaction`); URA credit-note reversal path | URA-side cancellation interface not implemented (🔒) |
 | REQ-11 | Tax reporting & reconciliation | 🟡 | Reconciliation endpoint + VAT filing (0223) | Report breadth per section 14 incomplete (GAP-5) |
@@ -47,6 +47,5 @@ Status legend:
 |---|---|---|
 | Exempt / zero-rated distinction | Official `taxCategoryCode` for exempt supplies | GAP-2 |
 | Excise duty fields | Official excise field semantics for this taxpayer's goods | GAP-2 |
-| B2G buyer classification | Official buyerType / buyer classification for government buyers | GAP-3 |
 | Uncertain-submission reconciliation | Official status/query interface code + request/response shape | GAP-4 |
 | URA-side cancellation/correction | Official cancellation interface and its distinction from credit-note reversal | REQ-10 |

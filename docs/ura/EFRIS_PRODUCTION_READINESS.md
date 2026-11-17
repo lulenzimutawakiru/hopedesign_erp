@@ -24,7 +24,7 @@ granted by URA, not by this repository.
       verified locally).
 - [ ] The tax-category model covers this taxpayer's supplies. **Blocked items:**
       exempt-supply category code and excise fields require the official URA
-      specification (GAP-2); B2G classification requires confirmation (GAP-3).
+      specification (GAP-2).
 - [ ] Uncertain-submission reconciliation (GAP-4) decision recorded: the current
       worker replays the same stable payload; the official URA status-query
       interface has **not** been wired. This is a known, documented limitation,
@@ -56,7 +56,7 @@ explicit authorisation:
 | Gap | Status | Required for go-live? |
 |---|---|---|
 | GAP-2 tax-category / excise | 🔒 official spec needed | Only if exempt/excisable supplies exist |
-| GAP-3 B2G classification | 🔒 official spec needed | Only if selling to government |
+| GAP-3 B2G classification | ✅ resolved (business `0` / consumer `1` / government `2`, overridable) | — |
 | GAP-4 uncertain-submission reconciliation | 🔒 official status-query spec needed | Recommended before heavy live volume |
 | GAP-5 reports (tax-category splits) | 🟡 blocked on GAP-2 | Partial |
 | GAP-6 health monitoring | ✅ implemented this branch | — |

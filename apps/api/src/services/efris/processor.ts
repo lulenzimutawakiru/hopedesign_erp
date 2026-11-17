@@ -65,7 +65,7 @@ const errMsg = (err: unknown): string => (err instanceof Error ? err.message : S
 /**
  * Map a stored buyer_type (B2B/B2C/B2G) onto the buyerKind hint the protocol
  * reads, falling back to the customer_type classification when the document did
- * not record an explicit buyer type (GAP-3 B2G).
+ * not record an explicit buyer type.
  */
 function buyerKindFor(buyerType: unknown, customerType: unknown): string | null {
   const bt = String(buyerType ?? '').trim().toUpperCase();
@@ -375,9 +375,10 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
       const note = await client.query(
         `SELECT n.invoice_id, n.reason, n.reason_code, c.name AS customer_name, c.tin AS customer_tin,
                 c.address AS customer_address, c.email AS customer_email, c.phone AS customer_phone,
-                c.customer_type AS customer_type
+                c.customer_type AS customer_type, i.buyer_type AS buyer_type
            FROM ${table} n
            JOIN customers c ON c.id = n.customer_id
+           LEFT JOIN customer_invoices i ON i.id = n.invoice_id
           WHERE n.id = $1 AND n.tenant_id = $2`,
         [row.doc_ref_id, row.tenant_id]
       );
@@ -435,7 +436,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
           address: party.customer_address != null ? String(party.customer_address) : null,
           email: party.customer_email != null ? String(party.customer_email) : null,
           phone: party.customer_phone != null ? String(party.customer_phone) : null,
-          buyerKind: buyerKindFor(null, party.customer_type),
+          buyerKind: buyerKindFor(party.buyer_type, party.customer_type),
         } : null,
         lines,
         oriInvoiceNo: ref.oriInvoiceNo,
