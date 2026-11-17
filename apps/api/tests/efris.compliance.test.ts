@@ -1,5 +1,5 @@
 // GAP-2/3/4 compliance behaviour: config-driven tax categories (fail-closed),
-// B2G buyer classification (fail-closed) and the stable data-exchange id.
+// B2B/B2C/B2G buyer classification and the stable data-exchange id.
 // No database — pure protocol.
 import { describe, expect, it } from 'vitest';
 import {
@@ -98,31 +98,26 @@ describe('taxCategory (GAP-2)', () => {
   });
 });
 
-describe('buyerTypeCode (GAP-3)', () => {
+describe('buyerTypeCode (B2B / B2C / B2G)', () => {
   it('keeps the proven business/consumer defaults', () => {
     expect(buyerTypeCode({ tin: '1000000001' })).toBe('0');
     expect(buyerTypeCode(null)).toBe('1');
     expect(buyerTypeCode({ tin: null })).toBe('1');
   });
 
-  it('refuses to classify a government buyer as a business', () => {
-    let caught: unknown;
-    try {
-      buyerTypeCode({ tin: '1000000001', buyerKind: 'government' });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeInstanceOf(EfrisProtocolError);
-    expect((caught as EfrisProtocolError).code).toBe('EFRIS_B2G_BUYER_TYPE_UNMAPPED');
+  it('classifies a government buyer as 2 by default', () => {
+    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'government' })).toBe('2');
+    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'government' }, {})).toBe('2');
+    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'b2g' })).toBe('2');
   });
 
-  it('uses the configured government code, and honours business/consumer overrides', () => {
-    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'government' }, { government: '2' })).toBe('2');
+  it('honours business/consumer/government overrides', () => {
+    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'government' }, { government: 'G' })).toBe('G');
     expect(buyerTypeCode({ tin: '1000000001' }, { business: 'B' })).toBe('B');
     expect(buyerTypeCode(null, { consumer: 'C' })).toBe('C');
   });
 
-  it('flows a government buyer through the T109 buyerType', () => {
+  it('flows a government buyer through the T109 buyerType without explicit config', () => {
     const invoice = buildT109Content({
       docType: 'SALES_INVOICE',
       docRefCode: 'INV-B2G',
@@ -133,7 +128,6 @@ describe('buyerTypeCode (GAP-3)', () => {
       seller,
       buyer: { legalName: 'Ministry of Works', tin: '1000000009', buyerKind: 'government' },
       lines: [{ description: 'Paper', quantity: 1, unitPrice: 100000, taxPercent: 18, lineGross: 118000 }],
-      buyerTypes: { government: '2' },
     });
     expect((invoice.buyerDetails as Record<string, string>).buyerType).toBe('2');
 
@@ -148,7 +142,6 @@ describe('buyerTypeCode (GAP-3)', () => {
       seller,
       buyer: { legalName: 'Ministry of Works', tin: '1000000009', buyerKind: 'government' },
       lines: [{ description: 'Paper', quantity: 1, unitPrice: 100000, taxPercent: 18, lineGross: 118000 }],
-      buyerTypes: { government: '2' },
     });
     expect((credit.buyerDetails as Record<string, string>).buyerType).toBe('2');
   });

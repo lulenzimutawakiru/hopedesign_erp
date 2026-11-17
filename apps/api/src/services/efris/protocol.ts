@@ -737,34 +737,23 @@ export interface BuyerTypeMapping {
   business?: string | null;
   /** Consumer / final-customer buyer-type code (default '1'). */
   consumer?: string | null;
-  /**
-   * Government-buyer (B2G) code. REQUIRED before a government sale is emitted:
-   * the URA B2G classification must come from the official specification.
-   */
+  /** Government-buyer (B2G) code (default '2'). */
   government?: string | null;
 }
 
 /**
- * Resolve `buyerDetails.buyerType`, fail-closed for government buyers (GAP-3).
+ * Resolve `buyerDetails.buyerType`.
  *
- * The presence of a buyer TIN has historically decided business ('0') vs
- * consumer ('1'). A government buyer is a distinct classification that URA does
- * not document by default, so when the ERP marks the buyer as government the
- * build requires an explicit `security_flags.buyerTypes.government` code and
- * refuses otherwise, rather than silently classifying a government sale as a
- * business buyer.
+ * URA classifies buyers as business ('0'), consumer ('1') and government ('2').
+ * A buyer TIN decides business vs consumer; an explicit `buyer_type = 'B2G'` (or
+ * `customer_type = 'GOVERNMENT'`) maps to '2'. Every code is overridable through
+ * `security_flags.buyerTypes` when a gateway build differs.
  */
 export function buyerTypeCode(buyer: UraParty | null | undefined, mapping?: BuyerTypeMapping | null): string {
   const map = mapping ?? {};
   const kind = (buyer?.buyerKind ?? '').trim().toLowerCase();
   if (kind === 'government' || kind === 'gov' || kind === 'b2g') {
-    const code = map.government?.trim();
-    if (code) return code;
-    throw new EfrisProtocolError(
-      'EFRIS_B2G_BUYER_TYPE_UNMAPPED',
-      'A government buyer was detected but no URA government buyer-type code is configured ' +
-        '(security_flags.buyerTypes.government). Refusing rather than misclassifying the sale as a business buyer.'
-    );
+    return map.government?.trim() || '2';
   }
   if (kind === 'business' || kind === 'b2b') return map.business?.trim() || '0';
   if (kind === 'consumer' || kind === 'b2c') return map.consumer?.trim() || '1';

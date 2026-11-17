@@ -74,7 +74,7 @@ REST surface: `GET/POST /api/ops/finance/efris/configurations`,
 | `notifyRoleCodes` | string[] | Role codes to notify (default finance roles). |
 | `duplicateWindowSeconds` | number | Duplicate-submission guard window. |
 | `payloadMapping` | object | Optional ERP→URA field overrides. |
-| `securityFlags` | object | Protocol flag, `deviceNo`, and server-written proof flags. |
+| `securityFlags` | object | Protocol flag, `deviceNo`, server-written proof flags, plus `buyerTypes` / `taxCategories` mappings (below). |
 | `isActive` | bool | Pause/resume the configuration. |
 
 ### Transport selection
@@ -89,6 +89,19 @@ REST surface: `GET/POST /api/ops/finance/efris/configurations`,
 
 The offline enabler is the configuration HOPE DESIGN currently uses
 (see `[[efris-offline-enabler-vps-deploy]]` in the project memory).
+
+### Buyer-type and tax-category mappings (`security_flags`)
+
+Two payload classifications resolve from `security_flags`, each with a default
+and an operator override for gateways that differ:
+
+- `buyerTypes` — maps business / consumer / government to URA `buyerType`.
+  Defaults: `business = "0"`, `consumer = "1"`, `government = "2"`. Override
+  e.g. `{ "buyerTypes": { "government": "3" } }`.
+- `taxCategories` — maps standard / zero / exempt (and any non-standard rate) to
+  URA `taxCategoryCode`. Defaults: `standard = "01"`, `zero = "02"`; `exempt` and
+  non-standard rates have no default and are refused until mapped
+  (e.g. `{ "taxCategories": { "exempt": { "code": "04" }, "rates": { "0.12": { "code": "03" } } } }`).
 
 ---
 
