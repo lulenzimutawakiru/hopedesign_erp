@@ -770,55 +770,67 @@ export async function completeWorkOrder(client: pg.PoolClient, ctx: Ctx, workOrd
   }
   const product = await productMeta(client, ctx, Number(wo.product_id));
 
-  const materials = (await client.query(
-    `SELECT * FROM work_order_materials WHERE work_order_id = $1`,
-    [workOrderId]
-  )).rows;
-  const actualMaterialCost = materials.reduce((sum, m) => sum + Number(m.issued_qty) * Number(m.unit_cost), 0);
+  // Server-authoritative costing: all arithmetic in SQL NUMERIC (no JS float accumulation).
+  // Waste cost preserves the running `actual_waste_cost` accumulated by recordScrap, and adds
+  // uncosted waste (`waste_qty` at product standard cost). Rework cost is rolled into
+  // `actual_other_cost`. Variance = standard − actual (positive = favourable).
+  const productStandardCost = Number(product.standard_cost) || 0;
+  const c = (await client.query(
+    `WITH c AS (
+       SELECT
+         (SELECT COALESCE(SUM(issued_qty * unit_cost), 0) FROM work_order_materials WHERE work_order_id = $1) AS material,
+         (SELECT COALESCE(SUM(cost), 0) FROM work_order_labour WHERE work_order_id = $1) AS labour,
+         (SELECT COALESCE(SUM(rework_cost), 0) FROM rework_orders WHERE source_work_order_id = $1) AS rework,
+         (SELECT COALESCE(actual_waste_cost, 0) + COALESCE(waste_qty, 0) * $2 FROM work_orders WHERE id = $1) AS waste,
+         COALESCE(SUM(hours * COALESCE(m.hourly_rate, 0)), 0) AS machine,
+         COALESCE(SUM(hours * COALESCE(wc.hourly_cost, 0) * COALESCE(wc.overhead_rate, 0)), 0) AS overhead
+       FROM (
+         SELECT
+           (CASE WHEN actual_started_at IS NOT NULL AND actual_ended_at IS NOT NULL
+                 THEN GREATEST(0, EXTRACT(EPOCH FROM (actual_ended_at - actual_started_at))) / 3600.0
+                 ELSE (COALESCE(planned_setup_min, 0) + COALESCE(planned_run_min, 0)) / 60.0 END) AS hours,
+           work_centre_id, machine_id
+         FROM work_order_operations WHERE work_order_id = $1
+       ) o
+       LEFT JOIN work_centres wc ON wc.id = o.work_centre_id
+       LEFT JOIN machines m ON m.id = o.machine_id
+     )
+     SELECT
+       round(c.material, 2) AS material_cost,
+       round(c.labour, 2) AS labour_cost,
+       round(c.machine, 2) AS machine_cost,
+       round(c.overhead, 2) AS overhead_cost,
+       round(c.rework, 2) AS rework_cost,
+       round(c.waste, 2) AS waste_cost,
+       round(c.material + c.labour + c.machine + c.overhead + c.rework + c.waste, 2) AS actual_cost,
+       round(COALESCE(wo.standard_cost, 0) - (c.material + c.labour + c.machine + c.overhead + c.rework + c.waste), 2) AS cost_variance,
+       CASE WHEN COALESCE(wo.quantity, 0) > 0 THEN round((COALESCE(wo.produced_qty, 0) / wo.quantity) * 100, 2) ELSE 0 END AS yield_percent
+     FROM c, work_orders wo
+     WHERE wo.id = $1`,
+    [workOrderId, productStandardCost]
+  )).rows[0];
 
-  const labour = (await client.query(
-    `SELECT * FROM work_order_labour WHERE work_order_id = $1`,
-    [workOrderId]
-  )).rows;
-  const actualLabourCost = labour.reduce((sum, l) => sum + Number(l.cost), 0);
-
-  const ops = (await client.query(
-    `SELECT wo.*, wc.hourly_cost, wc.overhead_rate, m.hourly_rate AS machine_rate
-     FROM work_order_operations wo
-     LEFT JOIN work_centres wc ON wc.id = wo.work_centre_id
-     LEFT JOIN machines m ON m.id = wo.machine_id
-     WHERE wo.work_order_id = $1`,
-    [workOrderId]
-  )).rows;
-  let actualMachineCost = 0;
-  let actualOverheadCost = 0;
-  for (const op of ops) {
-    const hasActual = op.actual_started_at && op.actual_ended_at;
-    const minutes = hasActual
-      ? Math.max(0, (new Date(op.actual_ended_at).getTime() - new Date(op.actual_started_at).getTime()) / 60000)
-      : Number(op.planned_setup_min) + Number(op.planned_run_min);
-    const hours = minutes / 60;
-    actualMachineCost += hours * (Number(op.machine_rate) || 0);
-    actualOverheadCost += hours * (Number(op.hourly_cost) || 0) * (Number(op.overhead_rate) || 0);
-  }
-
-  const actualWasteCost = Number(wo.waste_qty) * (Number(product.standard_cost) || 0);
-  const actualCost = round2(actualMaterialCost + actualLabourCost + actualMachineCost + actualOverheadCost + actualWasteCost);
-  const standardCost = Number(wo.standard_cost);
-  const costVariance = round2(standardCost - actualCost);
-  const yieldPercent = Number(wo.quantity) > 0 ? round2((Number(wo.produced_qty) / Number(wo.quantity)) * 100) : 0;
+  const actualMaterialCost = Number(c.material_cost);
+  const actualLabourCost = Number(c.labour_cost);
+  const actualMachineCost = Number(c.machine_cost);
+  const actualOverheadCost = Number(c.overhead_cost);
+  const reworkCost = Number(c.rework_cost);
+  const actualWasteCost = Number(c.waste_cost);
+  const actualCost = Number(c.actual_cost);
+  const costVariance = Number(c.cost_variance);
+  const yieldPercent = Number(c.yield_percent);
   const efficiencyPercent = yieldPercent;
 
   await client.query(
     `UPDATE work_orders SET
        status = 'COMPLETED', completed_at = now(),
        actual_material_cost = $2, actual_labour_cost = $3, actual_machine_cost = $4,
-       actual_overhead_cost = $5, actual_waste_cost = $6, actual_cost = $7, cost_variance = $8,
-       yield_percent = $9, efficiency_percent = $10
+       actual_overhead_cost = $5, actual_waste_cost = $6, actual_other_cost = $7,
+       actual_cost = $8, cost_variance = $9, yield_percent = $10, efficiency_percent = $10
      WHERE id = $1`,
     [
-      workOrderId, round2(actualMaterialCost), round2(actualLabourCost), round2(actualMachineCost),
-      round2(actualOverheadCost), round2(actualWasteCost), actualCost, costVariance, yieldPercent, efficiencyPercent,
+      workOrderId, actualMaterialCost, actualLabourCost, actualMachineCost,
+      actualOverheadCost, actualWasteCost, reworkCost, actualCost, costVariance, yieldPercent,
     ]
   );
 

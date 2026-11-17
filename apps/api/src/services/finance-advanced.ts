@@ -1084,7 +1084,9 @@ export async function captureProductionCost(
   if (!(quantity > 0)) throw badRequest('Production quantity must be positive');
   const expected = n(input.expectedCost);
   const actual = round2(input.components.reduce((s, c) => s + n(c.amount), 0));
-  const variance = round2(actual - expected);
+  // Variance convention (aligned with the work-order costing engine): expected − actual,
+  // so a positive value is favourable (actual below expected).
+  const variance = round2(expected - actual);
   const costDate = isoDate(input.costDate);
   const periodRes = await client.query(
     `SELECT id FROM financial_periods
@@ -1122,7 +1124,7 @@ export async function captureProductionCost(
     if (exp === 0) continue;
     await client.query(
       `INSERT INTO cost_variances (production_cost_id, variance_type, expected, actual, variance)
-       VALUES ($1,$2,$3,$4,$5)`, [costId, type, exp, actualAmount, round2(actualAmount - exp)]
+       VALUES ($1,$2,$3,$4,$5)`, [costId, type, exp, actualAmount, round2(exp - actualAmount)]
     );
   }
   await finAudit(client, ctx, {

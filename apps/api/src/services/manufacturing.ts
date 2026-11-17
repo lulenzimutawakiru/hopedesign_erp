@@ -1583,25 +1583,42 @@ export async function costingDesk(client: pg.PoolClient, ctx: Ctx) {
 
 export async function workOrderCosting(client: pg.PoolClient, ctx: Ctx, workOrderId: number) {
   const wo = await getWorkOrder(client, ctx, workOrderId);
-  const costs = await client.query(
-    `SELECT pcc.component_type AS component, COALESCE(SUM(pcc.amount),0)::numeric AS amount
-     FROM production_cost_components pcc
-     JOIN production_costs pc ON pc.id = pcc.production_cost_id
-     WHERE pc.work_order_id = $1 GROUP BY pcc.component_type`,
-    [workOrderId]
-  );
+  // Authoritative cost source: the work_orders cost columns computed at completion
+  // (single engine — do not fall back to the finance cost-sheet components).
   const standardCost = num(wo.standard_cost);
-  const actualTotal = costs.rows.reduce((s, r) => s + num(r.amount), 0);
-  const produced = num(wo.produced_qty) || 1;
+  const material = num(wo.actual_material_cost);
+  const labour = num(wo.actual_labour_cost);
+  const machine = num(wo.actual_machine_cost);
+  const overhead = num(wo.actual_overhead_cost);
+  const waste = num(wo.actual_waste_cost);
+  const other = num(wo.actual_other_cost);
+  const actualTotal = material + labour + machine + overhead + waste + other;
+  const produced = num(wo.produced_qty) || 0;
+  const variance = standardCost - actualTotal; // positive = favourable (aligned with completeWorkOrder)
   return {
     workOrderId,
     woNo: String(wo.wo_no),
-    standardCost,
+    standardCost: round2(standardCost),
     actualCost: round2(actualTotal),
-    variance: round2(actualTotal - standardCost),
-    costPerUnitStandard: round2(standardCost / produced),
-    costPerUnitActual: round2(actualTotal / produced),
-    components: costs.rows.map((r) => ({ component: String(r.component), amount: num(r.amount) })),
+    variance: round2(variance),
+    favourable: variance >= 0,
+    variancePct: pct(variance, standardCost),
+    costPerUnitStandard: produced > 0 ? round2(standardCost / produced) : 0,
+    costPerUnitActual: produced > 0 ? round2(actualTotal / produced) : 0,
+    costPerGoodUnit: produced > 0 ? round2(actualTotal / produced) : 0,
+    producedQty: produced,
+    goodQty: produced,
+    scrappedQty: num(wo.scrapped_qty),
+    reworkQty: num(wo.rework_qty),
+    wasteQty: num(wo.waste_qty),
+    components: [
+      { component: 'RAW_MATERIAL', amount: round2(material) },
+      { component: 'DIRECT_LABOUR', amount: round2(labour) },
+      { component: 'MACHINE', amount: round2(machine) },
+      { component: 'OVERHEAD', amount: round2(overhead) },
+      { component: 'WASTE', amount: round2(waste) },
+      { component: 'OTHER', amount: round2(other) },
+    ],
   };
 }
 
