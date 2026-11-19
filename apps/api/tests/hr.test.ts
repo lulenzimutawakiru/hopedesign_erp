@@ -471,6 +471,11 @@ describe('HR and payroll', () => {
        ) VALUES ($1,$2,$3,'2026-11-02','2026-11-02 08:00:00+03','2026-11-02 17:30:00+03',510,30,'PRESENT','HIKVISION')`,
       [who.rows[0].tenant_id, who.rows[0].company_id, employeeId],
     );
+    const today = await api.get('/api/ops/hr/attendance').set(auth(token));
+    expect(today.status).toBe(200);
+    expect(String(today.body.data.workDate)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(Array.isArray(today.body.data.rows)).toBe(true);
+
     const att = await api.get('/api/ops/hr/attendance?date=2026-11-02').set(auth(token));
     expect(att.status).toBe(200);
     expect(Array.isArray(att.body.data.rows)).toBe(true);
