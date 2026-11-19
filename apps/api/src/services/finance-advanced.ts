@@ -12,6 +12,7 @@ import { emitEvent } from './events.js';
 import { logAudit } from './audit.js';
 import { getAccountId, postJournalLines, budgetPosition } from './finance.js';
 import { resolveFiscalTarget, type FiscalTarget } from './efris/config.js';
+import { loadTaxActivity, summarizeTaxActivity } from './taxFilings.js';
 
 const n = (v: unknown): number => Number(v) || 0;
 const round2 = (v: number): number => Math.round(v * 100) / 100;
@@ -469,36 +470,12 @@ export async function listTaxTransactions(
   ctx: Ctx,
   filters: { from?: string; to?: string } = {}
 ) {
-  const params: unknown[] = [ctx.tenantId, ctx.companyId];
-  let where = 'WHERE tt.tenant_id = $1 AND tt.company_id = $2';
-  if (filters.from) { params.push(filters.from); where += ` AND tt.txn_date >= $${params.length}::date`; }
-  if (filters.to) { params.push(filters.to); where += ` AND tt.txn_date <= $${params.length}::date`; }
-  const res = await client.query(
-    `SELECT tt.*, t.code AS tax_code, t.name AS tax_name, tj.code AS jurisdiction_code
-     FROM tax_transactions tt
-     JOIN taxes t ON t.id = tt.tax_id
-     LEFT JOIN tax_jurisdictions tj ON tj.id = tt.jurisdiction_id
-     ${where} ORDER BY tt.txn_date DESC, tt.id DESC`,
-    params
-  );
-  return toCamelRows(res.rows);
+  return loadTaxActivity(client, ctx, filters.from, filters.to);
 }
 
 export async function taxComplianceSummary(client: pg.PoolClient, ctx: Ctx, from?: string, to?: string) {
-  const params: unknown[] = [ctx.tenantId, ctx.companyId];
-  let where = 'WHERE tt.tenant_id = $1 AND tt.company_id = $2';
-  if (from) { params.push(from); where += ` AND tt.txn_date >= $${params.length}::date`; }
-  if (to) { params.push(to); where += ` AND tt.txn_date <= $${params.length}::date`; }
-  const res = await client.query(
-    `SELECT t.code AS tax_code, t.name AS tax_name, t.tax_type,
-            COUNT(*)::int AS txn_count, SUM(tt.base_amount)::numeric AS base_amount,
-            SUM(tt.tax_amount)::numeric AS tax_amount
-     FROM tax_transactions tt
-     JOIN taxes t ON t.id = tt.tax_id
-     ${where} GROUP BY t.id ORDER BY t.code`,
-    params
-  );
-  return toCamelRows(res.rows);
+  const rows = await loadTaxActivity(client, ctx, from, to);
+  return summarizeTaxActivity(rows);
 }
 // ---------- 4. URA EFRIS integration (ERP records and fiscal records linked but separate) ----------
 export async function listEfrisTransactions(
@@ -1689,10 +1666,8 @@ export async function financeAdvancedSummary(client: pg.PoolClient, ctx: Ctx) {
      WHERE je.tenant_id=$1 AND je.company_id=$2 AND je.status='POSTED'
        AND round(journal_balance(je.id),2) <> 0`, [ctx.tenantId, ctx.companyId]
   );
-  const taxDue = await client.query(
-    `SELECT COALESCE(SUM(tax_amount),0)::numeric AS v FROM tax_transactions
-     WHERE tenant_id=$1 AND company_id=$2 AND status='POSTED'`, [ctx.tenantId, ctx.companyId]
-  );
+  const taxActivity = await loadTaxActivity(client, ctx);
+  const taxDue = taxActivity.reduce((sum, row) => sum + row.taxAmount * (row.direction === 'INPUT' ? -1 : 1), 0);
   const fiscalized = await client.query(
     `SELECT COUNT(*)::int AS c FROM efris_transactions
      WHERE tenant_id=$1 AND company_id=$2 AND status='FISCALIZED'`, [ctx.tenantId, ctx.companyId]
@@ -1704,7 +1679,7 @@ export async function financeAdvancedSummary(client: pg.PoolClient, ctx: Ctx) {
     committedBudget: Number(committedBudget.rows[0].v),
     productionVariance: Number(productionVariance.rows[0].v),
     openCloseTasks: Number(openCloseTasks.rows[0].c),
-    taxDue: Number(taxDue.rows[0].v),
+    taxDue: round2(taxDue),
     integrityIssues: Number(integrity.rows[0].c),
     trialBalanceOk: Number(integrity.rows[0].c) === 0,
   };
