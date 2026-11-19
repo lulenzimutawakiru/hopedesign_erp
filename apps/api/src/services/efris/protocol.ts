@@ -737,28 +737,85 @@ export interface BuyerTypeMapping {
   business?: string | null;
   /** Consumer / final-customer buyer-type code (default '1'). */
   consumer?: string | null;
-  /** Government-buyer (B2G) code (default '2'). */
+  /** Government-buyer (B2G) code (default '3'; '2' is foreigner). */
   government?: string | null;
 }
 
 /**
  * Resolve `buyerDetails.buyerType`.
  *
- * URA classifies buyers as business ('0'), consumer ('1') and government ('2').
- * A buyer TIN decides business vs consumer; an explicit `buyer_type = 'B2G'` (or
- * `customer_type = 'GOVERNMENT'`) maps to '2'. Every code is overridable through
- * `security_flags.buyerTypes` when a gateway build differs.
+ * URA's dictionary is business ('0'), consumer ('1'), foreigner ('2') and
+ * government ('3'). Sending a Ugandan TIN with buyerType '2' is a foreigner
+ * sale, and URA refuses to fiscalize it. A buyer TIN decides business vs
+ * consumer; an explicit `buyer_type = 'B2G'` (or `customer_type = 'GOVERNMENT'`)
+ * maps to '3'. Every code is overridable through `security_flags.buyerTypes`.
  */
 export function buyerTypeCode(buyer: UraParty | null | undefined, mapping?: BuyerTypeMapping | null): string {
   const map = mapping ?? {};
   const kind = (buyer?.buyerKind ?? '').trim().toLowerCase();
   if (kind === 'government' || kind === 'gov' || kind === 'b2g') {
-    return map.government?.trim() || '2';
+    return map.government?.trim() || '3';
   }
   if (kind === 'business' || kind === 'b2b') return map.business?.trim() || '0';
   if (kind === 'consumer' || kind === 'b2c') return map.consumer?.trim() || '1';
   if (buyer?.tin) return map.business?.trim() || '0';
   return map.consumer?.trim() || '1';
+}
+
+export type BuyerTinDecision =
+  | { action: 'use'; buyer: UraParty | null }
+  | { action: 'lookup'; tin: string; buyer: UraParty }
+  | { action: 'reject'; code: 'EFRIS_BUYER_TIN_INVALID' | 'EFRIS_BUYER_TIN_IS_SELLER'; message: string };
+
+/**
+ * Decide how a buyer TIN may be sent.
+ *
+ * URA refuses a consumer document that also carries a TIN, refuses a TIN that
+ * is not 10 digits, and refuses a document whose buyer TIN is the seller's own.
+ * A plausible business or government TIN has to be checked with T119 so the
+ * payload can carry the name URA has registered. A CRM trade name in
+ * `buyerLegalName` is rejected once a TIN is present.
+ */
+export function assessBuyerTin(
+  buyer: UraParty | null | undefined,
+  sellerTin: string | null | undefined,
+): BuyerTinDecision {
+  if (!buyer) return { action: 'use', buyer: null };
+  const kind = (buyer.buyerKind ?? '').trim().toLowerCase();
+  const digits = (buyer.tin ?? '').replace(/\D/g, '');
+  if (kind === 'consumer' || kind === 'b2c') {
+    return { action: 'use', buyer: { ...buyer, tin: null } };
+  }
+  if (!digits) return { action: 'use', buyer: { ...buyer, tin: null } };
+  if (!/^\d{10}$/.test(digits)) {
+    return {
+      action: 'reject',
+      code: 'EFRIS_BUYER_TIN_INVALID',
+      message: `Buyer TIN ${digits} is not a 10-digit URA TIN, so the document was not sent.`,
+    };
+  }
+  const seller = (sellerTin ?? '').replace(/\D/g, '');
+  if (seller && digits === seller) {
+    return {
+      action: 'reject',
+      code: 'EFRIS_BUYER_TIN_IS_SELLER',
+      message: `Buyer TIN ${digits} is this company's own TIN. URA will not fiscalize a document issued to the seller.`,
+    };
+  }
+  return { action: 'lookup', tin: digits, buyer: { ...buyer, tin: digits } };
+}
+
+/**
+ * Stamp the name URA has registered for the buyer TIN onto the fiscal buyer.
+ * `buyerLegalName` must be that registered name; the CRM account name is not.
+ */
+export function applyRegisteredBuyer(
+  buyer: UraParty,
+  registered: { legalName?: string | null; businessName?: string | null },
+): UraParty {
+  const legal = registered.legalName?.trim() || registered.businessName?.trim() || buyer.legalName || null;
+  const business = registered.businessName?.trim() || legal;
+  return { ...buyer, legalName: legal, businessName: business };
 }
 
 /** Inner T109 (or T110) content. Amounts are strings, which is what URA parses. */

@@ -3,6 +3,8 @@
 // No database — pure protocol.
 import { describe, expect, it } from 'vitest';
 import {
+  applyRegisteredBuyer,
+  assessBuyerTin,
   buildGlobalInfo,
   buildT109Content,
   buildT110Content,
@@ -105,10 +107,11 @@ describe('buyerTypeCode (B2B / B2C / B2G)', () => {
     expect(buyerTypeCode({ tin: null })).toBe('1');
   });
 
-  it('classifies a government buyer as 2 by default', () => {
-    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'government' })).toBe('2');
-    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'government' }, {})).toBe('2');
-    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'b2g' })).toBe('2');
+  it('classifies a government buyer as 3 by default', () => {
+    // 2 is URA's foreigner code. A Ugandan TIN sent as 2 is refused.
+    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'government' })).toBe('3');
+    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'government' }, {})).toBe('3');
+    expect(buyerTypeCode({ tin: '1000000001', buyerKind: 'b2g' })).toBe('3');
   });
 
   it('honours business/consumer/government overrides', () => {
@@ -129,7 +132,7 @@ describe('buyerTypeCode (B2B / B2C / B2G)', () => {
       buyer: { legalName: 'Ministry of Works', tin: '1000000009', buyerKind: 'government' },
       lines: [{ description: 'Paper', quantity: 1, unitPrice: 100000, taxPercent: 18, lineGross: 118000 }],
     });
-    expect((invoice.buyerDetails as Record<string, string>).buyerType).toBe('2');
+    expect((invoice.buyerDetails as Record<string, string>).buyerType).toBe('3');
 
     // A T110 credit note mirrors the same classification.
     const credit = buildT110Content({
@@ -143,7 +146,52 @@ describe('buyerTypeCode (B2B / B2C / B2G)', () => {
       buyer: { legalName: 'Ministry of Works', tin: '1000000009', buyerKind: 'government' },
       lines: [{ description: 'Paper', quantity: 1, unitPrice: 100000, taxPercent: 18, lineGross: 118000 }],
     });
-    expect((credit.buyerDetails as Record<string, string>).buyerType).toBe('2');
+    expect((credit.buyerDetails as Record<string, string>).buyerType).toBe('3');
+  });
+
+  it('drops a TIN from a consumer buyer and keeps a business TIN for lookup', () => {
+    const consumer = assessBuyerTin(
+      { legalName: 'Walk in', tin: '1000000001', buyerKind: 'consumer' },
+      '1047578560',
+    );
+    expect(consumer.action).toBe('use');
+    if (consumer.action === 'use') expect(consumer.buyer?.tin).toBeNull();
+
+    const business = assessBuyerTin({ legalName: 'Acme Trading', tin: '1000 000 002' }, '1047578560');
+    expect(business).toMatchObject({ action: 'lookup', tin: '1000000002' });
+
+    expect(assessBuyerTin({ legalName: 'Self', tin: '1047578560' }, '1047578560')).toMatchObject({
+      action: 'reject',
+      code: 'EFRIS_BUYER_TIN_IS_SELLER',
+    });
+    expect(assessBuyerTin({ legalName: 'Short', tin: '12345' }, '1047578560')).toMatchObject({
+      action: 'reject',
+      code: 'EFRIS_BUYER_TIN_INVALID',
+    });
+  });
+
+  it('stamps the URA registered name onto a buyer TIN invoice', () => {
+    const buyer = applyRegisteredBuyer(
+      { legalName: 'Acme Trading', businessName: 'Acme Trading', tin: '1000000002' },
+      { legalName: 'ACME UGANDA LIMITED', businessName: 'Acme' },
+    );
+    expect(buyer.legalName).toBe('ACME UGANDA LIMITED');
+    expect(buyer.businessName).toBe('Acme');
+    const invoice = buildT109Content({
+      docType: 'SALES_INVOICE',
+      docRefCode: 'INV-TIN',
+      txnDate: '2026-11-19',
+      currency: 'UGX',
+      grossAmount: 118000,
+      taxAmount: 18000,
+      seller,
+      buyer,
+      lines: [{ description: 'Paper', quantity: 1, unitPrice: 100000, taxPercent: 18, lineGross: 118000 }],
+    });
+    const details = invoice.buyerDetails as Record<string, string>;
+    expect(details.buyerTin).toBe('1000000002');
+    expect(details.buyerLegalName).toBe('ACME UGANDA LIMITED');
+    expect(details.buyerType).toBe('0');
   });
 });
 

@@ -16,10 +16,10 @@ import { toISODate } from '../../utils.js';
 import { logAudit } from '../audit.js';
 import { emitEvent } from '../events.js';
 import { notifyRoleAdvanced } from '../communication.js';
-import { resolveCredentials, notificationRoleCodes, type EfrisConfigurationRow } from './config.js';
+import { resolveCredentials, notificationRoleCodes, type EfrisConfigurationRow, type EfrisMode } from './config.js';
 import { buildSubmitPayload, type EfrisTaxpayerLite, type FiscalLine, type FiscalParty, type StockSource } from './builders.js';
-import { submitFiscalDocument, extractFiscalIdentifiers, EfrisClientError, queryCreditNoteApplication, fetchCreditNoteDocument } from './client.js';
-import { digFirst, isStockDocType, uraAdjustmentType } from './protocol.js';
+import { submitFiscalDocument, extractFiscalIdentifiers, EfrisClientError, queryCreditNoteApplication, fetchCreditNoteDocument, queryTaxpayerByTin } from './client.js';
+import { applyRegisteredBuyer, assessBuyerTin, digFirst, isStockDocType, uraAdjustmentType } from './protocol.js';
 
 /** Row returned by efris_claim_fiscal_batch(). */
 export interface ClaimedFiscalTransaction {
@@ -61,6 +61,77 @@ interface WorkerRowMeta {
 }
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/**
+ * A buyer TIN is only fiscalizable under the name URA has registered for it.
+ * Sending the CRM account name, a consumer type together with a TIN, or
+ * buyerType 2 (foreigner) for a government TIN is what URA refuses.
+ * The lookup runs with no open transaction: the caller has already committed.
+ */
+async function alignBuyerWithUra(
+  buyer: FiscalParty | null,
+  sellerTin: string | null,
+  lookup: {
+    mode: EfrisMode;
+    baseUrl: string;
+    tokenUrl: string | null;
+    clientId?: string;
+    clientSecret?: string;
+    timeoutSeconds: number;
+    securityFlags: Record<string, unknown> | null;
+  },
+): Promise<FiscalParty | null> {
+  const asFiscal = (party: { legalName?: string | null; businessName?: string | null; tin?: string | null; address?: string | null; email?: string | null; phone?: string | null; buyerKind?: string | null } | null): FiscalParty | null => {
+    if (!party) return null;
+    return {
+      legalName: party.legalName ?? null,
+      businessName: party.businessName ?? null,
+      tin: party.tin ?? null,
+      address: party.address ?? null,
+      email: party.email ?? null,
+      phone: party.phone ?? null,
+      buyerKind: party.buyerKind ?? null,
+    };
+  };
+  const decision = assessBuyerTin(buyer, sellerTin);
+  if (decision.action === 'use') return asFiscal(decision.buyer);
+  if (decision.action === 'reject') {
+    throw new EfrisClientError({
+      code: decision.code,
+      stage: 'config',
+      message: decision.message,
+      retryable: false,
+    });
+  }
+  let result;
+  try {
+    result = await queryTaxpayerByTin({
+      mode: lookup.mode,
+      baseUrl: lookup.baseUrl,
+      tokenUrl: lookup.tokenUrl,
+      clientId: lookup.clientId,
+      clientSecret: lookup.clientSecret,
+      timeoutSeconds: lookup.timeoutSeconds,
+      securityFlags: lookup.securityFlags,
+      tin: sellerTin,
+      lookupTin: decision.tin,
+    });
+  } catch (err) {
+    // An OAuth gateway cannot run T119. Keep the TIN and the CRM name rather
+    // than refusing every business invoice on that transport.
+    if (err instanceof EfrisClientError && err.code === 'EFRIS_LOOKUP_TRANSPORT') return asFiscal(decision.buyer);
+    throw err;
+  }
+  if (!result.found || !result.taxpayer) {
+    throw new EfrisClientError({
+      code: 'EFRIS_BUYER_TIN_UNKNOWN',
+      stage: 'submit',
+      message: `URA has no active taxpayer under buyer TIN ${decision.tin}. The document was not sent. Check the TIN, or leave it blank to fiscalize the sale as a cash customer.`,
+      retryable: false,
+    });
+  }
+  return asFiscal(applyRegisteredBuyer(decision.buyer, result.taxpayer));
+}
 
 /**
  * Map a stored buyer_type (B2B/B2C/B2G) onto the buyerKind hint the protocol
@@ -658,6 +729,24 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
     }
 
     const source = await loadFiscalSource(client, row);
+    const stored = row.request_payload && Object.keys(row.request_payload).length > 0 ? row.request_payload : null;
+    const storedIsUra = Boolean(stored && (stored.goodsDetails || stored.sellerDetails || stored.goodsStockIn));
+
+    // End the read phase before any URA call. The buyer-TIN lookup and the
+    // submit must not hold an open transaction across a multi-second round-trip.
+    await client.query('COMMIT');
+
+    const buyer = isStockDocType(row.doc_type)
+      ? source.buyer
+      : await alignBuyerWithUra(source.buyer, taxpayer?.tin ?? null, {
+        mode: config.mode,
+        baseUrl: config.base_url ?? '',
+        tokenUrl: config.token_url,
+        clientId: creds.clientId,
+        clientSecret: creds.clientSecret,
+        timeoutSeconds: Number(config.timeout_seconds || 20),
+        securityFlags: config.security_flags,
+      });
     const built = buildSubmitPayload({
       docType: row.doc_type,
       docRefType: row.doc_ref_type,
@@ -670,7 +759,7 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
       requestRef: row.request_ref,
       taxpayer,
       config,
-      buyer: source.buyer,
+      buyer,
       lines: source.lines,
       oriInvoiceNo: source.oriInvoiceNo,
       oriInvoiceId: source.oriInvoiceId,
@@ -679,13 +768,6 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
       reason: source.reason,
       stock: source.stock,
     });
-    const stored = row.request_payload && Object.keys(row.request_payload).length > 0 ? row.request_payload : null;
-    const storedIsUra = Boolean(stored && (stored.goodsDetails || stored.sellerDetails || stored.goodsStockIn));
-
-    // End the read phase before the network call: the URA submit must not hold
-    // an open transaction (or its pooled connection) across a multi-second
-    // round-trip.
-    await client.query('COMMIT');
 
     const raw = await submitFiscalDocument({
       mode: config.mode,
