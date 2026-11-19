@@ -7632,8 +7632,10 @@ function TaxCompliance() {
   const [taxes, setTaxes] = useState<Rec[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [from, setFrom] = useState(`${new Date().getFullYear()}-01-01`);
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
+  const today = new Date();
+  const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const [from, setFrom] = useState(`${today.getFullYear()}-01-01`);
+  const [to, setTo] = useState(localDate);
   const [txnOpen, setTxnOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -7727,7 +7729,14 @@ function TaxCompliance() {
   );
   const summaryTotal = useMemo(
     () => summary.reduce<TaxSums>(
-      (acc, s) => ({ base: acc.base + Number(s.baseAmount ?? 0), tax: acc.tax + Number(s.taxAmount ?? 0), count: acc.count + Number(s.txnCount ?? 0) }),
+      (acc, s) => {
+        const sign = s.direction === 'INPUT' ? -1 : 1;
+        return {
+          base: acc.base + Number(s.baseAmount ?? 0) * sign,
+          tax: acc.tax + Number(s.taxAmount ?? 0) * sign,
+          count: acc.count + Number(s.txnCount ?? 0),
+        };
+      },
       { base: 0, tax: 0, count: 0 },
     ),
     [summary],
@@ -7828,9 +7837,9 @@ function TaxCompliance() {
         <>
           <div className="kpi-grid">
             <div className={`kpi-card${summary.length > 0 ? '' : ' card-warn'}`}>
-              <span className="kpi-label">Total tax in period</span>
+              <span className="kpi-label">Net tax payable</span>
               <span className={`kpi-value${summary.length > 0 ? '' : ' kpi-warn'}`}>{fmtMoney(summaryTotal.tax)}</span>
-              <span className="kpi-sub">{summary.length > 0 ? `on ${fmtMoney(summaryTotal.base)} base \u00B7 ${fmtNum(summaryTotal.count)} txns` : 'No posted tax lines in this period'}</span>
+              <span className="kpi-sub">{summary.length > 0 ? `output VAT minus input VAT, plus other taxes \u00B7 ${fmtNum(summaryTotal.count)} txns` : 'No posted tax lines in this period'}</span>
             </div>
             {summary.map((s) => (
               <div key={String(s.taxCode)} className="kpi-card">
@@ -8017,7 +8026,7 @@ function VatFilingDesk() {
           {canManage && <button className="btn btn-sm btn-primary" onClick={() => setPrepareOpen(true)}>Prepare VAT return</button>}
         </div>
         <p className="muted" style={{ marginTop: 0 }}>
-          ERP-computed output/input VAT per period. Submit and file record an operator's confirmation on the URA portal — URA exposes no filing API, so these are controlled manual steps.
+          VAT returns use posted sales, credit notes, debit notes and supplier invoices. A withholding return uses posted WHT transactions. Submit and file record an operator's confirmation on the URA portal — URA exposes no filing API, so these are controlled manual steps.
         </p>
         {loading ? <Skeleton rows={4} /> : filings.length === 0 ? (
           <EmptyState title="No VAT returns yet"
@@ -8029,7 +8038,7 @@ function VatFilingDesk() {
               <thead>
                 <tr>
                   <th>Period</th><th>Type</th><th>Status</th>
-                  <th className="cell-num">Output VAT</th><th className="cell-num">Input VAT</th>
+                  <th className="cell-num">Output / WHT</th><th className="cell-num">Input VAT</th>
                   <th className="cell-num">Net payable</th><th>URA ref</th><th>Actions</th>
                 </tr>
               </thead>

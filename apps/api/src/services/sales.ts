@@ -1200,7 +1200,7 @@ export async function createInvoice(
   if (!companyId) throw badRequest('Company context required');
   const bank = await companyBankDefaults(client, ctx);
   let orderId = input.orderId != null ? Number(input.orderId) : null;
-  const buyerType = normalizeBuyerType(input.buyerType);
+  let buyerType = normalizeBuyerType(input.buyerType);
   let buyerTin = normalizeBuyerTin(input.buyerTin);
 
   let customerId: number;
@@ -1212,7 +1212,6 @@ export async function createInvoice(
   let bankAccountNumber: string;
   let orderLines: Array<Record<string, unknown>> | null = null;
   let orderSubtotal = 0;
-  let orderDiscountAmount = 0;
   let sourceOrderTerms: unknown = null;
 
   if (orderId != null) {
@@ -1231,7 +1230,9 @@ export async function createInvoice(
     customerId = Number(so.customer_id);
     currency = String(so.currency ?? 'UGX');
     sourceOrderTerms = so.payment_terms_days;
-    // Inherit the buyer TIN from the order unless the caller supplied an override.
+    // Inherit the buyer classification and TIN from the order unless the caller supplied an override.
+    // Dropping buyer_type here sent a government TIN as a business sale.
+    if (buyerType == null && so.buyer_type != null) buyerType = normalizeBuyerType(so.buyer_type);
     if (buyerTin == null && so.buyer_tin != null) buyerTin = String(so.buyer_tin);
     bankName = input.bankName != null ? String(input.bankName) : so.bank_name != null ? String(so.bank_name) : bank.bankName;
     bankAccountName = input.bankAccountName != null ? String(input.bankAccountName) : so.bank_account_name != null ? String(so.bank_account_name) : bank.bankAccountName;
@@ -1239,7 +1240,6 @@ export async function createInvoice(
     discountType = so.discount_type === 'AMOUNT' ? 'AMOUNT' : 'PERCENT';
     discountValue = Number(so.discount_value ?? 0);
     orderSubtotal = Number(so.subtotal ?? 0);
-    orderDiscountAmount = Number(so.discount_amount ?? 0);
   } else {
     customerId = input.customerId != null ? Number(input.customerId) : 0;
     if (!customerId) throw badRequest('customerId is required when creating a manual invoice');
@@ -1324,6 +1324,7 @@ export async function createInvoice(
     unitPrice: number;
     taxPercent: number;
     taxCategory: string | null;
+    discountPercent: number;
     lineTotal: number;
     orderItemId: number | null;
   }> = [];
@@ -1340,6 +1341,7 @@ export async function createInvoice(
         unitPrice,
         taxPercent: Number(item.tax_percent ?? 0),
         taxCategory: item.tax_category != null ? String(item.tax_category) : null,
+        discountPercent: Number(item.discount_percent ?? 0),
         lineTotal,
         orderItemId: Number(item.id),
       });
@@ -1363,28 +1365,32 @@ export async function createInvoice(
       }
       if (!description) throw badRequest('Each line needs a product or description');
       const lineTotal = qty * unitPrice;
-      lineSpecs.push({ productId, description, qty, unitId, unitPrice, taxPercent, taxCategory: item.taxCategory ?? null, lineTotal, orderItemId: null });
+      lineSpecs.push({ productId, description, qty, unitId, unitPrice, taxPercent, taxCategory: item.taxCategory ?? null, discountPercent: 0, lineTotal, orderItemId: null });
       subtotal += lineTotal;
     }
   }
-  let invoiceDiscount = 0;
+  let lineDiscountTotal = 0;
+  const lineDiscounts = lineSpecs.map((spec) => {
+    const lineDiscount = spec.lineTotal * (spec.discountPercent / 100);
+    lineDiscountTotal += lineDiscount;
+    return lineDiscount;
+  });
+  let headerDiscount = 0;
   if (discountValue > 0 && subtotal > 0) {
-    if (discountType === 'PERCENT') {
-      invoiceDiscount = round2((subtotal * discountValue) / 100);
-    } else if (orderId != null && orderSubtotal > 0) {
-      invoiceDiscount = round2((orderDiscountAmount * subtotal) / orderSubtotal);
-    } else {
-      invoiceDiscount = round2(Math.min(discountValue, subtotal));
-    }
+    if (discountType === 'PERCENT') headerDiscount = (subtotal * discountValue) / 100;
+    else if (orderId != null && orderSubtotal > 0) headerDiscount = discountValue * (subtotal / orderSubtotal);
+    else headerDiscount = Math.min(discountValue, subtotal);
   }
+  const invoiceDiscount = round2(lineDiscountTotal + headerDiscount);
   let tax = 0;
-  for (const spec of lineSpecs) {
-    const headerShare = subtotal > 0 ? invoiceDiscount * (spec.lineTotal / subtotal) : 0;
-    const taxAmt = Math.max(0, spec.lineTotal - headerShare) * (spec.taxPercent / 100);
+  for (let i = 0; i < lineSpecs.length; i++) {
+    const spec = lineSpecs[i];
+    const headerShare = subtotal > 0 ? headerDiscount * (spec.lineTotal / subtotal) : 0;
+    const taxAmt = Math.max(0, spec.lineTotal - lineDiscounts[i] - headerShare) * (spec.taxPercent / 100);
     await client.query(
       `INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_id, unit_price, tax_percent, tax_category, line_total)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [invoiceId, spec.productId, spec.description, spec.qty, spec.unitId, spec.unitPrice, spec.taxPercent, spec.taxCategory, spec.lineTotal + taxAmt]
+      [invoiceId, spec.productId, spec.description, spec.qty, spec.unitId, spec.unitPrice, spec.taxPercent, spec.taxCategory, round2(spec.lineTotal - lineDiscounts[i] + taxAmt)]
     );
     tax += taxAmt;
     if (spec.orderItemId != null) {
