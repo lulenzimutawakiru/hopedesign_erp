@@ -11,7 +11,7 @@ import path from 'node:path';
 import { config } from '../config.js';
 import { parsePdf } from './pdf.js';
 import { mintEmployeeIdentity } from './employeeIdentity.js';
-import { clockIn, clockOut } from './hr.js';
+import { clockIn, clockOut, listEmployeeAttendance } from './hr.js';
 import { assertScreeningClear } from './iso/gates.js';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -2553,11 +2553,7 @@ export async function myLeave(client: pg.PoolClient, ctx: Ctx) {
 
 export async function myAttendance(client: pg.PoolClient, ctx: Ctx) {
   const emp = await employeeForUser(client, ctx);
-  const res = await client.query(
-    `SELECT * FROM attendance WHERE employee_id = $1 ORDER BY work_date DESC LIMIT 60`,
-    [Number(emp.id)]
-  );
-  return toCamelRows(res.rows);
+  return listEmployeeAttendance(client, ctx, Number(emp.id), Number(emp.company_id));
 }
 
 export async function myClockIn(client: pg.PoolClient, ctx: Ctx, loc?: { latitude?: unknown; longitude?: unknown; accuracy?: unknown } | null) {

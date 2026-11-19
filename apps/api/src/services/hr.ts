@@ -10,7 +10,7 @@ import { logAudit } from './audit.js';
 import * as finance from './finance.js';
 import * as statutory from './statutory.js';
 import * as payrollValidation from './payrollValidation.js';
-import { loadModernPayrollInputs, prorateEmployment, prorateBasic, resolveComponentAmount, emptyVariablePay } from './payrollEngine.js';
+import { loadModernPayrollInputs, loadAttendanceOvertimeDays, attendanceOvertimeAmount, prorateEmployment, prorateBasic, resolveComponentAmount, emptyVariablePay } from './payrollEngine.js';
 import * as identityLink from './identityLink.js';
 import { mintEmployeeIdentity } from './employeeIdentity.js';
 import * as payrollSettings from './payrollSettings.js';
@@ -263,7 +263,7 @@ export async function createEmployee(
       input.managerId ?? null, input.coachId ?? null, input.locationId ?? null,
       input.workEmail ?? null, input.workPhone ?? null,
       input.mobilePhone ?? null, input.workPermitNo ?? null, input.badgeId ?? null,
-      input.tags && input.tags.length ? input.tags : null,
+      input.tags && input.tags.length ? input.tags : [],
     ]
   );
   const employeeId = Number(ins.rows[0].id);
@@ -866,6 +866,100 @@ async function mirrorDevicePunch(client: pg.PoolClient, ctx: Ctx, employeeId: nu
   }
 }
 
+async function hasBiometricCheckIn(client: pg.PoolClient, tenantId: number, employeeId: number, workDate: string): Promise<boolean> {
+  const res = await client.query(
+    `SELECT 1 FROM attendance_records
+      WHERE tenant_id = $1 AND employee_id = $2 AND work_date = $3::date AND check_in IS NOT NULL
+      LIMIT 1`,
+    [tenantId, employeeId, workDate],
+  );
+  return res.rows.length > 0;
+}
+
+/** Close terminal punches that have no device clock-out, without rewriting check-in. */
+async function closeOpenBiometricPunches(
+  client: pg.PoolClient,
+  tenantId: number,
+  employeeId: number,
+  workDate: string,
+): Promise<{ hours: number } | null> {
+  const open = await client.query(
+    `SELECT id, check_in, scheduled_end, break_minutes, late_minutes
+       FROM attendance_records
+      WHERE tenant_id = $1 AND employee_id = $2 AND work_date = $3::date
+        AND check_in IS NOT NULL AND check_out IS NULL
+      ORDER BY check_in`,
+    [tenantId, employeeId, workDate],
+  );
+  if (!open.rows.length) return null;
+  const nowRes = await client.query(`SELECT now() AS ts`);
+  const now = new Date(nowRes.rows[0].ts);
+  let earliest = now.getTime();
+  for (const row of open.rows) {
+    const checkIn = new Date(row.check_in);
+    if (checkIn.getTime() < earliest) earliest = checkIn.getTime();
+    const scheduledEnd = row.scheduled_end ? new Date(row.scheduled_end) : null;
+    const breakMinutes = Number(row.break_minutes) || 0;
+    const late = Number(row.late_minutes) || 0;
+    let early = 0;
+    let overtime = 0;
+    if (scheduledEnd && now.getTime() < scheduledEnd.getTime()) {
+      early = Math.round((scheduledEnd.getTime() - now.getTime()) / 60000);
+    } else if (scheduledEnd && now.getTime() > scheduledEnd.getTime()) {
+      overtime = Math.round((now.getTime() - scheduledEnd.getTime()) / 60000);
+    }
+    const actual = Math.max(0, Math.round((now.getTime() - checkIn.getTime()) / 60000));
+    const worked = Math.max(0, actual - breakMinutes);
+    const status = late > 0 ? 'LATE' : early > 0 ? 'EARLY_DEPARTURE' : 'PRESENT';
+    await client.query(
+      `UPDATE attendance_records
+          SET check_out = $2, actual_minutes = $3, worked_minutes = $4,
+              early_departure_minutes = $5, overtime_minutes = $6,
+              attendance_status = $7, updated_at = now()
+        WHERE id = $1`,
+      [row.id, now, actual, worked, early, overtime, status],
+    );
+  }
+  return { hours: round2((now.getTime() - earliest) / 3600000) };
+}
+
+const ATTENDANCE_DAY_COLUMNS = `
+  min(a.id) AS id,
+  a.work_date,
+  to_char(min(a.check_in) AT TIME ZONE 'Africa/Kampala', 'YYYY-MM-DD HH24:MI:SS') AS clock_in,
+  to_char((CASE WHEN bool_or(a.check_in IS NOT NULL AND a.check_out IS NULL) THEN NULL ELSE max(a.check_out) END) AT TIME ZONE 'Africa/Kampala', 'YYYY-MM-DD HH24:MI:SS') AS clock_out,
+  round(COALESCE(sum(a.worked_minutes), 0)::numeric / 60.0, 2) AS hours,
+  COALESCE(sum(a.overtime_minutes), 0)::int AS overtime_minutes,
+  COALESCE(sum(a.late_minutes), 0)::int AS late_minutes,
+  (array_agg(a.attendance_status ORDER BY CASE a.attendance_status
+     WHEN 'ABSENT' THEN 0
+     WHEN 'LATE' THEN 1
+     WHEN 'EARLY_DEPARTURE' THEN 2
+     WHEN 'HALF_DAY' THEN 3
+     WHEN 'PENDING' THEN 4
+     WHEN 'ON_LEAVE' THEN 5
+     WHEN 'HOLIDAY' THEN 6
+     WHEN 'EXCUSED' THEN 7
+     ELSE 8 END))[1] AS status`;
+
+export async function listEmployeeAttendance(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  employeeId: number,
+  companyId: number,
+) {
+  const res = await client.query(
+    `SELECT ${ATTENDANCE_DAY_COLUMNS}
+       FROM attendance_records a
+      WHERE a.tenant_id = $1 AND a.company_id = $2 AND a.employee_id = $3
+      GROUP BY a.work_date
+      ORDER BY a.work_date DESC
+      LIMIT 60`,
+    [ctx.tenantId, companyId, employeeId],
+  );
+  return toCamelRows(res.rows);
+}
+
 export async function clockIn(
   client: pg.PoolClient,
   ctx: Ctx,
@@ -881,6 +975,9 @@ export async function clockIn(
     [employeeId, day]
   );
   if (existing.rows.length && existing.rows[0].clock_in) throw badRequest('Already clocked in today');
+  if (await hasBiometricCheckIn(client, Number(ctx.tenantId), employeeId, day)) {
+    throw badRequest('Already clocked in today');
+  }
   const attrs = JSON.stringify(where);
   if (existing.rows.length) {
     await client.query(
@@ -913,8 +1010,16 @@ export async function clockOut(
      WHERE a.employee_id = $1 AND a.work_date = $2 AND e.tenant_id = $3`,
     [employeeId, day, ctx.tenantId]
   );
-  if (existing.rows.length === 0 || !existing.rows[0].clock_in) throw badRequest('Clock in first');
-  if (existing.rows[0].clock_out) throw badRequest('Already clocked out');
+  if (existing.rows.length && existing.rows[0].clock_in) {
+    if (existing.rows[0].clock_out) throw badRequest('Already clocked out');
+  } else {
+    const closed = await closeOpenBiometricPunches(client, Number(ctx.tenantId), employeeId, day);
+    if (closed) {
+      return { attendanceId: employeeId, hours: closed.hours, premises: where.premisesName, distanceMeters: where.distanceMeters };
+    }
+    if (await hasBiometricCheckIn(client, Number(ctx.tenantId), employeeId, day)) throw badRequest('Already clocked out');
+    throw badRequest('Clock in first');
+  }
   const hours = (Date.now() - new Date(existing.rows[0].clock_in).getTime()) / 3600000;
   const attrs = { ...(existing.rows[0].attributes ?? {}), clockOut: where };
   await client.query(
@@ -928,14 +1033,17 @@ export async function clockOut(
 }
 
 export async function listAttendance(client: pg.PoolClient, ctx: Ctx, day?: string) {
-  const workDate = day || new Date().toISOString().slice(0, 10);
+  const requested = day?.trim() ?? '';
+  if (requested && !/^\d{4}-\d{2}-\d{2}$/.test(requested)) throw badRequest('Attendance date is invalid');
+  const workDate = requested || await kampalaToday(client);
   const res = await client.query(
-    `SELECT a.id, a.work_date, a.clock_in, a.clock_out, a.hours, a.status,
+    `SELECT ${ATTENDANCE_DAY_COLUMNS},
             e.id AS employee_id, e.employee_no, e.first_name, e.last_name
-     FROM attendance a
-     JOIN employees e ON e.id = a.employee_id
-     WHERE e.tenant_id = $1 AND e.company_id = $2 AND a.work_date = $3
-     ORDER BY e.last_name`,
+       FROM attendance_records a
+       JOIN employees e ON e.id = a.employee_id
+      WHERE a.tenant_id = $1 AND a.company_id = $2 AND a.work_date = $3::date
+      GROUP BY a.work_date, e.id, e.employee_no, e.first_name, e.last_name
+      ORDER BY e.last_name, e.first_name`,
     [ctx.tenantId, ctx.companyId, workDate]
   );
   return { workDate, rows: toCamelRows(res.rows) };
@@ -1355,11 +1463,13 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
   // Modern payroll inputs (components, variable pay, benefits, effective
   // salaries) are loaded once for the whole staff; every loader is a no-op
   // when the enterprise tables are empty, keeping legacy runs identical.
-  const modern = await loadModernPayrollInputs(client, ctx, staff.rows.map((r) => Number(r.id)), periodStart, periodEnd);
+  const staffIds = staff.rows.map((r) => Number(r.id));
+  const modern = await loadModernPayrollInputs(client, ctx, staffIds, periodStart, periodEnd);
   // Attendance-derived unpaid days. The terminal alone never marks anyone
   // absent and only LOCKED attendance periods count, so a run whose attendance
   // has not been reviewed produces exactly the numbers it produced before.
   const attendanceUnpaidDays = await loadAttendanceUnpaidDays(client, ctx, periodStart, periodEnd);
+  const attendanceOvertime = await loadAttendanceOvertimeDays(client, ctx, staffIds, periodStart, periodEnd);
   const componentEntries: { employeeId: number; componentId: number; amount: number }[] = [];
   let grossTotal = 0;
   let deductionTotal = 0;
@@ -1408,6 +1518,13 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
     // Approved variable pay: overtime, bonuses, commissions and effective
     // employee earnings/deductions.
     const variable = modern.variablePay.get(employeeId) ?? emptyVariablePay();
+    const attendanceOt = attendanceOvertimeAmount({
+      salaryType: String(emp.salary_type ?? 'MONTHLY'),
+      monthlyBasic: effectiveSalary ? effectiveSalary.basicSalary : (Number(emp.base_salary) || 0),
+      hourlyRate: Number(emp.hourly_rate) || 0,
+      days: attendanceOvertime.get(employeeId) ?? [],
+    });
+    if (attendanceOt.amount > 0) variable.overtime = round2(variable.overtime + attendanceOt.amount);
     const variableEarnings = round2(variable.overtime + variable.bonuses + variable.commissions);
     if (variable.overtime > 0) earnings.push({ kind: 'OVERTIME', code: 'OVERTIME', name: 'Overtime', amount: variable.overtime, taxable: true });
     if (variable.bonuses > 0) earnings.push({ kind: 'BONUS', code: 'BONUS', name: 'Bonus', amount: variable.bonuses, taxable: true });
@@ -1542,6 +1659,9 @@ export async function calculatePayroll(client: pg.PoolClient, ctx: Ctx, payrollI
       proration,
       ...(attendanceUnpaidDays.has(employeeId)
         ? { attendanceUnpaidDays: attendanceUnpaidDays.get(employeeId) }
+        : {}),
+      ...(attendanceOt.minutes > 0
+        ? { attendanceOvertimeMinutes: attendanceOt.minutes, attendanceOvertimeAmount: attendanceOt.amount }
         : {}),
     };
     await client.query(

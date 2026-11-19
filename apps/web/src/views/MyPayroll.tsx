@@ -124,6 +124,8 @@ interface Trace {
   employerNssf: number;
   proration: Rec;
   attendanceUnpaidDays: number | null;
+  attendanceOvertimeMinutes: number | null;
+  attendanceOvertimeAmount: number | null;
   benefits: Rec;
   ruleVersions: { paye: Rec; nssf: Rec; lst: Rec };
 }
@@ -661,10 +663,11 @@ export default function MyPayroll() {
                 </div>
               </Panel>
 
-              {(detail.trace.attendanceUnpaidDays !== null || num(detail.trace.proration.daysInPeriod) > 0) && (
-                <Panel title="Proration and attendance" sub="How unpaid time affected this period">
+              {(detail.trace.attendanceUnpaidDays !== null || detail.trace.attendanceOvertimeMinutes != null || num(detail.trace.proration.daysInPeriod) > 0) && (
+                <Panel title="Proration and attendance" sub="How unpaid time and biometric overtime affected this period">
                   <div className="detail-list">
                     {detail.trace.attendanceUnpaidDays !== null && <Row label="Unpaid days">{fmtNum(detail.trace.attendanceUnpaidDays)}</Row>}
+                    {detail.trace.attendanceOvertimeMinutes != null && <Row label="Biometric overtime">{fmtNum(detail.trace.attendanceOvertimeMinutes / 60)} h · {money(detail.trace.attendanceOvertimeAmount)}</Row>}
                     {num(detail.trace.proration.daysInPeriod) > 0 && <Row label="Days in period">{fmtNum(detail.trace.proration.daysInPeriod)}</Row>}
                     {num(detail.trace.proration.paidDays) > 0 && <Row label="Paid days">{fmtNum(detail.trace.proration.paidDays)}</Row>}
                     {num(detail.trace.proration.factor) > 0 && <Row label="Proration factor">{String(detail.trace.proration.factor)}</Row>}

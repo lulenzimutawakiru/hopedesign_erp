@@ -334,6 +334,8 @@ export function buildCalculationTrace(item: Record<string, unknown>) {
     employerNssf: num(item.employer_nssf),
     proration: asObject(b.proration),
     attendanceUnpaidDays: b.attendanceUnpaidDays == null ? null : num(b.attendanceUnpaidDays),
+    attendanceOvertimeMinutes: b.attendanceOvertimeMinutes == null ? null : num(b.attendanceOvertimeMinutes),
+    attendanceOvertimeAmount: b.attendanceOvertimeAmount == null ? null : num(b.attendanceOvertimeAmount),
     benefits: asObject(b.benefits),
     ruleVersions: { paye: payeRule, nssf: nssfRule, lst: lstRule },
   };

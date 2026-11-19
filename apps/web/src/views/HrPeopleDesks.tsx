@@ -329,11 +329,12 @@ export function AttendanceDesk() {
         <div>
           <p className="mod-kicker" data-mod="hr">Attendance</p>
           <h1>Clock for {data.workDate}</h1>
+          <p className="muted">Terminal punches and device clock-ins from biometric attendance.</p>
         </div>
       </header>
       <div className="table-wrap card">
         <table className="data">
-          <thead><tr><th>Employee</th><th>In</th><th>Out</th><th className="cell-num">Hours</th><th>Status</th></tr></thead>
+          <thead><tr><th>Employee</th><th>In</th><th>Out</th><th className="cell-num">Hours</th><th className="cell-num">Overtime</th><th>Status</th></tr></thead>
           <tbody>
             {data.rows.map((r) => (
               <tr key={String(r.id)}>
@@ -341,10 +342,11 @@ export function AttendanceDesk() {
                 <td>{r.clockIn ? String(r.clockIn).slice(11, 16) : '—'}</td>
                 <td>{r.clockOut ? String(r.clockOut).slice(11, 16) : '—'}</td>
                 <td className="cell-num">{r.hours != null ? fmtNum(r.hours) : '—'}</td>
+                <td className="cell-num">{Number(r.overtimeMinutes) > 0 ? fmtNum(Number(r.overtimeMinutes) / 60) : '—'}</td>
                 <td><Badge value={r.status} /></td>
               </tr>
             ))}
-            {data.rows.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 24 }}>Nobody clocked today.</td></tr>}
+            {data.rows.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 24 }}>No attendance records for this day.</td></tr>}
           </tbody>
         </table>
       </div>

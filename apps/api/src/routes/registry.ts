@@ -113,7 +113,7 @@ export const ENTITIES: (CrudConfig & Handlers)[] = [
   // ------------------------------------------------ HR
   { table: 'employees', module: 'hr', resource: 'employees', label: 'Employee', codeColumn: 'employee_no', statusColumn: 'status', searchable: ['employee_no', 'first_name', 'last_name', 'email'], defaultOrder: 't.id DESC' },
   { table: 'employment_contracts', module: 'hr', resource: 'contracts', label: 'Employment Contract', entityType: 'hr.contracts', codeColumn: 'contract_no', statusColumn: 'status', searchable: ['contract_no'], defaultOrder: 't.id DESC' },
-  { table: 'attendance', module: 'hr', resource: 'attendance', label: 'Attendance', searchable: [], defaultOrder: 't.id DESC' },
+  { table: 'attendance_records', module: 'hr', resource: 'attendance', label: 'Attendance', readOnly: true, searchable: [], defaultOrder: 't.work_date DESC' },
   { table: 'leave_requests', module: 'hr', resource: 'leave', label: 'Leave Request', codeColumn: 'leave_no', statusColumn: 'status', searchable: ['leave_no'], defaultOrder: 't.id DESC' },
   { table: 'payrolls', module: 'hr', resource: 'payrolls', label: 'Payroll', entityType: 'hr.payrolls', codeColumn: 'payroll_no', statusColumn: 'status', searchable: ['payroll_no'], defaultOrder: 't.id DESC' },
   { table: 'employee_loans', module: 'hr', resource: 'loans', label: 'Employee Loan', searchable: [], defaultOrder: 't.id DESC' },

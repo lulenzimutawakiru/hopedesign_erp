@@ -230,12 +230,12 @@ function MyHr() {
               </div>
               <div className="table-wrap">
                 <table className="data">
-                  <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Date</th><th>In</th><th>Out</th><th className="cell-num">Hours</th><th>Status</th></tr></thead>
                   <tbody>
                     {attendance.map((r) => (
-                      <tr key={String(r.id)}><td>{fmtDate(r.workDate)}</td><td>{r.clockIn ? String(r.clockIn).slice(11, 16) : '—'}</td><td>{r.clockOut ? String(r.clockOut).slice(11, 16) : '—'}</td><td><Badge value={r.status} /></td></tr>
+                      <tr key={String(r.id)}><td>{fmtDate(r.workDate)}</td><td>{r.clockIn ? String(r.clockIn).slice(11, 16) : '—'}</td><td>{r.clockOut ? String(r.clockOut).slice(11, 16) : '—'}</td><td className="cell-num">{r.hours != null ? fmtNum(r.hours) : '—'}</td><td><Badge value={r.status} /></td></tr>
                     ))}
-                    {attendance.length === 0 && <tr><td colSpan={4} className="muted">No clock records.</td></tr>}
+                    {attendance.length === 0 && <tr><td colSpan={5} className="muted">No biometric attendance yet.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -1577,12 +1577,24 @@ function TimeDesk() {
   const [periodStart, setPeriodStart] = useState(today().slice(0, 8) + '01');
   const [periodEnd, setPeriodEnd] = useState(today());
   const [hours, setHours] = useState('160');
+  const [sheetBiometric, setSheetBiometric] = useState<{ hours: number; overtimeMinutes: number } | null>(null);
+  useEffect(() => {
+    if (open !== 'sheet' || !employeeId || !periodStart || !periodEnd) {
+      setSheetBiometric(null);
+      return;
+    }
+    let cancelled = false;
+    api<{ data: { hours: number; overtimeMinutes: number } }>(
+      '/api/ops/hcm/attendance-hours?employeeId=' + encodeURIComponent(employeeId) + '&periodStart=' + encodeURIComponent(periodStart) + '&periodEnd=' + encodeURIComponent(periodEnd),
+    ).then((r) => { if (!cancelled) setSheetBiometric(r.data); }).catch(() => { if (!cancelled) setSheetBiometric(null); });
+    return () => { cancelled = true; };
+  }, [open, employeeId, periodStart, periodEnd]);
   const post = async (path: string, body: Rec) => {
     try { await api(path, { method: 'POST', body: JSON.stringify(body) }); setOpen(''); shifts.load(); assignments.load(); timesheets.load(); }
     catch (e) { shifts.setError(e instanceof Error ? e.message : 'Action failed'); }
   };
   return (
-    <Page kicker="Time" title="Shifts and timesheets" sub="Today's clock stays on Attendance. This desk covers roster and timesheet approval." back="/people"
+    <Page kicker="Time" title="Shifts and timesheets" sub="Today's clock stays on Attendance and reads biometric records. Timesheet hours sit beside the biometric hours for the same period." back="/people"
       actions={<>
         <button className="btn" onClick={() => navigate('/people/attendance')}>Today's clock</button>
         {can(user, 'hr.shifts.create') && <button className="btn" onClick={() => setOpen('shift')}>New shift</button>}
@@ -1609,10 +1621,10 @@ function TimeDesk() {
         ))}</tbody>
       </table></div></section>}
       {tab === 'sheets' && <section className="card"><div className="table-wrap"><table className="data">
-        <thead><tr><th>Employee</th><th>Period</th><th className="cell-num">Hours</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Employee</th><th>Period</th><th className="cell-num">Hours</th><th className="cell-num">Biometric</th><th>Status</th><th></th></tr></thead>
         <tbody>{timesheets.rows.map((r) => (
           <tr key={String(r.id)}>
-            <td>{nameOf(r)}</td><td>{fmtDate(r.periodStart)} – {fmtDate(r.periodEnd)}</td><td className="cell-num">{fmtNum(r.totalHours)}</td><td><Badge value={r.status} /></td>
+            <td>{nameOf(r)}</td><td>{fmtDate(r.periodStart)} – {fmtDate(r.periodEnd)}</td><td className="cell-num">{fmtNum(r.totalHours)}</td><td className="cell-num">{fmtNum(r.attendanceHours)}</td><td><Badge value={r.status} /></td>
             <td>
               {String(r.status) === 'DRAFT' && can(user, 'hr.timesheets.submit') && <button className="btn btn-sm" onClick={() => post(`/api/ops/hcm/timesheets/${r.id}/submit`, {})}>Submit</button>}
               {String(r.status) === 'SUBMITTED' && can(user, 'hr.timesheets.approve') && <button className="btn btn-sm" onClick={() => post(`/api/ops/hcm/timesheets/${r.id}/approve`, {})}>Approve</button>}
@@ -1640,7 +1652,15 @@ function TimeDesk() {
             {open === 'sheet' && <>
               <Field label="Period start"><input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} /></Field>
               <Field label="Period end"><input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} /></Field>
-              <Field label="Hours"><input inputMode="decimal" value={hours} onChange={(e) => setHours(e.target.value)} /></Field>
+              <Field label="Hours">
+                <input inputMode="decimal" value={hours} onChange={(e) => setHours(e.target.value)} />
+                {sheetBiometric && (
+                  <p className="muted" style={{ margin: '6px 0 0' }}>
+                    Biometric attendance for this period is {fmtNum(sheetBiometric.hours)} hours.
+                    <button type="button" className="btn btn-sm" style={{ marginLeft: 8 }} onClick={() => setHours(String(sheetBiometric.hours))}>Use these hours</button>
+                  </p>
+                )}
+              </Field>
             </>}
           </div>
         </Modal>

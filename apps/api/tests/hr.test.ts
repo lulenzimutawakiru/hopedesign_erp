@@ -463,10 +463,26 @@ describe('HR and payroll', () => {
 
     const inn = await api.post(`/api/ops/hr/employees/${employeeId}/clock-in`).set(auth(token)).send({});
     expect([200, 400]).toContain(inn.status);
-    const att = await api.get('/api/ops/hr/attendance').set(auth(token));
+    const who = await db(`SELECT tenant_id, company_id FROM employees WHERE id = $1`, [employeeId]);
+    await db(
+      `INSERT INTO attendance_records (
+         tenant_id, company_id, employee_id, work_date, check_in, check_out,
+         worked_minutes, overtime_minutes, attendance_status, source
+       ) VALUES ($1,$2,$3,'2026-11-02','2026-11-02 08:00:00+03','2026-11-02 17:30:00+03',510,30,'PRESENT','HIKVISION')`,
+      [who.rows[0].tenant_id, who.rows[0].company_id, employeeId],
+    );
+    const att = await api.get('/api/ops/hr/attendance?date=2026-11-02').set(auth(token));
     expect(att.status).toBe(200);
     expect(Array.isArray(att.body.data.rows)).toBe(true);
+    const row = (att.body.data.rows as { employeeId: string; status: string; hours: string; overtimeMinutes: number; clockIn: string }[])
+      .find((r) => Number(r.employeeId) === employeeId);
+    expect(row).toBeTruthy();
+    expect(row!.status).toBe('PRESENT');
+    expect(Number(row!.hours)).toBe(8.5);
+    expect(Number(row!.overtimeMinutes)).toBe(30);
+    expect(String(row!.clockIn).slice(11, 16)).toBe('08:00');
 
+    await db(`DELETE FROM attendance_records WHERE employee_id = $1`, [employeeId]);
     await db(`DELETE FROM attendance WHERE employee_id = $1`, [employeeId]);
     await deleteEmployees([employeeId]);
   });

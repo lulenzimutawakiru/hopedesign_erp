@@ -360,6 +360,9 @@ hcmOpsRouter.get('/employees/:id/timeline', ...runGet('hr.employees.view', (c, c
 hcmOpsRouter.get('/shifts', ...runGet('hr.shifts.view', (c, ctx) => hcmLists.listShifts(c, ctx)));
 hcmOpsRouter.get('/shifts/assignments', ...runGet('hr.shift_assignments.view', (c, ctx) => hcmLists.listShiftAssignments(c, ctx)));
 hcmOpsRouter.get('/timesheets', ...runGet('hr.timesheets.view', (c, ctx, q) => hcmLists.listTimesheets(c, ctx, q.status != null ? String(q.status) : null)));
+hcmOpsRouter.get('/attendance-hours', ...runGet('hr.timesheets.view', (c, ctx, q) => hcmLists.attendanceHours(
+  c, ctx, Number(q.employeeId), String(q.periodStart ?? ''), String(q.periodEnd ?? ''),
+)));
 hcmOpsRouter.post('/timesheets', ...run('hr.timesheets.create', (c, ctx, b) => hcmLists.createTimesheet(c, ctx, {
   employeeId: Number(b.employeeId),
   periodStart: String(b.periodStart ?? ''),
