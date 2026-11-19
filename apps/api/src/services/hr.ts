@@ -757,8 +757,13 @@ async function assertAtFactory(client: pg.PoolClient, ctx: Ctx, loc: DeviceFixIn
 }
 
 async function kampalaToday(client: pg.PoolClient): Promise<string> {
-  const res = await client.query(`SELECT (now() AT TIME ZONE 'Africa/Kampala')::date AS work_date`);
-  return String(res.rows[0].work_date).slice(0, 10);
+  // Return text. node-pg parses a date column into a Date, and
+  // String(date).slice(0, 10) is "Thu Nov 19", which Postgres rejects
+  // when it is bound back as a date parameter.
+  const res = await client.query(
+    `SELECT to_char((now() AT TIME ZONE 'Africa/Kampala')::date, 'YYYY-MM-DD') AS work_date`,
+  );
+  return String(res.rows[0].work_date);
 }
 
 function atKampala(workDate: string, timeOfDay: string): Date {
