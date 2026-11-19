@@ -7621,10 +7621,61 @@ function EfrisConfigModal({ row, taxpayers, busy, error, onClose, onSave }: { ro
   );
 }
 
+function isoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Monthly VAT periods, plus the quarter and year a finance desk actually files against. */
+function taxPeriodPresets(now = new Date()): Array<{ key: string; label: string; from: string; to: string }> {
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const today = isoDate(now);
+  const quarterStart = new Date(y, Math.floor(m / 3) * 3, 1);
+  return [
+    { key: 'this-month', label: 'This month', from: isoDate(new Date(y, m, 1)), to: today },
+    { key: 'last-month', label: 'Last month', from: isoDate(new Date(y, m - 1, 1)), to: isoDate(new Date(y, m, 0)) },
+    { key: 'this-quarter', label: 'This quarter', from: isoDate(quarterStart), to: today },
+    { key: 'this-year', label: 'This year', from: `${y}-01-01`, to: today },
+  ];
+}
+
+function taxSide(direction: unknown): 'OUTPUT' | 'INPUT' | 'OTHER' {
+  const dir = String(direction ?? '').toUpperCase();
+  if (dir === 'OUTPUT' || dir === 'INPUT') return dir;
+  return 'OTHER';
+}
+
+function sideLabel(direction: unknown): string {
+  const side = taxSide(direction);
+  if (side === 'OUTPUT') return 'Output';
+  if (side === 'INPUT') return 'Input';
+  return 'Other';
+}
+
+const FILING_STEPS = ['PREPARED', 'SUBMITTED', 'FILED', 'CLOSED'] as const;
+
+function FilingTrail({ status }: { status: string }) {
+  if (status === 'CANCELLED' || status === 'OPEN' || !FILING_STEPS.includes(status as typeof FILING_STEPS[number])) {
+    return <Badge value={status || 'OPEN'} />;
+  }
+  const at = FILING_STEPS.indexOf(status as typeof FILING_STEPS[number]);
+  return (
+    <span className="fin-inbox-flags" aria-label={`Filing ${status.toLowerCase()}`}>
+      {FILING_STEPS.map((step, i) => (
+        <span key={step} className={`fin-chip${i <= at ? ' green' : ''}`}>
+          {step.charAt(0) + step.slice(1).toLowerCase()}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function TaxCompliance() {
+  const company = useCompanyProfile();
   const { user } = useAuth();
   type TaxPanel = string;
   type TaxSums = { base: number; tax: number; count: number };
+  const periodPresets = useMemo(() => taxPeriodPresets(), []);
   const [summary, setSummary] = useState<Rec[]>([]);
   const [rows, setRows] = useState<Rec[]>([]);
   const [jurisdictions, setJurisdictions] = useState<Rec[]>([]);
@@ -7632,10 +7683,8 @@ function TaxCompliance() {
   const [taxes, setTaxes] = useState<Rec[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const today = new Date();
-  const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  const [from, setFrom] = useState(`${today.getFullYear()}-01-01`);
-  const [to, setTo] = useState(localDate);
+  const [from, setFrom] = useState(periodPresets[0].from);
+  const [to, setTo] = useState(periodPresets[0].to);
   const [txnOpen, setTxnOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -7643,6 +7692,7 @@ function TaxCompliance() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [jurisdictionFilter, setJurisdictionFilter] = useState('');
+  const [directionFilter, setDirectionFilter] = useState('');
   const [sortBy, setSortBy] = useState('txnDate');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
@@ -7695,6 +7745,7 @@ function TaxCompliance() {
     const list = rows.filter((r) => {
       if (statusFilter && String(r.status ?? '') !== statusFilter) return false;
       if (jurisdictionFilter && String(r.jurisdictionCode ?? '') !== jurisdictionFilter) return false;
+      if (directionFilter && taxSide(r.direction) !== directionFilter) return false;
       if (!query) return true;
       return [r.taxCode, r.taxName, r.jurisdictionCode, r.docRefCode, r.docType, r.status]
         .map((v) => String(v ?? '').toLowerCase())
@@ -7704,6 +7755,7 @@ function TaxCompliance() {
     const value = (r: Rec): string | number => {
       switch (sortBy) {
         case 'tax': return `${String(r.taxCode ?? '')} ${String(r.taxName ?? '')}`.toLowerCase();
+        case 'direction': return sideLabel(r.direction).toLowerCase();
         case 'jurisdiction': return String(r.jurisdictionCode ?? '').toLowerCase();
         case 'doc': return String(r.docRefCode ?? r.docType ?? '').toLowerCase();
         case 'baseAmount': return Number(r.baseAmount ?? 0);
@@ -7719,7 +7771,7 @@ function TaxCompliance() {
       if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
       return String(av).localeCompare(String(bv)) * dir;
     });
-  }, [rows, statusFilter, jurisdictionFilter, query, sortBy, sortDir]);
+  }, [rows, statusFilter, jurisdictionFilter, directionFilter, query, sortBy, sortDir]);
   const totals = useMemo(
     () => filtered.reduce<TaxSums>(
       (acc, r) => ({ base: acc.base + Number(r.baseAmount ?? 0), tax: acc.tax + Number(r.taxAmount ?? 0), count: acc.count + 1 }),
@@ -7743,7 +7795,7 @@ function TaxCompliance() {
   );
 
   const TAX_SORT_LABELS: Record<string, string> = {
-    txnDate: 'date', tax: 'tax', jurisdiction: 'jurisdiction', doc: 'document',
+    txnDate: 'date', tax: 'tax', direction: 'side', jurisdiction: 'jurisdiction', doc: 'document',
     baseAmount: 'base amount', rate: 'rate', taxAmount: 'tax amount', status: 'status',
   };
   const sortMark = (col: string) => (sortBy === col ? (sortDir === 'asc' ? ' \u2191' : ' \u2193') : '');
@@ -7755,23 +7807,43 @@ function TaxCompliance() {
     setSortBy(''); setSortDir('asc');
   };
 
-  const hasFilters = Boolean(query || statusFilter || jurisdictionFilter);
+  const hasFilters = Boolean(query || statusFilter || jurisdictionFilter || directionFilter);
   const activeFilters: Array<{ key: string; label: string; value: string }> = [];
   if (query) activeFilters.push({ key: 'q', label: 'Search', value: search.trim() });
+  if (directionFilter) activeFilters.push({ key: 'direction', label: 'Side', value: sideLabel(directionFilter) });
   if (statusFilter) activeFilters.push({ key: 'status', label: 'Status', value: statusFilter.replace(/_/g, ' ') });
   if (jurisdictionFilter) activeFilters.push({ key: 'jurisdiction', label: 'Jurisdiction', value: jurisdictionFilter });
   const removeFilter = (key: string) => {
     if (key === 'q') setSearch('');
+    if (key === 'direction') setDirectionFilter('');
     if (key === 'status') setStatusFilter('');
     if (key === 'jurisdiction') setJurisdictionFilter('');
   };
-  const clearFilters = () => { setSearch(''); setStatusFilter(''); setJurisdictionFilter(''); };
+  const clearFilters = () => { setSearch(''); setStatusFilter(''); setJurisdictionFilter(''); setDirectionFilter(''); };
+  const activePreset = periodPresets.find((p) => p.from === from && p.to === to)?.key ?? '';
+  const bucket = (direction: 'OUTPUT' | 'INPUT' | 'OTHER') => summary.filter((s) => taxSide(s.direction) === direction);
+  const bucketTax = (direction: 'OUTPUT' | 'INPUT' | 'OTHER') => bucket(direction).reduce((sum, s) => sum + Number(s.taxAmount ?? 0), 0);
+  const bucketCount = (direction: 'OUTPUT' | 'INPUT' | 'OTHER') => bucket(direction).reduce((sum, s) => sum + Number(s.txnCount ?? 0), 0);
+  const outputVat = bucketTax('OUTPUT');
+  const inputVat = bucketTax('INPUT');
+  const otherTax = bucketTax('OTHER');
+  const scrollToId = (id: string) => {
+    const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    document.getElementById(id)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  };
+  const focusSide = (direction: 'OUTPUT' | 'INPUT' | 'OTHER') => {
+    setDirectionFilter((current) => (current === direction ? '' : direction));
+    scrollToId('tax-activity');
+  };
+  const signedNet = filtered.reduce(
+    (sum, r) => sum + (taxSide(r.direction) === 'INPUT' ? -Number(r.taxAmount ?? 0) : Number(r.taxAmount ?? 0)),
+    0,
+  );
 
   const loadNote = loadFailures.length > 0 ? (
-    <div className="card card-pad card-warn" role="status" aria-live="polite" style={{ marginBottom: 14 }}>
-      <h3 style={{ marginTop: 0 }}>Could not load {loadFailures.length === 1 ? '1 panel' : `${loadFailures.length} panels`}</h3>
-      <p className="muted" style={{ margin: '6px 0' }}>{loadFailures.map((f) => `${f.panel}: ${f.message}`).join(' \u00B7 ')}</p>
-      <p className="muted" style={{ marginBottom: 10 }}>Everything else on this screen is showing what the server last returned.</p>
+    <div className="fin-banner" role="status" aria-live="polite">
+      <strong>Some panels did not load.</strong>
+      <span>{loadFailures.map((f) => `${f.panel}: ${f.message}`).join(' \u00B7 ')} The rest of the desk is showing the last figures the server returned.</span>
       <button className="btn btn-sm" disabled={refreshing} onClick={load}>{refreshing ? 'Retrying\u2026' : 'Retry'}</button>
     </div>
   ) : null;
@@ -7794,88 +7866,162 @@ function TaxCompliance() {
     </div>
   ) : null;
 
-  const filterCard = (
-    <div className="card card-pad" style={{ marginBottom: 14 }}>
-      <div className="toolbar" style={{ marginBottom: hasFilters || sortBy ? 10 : 0 }}>
-        <input className="search-input" type="search" value={search} aria-label="Search tax transactions"
-          placeholder="Search tax, jurisdiction, document..."
-          onChange={(e) => setSearch(e.target.value)} />
-        {statusOptions.length > 0 && <StatusSelect value={statusFilter} onChange={setStatusFilter} options={statusOptions} />}
-        {jurisdictionOptions.length > 0 && (
-          <StatusSelect value={jurisdictionFilter} onChange={setJurisdictionFilter} options={jurisdictionOptions}
-            label="Filter by jurisdiction" placeholder="All jurisdictions" />
-        )}
-        {hasFilters && <button className="btn btn-sm btn-ghost" onClick={clearFilters}>Clear filters</button>}
-      </div>
-      {chips}
-    </div>
-  );
-
   return (
-    <div className="page">
-      <header className="page-head">
+    <div className="page fin-cc">
+      <header className="fin-head">
         <div>
-          <p className="mod-kicker" data-mod="fin">Uganda tax</p>
+          <p className="mod-kicker" data-mod="fin">Tax &amp; EFRIS</p>
           <h1>Tax compliance</h1>
-          <p className="muted">Configurable VAT / WHT / excise engine. Rates and rules are editable {'\u2014'} never hardcoded.</p>
+          <p className="muted fin-head-sub">
+            <span>{from} {'\u2192'} {to}</span>
+            <span className="fin-sep" aria-hidden="true">{'\u2022'}</span>
+            <span>Output VAT less input VAT, plus withholding and excise</span>
+            <span className="fin-sep" aria-hidden="true">{'\u2022'}</span>
+            <span>Books of {company.name}</span>
+          </p>
         </div>
         <div className="head-actions">
           <label className="muted" style={{ fontSize: 12 }} htmlFor="tax-from">Period</label>
-          <input id="tax-from" type="date" value={from} max={to} aria-label="Period start date" title="Period start" onChange={(e) => setFrom(e.target.value)} />
-          <input type="date" value={to} min={from} aria-label="Period end date" title="Period end" onChange={(e) => setTo(e.target.value)} />
+          <input id="tax-from" type="date" value={from} max={to || undefined} aria-label="Period start date" title="Period start" onChange={(e) => setFrom(e.target.value)} />
+          <input type="date" value={to} min={from || undefined} aria-label="Period end date" title="Period end" onChange={(e) => setTo(e.target.value)} />
           <button className="btn" disabled={refreshing} onClick={load} title="Re-read every tax panel from the server">{refreshing ? 'Refreshing\u2026' : 'Refresh'}</button>
           {can(user, 'finance.tax_transactions.create') && <button className="btn btn-primary" onClick={() => setTxnOpen(true)}>Record tax</button>}
         </div>
       </header>
 
+      <div className="preset-row" role="group" aria-label="Tax period">
+        {periodPresets.map((preset) => (
+          <button
+            key={preset.key}
+            type="button"
+            className={'preset-chip' + (activePreset === preset.key ? ' is-on' : '')}
+            aria-pressed={activePreset === preset.key}
+            onClick={() => { setFrom(preset.from); setTo(preset.to); }}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+
       {error && <ErrorBanner error={error} />}
       {loadNote}
 
       {loading ? (
-        <div className="card card-pad" style={{ marginBottom: 16 }}><Skeleton rows={3} /></div>
+        <div className="card fin-panel"><Skeleton rows={3} /></div>
       ) : (
-        <>
-          <div className="kpi-grid">
-            <div className={`kpi-card${summary.length > 0 ? '' : ' card-warn'}`}>
-              <span className="kpi-label">Net tax payable</span>
-              <span className={`kpi-value${summary.length > 0 ? '' : ' kpi-warn'}`}>{fmtMoney(summaryTotal.tax)}</span>
-              <span className="kpi-sub">{summary.length > 0 ? `output VAT minus input VAT, plus other taxes \u00B7 ${fmtNum(summaryTotal.count)} txns` : 'No posted tax lines in this period'}</span>
-            </div>
-            {summary.map((s) => (
-              <div key={String(s.taxCode)} className="kpi-card">
-                <span className="kpi-label">{String(s.taxName ?? '') || String(s.taxCode)}{String(s.taxCode) ? ` (${String(s.taxCode)})` : ''}</span>
-                <span className="kpi-value">{fmtMoney(s.taxAmount)}</span>
-                <span className="kpi-sub">Base {fmtMoney(s.baseAmount)} {'\u00B7'} {fmtNum(s.txnCount)} txns</span>
-              </div>
-            ))}
-          </div>
-          <div className="kpi-grid" style={{ marginTop: 16 }}>
-            <div className={`kpi-card${jurisdictions.length > 0 ? '' : ' card-warn'}`}>
-              <span className="kpi-label">Jurisdictions</span>
-              <span className={`kpi-value${jurisdictions.length > 0 ? '' : ' kpi-warn'}`}>{fmtNum(jurisdictions.length)}</span>
-              <span className="kpi-sub">{jurisdictions.map((j) => String(j.code ?? '')).filter(Boolean).join(', ') || 'None configured'}</span>
-            </div>
-            <div className={`kpi-card${rules.length > 0 ? '' : ' card-warn'}`}>
-              <span className="kpi-label">Tax rules</span>
-              <span className={`kpi-value${rules.length > 0 ? '' : ' kpi-warn'}`}>{fmtNum(rules.length)}</span>
-              <span className="kpi-sub">Applies-to: {rules.map((r) => String(r.appliesTo ?? '')).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', ') || 'None configured'}</span>
-            </div>
-          </div>
-        </>
+        <div className="fin-kpi-grid">
+          <FinKpi
+            label="Output VAT" value={fmtMoney(outputVat)} emphasis
+            sub={bucketCount('OUTPUT') > 0 ? `${fmtNum(bucketCount('OUTPUT'))} output lines` : 'No output VAT in this period'}
+            onClick={() => focusSide('OUTPUT')}
+          />
+          <FinKpi
+            label="Input VAT" value={fmtMoney(inputVat)}
+            sub={bucketCount('INPUT') > 0 ? 'Recoverable \u00B7 reduces the payable' : 'No input VAT in this period'}
+            onClick={() => focusSide('INPUT')}
+          />
+          <FinKpi
+            label="Other taxes" value={fmtMoney(otherTax)}
+            sub={bucketCount('OTHER') > 0 ? 'Withholding, excise and other posted tax' : 'No withholding or excise in this period'}
+            onClick={() => focusSide('OTHER')}
+          />
+          <FinKpi
+            label="Net tax payable" value={fmtMoney(summaryTotal.tax)} emphasis
+            sub={summary.length > 0 ? `Output ${fmtMoney(outputVat)} \u2212 input ${fmtMoney(inputVat)} + other ${fmtMoney(otherTax)}` : 'No posted tax in this period'}
+            onClick={() => { setDirectionFilter(''); scrollToId('tax-filings'); }}
+          />
+        </div>
       )}
 
-      {filterCard}
+      <div className="fin-grid">
+        <section className="card fin-panel" aria-label="Position by tax">
+          <header className="fin-panel-head">
+            <h2>Position by tax</h2>
+            <span className="fin-chip">{fmtNum(summaryTotal.count)} lines</span>
+          </header>
+          {failedPanel('compliance summary') && summary.length === 0 ? (
+            <p className="fin-panel-hint muted">The position did not load: {failedPanel('compliance summary')}</p>
+          ) : summary.length === 0 ? (
+            <p className="fin-panel-hint muted">Posted sales, credit notes, supplier bills and withholding lines for this period will collect here.</p>
+          ) : (
+            <ul className="fin-suggest">
+              {summary.map((s) => (
+                <li key={String(s.taxCode)}>
+                  <div className="fin-suggest-main">
+                    <strong>{String(s.taxName ?? '') || String(s.taxCode)}</strong>
+                    <em>{String(s.taxCode)} {'\u00B7'} base {fmtMoney(s.baseAmount)} {'\u00B7'} {fmtNum(s.txnCount)} lines</em>
+                  </div>
+                  <span className={`fin-chip${taxSide(s.direction) === 'OUTPUT' ? ' green' : taxSide(s.direction) === 'INPUT' ? ' amber' : ''}`}>{sideLabel(s.direction)}</span>
+                  <span className="fin-suggest-amt">{fmtMoney(s.taxAmount)}</span>
+                </li>
+              ))}
+              <li>
+                <div className="fin-suggest-main">
+                  <strong>Net payable</strong>
+                  <em>Output VAT minus input VAT, plus other taxes</em>
+                </div>
+                <span className="fin-suggest-amt">{fmtMoney(summaryTotal.tax)}</span>
+              </li>
+            </ul>
+          )}
+        </section>
+        <section className="card fin-panel" aria-label="Tax setup">
+          <header className="fin-panel-head">
+            <h2>Setup</h2>
+            {(jurisdictions.length === 0 || rules.length === 0) && !loading && <span className="fin-chip amber">Needs attention</span>}
+          </header>
+          <div className="fin-stat-row">
+            <span><em>Jurisdictions</em><strong>{fmtNum(jurisdictions.length)}</strong></span>
+            <span><em>Tax rules</em><strong>{fmtNum(rules.length)}</strong></span>
+            <span><em>Tax codes</em><strong>{fmtNum(taxes.length)}</strong></span>
+          </div>
+          <p className="fin-panel-hint muted">
+            {jurisdictions.map((j) => String(j.code ?? '')).filter(Boolean).join(', ') || 'No jurisdiction is configured.'}
+            {rules.length > 0 ? ` Rules apply to ${rules.map((r) => String(r.appliesTo ?? '')).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', ') || 'the posted documents'}.` : ' No tax rule is configured.'}
+          </p>
+          {(failedPanel('jurisdictions') || failedPanel('tax rules') || failedPanel('tax catalog')) && (
+            <p className="fin-panel-hint muted">
+              {[failedPanel('jurisdictions') && `Jurisdictions: ${failedPanel('jurisdictions')}`, failedPanel('tax rules') && `Rules: ${failedPanel('tax rules')}`, failedPanel('tax catalog') && `Catalog: ${failedPanel('tax catalog')}`].filter(Boolean).join(' \u00B7 ')}
+            </p>
+          )}
+        </section>
+      </div>
 
-      <section className={`card card-pad${refreshing && !loading ? ' is-refreshing' : ''}`} aria-busy={refreshing && !loading}>
-        <div className="card-head">
-          <h3>Tax transactions ({filtered.length.toLocaleString()})</h3>
+      <section id="tax-activity" className={`card fin-panel${refreshing && !loading ? ' is-refreshing' : ''}`} aria-busy={refreshing && !loading}>
+        <header className="fin-panel-head">
+          <h2>Activity ({filtered.length.toLocaleString()})</h2>
           {!loading && (
             <span className="muted" style={{ fontSize: 12 }} role="status" aria-live="polite">
               {filtered.length === rows.length ? `${rows.length.toLocaleString()} in period` : `${filtered.length.toLocaleString()} of ${rows.length.toLocaleString()} in period`}
-              {sortBy ? ` \u00B7 sorted by ${TAX_SORT_LABELS[sortBy] ?? sortBy} (${sortDir === 'asc' ? 'ascending' : 'descending'})` : ''}
+              {sortBy ? ` \u00B7 sorted by ${TAX_SORT_LABELS[sortBy] ?? sortBy}` : ''}
             </span>
           )}
+        </header>
+        <div className="toolbar">
+          <input className="search-input" type="search" value={search} aria-label="Search tax transactions"
+            placeholder="Search tax, jurisdiction, document..."
+            onChange={(e) => setSearch(e.target.value)} />
+          <div className="preset-row" role="group" aria-label="Filter by side">
+            {(['OUTPUT', 'INPUT', 'OTHER'] as const).map((side) => (
+              <button
+                key={side}
+                type="button"
+                className={'preset-chip' + (directionFilter === side ? ' is-on' : '')}
+                aria-pressed={directionFilter === side}
+                onClick={() => setDirectionFilter((current) => (current === side ? '' : side))}
+              >
+                {sideLabel(side)}
+              </button>
+            ))}
+          </div>
+          {statusOptions.length > 0 && <StatusSelect value={statusFilter} onChange={setStatusFilter} options={statusOptions} />}
+          {jurisdictionOptions.length > 0 && (
+            <StatusSelect value={jurisdictionFilter} onChange={setJurisdictionFilter} options={jurisdictionOptions}
+              label="Filter by jurisdiction" placeholder="All jurisdictions" />
+          )}
+          {hasFilters && <button className="btn btn-sm btn-ghost" onClick={clearFilters}>Clear filters</button>}
         </div>
+        {chips}
         {loading ? <Skeleton rows={6} /> : failedPanel('tax transactions') && rows.length === 0 ? (
           <EmptyState title="Tax transactions could not load"
             body={`The server did not return this panel: ${failedPanel('tax transactions')}. Retry to ask again.`}
@@ -7897,7 +8043,10 @@ function TaxCompliance() {
                 <div key={`card-${String(r.id)}`} className="record-card">
                   <div className="record-card-top">
                     <strong>{String(r.taxCode ?? '') || '\u2014'}</strong>
-                    <Badge value={r.status} />
+                    <span className="fin-inbox-flags">
+                      <span className={`fin-chip${taxSide(r.direction) === 'OUTPUT' ? ' green' : taxSide(r.direction) === 'INPUT' ? ' amber' : ''}`}>{sideLabel(r.direction)}</span>
+                      <Badge value={r.status} />
+                    </span>
                   </div>
                   <div className="record-card-meta">
                     <span>{String(r.txnDate ?? '').slice(0, 10) || '\u2014'}</span>
@@ -7919,6 +8068,7 @@ function TaxCompliance() {
                   <tr>
                     <th aria-sort={ariaSort('txnDate')}><button className="th-btn" title="Sort by date" onClick={() => setSort('txnDate')}>Date{sortMark('txnDate')}</button></th>
                     <th aria-sort={ariaSort('tax')}><button className="th-btn" title="Sort by tax" onClick={() => setSort('tax')}>Tax{sortMark('tax')}</button></th>
+                    <th aria-sort={ariaSort('direction')}><button className="th-btn" title="Sort by side" onClick={() => setSort('direction')}>Side{sortMark('direction')}</button></th>
                     <th aria-sort={ariaSort('jurisdiction')}><button className="th-btn" title="Sort by jurisdiction" onClick={() => setSort('jurisdiction')}>Jurisdiction{sortMark('jurisdiction')}</button></th>
                     <th aria-sort={ariaSort('doc')}><button className="th-btn" title="Sort by document" onClick={() => setSort('doc')}>Doc{sortMark('doc')}</button></th>
                     <th className="cell-num" aria-sort={ariaSort('baseAmount')}><button className="th-btn" title="Sort by base amount" onClick={() => setSort('baseAmount')}>Base{sortMark('baseAmount')}</button></th>
@@ -7932,6 +8082,7 @@ function TaxCompliance() {
                     <tr key={String(r.id)}>
                       <td>{String(r.txnDate ?? '').slice(0, 10) || '\u2014'}</td>
                       <td>{String(r.taxCode ?? '') || '\u2014'}{String(r.taxName ?? '') ? ` \u2014 ${String(r.taxName)}` : ''}</td>
+                      <td><span className={`fin-chip${taxSide(r.direction) === 'OUTPUT' ? ' green' : taxSide(r.direction) === 'INPUT' ? ' amber' : ''}`}>{sideLabel(r.direction)}</span></td>
                       <td>{String(r.jurisdictionCode ?? '') || '\u2014'}</td>
                       <td className="cell-mono">{String(r.docRefCode ?? r.docType ?? '') || '\u2014'}</td>
                       <td className="cell-num">{fmtMoney(r.baseAmount)}</td>
@@ -7943,10 +8094,10 @@ function TaxCompliance() {
                 </tbody>
                 <tfoot>
                   <tr>
-                    <th scope="row" colSpan={4}>Totals {'\u2014'} {totals.count.toLocaleString()} {totals.count === 1 ? 'line' : 'lines'}{hasFilters ? ' (filtered)' : ''}</th>
+                    <th scope="row" colSpan={5}>Net {'\u2014'} {totals.count.toLocaleString()} {totals.count === 1 ? 'line' : 'lines'}{hasFilters ? ' (filtered)' : ''}</th>
                     <td className="cell-num">{fmtMoney(totals.base)}</td>
                     <td className="cell-num">{'\u2014'}</td>
-                    <td className="cell-num">{fmtMoney(totals.tax)}</td>
+                    <td className="cell-num" title="Output minus input, plus other taxes">{fmtMoney(signedNet)}</td>
                     <td />
                   </tr>
                 </tfoot>
@@ -7956,7 +8107,7 @@ function TaxCompliance() {
         )}
       </section>
 
-      <VatFilingDesk />
+      <VatFilingDesk periodStart={from} periodEnd={to} />
 
       {txnOpen && <TaxTxnModal taxes={taxes} busy={busy} onClose={() => setTxnOpen(false)} onSave={save} />}
     </div>
@@ -7969,7 +8120,7 @@ function TaxCompliance() {
  * file/close/cancel are operator-confirmed manual steps because URA exposes no
  * authorised filing API.
  */
-function VatFilingDesk() {
+function VatFilingDesk({ periodStart, periodEnd }: { periodStart: string; periodEnd: string }) {
   const { user } = useAuth();
   const [filings, setFilings] = useState<Rec[]>([]);
   const [reports, setReports] = useState<Rec[]>([]);
@@ -8006,40 +8157,44 @@ function VatFilingDesk() {
   const filingActions = (f: Rec): ReactNode => {
     if (!canManage) return null;
     const status = String(f.status ?? '');
-    const btn = (label: string, action: 'submit' | 'file' | 'close' | 'cancel') => (
-      <button key={action} className="btn btn-sm btn-ghost" disabled={busy}
+    const btn = (label: string, action: 'submit' | 'file' | 'close' | 'cancel', primary = false) => (
+      <button key={action} className={`btn btn-sm ${primary ? 'btn-primary' : 'btn-ghost'}`} disabled={busy}
         onClick={() => void transition(Number(f.id), action)}>{label}</button>
     );
-    if (status === 'PREPARED') return <>{btn('Submit', 'submit')} {btn('Cancel', 'cancel')}</>;
-    if (status === 'SUBMITTED') return <>{btn('File', 'file')} {btn('Cancel', 'cancel')}</>;
-    if (status === 'FILED') return <>{btn('Close', 'close')}</>;
+    if (status === 'PREPARED') return <>{btn('Submit', 'submit', true)} {btn('Cancel', 'cancel')}</>;
+    if (status === 'SUBMITTED') return <>{btn('Mark filed', 'file', true)} {btn('Cancel', 'cancel')}</>;
+    if (status === 'FILED') return <>{btn('Close', 'close', true)}</>;
     return null;
   };
 
+  const openFilings = filings.filter((f) => !['CLOSED', 'CANCELLED'].includes(String(f.status ?? ''))).length;
+
   return (
     <>
-      {error && <ErrorBanner error={error} />}
-
-      <section className="card card-pad" style={{ marginTop: 16 }}>
-        <div className="card-head">
-          <h3>VAT returns ({filings.length.toLocaleString()})</h3>
-          {canManage && <button className="btn btn-sm btn-primary" onClick={() => setPrepareOpen(true)}>Prepare VAT return</button>}
-        </div>
-        <p className="muted" style={{ marginTop: 0 }}>
-          VAT returns use posted sales, credit notes, debit notes and supplier invoices. A withholding return uses posted WHT transactions. Submit and file record an operator's confirmation on the URA portal — URA exposes no filing API, so these are controlled manual steps.
+      <section id="tax-filings" className="card fin-panel">
+        <header className="fin-panel-head">
+          <h2>Returns ({filings.length.toLocaleString()})</h2>
+          <span className="fin-inbox-flags">
+            {openFilings > 0 && <span className="fin-chip amber">{fmtNum(openFilings)} open</span>}
+            {canManage && <button className="btn btn-sm btn-primary" onClick={() => setPrepareOpen(true)}>Prepare return</button>}
+          </span>
+        </header>
+        <p className="fin-panel-hint muted">
+          A return is prepared from posted sales, credit notes, debit notes and supplier bills. Withholding uses posted WHT. File it on the URA portal, then record that step here. URA exposes no filing API.
         </p>
+        {error && <div className="fin-banner" role="alert"><strong>{error}</strong></div>}
         {loading ? <Skeleton rows={4} /> : filings.length === 0 ? (
-          <EmptyState title="No VAT returns yet"
-            body="Prepare a return for a month and the output/input VAT from posted transactions is computed here."
-            action={canManage ? 'Prepare VAT return' : undefined} onAction={() => setPrepareOpen(true)} />
+          <EmptyState title="No returns yet"
+            body="Prepare a month and the output VAT, input VAT and net payable are computed from the posted books."
+            action={canManage ? 'Prepare return' : undefined} onAction={() => setPrepareOpen(true)} />
         ) : (
           <div className="table-wrap">
             <table className="data">
               <thead>
                 <tr>
-                  <th>Period</th><th>Type</th><th>Status</th>
+                  <th>Period</th><th>Type</th><th>Progress</th>
                   <th className="cell-num">Output / WHT</th><th className="cell-num">Input VAT</th>
-                  <th className="cell-num">Net payable</th><th>URA ref</th><th>Actions</th>
+                  <th className="cell-num">Net payable</th><th>URA ref</th><th>Next step</th>
                 </tr>
               </thead>
               <tbody>
@@ -8047,12 +8202,12 @@ function VatFilingDesk() {
                   <tr key={String(f.id)}>
                     <td>{String(f.period ?? '')}</td>
                     <td>{String(f.filingType ?? '').replace(/_/g, ' ')}</td>
-                    <td><Badge value={f.status} /></td>
+                    <td><FilingTrail status={String(f.status ?? '')} /></td>
                     <td className="cell-num">{fmtMoney(f.outputVat)}</td>
                     <td className="cell-num">{fmtMoney(f.inputVat)}</td>
                     <td className="cell-num">{fmtMoney(f.netVatPayable)}</td>
-                    <td className="cell-mono">{String(f.uraReference ?? '—')}</td>
-                    <td>{filingActions(f)}</td>
+                    <td className="cell-mono">{String(f.uraReference ?? '\u2014')}</td>
+                    <td><div className="row-actions">{filingActions(f)}</div></td>
                   </tr>
                 ))}
               </tbody>
@@ -8061,13 +8216,13 @@ function VatFilingDesk() {
         )}
       </section>
 
-      <section className="card card-pad" style={{ marginTop: 16 }}>
-        <div className="card-head">
-          <h3>Report history ({reports.length.toLocaleString()})</h3>
+      <section className="card fin-panel">
+        <header className="fin-panel-head">
+          <h2>Report history ({reports.length.toLocaleString()})</h2>
           {canManage && <button className="btn btn-sm btn-primary" onClick={() => setReportOpen(true)}>Record report</button>}
-        </div>
-        <p className="muted" style={{ marginTop: 0 }}>
-          Controlled manual trail for portal-only URA reports (Z-report, VAT return, registers). The ERP records that a report was requested or received — it never claims to hold an official report it does not.
+        </header>
+        <p className="fin-panel-hint muted">
+          A manual trail for portal-only URA reports. The desk records that a report was requested or received. It does not claim to hold an official report it does not have.
         </p>
         {loading ? <Skeleton rows={4} /> : reports.length === 0 ? (
           <EmptyState title="No report history"
@@ -8097,14 +8252,14 @@ function VatFilingDesk() {
       </section>
 
       {prepareOpen && (
-        <PrepareFilingModal busy={busy} onClose={() => setPrepareOpen(false)} onSave={async (p) => {
+        <PrepareFilingModal busy={busy} initialStart={periodStart} initialEnd={periodEnd} onClose={() => setPrepareOpen(false)} onSave={async (p) => {
           setBusy(true); setError('');
           try { await api('/api/ops/finance/tax/filings/prepare', { method: 'POST', body: JSON.stringify(p) }); setPrepareOpen(false); load(); }
           catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
         }} />
       )}
       {reportOpen && (
-        <RecordReportModal busy={busy} onClose={() => setReportOpen(false)} onSave={async (p) => {
+        <RecordReportModal busy={busy} initialPeriod={/^\d{4}-\d{2}/.test(periodStart) ? periodStart.slice(0, 7) : ''} onClose={() => setReportOpen(false)} onSave={async (p) => {
           setBusy(true); setError('');
           try { await api('/api/ops/finance/reports/history', { method: 'POST', body: JSON.stringify(p) }); setReportOpen(false); load(); }
           catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
@@ -8114,16 +8269,19 @@ function VatFilingDesk() {
   );
 }
 
-function PrepareFilingModal({ busy, onClose, onSave }: { busy: boolean; onClose: () => void; onSave: (p: Rec) => void }) {
+function PrepareFilingModal({ busy, onClose, onSave, initialStart, initialEnd }: {
+  busy: boolean; onClose: () => void; onSave: (p: Rec) => void; initialStart: string; initialEnd: string;
+}) {
   const [filingType, setFilingType] = useState('VAT_RETURN');
-  const [periodStart, setPeriodStart] = useState('');
-  const [periodEnd, setPeriodEnd] = useState('');
+  const [periodStart, setPeriodStart] = useState(initialStart);
+  const [periodEnd, setPeriodEnd] = useState(initialEnd);
   const valid = /^\d{4}-\d{2}-\d{2}$/.test(periodStart) && /^\d{4}-\d{2}-\d{2}$/.test(periodEnd) && periodStart <= periodEnd;
   return (
-    <Modal title="Prepare VAT return" onClose={onClose} footer={<>
+    <Modal title="Prepare return" onClose={onClose} footer={<>
       <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
       <button className="btn btn-primary" disabled={busy || !valid} onClick={() => onSave({ filingType, periodStart, periodEnd })}>{busy ? 'Preparing…' : 'Prepare'}</button>
     </>}>
+      <p className="muted" style={{ marginTop: 0 }}>URA VAT returns are monthly. The dates start from the period open on this desk.</p>
       <div className="field"><label>Filing type</label>
         <select value={filingType} onChange={(e) => setFilingType(e.target.value)}>
           <option value="VAT_RETURN">VAT return</option>
@@ -8136,11 +8294,13 @@ function PrepareFilingModal({ busy, onClose, onSave }: { busy: boolean; onClose:
   );
 }
 
-function RecordReportModal({ busy, onClose, onSave }: { busy: boolean; onClose: () => void; onSave: (p: Rec) => void }) {
-  const [reportType, setReportType] = useState('');
-  const [source, setSource] = useState('ERP');
-  const [status, setStatus] = useState('REQUESTED');
-  const [period, setPeriod] = useState('');
+function RecordReportModal({ busy, onClose, onSave, initialPeriod }: {
+  busy: boolean; onClose: () => void; onSave: (p: Rec) => void; initialPeriod: string;
+}) {
+  const [reportType, setReportType] = useState('VAT_RETURN');
+  const [source, setSource] = useState('EFRIS_PORTAL');
+  const [status, setStatus] = useState('RECEIVED');
+  const [period, setPeriod] = useState(initialPeriod);
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
   return (
@@ -8148,7 +8308,15 @@ function RecordReportModal({ busy, onClose, onSave }: { busy: boolean; onClose: 
       <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
       <button className="btn btn-primary" disabled={busy || !reportType.trim()} onClick={() => onSave({ reportType, source, status, period: period || null, title: title || null, notes: notes || null })}>{busy ? 'Recording…' : 'Record'}</button>
     </>}>
-      <div className="field"><label>Report type</label><input value={reportType} placeholder="Z_REPORT" onChange={(e) => setReportType(e.target.value)} /></div>
+      <div className="field"><label>Report type</label>
+        <select value={reportType} onChange={(e) => setReportType(e.target.value)}>
+          <option value="VAT_RETURN">VAT return</option>
+          <option value="WHT_RETURN">Withholding tax return</option>
+          <option value="Z_REPORT">Z report</option>
+          <option value="SALES_REGISTER">Sales register</option>
+          <option value="PURCHASE_REGISTER">Purchase register</option>
+        </select>
+      </div>
       <div className="field"><label>Source</label>
         <select value={source} onChange={(e) => setSource(e.target.value)}>
           <option value="ERP">ERP</option><option value="EFRIS_PORTAL">EFRIS portal</option>
