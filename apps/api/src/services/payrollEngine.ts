@@ -259,6 +259,117 @@ export async function loadVariablePay(
   return result;
 }
 
+/** Ordinary-time overtime under the Employment Act: one and a half times. */
+export const ATTENDANCE_OVERTIME_MULTIPLIER = 1.5;
+/** Used when a locked attendance row has overtime but no scheduled length. */
+export const ATTENDANCE_FALLBACK_DAY_MINUTES = 480;
+
+export interface AttendanceOvertimeDay {
+  overtimeMinutes: number;
+  scheduledMinutes: number;
+}
+
+/**
+ * Prices biometric overtime minutes. Monthly staff take a day's pay as basic
+ * divided by 30, then an hour as that day divided by the scheduled hours.
+ * Hourly staff use employees.hourly_rate. Commission staff are paid only when
+ * an hourly rate is on the employee. Minutes are still returned when the
+ * rate is zero so the payslip can show time that was not priced.
+ */
+export function attendanceOvertimeAmount(input: {
+  salaryType: string;
+  monthlyBasic: number;
+  hourlyRate: number;
+  days: AttendanceOvertimeDay[];
+}): { minutes: number; amount: number } {
+  let minutes = 0;
+  let amount = 0;
+  const type = String(input.salaryType || 'MONTHLY').toUpperCase();
+  const hourlyRate = Math.max(0, Number(input.hourlyRate) || 0);
+  const monthlyBasic = Math.max(0, Number(input.monthlyBasic) || 0);
+  for (const day of input.days) {
+    const ot = Math.max(0, Number(day.overtimeMinutes) || 0);
+    if (ot <= 0) continue;
+    minutes += ot;
+    let hourly = 0;
+    if (type === 'HOURLY' || type === 'COMMISSION') {
+      hourly = hourlyRate;
+    } else {
+      const scheduled = Math.max(0, Number(day.scheduledMinutes) || 0) || ATTENDANCE_FALLBACK_DAY_MINUTES;
+      const dayHours = scheduled / 60;
+      hourly = dayHours > 0 ? (monthlyBasic / 30) / dayHours : 0;
+    }
+    amount += (ot / 60) * hourly * ATTENDANCE_OVERTIME_MULTIPLIER;
+  }
+  return { minutes, amount: round2(amount) };
+}
+
+/**
+ * Overtime minutes from locked, approved biometric attendance. Days that
+ * already have an approved overtime record are left out so payroll does not
+ * pay the same hours twice. An unset company setting follows the catalogue
+ * default, which is on.
+ */
+export async function loadAttendanceOvertimeDays(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  employeeIds: number[],
+  periodStart: string,
+  periodEnd: string
+): Promise<Map<number, AttendanceOvertimeDay[]>> {
+  const result = new Map<number, AttendanceOvertimeDay[]>();
+  if (employeeIds.length === 0) return result;
+  const setting = await client.query(
+    `SELECT value FROM app_settings
+      WHERE tenant_id = $1 AND category = 'organisation.attendance'
+        AND key = 'auto_overtime_from_attendance'
+        AND (company_id = $2 OR company_id IS NULL)
+      ORDER BY (company_id IS NOT NULL) DESC
+      LIMIT 1`,
+    [ctx.tenantId, ctx.companyId]
+  );
+  const stored = setting.rows[0]?.value;
+  const enabled = setting.rows.length === 0
+    ? true
+    : stored === true || stored === 'true' || stored === 1 || stored === '1';
+  if (!enabled) return result;
+  const res = await client.query(
+    `SELECT ar.employee_id,
+            ar.overtime_minutes,
+            ar.scheduled_minutes
+       FROM attendance_records ar
+       JOIN attendance_periods ap
+         ON ap.id = ar.period_id
+        AND ap.tenant_id = ar.tenant_id
+        AND ap.company_id = ar.company_id
+        AND ap.status = 'LOCKED'
+      WHERE ar.tenant_id = $1 AND ar.company_id = $2
+        AND ar.employee_id = ANY($3::bigint[])
+        AND ar.work_date BETWEEN $4::date AND $5::date
+        AND ar.approval_status IN ('APPROVED', 'ADJUSTED')
+        AND ar.overtime_minutes > 0
+        AND NOT EXISTS (
+          SELECT 1 FROM overtime_records o
+           WHERE o.tenant_id = ar.tenant_id
+             AND o.company_id = ar.company_id
+             AND o.employee_id = ar.employee_id
+             AND o.overtime_date = ar.work_date
+             AND o.status = 'APPROVED'
+        )`,
+    [ctx.tenantId, ctx.companyId, employeeIds, periodStart, periodEnd]
+  );
+  for (const row of res.rows) {
+    const employeeId = Number(row.employee_id);
+    const days = result.get(employeeId) ?? [];
+    days.push({
+      overtimeMinutes: Number(row.overtime_minutes) || 0,
+      scheduledMinutes: Number(row.scheduled_minutes) || 0,
+    });
+    result.set(employeeId, days);
+  }
+  return result;
+}
+
 /**
  * Loads approved, effective employee-specific earnings and deductions
  * (employee_earnings / employee_deductions). Percentages are resolved

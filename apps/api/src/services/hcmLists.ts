@@ -197,12 +197,42 @@ export async function listShiftAssignments(client: pg.PoolClient, ctx: Ctx) {
   );
 }
 
+export async function attendanceHours(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  employeeId: number,
+  periodStart: string,
+  periodEnd: string,
+) {
+  const { tenantId, companyId } = scoped(ctx);
+  if (!employeeId || !periodStart || !periodEnd) throw badRequest('Employee and period are required');
+  const res = await client.query(
+    `SELECT round(COALESCE(sum(worked_minutes), 0)::numeric / 60.0, 2) AS hours,
+            COALESCE(sum(overtime_minutes), 0)::int AS overtime_minutes
+       FROM attendance_records
+      WHERE tenant_id = $1 AND company_id = $2 AND employee_id = $3
+        AND work_date BETWEEN $4::date AND $5::date`,
+    [tenantId, companyId, employeeId, periodStart, periodEnd],
+  );
+  return {
+    hours: Number(res.rows[0]?.hours) || 0,
+    overtimeMinutes: Number(res.rows[0]?.overtime_minutes) || 0,
+  };
+}
+
 export async function listTimesheets(client: pg.PoolClient, ctx: Ctx, status?: string | null) {
   const { tenantId, companyId } = scoped(ctx);
   return rows(
     client,
     `SELECT t.id, t.period_start, t.period_end, t.total_hours, t.status, t.approved_at, t.notes,
-            e.id AS employee_id, e.employee_no, e.first_name, e.last_name
+            e.id AS employee_id, e.employee_no, e.first_name, e.last_name,
+            (
+              SELECT round(COALESCE(sum(ar.worked_minutes), 0)::numeric / 60.0, 2)
+                FROM attendance_records ar
+               WHERE ar.tenant_id = t.tenant_id AND ar.company_id = t.company_id
+                 AND ar.employee_id = t.employee_id
+                 AND ar.work_date BETWEEN t.period_start AND t.period_end
+            ) AS attendance_hours
      FROM timesheets t JOIN employees e ON e.id = t.employee_id
      WHERE t.tenant_id = $1 AND t.company_id = $2 AND ($3::text IS NULL OR t.status = $3)
      ORDER BY t.period_start DESC, t.id DESC LIMIT 200`,
@@ -217,10 +247,15 @@ export async function createTimesheet(
 ) {
   const { tenantId, companyId } = scoped(ctx);
   if (!input.employeeId || !input.periodStart || !input.periodEnd) throw badRequest('Employee and period are required');
+  let totalHours = input.totalHours;
+  if (totalHours == null || !Number.isFinite(Number(totalHours))) {
+    const summed = await attendanceHours(client, ctx, Number(input.employeeId), input.periodStart, input.periodEnd);
+    totalHours = summed.hours;
+  }
   const ins = await client.query(
     `INSERT INTO timesheets (company_id, tenant_id, employee_id, period_start, period_end, total_hours, notes, status)
      VALUES ($1,$2,$3,$4,$5,$6,$7,'DRAFT') RETURNING id`,
-    [companyId, tenantId, Number(input.employeeId), input.periodStart, input.periodEnd, Number(input.totalHours ?? 0), input.notes ?? null]
+    [companyId, tenantId, Number(input.employeeId), input.periodStart, input.periodEnd, Number(totalHours), input.notes ?? null]
   );
   return { timesheetId: Number(ins.rows[0].id), status: 'DRAFT' };
 }

@@ -6,6 +6,7 @@ import {
   prorateBasic,
   resolveComponentAmount,
   emptyVariablePay,
+  attendanceOvertimeAmount,
 } from '../src/services/payrollEngine.js';
 
 describe('payroll engine: date helpers', () => {
@@ -78,6 +79,45 @@ describe('payroll engine: employment proration', () => {
     expect(pr.workDays).toBe(0);
     expect(pr.payableDays).toBe(0);
     expect(pr.factor).toBe(0);
+  });
+});
+
+describe('payroll engine: biometric overtime', () => {
+  it('prices monthly overtime at one and a half times the ordinary hourly rate', () => {
+    const oneHour = attendanceOvertimeAmount({
+      salaryType: 'MONTHLY',
+      monthlyBasic: 3000000,
+      hourlyRate: 0,
+      days: [{ overtimeMinutes: 60, scheduledMinutes: 480 }],
+    });
+    expect(oneHour).toEqual({ minutes: 60, amount: 18750 });
+    const twoDays = attendanceOvertimeAmount({
+      salaryType: 'MONTHLY',
+      monthlyBasic: 3000000,
+      hourlyRate: 0,
+      days: [
+        { overtimeMinutes: 60, scheduledMinutes: 480 },
+        { overtimeMinutes: 30, scheduledMinutes: 0 },
+      ],
+    });
+    expect(twoDays).toEqual({ minutes: 90, amount: 28125 });
+  });
+
+  it('uses the employee hourly rate for hourly staff and skips commission staff with no rate', () => {
+    const hourly = attendanceOvertimeAmount({
+      salaryType: 'HOURLY',
+      monthlyBasic: 0,
+      hourlyRate: 10000,
+      days: [{ overtimeMinutes: 120, scheduledMinutes: 0 }],
+    });
+    expect(hourly).toEqual({ minutes: 120, amount: 30000 });
+    const commission = attendanceOvertimeAmount({
+      salaryType: 'COMMISSION',
+      monthlyBasic: 5000000,
+      hourlyRate: 0,
+      days: [{ overtimeMinutes: 90, scheduledMinutes: 480 }],
+    });
+    expect(commission).toEqual({ minutes: 90, amount: 0 });
   });
 });
 

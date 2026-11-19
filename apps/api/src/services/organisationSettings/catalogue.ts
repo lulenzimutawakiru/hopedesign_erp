@@ -333,7 +333,11 @@ export const ORG_CATEGORIES: OrgCategory[] = [
       late_grace_minutes: num('Late Grace (minutes)', { group: 'Rules', default: 10, min: 0, max: 240 }),
       early_departure_grace_minutes: num('Early Departure Grace (minutes)', { group: 'Rules', default: 10, min: 0, max: 240 }),
       absent_after_minutes: num('Absent After (minutes)', { group: 'Rules', default: 240, min: 0, max: 1440 }),
-      auto_overtime_from_attendance: bool('Derive Overtime From Attendance', { group: 'Rules', default: false }),
+      auto_overtime_from_attendance: bool('Derive Overtime From Attendance', {
+        group: 'Rules',
+        default: true,
+        help: 'When on, overtime minutes on a locked, approved biometric attendance record are paid at 1.5 times the ordinary hourly rate. A day that already has an approved overtime record is not counted twice. Monthly staff use basic pay divided by 30, then by that day’s scheduled hours.',
+      }),
       correction_requires_approval: bool('Corrections Require Approval', { group: 'Corrections', default: true }),
       correction_window_days: num('Correction Window (days)', { group: 'Corrections', default: 14, min: 1, max: 365 }),
       raw_events_immutable: bool('Raw Device Events Are Immutable', {
