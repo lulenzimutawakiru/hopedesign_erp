@@ -1,0 +1,118 @@
+/* Natex Cloud visual layer
+   Additive presentation-only overrides. Keep business state, permissions,
+   routes and component behaviour in their existing source modules.
+*/
+:root {
+  --natex-navy: #0b1f3a;
+  --natex-blue: #2563eb;
+  --natex-blue-hover: #1d4ed8;
+  --natex-cyan: #06b6d4;
+  --natex-surface: #ffffff;
+  --natex-canvas: #f4f7fb;
+  --natex-focus: #0e7490;
+}
+
+body {
+  background: var(--natex-canvas);
+  color: #14263d;
+  letter-spacing: -0.012em;
+}
+
+.sidebar {
+  background: linear-gradient(180deg, #0b1f3a 0%, #102b4b 100%);
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.sidebar-brand {
+  min-height: 76px;
+  padding-inline: 20px;
+}
+
+.sidebar-brand strong {
+  letter-spacing: -0.025em;
+}
+
+.nav-item {
+  min-height: 40px;
+  border-radius: 8px;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.nav-item:hover {
+  background: rgba(148, 190, 255, 0.12);
+}
+
+.nav-active {
+  background: var(--natex-blue);
+  box-shadow: inset 3px 0 0 var(--natex-cyan);
+}
+
+.topbar {
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom-color: #e3eaf3;
+  backdrop-filter: blur(12px);
+}
+
+.content {
+  background: var(--natex-canvas);
+}
+
+.page {
+  max-width: 1440px;
+}
+
+.page-head {
+  margin-bottom: 22px;
+}
+
+.page-head h1 {
+  color: var(--natex-navy);
+  font-family: var(--font);
+  font-size: clamp(24px, 2vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+}
+
+.card {
+  border-color: #e3eaf3;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(11, 31, 58, 0.035), 0 8px 24px rgba(11, 31, 58, 0.035);
+}
+
+.btn-primary,
+.btn.btn-primary {
+  background: var(--natex-blue);
+  border-color: var(--natex-blue);
+}
+
+.btn-primary:hover,
+.btn.btn-primary:hover {
+  background: var(--natex-blue-hover);
+  border-color: var(--natex-blue-hover);
+}
+
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--natex-cyan) 65%, white);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .content {
+    padding-inline: 14px;
+  }
+
+  .page-head {
+    align-items: flex-start;
+  }
+}
