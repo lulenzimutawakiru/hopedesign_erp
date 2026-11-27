@@ -680,6 +680,14 @@ export async function queryCreditNoteApplication(
   );
 }
 
+/** Cancel a submitted credit-note application (interface code T114). */
+export async function cancelCreditNoteApplication(
+  opts: SubmitFiscalOptions,
+  content: Record<string, unknown>
+): Promise<unknown> {
+  return postUraContent(opts, 'T114', content, queryEndpoint(opts));
+}
+
 /** Fetch the approved credit-note document by its invoiceNo (interface code T108). */
 export async function fetchCreditNoteDocument(
   opts: SubmitFiscalOptions,

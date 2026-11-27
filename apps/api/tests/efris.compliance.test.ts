@@ -8,6 +8,7 @@ import {
   buildGlobalInfo,
   buildT109Content,
   buildT110Content,
+  buildT114Content,
   buyerTypeCode,
   EfrisProtocolError,
   taxCategory,
@@ -170,6 +171,19 @@ describe('buyerTypeCode (B2B / B2C / B2G)', () => {
     });
   });
 
+  it('requires a TIN for a classified business or government buyer', () => {
+    for (const buyerKind of ['business', 'b2b', 'government', 'gov', 'b2g']) {
+      expect(assessBuyerTin({ legalName: 'Classified', tin: null, buyerKind }, '1047578560')).toMatchObject({
+        action: 'reject',
+        code: 'EFRIS_BUYER_TIN_REQUIRED',
+      });
+    }
+    const consumer = assessBuyerTin({ legalName: 'Walk in', tin: null, buyerKind: 'b2c' }, '1047578560');
+    expect(consumer.action).toBe('use');
+    const unclassified = assessBuyerTin({ legalName: 'Unclassified', tin: null }, '1047578560');
+    expect(unclassified.action).toBe('use');
+  });
+
   it('stamps the URA registered name onto a buyer TIN invoice', () => {
     const buyer = applyRegisteredBuyer(
       { legalName: 'Acme Trading', businessName: 'Acme Trading', tin: '1000000002' },
@@ -192,6 +206,37 @@ describe('buyerTypeCode (B2B / B2C / B2G)', () => {
     expect(details.buyerTin).toBe('1000000002');
     expect(details.buyerLegalName).toBe('ACME UGANDA LIMITED');
     expect(details.buyerType).toBe('0');
+  });
+});
+
+describe('buildT114Content (credit-note cancel)', () => {
+  it('sends the application reference and the caller reason', () => {
+    const body = buildT114Content({
+      referenceNo: 'APP-100',
+      invoiceNo: 'FDN-CN',
+      oriInvoiceNo: 'FDN-INV',
+      reasonCode: '102',
+      reason: 'Customer withdrew the return',
+    });
+    expect(body).toEqual({
+      referenceNo: 'APP-100',
+      invoiceNo: 'FDN-CN',
+      oriInvoiceNo: 'FDN-INV',
+      reasonCode: '102',
+      reason: 'Customer withdrew the return',
+    });
+    expect(Object.keys(body).sort()).toEqual(['invoiceNo', 'oriInvoiceNo', 'reason', 'reasonCode', 'referenceNo']);
+  });
+
+  it('refuses a cancel with no application reference and maps an unknown reason to 105', () => {
+    expect(() => buildT114Content({ referenceNo: '  ' })).toThrow(EfrisProtocolError);
+    try {
+      buildT114Content({ referenceNo: '' });
+    } catch (err) {
+      expect(err).toBeInstanceOf(EfrisProtocolError);
+      expect((err as EfrisProtocolError).code).toBe('EFRIS_CREDIT_NOTE_REF_REQUIRED');
+    }
+    expect(buildT114Content({ referenceNo: 'APP-1', reasonCode: 'NOT-A-CODE', reason: 'Because' }).reasonCode).toBe('105');
   });
 });
 

@@ -962,13 +962,21 @@ interface DraftLine {
   discountPercent: number;
   taxPercent: number;
   taxCategory: string;
+  uraVatRate: number | null;
 }
 
 function emptyLine(): DraftLine {
-  return { key: `${Date.now()}-${Math.random()}`, productId: '', productLabel: '', quantity: 1, unitId: '', unitLabel: '', unitPrice: 0, discountPercent: 0, taxPercent: 18, taxCategory: 'STANDARD' };
+  return { key: `${Date.now()}-${Math.random()}`, productId: '', productLabel: '', quantity: 1, unitId: '', unitLabel: '', unitPrice: 0, discountPercent: 0, taxPercent: 18, taxCategory: 'STANDARD', uraVatRate: null };
 }
 
 type TaxOption = { code: string; name: string; rate: number };
+
+function categoryForUraRate(rate: number, options: TaxOption[]): string | null {
+  if (rate === 0) {
+    return (options.find((o) => o.code === 'ZERO') ?? options.find((o) => o.rate === 0))?.code ?? null;
+  }
+  return options.find((o) => Math.abs(o.rate - rate) < 0.001)?.code ?? null;
+}
 
 function Composer({ resource }: { resource: string }) {
   const isQuote = resource === 'quotations';
@@ -1006,7 +1014,7 @@ function Composer({ resource }: { resource: string }) {
   useEffect(() => {
     // Reconcile the hard-coded fallback (STANDARD/18) on freshly-added lines with
     // the configured standard rate once it has loaded.
-    setLines((prev) => prev.map((l) => (l.taxCategory === 'STANDARD' && l.taxPercent === 18 ? { ...l, taxPercent: defaultTax.rate } : l)));
+    setLines((prev) => prev.map((l) => (l.uraVatRate == null && l.taxCategory === 'STANDARD' && l.taxPercent === 18 ? { ...l, taxPercent: defaultTax.rate } : l)));
   }, [defaultTax]);
   useEffect(() => {
     const cid = Number(q.get('customer'));
@@ -1081,6 +1089,20 @@ function Composer({ resource }: { resource: string }) {
       }));
     if (!items.length) { setError('Add at least one product line'); return; }
     const buyerTinDigits = buyerTin.replace(/\D/g, '');
+    if (isInvoice && !buyerType) {
+      setError('Select a buyer type: B2B, B2C, or B2G');
+      return;
+    }
+    if (buyerType === 'B2B' || buyerType === 'B2G') {
+      if (!/^\d{10}$/.test(buyerTinDigits)) {
+        setError('B2B and B2G documents need a 10-digit buyer TIN');
+        return;
+      }
+      if (tinLookup && tinLookup.found === false) {
+        setError('URA has no taxpayer registered under this TIN. Search again or use a registered TIN.');
+        return;
+      }
+    }
     setBusy(true);
     try {
       if (isQuote) {
@@ -1182,7 +1204,7 @@ function Composer({ resource }: { resource: string }) {
               setDueDate(addDays(invoiceDate || todayIso(), Math.trunc(days)));
             }}
           />
-          <div className="field">
+          <div className={`field${isInvoice ? ' field-required' : ''}`}>
             <label>Buyer type</label>
             <select value={buyerType} onChange={(e) => setBuyerType(e.target.value)}>
               <option value="">— Select —</option>
@@ -1192,8 +1214,8 @@ function Composer({ resource }: { resource: string }) {
             </select>
           </div>
           {(buyerType === 'B2B' || buyerType === 'B2G') && (
-            <div className="field">
-              <label>Buyer TIN <span className="muted">(defaults to the customer's TIN)</span></label>
+            <div className="field field-required">
+              <label>Buyer TIN</label>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input inputMode="numeric" value={buyerTin} onChange={(e) => { setBuyerTin(e.target.value); setTinLookup(null); }} placeholder="10-digit URA TIN" style={{ flex: 1 }} />
                 <button type="button" className="btn btn-sm" disabled={lookingUp || !/^\d{10}$/.test(buyerTin.replace(/\D/g, ''))} onClick={runTinLookup}>
@@ -1277,13 +1299,22 @@ function Composer({ resource }: { resource: string }) {
                       endpoint={customerId ? `/api/ops/sales/products?customerId=${customerId}` : '/api/ops/sales/products'}
                       display={(r) => `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`}
                       valueLabel={l.productLabel}
-                      onPick={(r) => setLine(l.key, {
-                        productId: num(r.id),
-                        productLabel: `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`,
-                        unitId: pick(r, 'unitId', 'unit_id') != null ? num(pick(r, 'unitId', 'unit_id')) : '',
-                        unitLabel: [pick(r, 'unitCode', 'unit_code'), pick(r, 'unitName', 'unit_name')].filter(Boolean).join(' · '),
-                        unitPrice: num(pick(r, 'listPrice', 'standardPrice', 'standard_price'), l.unitPrice),
-                      })}
+                      onPick={(r) => {
+                        const rawRate = pick(r, 'efrisVatRate', 'efris_vat_rate');
+                        const uraRate = rawRate == null || rawRate === '' ? null : Number(rawRate);
+                        const hasUra = uraRate != null && Number.isFinite(uraRate);
+                        const category = hasUra ? categoryForUraRate(uraRate, taxOptions) : null;
+                        setLine(l.key, {
+                          productId: num(r.id),
+                          productLabel: `${pick(r, 'code') ?? ''} · ${pick(r, 'name') ?? ''}`,
+                          unitId: pick(r, 'unitId', 'unit_id') != null ? num(pick(r, 'unitId', 'unit_id')) : '',
+                          unitLabel: [pick(r, 'unitCode', 'unit_code'), pick(r, 'unitName', 'unit_name')].filter(Boolean).join(' · '),
+                          unitPrice: num(pick(r, 'listPrice', 'standardPrice', 'standard_price'), l.unitPrice),
+                          uraVatRate: hasUra ? uraRate : null,
+                          ...(hasUra ? { taxPercent: uraRate } : {}),
+                          ...(category ? { taxCategory: category } : {}),
+                        });
+                      }}
                     />
                   </td>
                   <td><input className="cell-input" type="number" min={0} value={l.quantity} onChange={(e) => setLine(l.key, { quantity: num(e.target.value) })} /></td>
@@ -1303,6 +1334,7 @@ function Composer({ resource }: { resource: string }) {
                       ))}
                       {!taxOptions.some((o) => o.code === l.taxCategory) && <option value={l.taxCategory}>{l.taxCategory}</option>}
                     </select>
+                    {l.uraVatRate != null && <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>URA list {fmtNum(l.uraVatRate)}%</div>}
                   </td>
                   <td className="cell-num">{fmtMoney(lineTotal(l.quantity, l.unitPrice, isInvoice ? 0 : l.discountPercent, l.taxPercent))}</td>
                   <td><button className="btn btn-sm" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key) )}>Remove</button></td>
@@ -1344,7 +1376,7 @@ const MONEY_DOC_META: Record<string, { title: string; note: string; path: string
   },
   credit_notes: {
     title: 'New credit note',
-    note: 'Credits a customer (e.g. returned or disputed goods). Drafts go through the approval workflow.',
+    note: 'Credits a customer. A posted note is sent to URA. You can cancel it from the note, including one URA has already accepted.',
     path: '/api/ops/sales/credit-notes',
     idKey: 'creditNoteId',
   },
@@ -1964,6 +1996,8 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState('CASH');
   const [payRef, setPayRef] = useState('');
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
 
   const load = useCallback(async () => {
     if (resource === 'quotations') {
@@ -2165,6 +2199,9 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
   const invActions = resource === 'invoices' && can(user, 'sales.receipts.create') && !['VOID', 'PAID'].includes(status) ? (
     <button className="btn btn-success btn-block" disabled={busy} onClick={() => setPayOpen(true)}>Record payment</button>
   ) : null;
+  const cancelAction = resource === 'credit_notes' && status !== 'VOID' && can(user, 'sales.credit_notes.void') ? (
+    <button className="btn btn-block" disabled={busy} onClick={() => { setCancelReason(''); setCancelOpen(true); }}>Cancel credit note</button>
+  ) : null;
 
   return (
     <div className="page">
@@ -2352,10 +2389,11 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
               {dnActions}
               {postAction}
               {invActions}
+              {cancelAction}
               {status === 'SUBMITTED' && (
                 <button className="btn btn-block" onClick={() => navigate('/approvals')}>Open approvals queue</button>
               )}
-              {!quoteActions && !orderActions && !dnActions && !postAction && !invActions && status !== 'SUBMITTED' && (
+              {!quoteActions && !orderActions && !dnActions && !postAction && !invActions && !cancelAction && status !== 'SUBMITTED' && (
                 <p className="muted">No actions available in this status for your role.</p>
               )}
             </div>
@@ -2487,6 +2525,32 @@ function DocumentDetail({ resource, id }: { resource: string; id: number }) {
               })}
             >
               Confirm
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {cancelOpen && (
+        <Modal title="Cancel credit note" onClose={() => setCancelOpen(false)}>
+          <p className="muted">If URA has already accepted this note, it is cancelled there first. A refusal leaves the note unchanged.</p>
+          <div className="field field-required">
+            <label htmlFor="cancel-credit-reason">Reason</label>
+            <textarea id="cancel-credit-reason" rows={3} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Why is this credit note being cancelled?" />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+            <button className="btn" onClick={() => setCancelOpen(false)}>Keep note</button>
+            <button
+              className="btn btn-primary"
+              disabled={busy || cancelReason.trim().length < 3}
+              onClick={() => act('Credit note cancelled', async () => {
+                await api(`/api/ops/sales/credit-notes/${id}/cancel`, {
+                  method: 'POST',
+                  body: JSON.stringify({ reason: cancelReason.trim() }),
+                });
+                setCancelOpen(false);
+              })}
+            >
+              Cancel credit note
             </button>
           </div>
         </Modal>

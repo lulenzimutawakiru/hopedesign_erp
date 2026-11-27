@@ -5932,8 +5932,9 @@ function GoodsCatalogue() {
         <div>
           <h3>URA goods catalogue ({total.toLocaleString()})</h3>
           <p className="muted" style={{ margin: 0 }}>
-            A searchable copy of the official URA goods list. Import rows to keep it current; mapping a product
-            to a goods code happens under Registrations.
+            A searchable copy of the official URA goods and services list. Goods and services are configured
+            the same way. Services do not need a stock upload. Import rows to keep the list current; mapping a
+            product to a goods code happens under Registrations.
           </p>
         </div>
         <div className="row-actions">
@@ -6082,6 +6083,7 @@ function ProductRegistrations() {
             <thead>
               <tr>
                 <th>Product</th><th>Type</th><th>Goods code</th><th>Goods name</th>
+                <th className="cell-num">VAT %</th>
                 <th>Status</th><th>Registered at</th><th />
               </tr>
             </thead>
@@ -6095,6 +6097,7 @@ function ProductRegistrations() {
                   <td className="muted">{String(r.type ?? '—')}</td>
                   <td className="cell-mono">{String(r.efrisGoodsCode ?? '—')}</td>
                   <td className="muted">{String(r.efrisGoodsName ?? '—')}</td>
+                  <td className="cell-num">{r.catalogueVatRate == null || r.catalogueVatRate === '' ? '—' : fmtNum(r.catalogueVatRate)}</td>
                   <td><Badge value={r.efrisRegistrationStatus ?? 'UNMAPPED'} /></td>
                   <td className="muted">{r.efrisRegisteredAt ? String(r.efrisRegisteredAt).slice(0, 10) : '—'}</td>
                   <td>
@@ -6123,7 +6126,7 @@ function ProductRegistrations() {
             <datalist id="efris-goods-codes">
               {catalogue.map((g) => <option key={String(g.id)} value={String(g.goodsCode)}>{String(g.goodsName)}</option>)}
             </datalist>
-            <span className="hint">{matched ? String(matched.goodsName) : 'The code must exist in the goods catalogue.'}</span>
+            <span className="hint">{matched ? `${String(matched.goodsName)} · URA VAT ${fmtNum(matched.vatRate)}%` : 'The code must exist in the goods catalogue.'}</span>
           </div>
         </Modal>
       )}

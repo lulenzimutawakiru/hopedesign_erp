@@ -765,7 +765,7 @@ export function buyerTypeCode(buyer: UraParty | null | undefined, mapping?: Buye
 export type BuyerTinDecision =
   | { action: 'use'; buyer: UraParty | null }
   | { action: 'lookup'; tin: string; buyer: UraParty }
-  | { action: 'reject'; code: 'EFRIS_BUYER_TIN_INVALID' | 'EFRIS_BUYER_TIN_IS_SELLER'; message: string };
+  | { action: 'reject'; code: 'EFRIS_BUYER_TIN_INVALID' | 'EFRIS_BUYER_TIN_IS_SELLER' | 'EFRIS_BUYER_TIN_REQUIRED'; message: string };
 
 /**
  * Decide how a buyer TIN may be sent.
@@ -785,6 +785,15 @@ export function assessBuyerTin(
   const digits = (buyer.tin ?? '').replace(/\D/g, '');
   if (kind === 'consumer' || kind === 'b2c') {
     return { action: 'use', buyer: { ...buyer, tin: null } };
+  }
+  const classified = kind === 'business' || kind === 'b2b'
+    || kind === 'government' || kind === 'gov' || kind === 'b2g';
+  if (classified && !digits) {
+    return {
+      action: 'reject',
+      code: 'EFRIS_BUYER_TIN_REQUIRED',
+      message: 'B2B and B2G invoices need a 10-digit buyer TIN. URA will not fiscalize the document until that TIN is checked.',
+    };
   }
   if (!digits) return { action: 'use', buyer: { ...buyer, tin: null } };
   if (!/^\d{10}$/.test(digits)) {
@@ -952,6 +961,36 @@ export const URA_CREDIT_NOTE_REASONS: Record<string, string> = {
   '104': 'Partial or complete waive off of the product sale after the invoice is generated and sent to customer.',
   '105': 'Others (Please specify)',
 };
+
+/**
+ * T114 cancels a credit-note application. URA keys it on the referenceNo that
+ * T110 returned (the same reference T111 queries). invoiceNo is the credit
+ * note's own FDN once URA has approved it; oriInvoiceNo is the original sale.
+ * A reason that is not one of 101-105 is sent as 105 (Others).
+ */
+export function buildT114Content(input: {
+  referenceNo: string;
+  invoiceNo?: string | null;
+  oriInvoiceNo?: string | null;
+  reasonCode?: string | null;
+  reason?: string | null;
+}): Record<string, unknown> {
+  const referenceNo = compact(input.referenceNo);
+  if (!referenceNo) {
+    throw new EfrisProtocolError(
+      'EFRIS_CREDIT_NOTE_REF_REQUIRED',
+      'A credit note can be cancelled at URA only after the application reference has been issued.'
+    );
+  }
+  const reasonCode = compact(input.reasonCode);
+  return {
+    referenceNo,
+    invoiceNo: compact(input.invoiceNo),
+    oriInvoiceNo: compact(input.oriInvoiceNo),
+    reasonCode: URA_CREDIT_NOTE_REASONS[reasonCode] ? reasonCode : '105',
+    reason: compact(input.reason).slice(0, 200),
+  };
+}
 
 /**
  * Inner T110 credit-note application content.

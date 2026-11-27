@@ -154,6 +154,37 @@ async function productMeta(client: pg.PoolClient, ctx: Ctx, productId: number) {
   return res.rows[0];
 }
 
+/**
+ * A direct invoice (no prior delivery) is the stock issue for goods. Services
+ * are not stocked. Order invoices are skipped: dispatch already moved those
+ * quantities, so issuing again would count them twice.
+ */
+async function issueInvoicedGoods(client: pg.PoolClient, ctx: Ctx, invoiceId: number, invoiceNo: string) {
+  const items = await client.query(
+    `SELECT ii.product_id, ii.quantity, p.type
+       FROM invoice_items ii
+       JOIN products p ON p.id = ii.product_id
+      WHERE ii.invoice_id = $1 AND ii.product_id IS NOT NULL`,
+    [invoiceId]
+  );
+  for (const row of items.rows) {
+    if (String(row.type) === 'SERVICE') continue;
+    const qty = Number(row.quantity);
+    if (!(qty > 0)) continue;
+    const warehouseId = await warehouseByType(client, ctx, String(row.type));
+    await postMove(client, ctx, {
+      movementType: 'DISPTACH',
+      product: Number(row.product_id),
+      warehouse: warehouseId,
+      quantity: qty,
+      refType: 'customer_invoices',
+      refId: invoiceId,
+      refCode: invoiceNo,
+      reason: `Issued on invoice ${invoiceNo}`,
+    });
+  }
+}
+
 /** Default warehouse by product type (finished goods vs raw vs security). */
 export async function warehouseByType(client: pg.PoolClient, ctx: Ctx, productType: string): Promise<number> {
   const code = productType === 'SECURITY_ITEM' ? 'SEC-WH' : ['JUMBO_ROLL', 'PAPER_BOBBIN', 'PACKAGING', 'CONSUMABLE', 'SPARE_PART'].includes(productType) ? 'RAW-MAT' : 'FG-WH';
@@ -1202,6 +1233,7 @@ export async function createInvoice(
   let orderId = input.orderId != null ? Number(input.orderId) : null;
   let buyerType = normalizeBuyerType(input.buyerType);
   let buyerTin = normalizeBuyerTin(input.buyerTin);
+  let directSale = false;
 
   let customerId: number;
   let currency: string;
@@ -1283,12 +1315,27 @@ export async function createInvoice(
         buyerTin,
       });
       orderId = so.orderId;
+      directSale = true;
       // The invoice records delivery directly, so mark the generated order fulfilled.
       await client.query(
         `UPDATE sales_order_items SET dispatched_qty = quantity, invoiced_qty = quantity WHERE order_id = $1`,
         [orderId]
       );
       await client.query(`UPDATE sales_orders SET status = 'INVOICED' WHERE id = $1`, [orderId]);
+    }
+  }
+
+  buyerTin = normalizeBuyerTin(buyerTin);
+  if (buyerType === 'B2B' || buyerType === 'B2G') {
+    if (!buyerTin) {
+      const cust = await client.query(
+        `SELECT tin FROM customers WHERE id = $1 AND tenant_id = $2`,
+        [customerId, ctx.tenantId]
+      );
+      buyerTin = normalizeBuyerTin(cust.rows[0]?.tin ?? null);
+    }
+    if (!buyerTin) {
+      throw badRequest('B2B and B2G invoices need a 10-digit buyer TIN. Search EFRIS to confirm the buyer is registered with URA.');
     }
   }
 
@@ -1412,6 +1459,7 @@ export async function createInvoice(
     }
   }
   await client.query(`UPDATE customer_invoices SET status = 'SUBMITTED' WHERE id = $1`, [invoiceId]);
+  if (directSale) await issueInvoicedGoods(client, ctx, invoiceId, invoiceNo);
   await startWorkflow(client, ctx, { entityType: 'sales.invoices', entityId: invoiceId, entityCode: invoiceNo, amount: total });
   await emitEvent(client, ctx, { eventType: 'sales.invoice_created', entityType: 'customer_invoices', entityId: invoiceId, entityCode: invoiceNo, payload: { orderId: orderId ?? null, customerId, total } });
   await logAudit(client, ctx, { action: 'create', resource: 'customer_invoices', recordId: invoiceId, recordCode: invoiceNo, newValues: { orderId: orderId ?? null, customerId, total } });
@@ -1564,6 +1612,216 @@ export async function createCreditNote(
   await emitEvent(client, ctx, { eventType: 'sales.credit_note_created', entityType: 'credit_notes', entityId: creditNoteId, entityCode: creditNo });
   await logAudit(client, ctx, { action: 'create', resource: 'credit_notes', recordId: creditNoteId, recordCode: creditNo, newValues: { amount } });
   return { creditNoteId, creditNo };
+}
+
+const URA_BOUND_CREDIT_STATUSES = new Set(['TRANSMITTED', 'FISCALIZED', 'ACCEPTED']);
+const LOCAL_CREDIT_STATUSES = new Set(['PENDING', 'QUEUED', 'RETRYING', 'FAILED', 'REJECTED', 'CANCELLED', 'VOIDED']);
+
+/**
+ * Cancel a credit note. A note URA has already accepted (TRANSMITTED or
+ * FISCALIZED) is cancelled at URA with T114 before any local void. A refusal
+ * leaves the note unchanged. A note that was never sent is voided locally.
+ * A posted note reverses its journal and the amount it applied to the invoice.
+ */
+export async function cancelCreditNote(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  creditNoteId: number,
+  input: { reason?: string | null }
+) {
+  const reason = String(input.reason ?? '').trim();
+  if (reason.length < 3) throw badRequest('A cancellation reason of at least 3 characters is required');
+
+  const res = await client.query(
+    `SELECT * FROM credit_notes WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+    [creditNoteId, ctx.tenantId]
+  );
+  if (res.rows.length === 0) throw notFound('Credit note not found');
+  const cn = res.rows[0];
+  if (String(cn.status) === 'VOID') throw badRequest('This credit note is already cancelled');
+
+  const txnRes = await client.query(
+    `SELECT id, status, application_ref_no
+       FROM efris_transactions
+      WHERE doc_ref_type = 'credit_notes' AND doc_ref_id = $1 AND tenant_id = $2
+      ORDER BY id DESC
+      LIMIT 1
+      FOR UPDATE`,
+    [creditNoteId, ctx.tenantId]
+  );
+  const txn = txnRes.rows[0] as { id: number; status: string; application_ref_no: string | null } | undefined;
+  const efrisStatus = txn ? String(txn.status) : '';
+  if (efrisStatus === 'PROCESSING') {
+    throw badRequest('This credit note is being sent to URA. Wait until that finishes, then cancel it.');
+  }
+
+  let journalStatus: string | null = null;
+  if (cn.gl_posted) {
+    if (cn.gl_journal_id == null) throw badRequest('This credit note is marked posted but has no journal to reverse');
+    const je = await client.query(
+      `SELECT status FROM journal_entries WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [cn.gl_journal_id, ctx.tenantId]
+    );
+    if (je.rows.length === 0) throw badRequest('The credit note journal was not found');
+    journalStatus = String(je.rows[0].status);
+    if (journalStatus !== 'POSTED' && journalStatus !== 'VOID') {
+      throw badRequest(`The credit note journal is ${journalStatus} and cannot be reversed`);
+    }
+  }
+
+  const needsUra = URA_BOUND_CREDIT_STATUSES.has(efrisStatus);
+  let uraResponse: unknown = null;
+  if (needsUra) {
+    const referenceNo = txn?.application_ref_no != null ? String(txn.application_ref_no).trim() : '';
+    if (!referenceNo) {
+      throw badRequest('URA has this credit note, but no application reference was stored, so it cannot be cancelled.');
+    }
+    const { resolveCredentials, resolveFiscalTarget } = await import('./efris/config.js');
+    const { buildT114Content, EfrisProtocolError, readReturnState } = await import('./efris/protocol.js');
+    const { cancelCreditNoteApplication, EfrisClientError } = await import('./efris/client.js');
+    const target = await resolveFiscalTarget(client, ctx);
+    if (!target) {
+      throw badRequest('EFRIS is not configured, so a credit note already sent to URA cannot be cancelled.');
+    }
+    const creditFdn = await client.query(
+      `SELECT fdn FROM efris_documents WHERE efris_transaction_id = $1 AND fdn IS NOT NULL`,
+      [txn!.id]
+    );
+    let oriFdn = '';
+    if (cn.invoice_id != null) {
+      const ori = await client.query(
+        `SELECT d.fdn
+           FROM efris_documents d
+           JOIN efris_transactions t ON t.id = d.efris_transaction_id
+          WHERE t.tenant_id = $1 AND t.doc_ref_type = 'customer_invoices' AND t.doc_ref_id = $2
+            AND d.fdn IS NOT NULL
+          ORDER BY t.id DESC
+          LIMIT 1`,
+        [ctx.tenantId, cn.invoice_id]
+      );
+      oriFdn = ori.rows[0]?.fdn != null ? String(ori.rows[0].fdn) : '';
+    }
+    const creds = resolveCredentials(target.config);
+    const storedCode = cn.reason_code != null ? String(cn.reason_code).trim() : '';
+    let content: Record<string, unknown>;
+    try {
+      content = buildT114Content({
+        referenceNo,
+        invoiceNo: creditFdn.rows[0]?.fdn != null ? String(creditFdn.rows[0].fdn) : '',
+        oriInvoiceNo: oriFdn,
+        reasonCode: storedCode,
+        reason,
+      });
+    } catch (err) {
+      if (err instanceof EfrisProtocolError) throw badRequest(err.message);
+      throw err;
+    }
+    try {
+      uraResponse = await cancelCreditNoteApplication({
+        mode: target.config.mode,
+        baseUrl: target.config.base_url ?? '',
+        tokenUrl: target.config.token_url,
+        grantType: target.config.auth_grant_type || 'client_credentials',
+        clientId: creds.clientId,
+        clientSecret: creds.clientSecret,
+        timeoutSeconds: Number(target.config.timeout_seconds || 20),
+        payload: {},
+        docType: 'CREDIT_NOTE',
+        tin: target.taxpayer?.tin ?? null,
+        securityFlags: target.config.security_flags,
+      }, content);
+    } catch (err) {
+      const state = err instanceof EfrisClientError ? readReturnState(err.payload) : null;
+      if (state?.code === '319') {
+        uraResponse = { alreadyCancelled: true, returnCode: '319' };
+      } else if (err instanceof EfrisClientError || err instanceof EfrisProtocolError) {
+        throw badRequest(err.message);
+      } else {
+        throw err;
+      }
+    }
+  } else if (txn && !LOCAL_CREDIT_STATUSES.has(efrisStatus)) {
+    throw badRequest(`This credit note is ${efrisStatus} at URA and cannot be cancelled from here.`);
+  }
+
+  if (txn && efrisStatus !== 'CANCELLED') {
+    await client.query(
+      `UPDATE efris_transactions
+          SET status = 'CANCELLED', claimed_at = NULL, next_attempt_at = NULL,
+              last_error = NULL, updated_at = now()
+        WHERE id = $1 AND tenant_id = $2`,
+      [txn.id, ctx.tenantId]
+    );
+    await client.query(
+      `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, request_payload, response_payload)
+       VALUES ($1, $2, 'CANCELLED', $3::jsonb, $4::jsonb)`,
+      [
+        ctx.tenantId,
+        txn.id,
+        JSON.stringify({ action: 'cancelCreditNote', reason, ura: needsUra }),
+        JSON.stringify(uraResponse ?? {}),
+      ]
+    );
+  }
+
+  if (journalStatus === 'POSTED') {
+    await finance.voidJournal(client, ctx, Number(cn.gl_journal_id), reason);
+  }
+  if (cn.gl_posted && cn.invoice_id != null) {
+    await client.query(
+      `UPDATE customer_invoices
+          SET amount_paid = GREATEST(amount_paid - $1::numeric, 0),
+              status = CASE
+                WHEN status = 'VOID' THEN 'VOID'
+                WHEN GREATEST(amount_paid - $1::numeric, 0) >= total - 0.005 THEN 'PAID'
+                WHEN GREATEST(amount_paid - $1::numeric, 0) > 0.005 THEN 'PARTIALLY_PAID'
+                WHEN gl_posted THEN 'POSTED'
+                ELSE 'APPROVED'
+              END
+        WHERE id = $2 AND tenant_id = $3`,
+      [Number(cn.amount), cn.invoice_id, ctx.tenantId]
+    );
+  }
+
+  await client.query(
+    `UPDATE approval_tasks t
+        SET status = 'REJECTED', comment = $3, decided_by = $4, decided_at = now()
+       FROM workflow_instances i
+      WHERE t.instance_id = i.id
+        AND i.tenant_id = $2
+        AND i.entity_type = 'sales.credit_notes'
+        AND i.entity_id = $1
+        AND i.status IN ('RUNNING', 'ESCALATED', 'EXECUTION_PENDING')
+        AND t.status IN ('PENDING', 'ESCALATED')`,
+    [creditNoteId, ctx.tenantId, reason.slice(0, 500), ctx.userId ?? null]
+  );
+  await client.query(
+    `UPDATE workflow_instances
+        SET status = 'CANCELLED', completed_at = now()
+      WHERE tenant_id = $2 AND entity_type = 'sales.credit_notes' AND entity_id = $1
+        AND status IN ('RUNNING', 'ESCALATED', 'EXECUTION_PENDING')`,
+    [creditNoteId, ctx.tenantId]
+  );
+  await client.query(
+    `UPDATE credit_notes SET status = 'VOID', updated_at = now() WHERE id = $1 AND tenant_id = $2`,
+    [creditNoteId, ctx.tenantId]
+  );
+  await emitEvent(client, ctx, {
+    eventType: 'sales.credit_note_cancelled',
+    entityType: 'credit_notes',
+    entityId: creditNoteId,
+    entityCode: String(cn.credit_no),
+    payload: { reason, ura: needsUra },
+  });
+  await logAudit(client, ctx, {
+    action: 'void',
+    resource: 'credit_notes',
+    recordId: creditNoteId,
+    recordCode: String(cn.credit_no),
+    oldValues: { status: String(cn.status) },
+    newValues: { status: 'VOID', reason, ura: needsUra },
+  });
+  return { creditNoteId, creditNo: String(cn.credit_no), status: 'VOID' };
 }
 
 /** Create a debit note (DRAFT + workflow; posts when approved). Prefix DNM so it does not collide with delivery notes. */
@@ -2088,9 +2346,12 @@ export async function postDebitNote(client: pg.PoolClient, ctx: Ctx, debitNoteId
 export async function listSellableProducts(client: pg.PoolClient, ctx: Ctx, customerId?: number) {
   const res = await client.query(
     `SELECT p.id, p.code, p.name, p.type, p.standard_price, p.standard_cost, p.unit_id, p.weight_per_unit,
-            u.code AS unit_code, u.name AS unit_name
+            u.code AS unit_code, u.name AS unit_name,
+            g.vat_rate AS efris_vat_rate
      FROM products p
      LEFT JOIN units u ON u.id = p.unit_id
+     LEFT JOIN efris_goods g
+       ON g.goods_code = p.efris_goods_code AND g.tenant_id = p.tenant_id AND g.company_id = p.company_id
      WHERE p.tenant_id = $1 AND p.company_id = $2 AND p.status = 'ACTIVE'
        AND p.type = ANY($3::text[])
      ORDER BY p.code LIMIT 80`,
