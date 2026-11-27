@@ -1920,8 +1920,89 @@ export async function uploadReceipt(client: pg.PoolClient, ctx: Ctx, b: Record<s
   );
   const receiptId = Number(ins.rows[0].id);
   await logAudit(client, ctx, { action: 'upload_receipt', resource: 'expenses.receipts', recordId: receiptId, recordCode: fileName, newValues: { refType, refId, checksum } });
-  const scanned = await runReceiptOcr(client, ctx, receiptId);
+  // OCR must not undo the upload. A scan error used to roll back the receipt
+  // row, and the expense screen then skipped submit.
+  let scanned: Record<string, unknown>;
+  try {
+    scanned = await runReceiptOcr(client, ctx, receiptId);
+  } catch (err) {
+    console.error('[expenses] receipt OCR failed', receiptId, err instanceof Error ? err.message : err);
+    await client.query(
+      `UPDATE expense_receipts SET ocr_status = 'FAILED' WHERE id = $1 AND tenant_id = $2`,
+      [receiptId, ctx.tenantId]
+    );
+    const row = await client.query(`SELECT * FROM expense_receipts WHERE id = $1`, [receiptId]);
+    scanned = toCamelRow(row.rows[0]);
+  }
   return { ...scanned, possibleDuplicate: dup.possibleDuplicate, duplicateMatches: dup.hashMatches };
+}
+
+const INLINE_RECEIPT_MIME = new Set([
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+]);
+
+/** Stream a stored receipt back to someone who may see that expense. */
+export async function readReceiptFile(client: pg.PoolClient, ctx: Ctx, id: number, ownOnly = false) {
+  const res = await client.query(
+    `SELECT id, file_name, mime_type, file_url, ref_type, ref_id, created_by
+       FROM expense_receipts
+      WHERE id = $1 AND tenant_id = $2 AND company_id = $3`,
+    [id, ctx.tenantId, companyId(ctx)]
+  );
+  if (!res.rows.length) throw notFound('Receipt not found');
+  const row = res.rows[0];
+  if (ownOnly) {
+    const mine = Number(row.created_by) === Number(ctx.userId);
+    let parentMine = false;
+    if (!mine && row.ref_type === 'EXPENSE') {
+      const parent = await client.query(
+        `SELECT created_by FROM expense_transactions
+          WHERE id = $1 AND tenant_id = $2 AND company_id = $3`,
+        [row.ref_id, ctx.tenantId, companyId(ctx)]
+      );
+      parentMine = parent.rows.length > 0 && Number(parent.rows[0].created_by) === Number(ctx.userId);
+    } else if (!mine && row.ref_type === 'CLAIM') {
+      const parent = await client.query(
+        `SELECT created_by FROM employee_expense_claims
+          WHERE id = $1 AND tenant_id = $2 AND company_id = $3`,
+        [row.ref_id, ctx.tenantId, companyId(ctx)]
+      );
+      parentMine = parent.rows.length > 0 && Number(parent.rows[0].created_by) === Number(ctx.userId);
+    }
+    if (!mine && !parentMine) throw forbidden('You may only open receipts on your own expenses');
+  }
+  const key = String(row.file_url ?? '').replace(/\\/g, '/').trim();
+  if (!key || key.includes('..') || key.startsWith('/') || /^[A-Za-z]:/.test(key)) {
+    throw notFound('Receipt file is missing');
+  }
+  const { readFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const { config } = await import('../config.js');
+  const root = path.resolve(config.storageRoot);
+  const abs = path.resolve(root, key);
+  if (!abs.startsWith(root + path.sep)) throw forbidden('Invalid receipt path');
+  let buffer: Buffer;
+  try {
+    buffer = readFileSync(abs);
+  } catch {
+    throw notFound('Receipt file is missing');
+  }
+  const storedMime = String(row.mime_type ?? 'application/octet-stream').toLowerCase().split(';')[0].trim();
+  const inline = INLINE_RECEIPT_MIME.has(storedMime);
+  const safeName = String(row.file_name ?? 'receipt').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^\.+/, '') || 'receipt';
+  return {
+    buffer,
+    fileName: safeName,
+    mimeType: inline ? storedMime : 'application/octet-stream',
+    inline,
+    sizeBytes: buffer.length,
+  };
 }
 
 export async function verifyReceipt(client: pg.PoolClient, ctx: Ctx, id: number, b: Record<string, unknown> = {}) {

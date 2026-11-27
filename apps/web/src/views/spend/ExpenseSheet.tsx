@@ -3,6 +3,7 @@ import { api, fmtDate, fmtMoney } from '../../api';
 import { useAuth, can } from '../../auth';
 import { navigate } from '../../router';
 import { Badge, ErrorBanner, Modal, PageLoader } from '../../components/ui';
+import { toast } from '../../components/toast';
 import { ExpenseChrome } from './MyExpenses';
 import { Pipeline, ReceiptChips, num, s, todayIso, uploadReceiptInput, type Rec } from './kit';
 import { billableUnitPrice, canReportOnPayslip, includedTax, odooExpenseStatus, paidByLabel, reinvoiceModeOf, takePendingReceipts } from './odooExpense';
@@ -146,9 +147,17 @@ export default function ExpenseSheet({ id }: { id?: number }) {
     notes: notes || undefined,
   });
 
-  const attachNew = async (expenseId: number) => {
-    for (const file of files) await uploadReceiptInput(file, 'EXPENSE', expenseId);
+  const attachNew = async (expenseId: number): Promise<string[]> => {
+    const failed: string[] = [];
+    for (const file of files) {
+      try {
+        await uploadReceiptInput(file, 'EXPENSE', expenseId);
+      } catch {
+        failed.push(file.name);
+      }
+    }
     setFiles([]);
+    return failed;
   };
 
   const save = async (submitNow: boolean) => {
@@ -159,17 +168,24 @@ export default function ExpenseSheet({ id }: { id?: number }) {
     setBusy(submitNow ? 'submit' : 'save');
     setError('');
     setMsg('');
+    let expenseId = id;
+    let createdNow = false;
     try {
-      let expenseId = id;
       if (!expenseId) {
         const created = await api<{ data: Rec }>('/api/ops/expenditure/expenses', { method: 'POST', body: JSON.stringify(body()) });
         expenseId = num(created.data.id);
+        createdNow = true;
       } else if (draft) {
         await api(`/api/ops/expenditure/expenses/${expenseId}/update`, { method: 'POST', body: JSON.stringify(body()) });
       }
-      if (files.length && expenseId) await attachNew(expenseId);
+      // A failed attachment must not skip submit. The receipt can be added again
+      // from the saved expense.
+      const failed = files.length && expenseId ? await attachNew(expenseId) : [];
       if (submitNow && expenseId) {
         await api(`/api/ops/expenditure/expenses/${expenseId}/submit`, { method: 'POST', body: '{}' });
+      }
+      if (failed.length) {
+        toast.warning('Some receipts could not be attached', { body: 'You can add them again from the expense page.' });
       }
       if (!id && expenseId) navigate(`/spend/expenses/${expenseId}`);
       else {
@@ -177,7 +193,14 @@ export default function ExpenseSheet({ id }: { id?: number }) {
         load();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      if (createdNow && expenseId) {
+        toast.error(submitNow ? 'Expense saved, but it was not submitted' : 'Expense saved', { body: message });
+        navigate(`/spend/expenses/${expenseId}`);
+        return;
+      }
+      setError(message);
+      if (id) load();
     } finally {
       setBusy('');
     }

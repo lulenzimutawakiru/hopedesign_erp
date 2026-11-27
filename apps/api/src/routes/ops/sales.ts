@@ -149,6 +149,9 @@ salesOpsRouter.post('/receipts', ...run('sales.receipts.create', (c, ctx, b) => 
     : undefined,
 })));
 salesOpsRouter.get('/credit-notes/:id', ...runGet('sales.credit_notes.view', (c, ctx, _q, p) => sales.getCreditNote(c, ctx, Number(p.id))));
+salesOpsRouter.post('/credit-notes/:id/cancel', ...run('sales.credit_notes.void', (c, ctx, b, p) => sales.cancelCreditNote(c, ctx, Number(p.id), {
+  reason: b.reason != null ? String(b.reason) : null,
+})));
 salesOpsRouter.post('/credit-notes', ...run('sales.credit_notes.create', (c, ctx, b) => sales.createCreditNote(c, ctx, {
   invoiceId: b.invoiceId != null ? Number(b.invoiceId) : null,
   customerId: Number(b.customerId),

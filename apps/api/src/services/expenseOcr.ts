@@ -171,11 +171,14 @@ export async function runReceiptOcr(client: pg.PoolClient, ctx: Ctx, receiptId: 
     currency: fields.currency ?? null,
   };
 
+  // Do not set updated_at here. Databases that predate 0252 have no such
+  // column, and naming it rolled the whole receipt upload back. The touch
+  // trigger fills it once the column exists.
   await client.query(
     `UPDATE expense_receipts
-        SET ocr_status = $1, ocr_confidence = $2, ocr_data = $3::jsonb, updated_at = now()
-      WHERE id = $4`,
-    [status, confidence, JSON.stringify(payload), receiptId]
+        SET ocr_status = $1, ocr_confidence = $2, ocr_data = $3::jsonb
+      WHERE id = $4 AND tenant_id = $5`,
+    [status, confidence, JSON.stringify(payload), receiptId, ctx.tenantId]
   );
   const updated = await client.query(`SELECT * FROM expense_receipts WHERE id = $1`, [receiptId]);
   return toCamelRow(updated.rows[0]);

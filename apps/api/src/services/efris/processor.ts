@@ -600,25 +600,33 @@ async function loadAdjustmentStockSource(client: pg.PoolClient, row: ClaimedFisc
       ORDER BY ai.id`,
     [row.doc_ref_id]
   );
-  const lines: Array<{ goodsCode: string; measureUnit: string; quantity: number; unitPrice: number; remarks: string | null }> = [];
+  const losses: Array<{ goodsCode: string; measureUnit: string; quantity: number; unitPrice: number; remarks: string | null }> = [];
+  const gains: Array<{ goodsCode: string; measureUnit: string; quantity: number; unitPrice: number; remarks: string | null }> = [];
   for (const it of items.rows as Array<Record<string, unknown>>) {
     const variance = Number(it.variance_qty ?? 0);
-    if (variance >= 0) continue; // URA only accepts negative (loss) adjustments via T131
+    if (variance === 0) continue;
     const goodsCode = String(it.efris_goods_code ?? it.product_code ?? '').trim();
     if (!goodsCode) continue;
-    lines.push({
+    const line = {
       goodsCode,
       measureUnit: String(it.efris_unit_of_measure ?? ''),
       quantity: Math.abs(Math.round(variance * 1000) / 1000),
       unitPrice: Number(it.unit_cost ?? 0),
-      remarks: null,
-    });
+      remarks: null as string | null,
+    };
+    if (variance < 0) losses.push(line);
+    else gains.push(line);
   }
+  // A loss is a T131 reconciliation (operation 102). A gain-only sheet is a stock
+  // upload (operation 101). A mixed sheet reports the loss; URA's adjustment
+  // interface does not accept a positive quantity.
+  const increase = losses.length === 0 && gains.length > 0;
+  const lines = increase ? gains : losses;
   const effective = toISODate(head.posted_at ?? head.updated_at ?? row.txn_date) ?? new Date().toISOString().slice(0, 10);
   base.stock = {
-    operationType: '102',
-    stockInType: '',
-    adjustType: uraAdjustmentType(head.adjustment_type != null ? String(head.adjustment_type) : null),
+    operationType: increase ? '101' : '102',
+    stockInType: increase ? '102' : '',
+    adjustType: increase ? '' : uraAdjustmentType(head.adjustment_type != null ? String(head.adjustment_type) : null),
     supplierTin: null,
     supplierName: null,
     branchId: head.branch_id != null ? String(head.branch_id) : null,
@@ -1039,12 +1047,16 @@ export async function pollCreditNoteApplications(batch = 10): Promise<{ polled: 
       const q = await queryCreditNoteApplication(opts, row.application_ref_no);
       const approveStatus = String(digFirst(q, ['approveStatus']) ?? '102');
       if (approveStatus === '103') {
-        await client.query(
+        const rejectedUpd = await client.query(
           `UPDATE efris_transactions
               SET status = 'REJECTED', application_status = '103', claimed_at = NULL, next_attempt_at = NULL, updated_at = now()
-            WHERE id = $1`,
+            WHERE id = $1 AND status = 'TRANSMITTED'`,
           [row.id]
         );
+        if ((rejectedUpd.rowCount ?? 0) === 0) {
+          pending += 1;
+          continue;
+        }
         await client.query(
           `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, response_payload)
            VALUES ($1,$2,'REJECTED',$3::jsonb)`,
@@ -1069,6 +1081,18 @@ export async function pollCreditNoteApplications(batch = 10): Promise<{ polled: 
         pending += 1;
         continue;
       }
+      const fiscalUpd = await client.query(
+        `UPDATE efris_transactions
+            SET status = 'FISCALIZED', application_status = '101', claimed_at = NULL,
+                next_attempt_at = NULL, fiscalized_at = now(), last_error = NULL,
+                error_code = NULL, last_response = $2::jsonb, updated_at = now()
+          WHERE id = $1 AND status = 'TRANSMITTED'`,
+        [row.id, JSON.stringify(doc ?? {})]
+      );
+      if ((fiscalUpd.rowCount ?? 0) === 0) {
+        pending += 1;
+        continue;
+      }
       await client.query(
         `INSERT INTO efris_documents
            (tenant_id, efris_transaction_id, erp_doc_no, fdn, verification_code, qr_ref, response_payload, transmitted_at, fiscalized_at)
@@ -1078,14 +1102,6 @@ export async function pollCreditNoteApplications(batch = 10): Promise<{ polled: 
                qr_ref = EXCLUDED.qr_ref, response_payload = EXCLUDED.response_payload,
                fiscalized_at = now()`,
         [row.tenant_id, row.id, row.doc_ref_code, identifiers.fdn, identifiers.vrc, identifiers.qrRef ?? null, JSON.stringify(doc ?? {})]
-      );
-      await client.query(
-        `UPDATE efris_transactions
-            SET status = 'FISCALIZED', application_status = '101', claimed_at = NULL,
-                next_attempt_at = NULL, fiscalized_at = now(), last_error = NULL,
-                error_code = NULL, last_response = $2::jsonb, updated_at = now()
-          WHERE id = $1`,
-        [row.id, JSON.stringify(doc ?? {})]
       );
       await client.query(
         `INSERT INTO efris_sync_logs (tenant_id, efris_transaction_id, status, response_payload)

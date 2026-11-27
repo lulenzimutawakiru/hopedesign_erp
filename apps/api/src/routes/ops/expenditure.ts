@@ -84,6 +84,32 @@ expenditureOpsRouter.get('/receipts', ...runGet('expenditure.receipts.view', (c,
   refType: q.refType != null ? String(q.refType) : undefined,
   refId: q.refId != null ? Number(q.refId) : undefined,
 })));
+expenditureOpsRouter.get(
+  '/receipts/:id/file',
+  requirePermission([
+    'expenditure.receipts.view',
+    'expenditure.expenses.view',
+    'expenditure.expenses.view_own',
+    'expenditure.expenses.create',
+    'expenditure.claims.view',
+    'expenditure.claims.create',
+  ]),
+  asyncHandler(async (req, res) => {
+    const broad = can(req.auth, 'expenditure.receipts.view')
+      || can(req.auth, 'expenditure.expenses.view')
+      || can(req.auth, 'expenditure.claims.view');
+    const out = await tx(
+      (client) => exp.readReceiptFile(client, req.ctx, Number(req.params.id), !broad),
+      req.ctx
+    );
+    res.setHeader('Content-Type', out.mimeType);
+    res.setHeader('Content-Length', String(out.sizeBytes));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `${out.inline ? 'inline' : 'attachment'}; filename="${out.fileName}"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(out.buffer);
+  })
+);
 expenditureOpsRouter.post(
   '/receipts',
   requirePermission(['expenditure.receipts.upload', 'expenditure.expenses.create']),

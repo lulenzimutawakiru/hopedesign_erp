@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from 'react';
-import { api, fmtDate, fmtMoney } from '../../api';
+import { useEffect, useState, type ReactNode } from 'react';
+import { api, fmtDate, fmtMoney, getToken } from '../../api';
 import { useAuth, can } from '../../auth';
 import { navigate } from '../../router';
-import { Badge } from '../../components/ui';
+import { Badge, Modal } from '../../components/ui';
 
 export type Rec = Record<string, unknown>;
 
@@ -208,22 +208,87 @@ export async function uploadReceiptInput(file: File | undefined, refType: string
   return r.data;
 }
 
+/** Open a stored receipt in the page. Images and PDFs preview; other files download. */
+export async function fetchReceiptFile(receiptId: number): Promise<{ blob: Blob; mime: string }> {
+  const token = getToken();
+  const res = await fetch(`/api/ops/expenditure/receipts/${receiptId}/file`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message = body && body.error && body.error.message ? String(body.error.message) : `Could not open the receipt (${res.status})`;
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const mime = (blob.type || res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  return { blob, mime };
+}
+
 export function ReceiptChips({ receipts }: { receipts: Rec[] }) {
+  const [opening, setOpening] = useState<number | null>(null);
+  const [error, setError] = useState('');
+  const [preview, setPreview] = useState<{ url: string; name: string; kind: 'image' | 'pdf' } | null>(null);
+
+  useEffect(() => () => {
+    if (preview) URL.revokeObjectURL(preview.url);
+  }, [preview]);
+
   if (!receipts.length) return <p className="empty-state">No receipts attached yet.</p>;
+
+  const closePreview = () => setPreview(null);
+
+  const view = async (r: Rec) => {
+    const id = num(r.id);
+    setOpening(id);
+    setError('');
+    try {
+      const { blob, mime } = await fetchReceiptFile(id);
+      const url = URL.createObjectURL(blob);
+      if (mime.startsWith('image/') || mime === 'application/pdf') {
+        setPreview({ url, name: s(r.fileName) || 'Receipt', kind: mime === 'application/pdf' ? 'pdf' : 'image' });
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = s(r.fileName) || 'receipt';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOpening(null);
+    }
+  };
+
   return (
-    <div className="related-list">
-      {receipts.map((r) => (
-        <div key={s(r.id)} className="related-item" style={{ alignItems: 'center', gap: 8 }}>
-          <span style={{ fontWeight: 600 }}>{s(r.fileName)}</span>
-          <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-            {s(r.supplier) || 'Unknown supplier'}{r.invoiceNo ? ` · INV ${s(r.invoiceNo)}` : ''}
-          </span>
-          {num(r.total) > 0 && <span style={{ color: 'var(--muted)', fontSize: 12 }}>{fmtMoney(num(r.total))}</span>}
-          <OcrBadge row={r} />
-          {r.verified === true || r.verified === 'true' ? <Badge value="VERIFIED" /> : <Badge value="UNVERIFIED" />}
-        </div>
-      ))}
-    </div>
+    <>
+      {error && <p className="empty-state">{error}</p>}
+      <div className="related-list">
+        {receipts.map((r) => (
+          <div key={s(r.id)} className="related-item" style={{ alignItems: 'center', gap: 8 }}>
+            <button type="button" className="btn btn-sm" disabled={opening === num(r.id)} onClick={() => void view(r)}>
+              {opening === num(r.id) ? 'Opening…' : 'View'}
+            </button>
+            <span style={{ fontWeight: 600 }}>{s(r.fileName)}</span>
+            <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+              {s(r.supplier) || 'Unknown supplier'}{r.invoiceNo ? ` · INV ${s(r.invoiceNo)}` : ''}
+            </span>
+            {num(r.total) > 0 && <span style={{ color: 'var(--muted)', fontSize: 12 }}>{fmtMoney(num(r.total))}</span>}
+            <OcrBadge row={r} />
+            {r.verified === true || r.verified === 'true' ? <Badge value="VERIFIED" /> : <Badge value="UNVERIFIED" />}
+          </div>
+        ))}
+      </div>
+      {preview && (
+        <Modal title={preview.name} wide onClose={closePreview}>
+          {preview.kind === 'image'
+            ? <img src={preview.url} alt={preview.name} style={{ display: 'block', maxWidth: '100%', maxHeight: '70vh', margin: '0 auto' }} />
+            : <iframe title={preview.name} src={preview.url} style={{ width: '100%', height: '70vh', border: 0 }} />}
+        </Modal>
+      )}
+    </>
   );
 }
 
