@@ -24,6 +24,7 @@ import {
   uraAdjustmentType,
 } from '../src/services/efris/protocol.js';
 import { extractFiscalIdentifiers } from '../src/services/efris/client.js';
+import { buildSubmitPayload } from '../src/services/efris/builders.js';
 
 const AES_KEY = '0123456789abcdef';
 
@@ -394,5 +395,46 @@ describe('URA EFRIS protocol', () => {
     expect(head.adjustType).toBe('102');
     expect(head.stockInType).toBe('');
     expect(head.supplierTin).toBe('');
+  });
+
+  it('names the taxpayer on a stock-in that has no supplier', () => {
+    const built = buildSubmitPayload({
+      docType: 'STOCK_ADJUSTMENT',
+      docRefType: 'inventory_adjustments',
+      docRefCode: 'ADJ-1',
+      docRefId: 1,
+      txnDate: '2026-11-27',
+      currency: 'UGX',
+      grossAmount: 0,
+      taxAmount: 0,
+      requestRef: null,
+      taxpayer: {
+        id: 1,
+        legal_name: 'HOPE DESIGN',
+        trading_name: null,
+        tin: '1047578560',
+        vat_registered: true,
+        vat_number: null,
+        taxpayer_type: null,
+        place_of_business: null,
+        branch_id: null,
+      },
+      config: null,
+      stock: {
+        operationType: '101',
+        stockInType: '102',
+        adjustType: '',
+        supplierTin: null,
+        supplierName: null,
+        branchId: null,
+        invoiceNo: null,
+        stockInDate: '2026-11-27',
+        remarks: null,
+        lines: [{ goodsCode: 'GOODS', measureUnit: 'CT', quantity: 1, unitPrice: 1000 }],
+      },
+    });
+    const head = built.ura.goodsStockIn as Record<string, string>;
+    expect(head.operationType).toBe('101');
+    expect(head.supplierName).toBe('HOPE DESIGN');
   });
 });

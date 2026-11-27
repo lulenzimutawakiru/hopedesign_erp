@@ -199,15 +199,22 @@ function buildStockContent(ctx: FiscalBuildContext): Record<string, unknown> {
     remarks: null,
     lines: [] as StockFiscalLine[],
   };
+  const operationType = stock.operationType || '101';
+  // URA rejects a stock-in (operation 101) with 2081 when supplierName is empty.
+  // A goods receipt already carries the supplier. A gain-only adjustment does not,
+  // so the taxpayer's own legal name is the stock-in party URA requires.
+  const namedSupplier = (stock.supplierName ?? '').trim();
+  const supplierName = namedSupplier
+    || (operationType === '101' ? (ctx.taxpayer?.legal_name ?? '').trim() : '');
   const input: UraStockInput = {
     docType: ctx.docType,
     docRefCode: ctx.docRefCode,
     stockInDate: stock.stockInDate || ctx.txnDate,
-    operationType: stock.operationType || '101',
+    operationType,
     stockInType: stock.stockInType ?? null,
     adjustType: stock.adjustType ?? null,
     supplierTin: stock.supplierTin,
-    supplierName: stock.supplierName,
+    supplierName: supplierName || null,
     branchId: stock.branchId,
     invoiceNo: stock.invoiceNo,
     remarks: stock.remarks ?? ctx.remarks ?? ctx.requestRef,
