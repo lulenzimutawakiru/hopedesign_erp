@@ -1920,21 +1920,45 @@ export async function uploadReceipt(client: pg.PoolClient, ctx: Ctx, b: Record<s
   );
   const receiptId = Number(ins.rows[0].id);
   await logAudit(client, ctx, { action: 'upload_receipt', resource: 'expenses.receipts', recordId: receiptId, recordCode: fileName, newValues: { refType, refId, checksum } });
-  // OCR must not undo the upload. A scan error used to roll back the receipt
-  // row, and the expense screen then skipped submit.
-  let scanned: Record<string, unknown>;
+  // OCR must not undo the upload. The scan runs inside this transaction, and a
+  // failed statement aborts every later query until the transaction ends. Roll
+  // only the scan back, then mark the receipt failed, so the row still commits.
+  const scanned = await scanReceiptWithoutLosingIt(client, ctx, receiptId);
+  return { ...scanned, possibleDuplicate: dup.possibleDuplicate, duplicateMatches: dup.hashMatches };
+}
+
+async function scanReceiptWithoutLosingIt(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  receiptId: number
+): Promise<Record<string, unknown>> {
+  await client.query('SAVEPOINT receipt_ocr');
   try {
-    scanned = await runReceiptOcr(client, ctx, receiptId);
+    const scanned = await runReceiptOcr(client, ctx, receiptId);
+    await client.query('RELEASE SAVEPOINT receipt_ocr');
+    return scanned;
   } catch (err) {
     console.error('[expenses] receipt OCR failed', receiptId, err instanceof Error ? err.message : err);
-    await client.query(
-      `UPDATE expense_receipts SET ocr_status = 'FAILED' WHERE id = $1 AND tenant_id = $2`,
-      [receiptId, ctx.tenantId]
-    );
-    const row = await client.query(`SELECT * FROM expense_receipts WHERE id = $1`, [receiptId]);
-    scanned = toCamelRow(row.rows[0]);
+    await client.query('ROLLBACK TO SAVEPOINT receipt_ocr');
+    await client.query('RELEASE SAVEPOINT receipt_ocr');
   }
-  return { ...scanned, possibleDuplicate: dup.possibleDuplicate, duplicateMatches: dup.hashMatches };
+  await client.query('SAVEPOINT receipt_ocr_status');
+  try {
+    await client.query(
+      `UPDATE expense_receipts SET ocr_status = 'FAILED' WHERE id = $1 AND tenant_id = $2 AND company_id = $3`,
+      [receiptId, ctx.tenantId, companyId(ctx)]
+    );
+    await client.query('RELEASE SAVEPOINT receipt_ocr_status');
+  } catch (err) {
+    console.error('[expenses] could not mark receipt OCR failed', receiptId, err instanceof Error ? err.message : err);
+    await client.query('ROLLBACK TO SAVEPOINT receipt_ocr_status');
+    await client.query('RELEASE SAVEPOINT receipt_ocr_status');
+  }
+  const row = await client.query(
+    `SELECT * FROM expense_receipts WHERE id = $1 AND tenant_id = $2 AND company_id = $3`,
+    [receiptId, ctx.tenantId, companyId(ctx)]
+  );
+  return row.rows[0] ? toCamelRow(row.rows[0]) : { id: receiptId, ocrStatus: 'FAILED' };
 }
 
 const INLINE_RECEIPT_MIME = new Set([
