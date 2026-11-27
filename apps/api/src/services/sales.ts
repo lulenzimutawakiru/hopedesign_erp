@@ -1687,6 +1687,12 @@ export async function cancelCreditNote(
       `SELECT fdn FROM efris_documents WHERE efris_transaction_id = $1 AND fdn IS NOT NULL`,
       [txn!.id]
     );
+    const creditInvoiceNo = creditFdn.rows[0]?.fdn != null ? String(creditFdn.rows[0].fdn).trim() : '';
+    if (!creditInvoiceNo) {
+      throw badRequest(
+        'URA has not issued a credit-note invoice number yet, so this application cannot be cancelled. It stays unchanged until URA approves it.'
+      );
+    }
     let oriFdn = '';
     if (cn.invoice_id != null) {
       const ori = await client.query(
@@ -1707,7 +1713,7 @@ export async function cancelCreditNote(
     try {
       content = buildT114Content({
         referenceNo,
-        invoiceNo: creditFdn.rows[0]?.fdn != null ? String(creditFdn.rows[0].fdn) : '',
+        invoiceNo: creditInvoiceNo,
         oriInvoiceNo: oriFdn,
         reasonCode: storedCode,
         reason,
