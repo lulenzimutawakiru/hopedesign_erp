@@ -8,6 +8,7 @@ import {
   buildEncryptedEnvelope,
   buildT109Content,
   buildT110Content,
+  buildT130Content,
   buildT131Content,
   canonicalizeEndpoint,
   decryptAesEcb,
@@ -261,9 +262,64 @@ describe('URA EFRIS protocol', () => {
     const payWay = credit.payWay as Array<Record<string, string>>;
     expect(payWay[0].paymentMode).toBe('101');
     expect(payWay[0].paymentAmount).toBe('-66080.00');
+
+    const unnamed = buildT110Content({
+      docType: 'CREDIT_NOTE',
+      docRefCode: 'CN-10',
+      txnDate: '2026-10-19',
+      currency: 'UGX',
+      grossAmount: 66080,
+      taxAmount: 10080,
+      seller,
+      buyer: null,
+      lines: [{
+        itemCode: 'Natex A4 superior white Paper 80g/m²',
+        description: 'Bond 80 Natex Paper',
+        quantity: 1,
+        unitPrice: 56000,
+        taxPercent: 18,
+        lineGross: 66080,
+        unitOfMeasure: 'CT',
+      }],
+      oriInvoiceNo: '326044299862',
+      oriInvoiceId: '444586912409100060',
+      reasonCode: '102',
+      reason: '   ',
+    });
+    expect(unnamed.reasonCode).toBe('102');
+    expect(unnamed.reason).toBe('Cancellation of the purchase');
   });
 
-  it('carries the URA goods registration through the T109 goodsDetails', () => {    const invoice = buildT109Content({
+  it('keeps URA tax maths when the invoice header tax does not match the lines', () => {
+    const invoice = buildT109Content({
+      docType: 'SALES_INVOICE',
+      docRefCode: 'INV-100',
+      txnDate: '2026-10-14',
+      currency: 'UGX',
+      grossAmount: 118001,
+      taxAmount: 18001,
+      seller,
+      buyer: null,
+      lines: [{
+        itemCode: 'SKU1',
+        description: 'Printed ream',
+        quantity: 2,
+        unitPrice: 50000,
+        taxPercent: 18,
+        lineGross: 118000,
+      }],
+    });
+    const goods = invoice.goodsDetails as Array<Record<string, string>>;
+    expect(goods[0].taxRate).toBe('0.18');
+    expect(goods[0].tax).toBe('18000.00');
+    expect(goods[0].total).toBe('118000.00');
+    const summary = invoice.summary as Record<string, string>;
+    expect(summary.taxAmount).toBe('18000.00');
+    expect(summary.grossAmount).toBe('118000.00');
+  });
+
+  it('carries the URA goods registration through the T109 goodsDetails', () => {
+    const invoice = buildT109Content({
       docType: 'SALES_INVOICE',
       docRefCode: 'INV-URA-1',
       txnDate: '2026-10-19',
@@ -368,6 +424,80 @@ describe('URA EFRIS protocol', () => {
     expect(item.quantity).toBe('10');
     expect(item.unitPrice).toBe('56000.00');
     expect(item.commodityGoodsId).toBe('');
+  });
+
+  it('builds the T130 goods-upload array URA accepts', () => {
+    const rows = buildT130Content([{
+      operationType: '101',
+      goodsName: 'Bond 80 Natex Paper',
+      goodsCode: 'Natex A4 superior white Paper 80g/m²',
+      measureUnit: 'CT',
+      unitPrice: 56000,
+      currency: 'UGX',
+      commodityCategoryId: '14111507',
+      stockPrewarning: 0,
+    }]);
+    expect(rows).toEqual([{
+      operationType: '101',
+      goodsName: 'Bond 80 Natex Paper',
+      goodsCode: 'Natex A4 superior white Paper 80g/m²',
+      measureUnit: 'CT',
+      unitPrice: '56000.00',
+      currency: '101',
+      commodityCategoryId: '14111507',
+      haveExciseTax: '102',
+      stockPrewarning: '0',
+      havePieceUnit: '102',
+      pieceMeasureUnit: '',
+      pieceUnitPrice: '',
+      packageScaledValue: '',
+      pieceScaledValue: '',
+      haveOtherUnit: '102',
+      goodsOtherUnits: [],
+    }]);
+
+    const update = buildT130Content([{
+      operationType: '102',
+      goodsName: 'Bond 80 Natex Paper',
+      goodsCode: 'Natex A4 superior white Paper 80g/m²',
+      measureUnit: 'CT',
+      unitPrice: 56000,
+      currency: '101',
+      commodityCategoryId: '14111507',
+    }]);
+    expect(update[0].operationType).toBe('102');
+    expect(update[0].currency).toBe('101');
+
+    const usd = buildT130Content([{
+      operationType: '101',
+      goodsName: 'Bond 80 Natex Paper',
+      goodsCode: 'PAPER-1',
+      measureUnit: 'CT',
+      unitPrice: 15,
+      currency: 'USD',
+      commodityCategoryId: '14111507',
+    }]);
+    expect(usd[0].currency).toBe('102');
+
+    expect(() => buildT130Content([{
+      operationType: '101',
+      goodsName: 'Bond 80 Natex Paper',
+      goodsCode: 'PAPER-1',
+      measureUnit: 'CT',
+      unitPrice: 15,
+      currency: 'ZAR',
+      commodityCategoryId: '14111507',
+    }])).toThrow(EfrisProtocolError);
+    expect(() => buildT130Content([{
+      operationType: '101',
+      goodsName: 'Bond 80 Natex Paper',
+      goodsCode: 'PAPER-1',
+      measureUnit: 'CT',
+      unitPrice: 0,
+      currency: 'UGX',
+      commodityCategoryId: '14111507',
+    }])).toThrow(EfrisProtocolError);
+    expect(() => buildT130Content([])).toThrow(EfrisProtocolError);
   });
 
   it('maps an ERP adjustment type onto a URA T131 adjustType', () => {

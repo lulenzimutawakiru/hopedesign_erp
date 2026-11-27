@@ -29,6 +29,7 @@ import {
   resolveModeEndpoint,
   rsaDecryptBase64,
   unwrapResponse,
+  type UraContent,
   type UraGlobalOptions,
 } from './protocol.js';
 
@@ -600,7 +601,7 @@ export async function submitFiscalDocument(opts: SubmitFiscalOptions): Promise<u
 async function postUraContent(
   opts: SubmitFiscalOptions,
   interfaceCode: string,
-  content: Record<string, unknown>,
+  content: UraContent,
   endpoint: string
 ): Promise<unknown> {
   const flags = flagsOf(opts);
@@ -653,18 +654,31 @@ async function postUraContent(
   }
 }
 
-function queryEndpoint(opts: SubmitFiscalOptions): string {
+function queryEndpoint(opts: SubmitFiscalOptions, blockedMessage?: string): string {
   assertLiveMode(opts.mode);
   const flags = flagsOf(opts);
   if (usesOauthGateway(opts)) {
     throw new EfrisClientError({
       code: 'EFRIS_LOOKUP_TRANSPORT',
       stage: 'config',
-      message: 'Credit-note queries (T111/T108) are only available on the URA system-to-system gateway',
+      message: blockedMessage ?? 'Credit-note queries (T111/T108) are only available on the URA system-to-system gateway',
       retryable: false,
     });
   }
   return resolveModeEndpoint(opts.mode, opts.baseUrl, flags);
+}
+
+/** Upload goods configuration to URA (interface code T130). Success is return code 00. */
+export async function uploadGoods(
+  opts: SubmitFiscalOptions,
+  content: Array<Record<string, unknown>>
+): Promise<unknown> {
+  return postUraContent(
+    opts,
+    'T130',
+    content,
+    queryEndpoint(opts, 'Goods upload (T130) is only available on the URA system-to-system gateway'),
+  );
 }
 
 /** Query a submitted T110 application by referenceNo (interface code T111). */

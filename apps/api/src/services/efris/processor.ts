@@ -134,6 +134,69 @@ async function alignBuyerWithUra(
 }
 
 /**
+ * URA rejects a T109 when sellerDetails.emailAddress is empty (return 1115).
+ * Use the email stored on the taxpayer. When that is blank, use the email URA
+ * already holds for this TIN (T119). Never invent one.
+ */
+async function ensureSellerEmail(
+  taxpayer: EfrisTaxpayerLite | null,
+  lookup: {
+    mode: EfrisMode;
+    baseUrl: string;
+    tokenUrl: string | null;
+    clientId?: string;
+    clientSecret?: string;
+    timeoutSeconds: number;
+    securityFlags: Record<string, unknown> | null;
+  },
+): Promise<void> {
+  if ((taxpayer?.contact_email ?? '').trim()) return;
+  const tin = (taxpayer?.tin ?? '').trim();
+  if (!taxpayer || !tin) {
+    throw new EfrisClientError({
+      code: 'EFRIS_SELLER_EMAIL_REQUIRED',
+      stage: 'config',
+      message: 'URA rejects an invoice with an empty seller email. Set the taxpayer contact email before sending it.',
+      retryable: false,
+    });
+  }
+  let email = '';
+  try {
+    const result = await queryTaxpayerByTin({
+      mode: lookup.mode,
+      baseUrl: lookup.baseUrl,
+      tokenUrl: lookup.tokenUrl,
+      clientId: lookup.clientId,
+      clientSecret: lookup.clientSecret,
+      timeoutSeconds: lookup.timeoutSeconds,
+      securityFlags: lookup.securityFlags,
+      tin,
+      lookupTin: tin,
+    });
+    email = result.taxpayer?.contactEmail?.trim() ?? '';
+  } catch (err) {
+    if (err instanceof EfrisClientError && err.code === 'EFRIS_LOOKUP_TRANSPORT') {
+      throw new EfrisClientError({
+        code: 'EFRIS_SELLER_EMAIL_REQUIRED',
+        stage: 'config',
+        message: 'URA rejects an invoice with an empty seller email. Set the taxpayer contact email before sending it.',
+        retryable: false,
+      });
+    }
+    throw err;
+  }
+  if (!email) {
+    throw new EfrisClientError({
+      code: 'EFRIS_SELLER_EMAIL_REQUIRED',
+      stage: 'config',
+      message: `URA rejects an invoice with an empty seller email, and TIN ${tin} has no contact email on file or at URA.`,
+      retryable: false,
+    });
+  }
+  taxpayer.contact_email = email;
+}
+
+/**
  * Map a stored buyer_type (B2B/B2C/B2G) onto the buyerKind hint the protocol
  * reads, falling back to the customer_type classification when the document did
  * not record an explicit buyer type.
@@ -145,6 +208,33 @@ function buyerKindFor(buyerType: unknown, customerType: unknown): string | null 
   if (bt === 'B2C') return 'consumer';
   const kind = String(customerType ?? '').trim().toUpperCase();
   return kind === 'GOVERNMENT' ? 'government' : null;
+}
+
+/**
+ * URA resolves a line by the goods code and unit it registered. An ERP SKU, or
+ * the builder's ITEM1 fallback, comes back as 2122 "not configured with URA".
+ */
+function requireMappedGood(item: Record<string, unknown>, label: string): { code: string; unit: string } {
+  const code = item.efris_goods_code != null ? String(item.efris_goods_code).trim() : '';
+  const name = String(item.description ?? item.product_code ?? label).trim() || label;
+  if (!code) {
+    throw new EfrisClientError({
+      code: 'EFRIS_GOODS_UNMAPPED',
+      stage: 'config',
+      message: `${name} is not mapped to a URA goods code, so the document was not sent. Map it in the EFRIS catalogue first.`,
+      retryable: false,
+    });
+  }
+  const unit = item.efris_unit_of_measure != null ? String(item.efris_unit_of_measure).trim() : '';
+  if (!unit) {
+    throw new EfrisClientError({
+      code: 'EFRIS_GOODS_UOM_MISSING',
+      stage: 'config',
+      message: `URA goods ${code} has no unit of measure, so the document was not sent. Set the unit URA registered for that goods code.`,
+      retryable: false,
+    });
+  }
+  return { code, unit };
 }
 
 /**
@@ -405,6 +495,33 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
         [row.doc_ref_id]
       );
       const party = inv.rows[0] as Record<string, unknown> | undefined;
+      const lines = (items.rows as Array<Record<string, unknown>>).flatMap((item) => {
+        const quantity = Number(item.quantity ?? 0);
+        if (!(quantity > 0)) return [];
+        const mapped = requireMappedGood(item, 'Invoice line');
+        const taxPercent = Number(item.tax_percent ?? 0);
+        return [{
+          itemCode: mapped.code,
+          description: goodsName(item),
+          quantity,
+          unitPrice: Number(item.unit_price ?? 0),
+          taxPercent,
+          lineGross: Number(item.line_total ?? 0),
+          unitOfMeasure: mapped.unit,
+          goodsCategoryId: item.efris_goods_category_id != null ? String(item.efris_goods_category_id) : null,
+          goodsCategoryName: item.efris_goods_category_name != null ? String(item.efris_goods_category_name) : null,
+          vatApplicableFlag: taxPercent > 0 ? '1' : '0',
+          exempt: String(item.tax_category ?? '').toUpperCase() === 'EXEMPT',
+        }];
+      });
+      if (lines.length === 0) {
+        throw new EfrisClientError({
+          code: 'EFRIS_GOODS_UNMAPPED',
+          stage: 'config',
+          message: 'This invoice has no line that can be sent to URA. Map each product to a catalogue goods code first.',
+          retryable: false,
+        });
+      }
       return {
         buyer: party ? {
           legalName: party.customer_name != null ? String(party.customer_name) : null,
@@ -414,25 +531,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
           phone: party.customer_phone != null ? String(party.customer_phone) : null,
           buyerKind: buyerKindFor(party.buyer_type, party.customer_type),
         } : null,
-        lines: (items.rows as Array<Record<string, unknown>>).map((item) => {
-          const taxPercent = Number(item.tax_percent ?? 0);
-          return {
-            // URA resolves goods by its registered goodsCode, not the ERP SKU, so
-            // prefer the URA goods code and fall back to the product code.
-            itemCode: item.efris_goods_code != null ? String(item.efris_goods_code)
-              : (item.product_code != null ? String(item.product_code) : null),
-            description: goodsName(item),
-            quantity: Number(item.quantity ?? 0),
-            unitPrice: Number(item.unit_price ?? 0),
-            taxPercent,
-            lineGross: Number(item.line_total ?? 0),
-            unitOfMeasure: item.efris_unit_of_measure != null ? String(item.efris_unit_of_measure) : null,
-            goodsCategoryId: item.efris_goods_category_id != null ? String(item.efris_goods_category_id) : null,
-            goodsCategoryName: item.efris_goods_category_name != null ? String(item.efris_goods_category_name) : null,
-            vatApplicableFlag: taxPercent > 0 ? '1' : '0',
-            exempt: String(item.tax_category ?? '').toUpperCase() === 'EXEMPT',
-          };
-        }),
+        lines,
         oriInvoiceNo: null,
         oriInvoiceId: null,
         remarks: party?.notes != null ? String(party.notes) : null,
@@ -473,22 +572,29 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
         [invoiceId]
       );
       const item = items.rows[0] as Record<string, unknown> | undefined;
-      const taxPercent = item != null ? Number(item.tax_percent ?? 0)
-        : (Number(row.tax_amount) > 0 ? 18 : 0);
-      const lines: FiscalLine[] = item != null ? [{
-        itemCode: item.efris_goods_code != null ? String(item.efris_goods_code)
-          : (item.product_code != null ? String(item.product_code) : null),
+      if (!item) {
+        throw new EfrisClientError({
+          code: 'EFRIS_GOODS_UNMAPPED',
+          stage: 'config',
+          message: 'This note has no original invoice line mapped to a URA goods code, so it was not sent.',
+          retryable: false,
+        });
+      }
+      const mapped = requireMappedGood(item, 'Credit note');
+      const taxPercent = Number(item.tax_percent ?? 0);
+      const lines: FiscalLine[] = [{
+        itemCode: mapped.code,
         description: goodsName(item),
         quantity: 1,
         unitPrice: Number(row.gross_amount) || 0,
         taxPercent,
         lineGross: Number(row.gross_amount) || 0,
-        unitOfMeasure: item.efris_unit_of_measure != null ? String(item.efris_unit_of_measure) : null,
+        unitOfMeasure: mapped.unit,
         goodsCategoryId: item.efris_goods_category_id != null ? String(item.efris_goods_category_id) : null,
         goodsCategoryName: item.efris_goods_category_name != null ? String(item.efris_goods_category_name) : null,
         vatApplicableFlag: taxPercent > 0 ? '1' : '0',
         exempt: String(item.tax_category ?? '').toUpperCase() === 'EXEMPT',
-      }] : [];
+      }];
 
       // Only a credit note (T110 red invoice) references the original invoice via
       // oriInvoiceNo + oriInvoiceId. A debit note is a standalone positive invoice
@@ -529,6 +635,7 @@ async function loadFiscalSource(client: pg.PoolClient, row: ClaimedFiscalTransac
     }
   } catch (err) {
     console.error('[efris][worker] source document lookup failed', err instanceof Error ? err.message : err);
+    throw err;
   }
   return empty;
 }
@@ -554,15 +661,27 @@ async function loadGoodsReceiptStockSource(client: pg.PoolClient, row: ClaimedFi
       ORDER BY gi.id`,
     [row.doc_ref_id]
   );
-  const lines = (items.rows as Array<Record<string, unknown>>)
-    .filter((it) => String(it.efris_goods_code ?? it.product_code ?? '').trim())
-    .map((it) => ({
-      goodsCode: String(it.efris_goods_code ?? it.product_code),
-      measureUnit: String(it.efris_unit_of_measure ?? ''),
-      quantity: Number(it.quantity_received ?? 0),
+  const lines: Array<{ goodsCode: string; measureUnit: string; quantity: number; unitPrice: number; remarks: string | null }> = [];
+  for (const it of items.rows as Array<Record<string, unknown>>) {
+    const quantity = Number(it.quantity_received ?? 0);
+    if (!(quantity > 0)) continue;
+    const mapped = requireMappedGood(it, 'Goods receipt line');
+    lines.push({
+      goodsCode: mapped.code,
+      measureUnit: mapped.unit,
+      quantity,
       unitPrice: Number(it.unit_cost ?? 0),
-      remarks: null as string | null,
-    }));
+      remarks: null,
+    });
+  }
+  if (lines.length === 0) {
+    throw new EfrisClientError({
+      code: 'EFRIS_STOCK_LINES_EMPTY',
+      stage: 'config',
+      message: 'This goods receipt has no quantity that can be uploaded to URA.',
+      retryable: false,
+    });
+  }
   const received = toISODate(head.received_at) ?? toISODate(row.txn_date) ?? new Date().toISOString().slice(0, 10);
   base.stock = {
     operationType: '101',
@@ -605,11 +724,10 @@ async function loadAdjustmentStockSource(client: pg.PoolClient, row: ClaimedFisc
   for (const it of items.rows as Array<Record<string, unknown>>) {
     const variance = Number(it.variance_qty ?? 0);
     if (variance === 0) continue;
-    const goodsCode = String(it.efris_goods_code ?? it.product_code ?? '').trim();
-    if (!goodsCode) continue;
+    const mapped = requireMappedGood(it, 'Stock adjustment line');
     const line = {
-      goodsCode,
-      measureUnit: String(it.efris_unit_of_measure ?? ''),
+      goodsCode: mapped.code,
+      measureUnit: mapped.unit,
       quantity: Math.abs(Math.round(variance * 1000) / 1000),
       unitPrice: Number(it.unit_cost ?? 0),
       remarks: null as string | null,
@@ -622,6 +740,14 @@ async function loadAdjustmentStockSource(client: pg.PoolClient, row: ClaimedFisc
   // interface does not accept a positive quantity.
   const increase = losses.length === 0 && gains.length > 0;
   const lines = increase ? gains : losses;
+  if (lines.length === 0) {
+    throw new EfrisClientError({
+      code: 'EFRIS_STOCK_LINES_EMPTY',
+      stage: 'config',
+      message: 'This stock adjustment has no quantity that can be sent to URA.',
+      retryable: false,
+    });
+  }
   const effective = toISODate(head.posted_at ?? head.updated_at ?? row.txn_date) ?? new Date().toISOString().slice(0, 10);
   base.stock = {
     operationType: increase ? '101' : '102',
@@ -673,22 +799,32 @@ async function loadReceiptFiscalSource(client: pg.PoolClient, row: ClaimedFiscal
         ORDER BY ii.id`,
       [invoiceId]
     );
-    lines = (items.rows as Array<Record<string, unknown>>).map((item) => {
+    lines = (items.rows as Array<Record<string, unknown>>).flatMap((item) => {
+      const quantity = Number(item.quantity ?? 0);
+      if (!(quantity > 0)) return [];
+      const mapped = requireMappedGood(item, 'Receipt line');
       const taxPercent = Number(item.tax_percent ?? 0);
-      return {
-        itemCode: item.efris_goods_code != null ? String(item.efris_goods_code)
-          : (item.product_code != null ? String(item.product_code) : null),
+      return [{
+        itemCode: mapped.code,
         description: goodsName(item),
-        quantity: Number(item.quantity ?? 0),
+        quantity,
         unitPrice: Number(item.unit_price ?? 0),
         taxPercent,
         lineGross: Number(item.line_total ?? 0),
-        unitOfMeasure: item.efris_unit_of_measure != null ? String(item.efris_unit_of_measure) : null,
+        unitOfMeasure: mapped.unit,
         goodsCategoryId: item.efris_goods_category_id != null ? String(item.efris_goods_category_id) : null,
         goodsCategoryName: item.efris_goods_category_name != null ? String(item.efris_goods_category_name) : null,
         vatApplicableFlag: taxPercent > 0 ? '1' : '0',
         exempt: String(item.tax_category ?? '').toUpperCase() === 'EXEMPT',
-      };
+      }];
+    });
+  }
+  if (lines.length === 0) {
+    throw new EfrisClientError({
+      code: 'EFRIS_GOODS_UNMAPPED',
+      stage: 'config',
+      message: 'This receipt has no invoice line mapped to a URA goods code, so it was not sent.',
+      retryable: false,
     });
   }
   return { ...base, buyer, lines };
@@ -737,12 +873,41 @@ async function processFiscalRow(row: ClaimedFiscalTransaction): Promise<boolean>
     }
 
     const source = await loadFiscalSource(client, row);
+    if (isStockDocType(row.doc_type)) {
+      if (!source.stock || source.stock.lines.length === 0) {
+        throw new EfrisClientError({
+          code: 'EFRIS_STOCK_LINES_EMPTY',
+          stage: 'config',
+          message: `${row.doc_ref_code} has no stock line that can be sent to URA.`,
+          retryable: false,
+        });
+      }
+    } else if (source.lines.length === 0) {
+      throw new EfrisClientError({
+        code: 'EFRIS_GOODS_UNMAPPED',
+        stage: 'config',
+        message: `${row.doc_ref_code} has no line mapped to a URA goods code, so it was not sent.`,
+        retryable: false,
+      });
+    }
     const stored = row.request_payload && Object.keys(row.request_payload).length > 0 ? row.request_payload : null;
     const storedIsUra = Boolean(stored && (stored.goodsDetails || stored.sellerDetails || stored.goodsStockIn));
 
     // End the read phase before any URA call. The buyer-TIN lookup and the
     // submit must not hold an open transaction across a multi-second round-trip.
     await client.query('COMMIT');
+
+    if (!isStockDocType(row.doc_type) && !isCreditNoteDocType(row.doc_type)) {
+      await ensureSellerEmail(taxpayer, {
+        mode: config.mode,
+        baseUrl: config.base_url ?? '',
+        tokenUrl: config.token_url,
+        clientId: creds.clientId,
+        clientSecret: creds.clientSecret,
+        timeoutSeconds: Number(config.timeout_seconds || 20),
+        securityFlags: config.security_flags,
+      });
+    }
 
     const buyer = isStockDocType(row.doc_type)
       ? source.buyer

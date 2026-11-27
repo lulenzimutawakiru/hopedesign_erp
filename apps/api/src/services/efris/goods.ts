@@ -1,7 +1,10 @@
 import pg from 'pg';
 import { Ctx } from '../../db.js';
-import { badRequest, notFound, toCamelRows } from '../../utils.js';
+import { ApiError, badRequest, notFound, toCamelRows } from '../../utils.js';
 import { logAudit } from '../audit.js';
+import { EfrisClientError, uploadGoods } from './client.js';
+import { assertCredentialsResolvable, resolveCredentials, resolveFiscalTarget } from './config.js';
+import { buildT130Content, EfrisProtocolError } from './protocol.js';
 
 export const EFRIS_REGISTRATION_STATUSES = ['UNMAPPED', 'MAPPED', 'SUBMITTED', 'REGISTERED', 'EXCLUDED'] as const;
 export type EfrisRegistrationStatus = (typeof EFRIS_REGISTRATION_STATUSES)[number];
@@ -187,4 +190,120 @@ export async function setRegistrationStatus(
     newValues: { efris_registration_status: input.status },
   });
   return { productId, efrisRegistrationStatus: input.status };
+}
+
+function asUploadError(err: unknown): never {
+  if (err instanceof EfrisClientError) {
+    const status = err.stage === 'config' ? 400 : 502;
+    throw new ApiError(status, err.code, err.message);
+  }
+  if (err instanceof EfrisProtocolError) throw new ApiError(400, err.code, err.message);
+  throw err;
+}
+
+/**
+ * Upload one mapped product to URA through T130.
+ *
+ * A product that is not yet REGISTERED is added (operation 101). One that URA
+ * has already accepted is updated (operation 102). REGISTERED is written only
+ * after URA returns success. A catalogue row on its own never counts.
+ * Excise goods are refused: the accepted upload sends haveExciseTax 102, and
+ * the excise follow-on fields are not part of that body.
+ */
+export async function uploadProductGoods(
+  client: pg.PoolClient,
+  ctx: Ctx,
+  productId: number,
+  input: { operationType?: string; unitPrice?: number; currency?: string } = {},
+) {
+  if (!Number.isFinite(productId) || productId <= 0) throw badRequest('A valid product id is required');
+  const prod = await client.query(
+    `SELECT p.id, p.code, p.standard_price, p.reorder_point,
+            p.efris_goods_code, p.efris_goods_name, p.efris_goods_category_id,
+            p.efris_unit_of_measure, p.efris_registration_status,
+            g.excise_rate
+       FROM products p
+       LEFT JOIN efris_goods g ON g.goods_code = p.efris_goods_code AND g.tenant_id = p.tenant_id
+      WHERE p.id = $1 AND p.tenant_id = $2`,
+    [productId, ctx.tenantId],
+  );
+  if (prod.rows.length === 0) throw notFound('Product not found');
+  const row = prod.rows[0];
+  const status = String(row.efris_registration_status ?? 'UNMAPPED');
+  if (status === 'UNMAPPED' || status === 'EXCLUDED') {
+    throw badRequest('Map the product to a URA goods code before uploading it');
+  }
+  const excise = Number(row.excise_rate ?? 0);
+  if (Number.isFinite(excise) && excise > 0) {
+    throw new ApiError(
+      400,
+      'EFRIS_GOODS_EXCISE_UNSUPPORTED',
+      'This good carries excise. T130 for an excisable good needs the excise fields URA adds after haveExciseTax, and those are not in the upload this ERP sends.',
+    );
+  }
+
+  const requested = String(input.operationType ?? '').trim();
+  const operationType = requested === '101' || requested === '102'
+    ? requested
+    : status === 'REGISTERED' ? '102' : '101';
+  const unitPrice = input.unitPrice != null && Number.isFinite(input.unitPrice)
+    ? input.unitPrice
+    : Number(row.standard_price ?? 0);
+
+  const target = await resolveFiscalTarget(client, ctx);
+  if (!target?.taxpayer?.tin) throw badRequest('EFRIS integration is not configured for this company');
+  assertCredentialsResolvable(target.config);
+  const creds = resolveCredentials(target.config);
+
+  let content: Array<Record<string, unknown>>;
+  try {
+    content = buildT130Content([{
+      operationType,
+      goodsCode: String(row.efris_goods_code ?? ''),
+      goodsName: String(row.efris_goods_name ?? ''),
+      measureUnit: String(row.efris_unit_of_measure ?? ''),
+      unitPrice,
+      currency: input.currency?.trim() || 'UGX',
+      commodityCategoryId: String(row.efris_goods_category_id ?? ''),
+      stockPrewarning: row.reorder_point,
+    }]);
+  } catch (err) {
+    asUploadError(err);
+  }
+
+  try {
+    await uploadGoods({
+      mode: target.config.mode,
+      baseUrl: target.config.base_url ?? '',
+      tokenUrl: target.config.token_url,
+      grantType: target.config.auth_grant_type || 'client_credentials',
+      clientId: creds.clientId,
+      clientSecret: creds.clientSecret,
+      timeoutSeconds: Number(target.config.timeout_seconds || 20),
+      payload: {},
+      docType: 'GOODS_UPLOAD',
+      tin: target.taxpayer.tin,
+      securityFlags: target.config.security_flags,
+    }, content);
+  } catch (err) {
+    asUploadError(err);
+  }
+
+  await client.query(
+    `UPDATE products SET efris_registration_status = 'REGISTERED', efris_registered_at = now()
+      WHERE id = $1 AND tenant_id = $2`,
+    [productId, ctx.tenantId],
+  );
+  await logAudit(client, ctx, {
+    action: 'upload', resource: 'product', recordId: productId,
+    recordCode: String(row.code ?? ''),
+    oldValues: { efris_registration_status: status },
+    newValues: { efris_registration_status: 'REGISTERED', interfaceCode: 'T130', operationType },
+  });
+  return {
+    productId,
+    goodsCode: String(row.efris_goods_code ?? ''),
+    operationType,
+    efrisRegistrationStatus: 'REGISTERED',
+  };
 }

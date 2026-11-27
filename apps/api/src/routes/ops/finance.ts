@@ -612,7 +612,9 @@ financeOpsRouter.get('/efris/goods', ...runGet('efris.configuration.view', (c, c
 })));
 financeOpsRouter.post('/efris/goods/import', ...run('efris.configuration.manage', (c, ctx, b) => efrisGoods.importGoods(c, ctx, Array.isArray(b?.items) ? b.items : [])));
 
-// Product -> goods registration lifecycle (Part J). REGISTERED is operator-confirmed.
+// Product -> goods registration lifecycle (Part J).
+// Mapping is local. T130 is the URA goods upload; REGISTERED is written only
+// after that call is accepted. The status route remains an operator correction.
 financeOpsRouter.get('/efris/registrations', ...runGet('efris.configuration.view', (c, ctx, q) => efrisGoods.listProductRegistrations(c, ctx, {
   q: q.q != null ? String(q.q) : undefined,
   status: q.status != null ? String(q.status) : undefined,
@@ -620,6 +622,11 @@ financeOpsRouter.get('/efris/registrations', ...runGet('efris.configuration.view
   pageSize: q.pageSize != null ? Number(q.pageSize) : undefined,
 })));
 financeOpsRouter.post('/efris/registrations/:productId/map', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisGoods.mapProductToGoods(c, ctx, Number(p.productId), { goodsCode: String(b.goodsCode ?? '') })));
+financeOpsRouter.post('/efris/registrations/:productId/upload', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisGoods.uploadProductGoods(c, ctx, Number(p.productId), {
+  operationType: b.operationType != null ? String(b.operationType) : undefined,
+  unitPrice: b.unitPrice != null && b.unitPrice !== '' ? Number(b.unitPrice) : undefined,
+  currency: b.currency != null ? String(b.currency) : undefined,
+})));
 financeOpsRouter.post('/efris/registrations/:productId/status', ...run('efris.configuration.manage', (c, ctx, b, p) => efrisGoods.setRegistrationStatus(c, ctx, Number(p.productId), { status: String(b.status ?? '') })));
 
 // ---- VAT return filing (Spec 2) ----

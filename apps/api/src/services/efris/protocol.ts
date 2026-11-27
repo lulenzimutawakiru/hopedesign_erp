@@ -337,16 +337,29 @@ export function preEncodeForOfflineEnabler(text: string): string {
   return Buffer.from(text, 'utf8').toString('latin1');
 }
 
+/** Inner URA content. T130 is a JSON array; every other interface used here is an object. */
+export type UraContent = Record<string, unknown> | readonly Record<string, unknown>[];
+
+function contentJson(content: UraContent | null | undefined): string | null {
+  if (content == null) return null;
+  if (Array.isArray(content)) {
+    if (content.length === 0) return null;
+    return JSON.stringify(content);
+  }
+  if (Object.keys(content).length === 0) return null;
+  return JSON.stringify(content);
+}
+
 export function buildUnencryptedEnvelope(
-  content: Record<string, unknown> | null,
+  content: UraContent | null,
   global: UraGlobalOptions,
   privateKeyPem?: string,
   opts?: { offlineEnabler?: boolean }
 ): Record<string, unknown> {
   let contentB64 = '';
   let signature = '';
-  if (content && Object.keys(content).length > 0) {
-    const json = JSON.stringify(content);
+  const json = contentJson(content);
+  if (json) {
     const text = opts?.offlineEnabler ? preEncodeForOfflineEnabler(json) : json;
     contentB64 = Buffer.from(text, 'utf8').toString('base64');
     if (privateKeyPem) signature = signRsaSha1(contentB64, privateKeyPem);
@@ -363,12 +376,12 @@ export function buildUnencryptedEnvelope(
 }
 
 export function buildEncryptedEnvelope(
-  content: Record<string, unknown>,
+  content: UraContent,
   aesKey: string,
   global: UraGlobalOptions,
   privateKeyPem: string
 ): Record<string, unknown> {
-  const encrypted = encryptAesEcb(JSON.stringify(content), aesKey);
+  const encrypted = encryptAesEcb(contentJson(content) ?? '{}', aesKey);
   return {
     data: {
       content: encrypted,
@@ -492,9 +505,13 @@ export function extractAesKey(raw: unknown): string | null {
   return typeof found === 'string' && found.trim() ? found.trim() : null;
 }
 
+function roundMoney(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * 100) / 100;
+}
+
 function money(value: number): string {
-  if (!Number.isFinite(value)) return '0.00';
-  return (Math.round(value * 100) / 100).toFixed(2);
+  return roundMoney(value).toFixed(2);
 }
 
 function qty(value: number): string {
@@ -634,21 +651,24 @@ function prepareLines(input: UraInvoiceInput): PreparedLine[] {
     taxPercent: 0,
     lineGross: input.grossAmount,
   }];
-  const prepared: PreparedLine[] = source.map((line, index) => {
+  return source.map((line, index) => {
     const quantity = line.quantity > 0 ? line.quantity : 1;
     const rate = line.taxPercent > 0 ? line.taxPercent / 100 : 0;
     const gross = Number.isFinite(line.lineGross) && line.lineGross > 0
       ? line.lineGross
       : line.unitPrice * quantity * (1 + rate);
-    const net = rate > 0 ? gross / (1 + rate) : Math.max(gross - 0, line.unitPrice * quantity);
-    const tax = Math.max(gross - net, 0);
+    // URA checks tax = round(total * taxRate / (1 + taxRate), 2) and rejects
+    // 2776 when the sent tax disagrees. Do not rewrite that tax from the
+    // invoice header: a one-shilling drift changes the rate and fails the check.
+    const tax = rate > 0 ? roundMoney(gross * rate / (1 + rate)) : 0;
+    const net = roundMoney(gross - tax);
     return {
       itemCode: compact(line.itemCode) || `ITEM${index + 1}`,
       description: compact(line.description) || `Item ${index + 1}`,
       quantity,
       net,
       tax,
-      gross: net + tax,
+      gross: roundMoney(net + tax),
       rate,
       unitOfMeasure: compact(line.unitOfMeasure) || '101',
       goodsCategoryId: compact(line.goodsCategoryId) || '',
@@ -657,17 +677,6 @@ function prepareLines(input: UraInvoiceInput): PreparedLine[] {
       exempt: line.exempt === true,
     };
   });
-  const netTarget = Math.max(input.grossAmount - input.taxAmount, 0);
-  const last = prepared[prepared.length - 1];
-  const netSum = prepared.reduce((sum, line) => sum + line.net, 0);
-  const taxSum = prepared.reduce((sum, line) => sum + line.tax, 0);
-  last.net += netTarget - netSum;
-  last.tax += input.taxAmount - taxSum;
-  if (last.net < 0) last.net = 0;
-  if (last.tax < 0) last.tax = 0;
-  last.gross = last.net + last.tax;
-  if (last.net > 0) last.rate = last.tax / last.net;
-  return prepared;
 }
 
 export interface TaxCategoryMapping {
@@ -1016,6 +1025,8 @@ export function buildT110Content(input: UraInvoiceInput): Record<string, unknown
   const buyer = input.buyer;
   const buyerTin = compact(buyer?.tin);
   const issued = compact(input.applicationTime) || ugandaTimestamp();
+  const reasonCode = compact(input.reasonCode) || '102';
+  const reasonText = compact(input.reason) || URA_CREDIT_NOTE_REASONS[reasonCode] || '';
   // A T110 credit note is a red invoice: URA rejects positive goodsDetails qty
   // (1431 "Cannot be positive"), so qty/total/tax and the summary/payWay totals
   // are negated while unitPrice stays positive.
@@ -1078,8 +1089,8 @@ export function buildT110Content(input: UraInvoiceInput): Record<string, unknown
   return {
     oriInvoiceId: compact(input.oriInvoiceId),
     oriInvoiceNo: compact(input.oriInvoiceNo),
-    reasonCode: compact(input.reasonCode) || '102',
-    reason: compact(input.reason) || '',
+    reasonCode,
+    reason: reasonText,
     applicationTime: issued,
     invoiceApplyCategoryCode: '101',
     currency: input.currency || 'UGX',
@@ -1240,4 +1251,113 @@ export function buildT131Content(input: UraStockInput): Record<string, unknown> 
       originalQuantity: '',
     })),
   };
+}
+
+/**
+ * T130 goods-upload currency codes. These are the codes on the URA currency
+ * dictionary (UGX is 101, not the ISO letters T109 sends).
+ */
+export const URA_GOODS_CURRENCY: Record<string, string> = {
+  UGX: '101',
+  USD: '102',
+  GBP: '103',
+  EUR: '104',
+  JPY: '105',
+  CNY: '106',
+  KES: '108',
+  TZS: '110',
+};
+
+/** Map an ISO currency, or a code already on that dictionary, onto the T130 value. */
+export function uraGoodsCurrency(code: string | null | undefined): string {
+  const raw = compact(code).toUpperCase();
+  const mapped = URA_GOODS_CURRENCY[raw];
+  if (mapped) return mapped;
+  if (Object.values(URA_GOODS_CURRENCY).includes(raw)) return raw;
+  throw new EfrisProtocolError(
+    'EFRIS_GOODS_CURRENCY_UNMAPPED',
+    `URA goods upload has no currency code for "${compact(code) || '(blank)'}".`,
+  );
+}
+
+export interface UraGoodsUploadLine {
+  /** '101' add a good that is not on URA yet. '102' update one that is. */
+  operationType: string;
+  goodsName: string;
+  goodsCode: string;
+  /** URA unit-of-measure code (for example "CT"), never an ERP unit name. */
+  measureUnit: string;
+  unitPrice: number;
+  /** ISO currency (UGX) or a dictionary code already in URA_GOODS_CURRENCY. */
+  currency: string;
+  /** URA commodity-category id the good is filed under. */
+  commodityCategoryId: string;
+  /** Low-stock alert quantity. Omitted or blank is sent as "0". */
+  stockPrewarning?: number | string | null;
+}
+
+function stockPrewarning(value: number | string | null | undefined): string {
+  if (value == null || value === '') return '0';
+  const n = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(n) || n < 0) return '0';
+  return String(n);
+}
+
+/**
+ * Inner T130 goods-upload content.
+ *
+ * URA takes an array of goods, not a tax document. Each row is the goods
+ * configuration the portal batch template collects: operation, name, code,
+ * unit, price, currency, commodity category, excise flag, and low-stock alert.
+ * A single unit with no excise and no piece-unit is haveExciseTax/havePieceUnit/
+ * haveOtherUnit "102" and the piece fields blank. Success is return code 00.
+ * This does not return an FDN.
+ */
+export function buildT130Content(lines: UraGoodsUploadLine[]): Array<Record<string, unknown>> {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new EfrisProtocolError('EFRIS_GOODS_UPLOAD_EMPTY', 'T130 needs at least one goods row.');
+  }
+  return lines.map((line) => {
+    const operationType = compact(line.operationType);
+    if (operationType !== '101' && operationType !== '102') {
+      throw new EfrisProtocolError(
+        'EFRIS_GOODS_OPERATION_INVALID',
+        'T130 operationType is 101 (add) or 102 (update).',
+      );
+    }
+    const goodsCode = compact(line.goodsCode);
+    const goodsName = compact(line.goodsName);
+    const measureUnit = compact(line.measureUnit);
+    const commodityCategoryId = compact(line.commodityCategoryId);
+    if (!goodsCode || !goodsName || !measureUnit || !commodityCategoryId) {
+      throw new EfrisProtocolError(
+        'EFRIS_GOODS_IDENTITY_MISSING',
+        'T130 needs goodsCode, goodsName, measureUnit, and commodityCategoryId.',
+      );
+    }
+    if (!Number.isFinite(line.unitPrice) || line.unitPrice <= 0) {
+      throw new EfrisProtocolError(
+        'EFRIS_GOODS_PRICE_REQUIRED',
+        `T130 unitPrice for ${goodsCode} must be greater than zero.`,
+      );
+    }
+    return {
+      operationType,
+      goodsName,
+      goodsCode,
+      measureUnit,
+      unitPrice: money(line.unitPrice),
+      currency: uraGoodsCurrency(line.currency),
+      commodityCategoryId,
+      haveExciseTax: '102',
+      stockPrewarning: stockPrewarning(line.stockPrewarning),
+      havePieceUnit: '102',
+      pieceMeasureUnit: '',
+      pieceUnitPrice: '',
+      packageScaledValue: '',
+      pieceScaledValue: '',
+      haveOtherUnit: '102',
+      goodsOtherUnits: [],
+    };
+  });
 }
