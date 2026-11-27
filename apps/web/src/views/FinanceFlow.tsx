@@ -6042,6 +6042,15 @@ function ProductRegistrations() {
     finally { setBusy(false); }
   };
 
+  const doUpload = async (row: Rec) => {
+    setBusy(true); setError('');
+    try {
+      await api(`/api/ops/finance/efris/registrations/${Number(row.id)}/upload`, { method: 'POST', body: JSON.stringify({}) });
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to upload goods'); }
+    finally { setBusy(false); }
+  };
+
   const doStatus = async () => {
     if (!statusTarget) return;
     setBusy(true); setError('');
@@ -6061,8 +6070,8 @@ function ProductRegistrations() {
         <div>
           <h3>Product registrations ({total.toLocaleString()})</h3>
           <p className="muted" style={{ margin: 0 }}>
-            Map each product to a URA goods code, then record its registration status. REGISTERED is
-            operator-confirmed against URA evidence — the ERP never marks it on its own.
+            Map each product to a URA goods code, then upload it. The goods upload (T130)
+            marks the product REGISTERED when URA accepts it. A product already registered is sent as an update.
           </p>
         </div>
       </div>
@@ -6103,6 +6112,11 @@ function ProductRegistrations() {
                   <td>
                     <div className="row-actions">
                       {canManage && <button className="btn btn-sm" disabled={busy} onClick={() => { setMapTarget(r); setMapCode(String(r.efrisGoodsCode ?? '')); }}>Map goods</button>}
+                      {canManage && Boolean(r.efrisGoodsCode) && r.efrisRegistrationStatus !== 'UNMAPPED' && r.efrisRegistrationStatus !== 'EXCLUDED' && (
+                        <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => doUpload(r)}>
+                          {r.efrisRegistrationStatus === 'REGISTERED' ? 'Update on URA' : 'Upload to URA'}
+                        </button>
+                      )}
                       {canManage && <button className="btn btn-sm" disabled={busy} onClick={() => { setStatusTarget(r); setStatusVal(String(r.efrisRegistrationStatus ?? 'UNMAPPED')); }}>Set status</button>}
                     </div>
                   </td>
@@ -6142,7 +6156,7 @@ function ProductRegistrations() {
             <select id="reg-status" value={statusVal} onChange={(e) => setStatusVal(e.target.value)}>
               {EFRIS_REGISTRATION_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
             </select>
-            <span className="hint">REGISTERED is confirmed against URA evidence, never derived automatically.</span>
+            <span className="hint">Use this to correct a status. Upload to URA is what registers the good.</span>
           </div>
         </Modal>
       )}
